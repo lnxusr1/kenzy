@@ -1,0 +1,31 @@
+# .readthedocs.yaml
+# Read the Docs configuration file
+# See https://docs.readthedocs.io/en/stable/config-file/v2.html for details
+
+# Required
+version: 2
+
+mkdocs:
+  configuration: mkdocs.yml
+  
+build:
+  image: latest
+  apt_packages:
+    - python3-fann2
+    - python3-opencv
+    - libatlas-base-dev
+    - python3-pyqt5
+    - libpulse-dev
+    - libportaudio2
+    - libasound2-dev
+    - libfann-dev
+    - python3-dev
+    - swig
+    - portaudio19-dev
+    - python3-pyaudio
+  
+# Optionally set the version of Python and requirements required to build your docs
+python:
+   version: 3.7
+   install:
+   - requirements: docs/requirements.txt

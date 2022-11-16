@@ -1,0 +1,132 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html lang="en-US">
+<head>
+	<title>Control Login &raquo; KENZY.Ai [__APP_VERSION__]</title>
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<style type="text/css">
+	
+		html, body { font-family: Arial, Helvetica, Sans-Serif; font-size: 16px; padding: 0; margin: 0; min-height: 100%; width: 100%; height: 100%;}
+		body {  position: relative; }
+		textarea { resize: none; }
+
+		.page_header { 
+				position: fixed; top: 0; left: 0; right: 0; 
+				height: 42px; line-height: 42px; 
+				background-color: #333333; background: linear-gradient(#58564d, #41403c); 
+				padding: 0 15px; 
+				color: #fff; 
+				font-weight: bold; text-shadow: 2px 2px #404040;
+				z-index: 1000;
+		}
+		
+		.page_header small { display: inline-block; padding-left: 10px; }
+		
+		.page_footer { 
+			position: fixed; bottom: 0; left: 0; right: 0; line-height: 32px; height: 32px; 
+			background-color: #f0f0f0; 
+			border-top: 1px solid #dcdcdc; 
+			z-index: 100;
+		}
+		.page_footer a { color: #666; font-size: 14px; text-decoration: none; display: block; padding: 0 15px; }
+		.page_footer a:hover { color: #333; text-shadow: 1px 1px #cac8c6; }
+		
+		/*input[type="text"] { width: 100%; max-width: 600px; line-height: 44px; height: 44px; padding: 0 10px; box-sizing: border-box; font-size: 15px; margin-bottom: 10px; border-radius: 3px; border: 1px solid #bcbcbc; background-color: #eee; }*/
+		select { width: 100%; max-width: 600px;  height: 32px; line-height: 32px; padding: 0 10px; font-size: 15px;  margin-bottom: 10px; border-radius: 3px; border: 1px solid #bcbcbc; background-color: #eee; }
+		textarea { width: 100%; max-width: 600px; height: 70px; padding: 5px 10px; box-sizing: border-box; font-size: 14px; border-radius: 3px; border: 1px solid #bcbcbc; background-color: #eee; margin-bottom: 10px; }
+		button.send {
+			margin-bottom: 10px;
+		}
+		
+		#bars { position: absolute; right: 20px; height: 42px; padding: 6px 0; width: 20px; display: none; }
+		#bars svg { fill: #fff; }
+		#bars svg:hover { fill: #ccc; }
+		#bars svg:active { fill: #f18458; }
+		
+		h1 { font-size: 1.1rem; }
+		h3 { font-size: 1.1rem; }
+		p { font-size: 16px; line-height: 24px; margin-bottom: 16px; max-width: 600px; }
+	
+		.login_container { width: 100%; height: 100%; position: relative; z-index: 1; }
+		.login_container form {
+			padding: 0; margin: 0;
+			background-color: #f7f7f7;
+			position: absolute;
+			display: block; 
+			width: 300px;
+			height: 240px;
+			top: calc(50% - 120px);
+			left: calc(50% - 150px);
+			box-shadow: 2px 2px 6px #aaa;
+			border-radius: 6px;
+		}
+		
+		.login_container h1 { margin-left: 30px; margin-top: 0; padding-top: 30px; }
+		.login_container input { display: block; margin: 10px 30px; width: calc(100% - 60px); box-sizing: border-box; font-size: 1.1rem; padding: 10px 4px; }
+		.login_container button { display: block; margin: 10px 30px 10px auto; padding: 8px 20px; text-transform: uppercase;
+			border: 1px solid #bbb8b5;
+			background-color: #555;
+			background: linear-gradient(#fbfafa, #fbfafa, #e8e9e9, #f2f1f0);
+			color: #333; 
+			border-radius: 3px;
+			font-size: .95rem;
+		}
+	
+		@media only screen and (max-width: 768px) {
+			.page_header { height: 60px; height: 60px; line-height: normal; }
+			.page_header .title { padding-top: 10px; font-size: 18px; }
+			.page_header small { display: block; padding: 5px 0 0 0; font-size: 12px; }
+			#bars { display: block; height: 60px; padding: 16px 0; width: 24px; }
+			
+		}
+		
+	</style>
+	<script type="text/javascript" src="/admin/jquery.js"></script>
+	<script type="text/javascript">
+		$(document).ready(function() {
+			if ($('#username').val() == "") {
+				$('#username').focus();
+			} else {
+				$('#password').focus();
+			}
+			
+			$('#btnSubmit').click(function() {
+				myuser = $('#username').val();
+				mypass = $('#password').val();
+				
+				my_auth_request = JSON.stringify({ "username": myuser, "password": mypass });
+				
+				$.ajax({
+					url: "/auth",
+					data: my_auth_request,
+					type: "POST",
+					contentType: "application/json",
+					dataType: "json",
+					success: function(data) {
+						if (data.error) {
+							alert(data.message);
+						} else {
+							self.location="/admin/index.html";
+						}
+					}
+				});
+			});
+		});
+	</script>
+</head>
+<body>
+<div class="page_header">
+	<div class="title">KENZY.Ai<small>[__APP_VERSION__]</small></div>
+</div>
+<div class="login_container">
+	<form action="/auth" method="post">
+		<h1>Authentication</h1>
+		<input type="text" name="username" value="" id="username" placeholder="login" />
+		<input type="password" name="password" value="" id="password" placeholder="password" />
+		<button id="btnSubmit">Login</button>
+	</form>
+</div>
+<div class="page_footer">
+	<div class="copyright"><a href="http://kenzy.ai">Kenzy.Ai</a></div>
+</div>
+</body>
+</html>

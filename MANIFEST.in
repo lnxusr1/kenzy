@@ -1,0 +1,11 @@
+global-exclude *.py[cod]
+include CHANGELOG.md
+include README.md
+include requirements.txt
+include src/kenzy/models/watcher/*.xml
+include src/kenzy/skills/HelloSkill/vocab/en_us/*.*
+include src/kenzy/skills/KnockKnockSkill/vocab/en_us/*.*
+include src/kenzy/skills/TellDateTimeSkill/vocab/en_us/*.*
+include src/kenzy/panel/resources/fonts/*.ttf
+include src/kenzy/panel/resources/images/*.svg
+include src/kenzy/web/*.*

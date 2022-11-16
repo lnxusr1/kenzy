@@ -1,0 +1,41 @@
+site_name: Kenzy.Ai Docs
+site_url: https://kenzy.ai/
+repo_url: https://github.com/lnxusr1/kenzy/
+
+theme: 
+    name: readthedocs
+    highlightjs: true
+
+nav:
+    - Overview: 'index.md'
+    - Setup:
+      - Installation: 'installation.basic.md'
+      - Audio/Video Extras: 'installation.audio.md'
+      - Raspberry Pi Notes: 'installation.raspberrypi.md'
+      - Training your Watcher: 'kenzy.watcher.train.md'
+    - Containers:
+      - Creating a Container: 'kenzy.containers.md'
+      - Setting a Startup Configuration: 'kenzy.config.md'
+    - Devices:
+      - Creating a Device: 'kenzy.devices.md'
+      - kenzy.devices.Listener: 'kenzy.devices.listener.md'
+      - kenzy.devices.Speaker: 'kenzy.devices.speaker.md'
+      - kenzy.devices.Watcher: 'kenzy.devices.watcher.md'
+    - Skills:
+      - Creating a Skill: 'kenzy.skill.md'
+    - Communications:
+      - Calls to a Container/Device: 'kenzy.communication.md'
+    - Links:
+      - '@ Code': 'https://kenzy.ai/code'
+      - '@ Community': 'https://kenzy.ai/discussion'
+      - '@ Bugs & Issues': 'https://kenzy.ai/issues'
+      - '@ kenzy.ai': 'https://kenzy.ai'
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          setup_commands:
+          - import sys
+          - sys.path.append("src")

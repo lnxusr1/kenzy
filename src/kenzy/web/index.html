@@ -1,0 +1,591 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html lang="en-US">
+<head>
+	<title>Control Panel &raquo; KENZY.Ai [__APP_VERSION__]</title>
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<style type="text/css">
+		html, body { font-family: Arial, Helvetica, Sans-Serif; font-size: 16px; padding: 0; margin: 0; min-height: 100%; width: 100%; }
+		body {  position: relative; }
+		textarea { resize: none; }
+
+		.page_header { 
+				position: fixed; top: 0; left: 0; right: 0; 
+				height: 42px; line-height: 42px; 
+				background-color: #333333; background: linear-gradient(#58564d, #41403c); 
+				padding: 0 15px; 
+				color: #fff; 
+				font-weight: bold; text-shadow: 2px 2px #404040;
+		}
+		
+		.page_header small { display: inline-block; padding-left: 10px; }
+				
+		.page_sidebar { 
+			width: 240px; position: fixed; left: 0; top: 42px; height: calc(100% - 42px); 
+			background-color: #fff; 
+			overflow: auto; 
+			
+			border-right: 1px solid #dfdddc;
+		}
+		
+		.page_sidebar .button { 
+			background-color: #fff;
+			width: 224px;
+			line-height: 48px;
+			height: 48px;
+			border-right: 1px solid #fbfbfb;
+			display: block;
+			padding-left: 15px;
+			font-size: 16px;
+			color: #000;
+			text-decoration: none;
+		}
+		
+		.page_sidebar .button:nth-child(odd) { 
+			background-color: #f7f7f7;
+		}
+		
+		.page_sidebar .button:last-child {
+			border-bottom: 1px solid #cac8c6;
+		}
+		
+		.page_sidebar .button:hover {
+			background-color: #ececec;
+		}
+		
+		.page_sidebar .button.active {
+			background-color: #f18458;
+			color: #fff;
+		}
+		
+		.content_container { margin-left: 241px; padding-top: 42px; padding-left: 20px; padding-bottom: 52px; padding-right: 20px; }
+		.page_footer { 
+			position: fixed; bottom: 0; left: 240px; right: 0; line-height: 32px; height: 32px; 
+			background-color: #f0f0f0; 
+			border-top: 1px solid #dcdcdc; 
+		}
+		.page_footer a { color: #666; font-size: 14px; text-decoration: none; display: block; padding: 0 15px; }
+		.page_footer a:hover { color: #333; text-shadow: 1px 1px #cac8c6; }
+		
+		.page_block { display:none; }
+		.page_block.active { display: block; }
+		
+		button { 
+			border: 1px solid #bbb8b5;
+			background-color: #555;
+			background: linear-gradient(#fbfafa, #fbfafa, #e8e9e9, #f2f1f0);
+			color: #333;
+			width: 175px;
+			height: 50px;
+			line-height: 48px;
+			border-radius: 4px;
+			font-size: 15px;
+		}
+		
+		button:hover {
+			background: linear-gradient(#f7f6f6, #f7f6f6, #e4e5e5, #eeedec);
+			color: #111;
+			text-shadow: 1px 1px #ddd;
+			box-shadow: 2px 2px 4px #eee;
+		}
+		
+		button:active {
+			background: linear-gradient(#e7e6e6, #d4d5d5, #dedddc, #dedddc);
+			color: #000;
+			text-shadow: -1px -1px #ddd;
+			box-shadow: -2px -2px 4px #eee;
+		}
+		
+		.box { max-width: 600px; }
+		.box button { 
+			margin: 6px 10px;
+		}
+		
+		.options { margin-top: 10px; border-top: 1px solid #ccc; padding-top: 10px; }
+		
+		.request { border: 1px solid #bbb; box-shadow: 2px 2px 4px #eee; margin-top: 20px; }
+		.request h3 { 
+			border: 1px solid #fff; 
+			margin: 0; display: block; 
+			font-size: 15px; 
+			padding: 0 10px; 
+			height: 30px; 
+			line-height: 30px; 
+			background: #f0f0f0; 
+		}
+		.request pre {
+			margin: 0;
+			padding: 10px;
+			font-size: 14px;
+		}
+		
+		.wrap .request pre {
+			white-space: pre-wrap;
+		}
+		
+		.device_list .device-command,
+		.device_list .device-button { width: auto; padding: 5px 10px; line-height: inherit; height: auto; }
+		
+		/*input[type="text"] { width: 100%; max-width: 600px; line-height: 44px; height: 44px; padding: 0 10px; box-sizing: border-box; font-size: 15px; margin-bottom: 10px; border-radius: 3px; border: 1px solid #bcbcbc; background-color: #eee; }*/
+		select { width: 100%; max-width: 600px;  height: 32px; line-height: 32px; padding: 0 10px; font-size: 15px;  margin-bottom: 10px; border-radius: 3px; border: 1px solid #bcbcbc; background-color: #eee; }
+		textarea { width: 100%; max-width: 600px; height: 70px; padding: 5px 10px; box-sizing: border-box; font-size: 14px; border-radius: 3px; border: 1px solid #bcbcbc; background-color: #eee; margin-bottom: 10px; }
+		button.send {
+			margin-bottom: 10px;
+		}
+		
+		#bars { position: absolute; right: 20px; height: 42px; padding: 6px 0; width: 20px; display: none; }
+		#bars svg { fill: #fff; }
+		#bars svg:hover { fill: #ccc; }
+		#bars svg:active { fill: #f18458; }
+		
+		h1 { font-size: 1.1rem; }
+		h3 { font-size: 1.1rem; }
+		p { font-size: 16px; line-height: 24px; margin-bottom: 16px; max-width: 600px; }
+		
+		table.device_list { border: 1px solid #ccc; }
+		table.device_list th { padding: 4px 8px; background: linear-gradient(#f2f2f2, #d0d0d0); text-align: left; }
+		table.device_list td { padding: 8px 8px; }
+		table.device_list td small { display: block; font-size: 0.7rem;}
+		table.device_list tbody tr td { border-bottom: 1px solid #ddd; }
+		table.device_list tbody tr td .started { color: green; }
+		table.device_list tbody tr td .stopped { color: red; }
+		table.device_list tbody tr:last-child td { border-bottom: none; }
+		
+		.modal { display: none; position: fixed; width: 100%; height: 100%; z-index: 1010; }
+		.modal-background { position: fixed; width: 100%; height: 100%; background-color: #aaa; opacity: 0.3; }
+		.modal-container { position: fixed; top: 15%; width: 600px; left: calc(50% - 300px); background-color: #fff; border-radius: 6px;  color: #000; box-shadow: 3px 3px 9px #999; }
+		.modal-title { font-size: 2rem; font-weight: bold; border-bottom: 1px solid #ddd; padding: 6px 18px; position: relative; height: 38px; }
+		.modal-footer { border-top: 1px solid #ddd; padding: 6px 18px; }
+		.modal-footer .button-area { text-align: right; }
+		.modal-footer .button-area button { padding: 10px 20px; line-height: inherit; height: auto; width: auto; }
+		.modal-close { display: block; font-size: 1rem; position: absolute; text-decoration: none; color: #999; font-weight: bold; top: 0; right: 0; padding: 16px; border-top-right-radius: 6px; }
+		.modal-close:hover { text-decoration: underline; color: #000; background-color: #f7f7f7; }
+		.modal-content { padding: 8px; }
+		.modal-content .image { width: 100%; border-bottom-left-radius: 6px; border-bottom-right-radius: 6px; }
+		
+		@media only screen and (max-width: 768px) {
+			.box button { width: 44%; }
+			.page_header { height: 60px; height: 60px; line-height: normal; }
+			.page_header .title { padding-top: 10px; font-size: 18px; }
+			.page_header small { display: block; padding: 5px 0 0 0; font-size: 12px; }
+			#bars { display: block; height: 60px; padding: 16px 0; width: 24px; }
+			.page_sidebar { top: 60px; width: 100%; height: calc(100% - 92px); border-right: none; }
+			.page_sidebar.inactive { display: none; }
+			.page_sidebar .button { width: calc(100% - 15px); border-right: none; }
+			.content_container { padding-top: 60px; margin: 0; }
+			.page_footer { left: 0; }
+			table.device_list { display: block; border: none; }
+			table.device_list thead { display: none; }
+			table.device_list tbody { display: block; }
+			table.device_list tbody tr { display: block; clear: left; }
+			table.device_list tbody tr td { display: block; float: left; width: 25%; box-sizing: border-box; border: none; }
+			table.device_list tbody tr td.break { clear: left; width: 75%; padding-bottom: 15px; }
+			table.device_list tbody tr { border-top: 1px solid #ddd; }
+			.options { clear: left; }
+			
+			.modal-container { width: 90%; left: 5%; }
+			.modal-title { font-size: 1.5rem; padding-top: 12px; }
+		}
+		
+	</style>
+	
+	<script type="text/javascript" src="/admin/jquery.js"></script>
+	<script type="text/javascript">
+	
+	myDevices = {};
+	
+	function showModal(content, title) {
+		$('.modal .modal-title span').html(title);
+		$('.modal .modal-content').html(content);
+		$('.modal').show();
+	}
+	
+	function hideModal() {
+		$('.modal .modal-content img').prop("src","#");
+		$('.modal').fadeOut('fast');
+		$('.modal .modal-content').html("");
+	}
+	
+	function refreshDevices(displayResponses) {
+		method = "GET";
+		url = "/brain/status";
+		
+		if (displayResponses != false) {
+			$('#devices-request pre').text(method + " " + url);
+		}
+		
+		$.ajax({
+			url: url,
+			type: method,
+			dataType: "json",
+			beforeSend: function() {
+				if (displayResponses != false) {
+					$('#devices-response pre').text('loading...');
+				}
+				
+				$('table.device_list tbody').children().remove();
+				$('table.device_list tbody').append($('<tr><td colspan="6">Refreshing...</td></tr>'));
+				
+			},
+			success: function(data) {
+				if (displayResponses != false) {
+					$('#devices-response pre').text(JSON.stringify(data, null, 2));
+				}
+
+				$('table.device_list tbody').children().remove();
+				$('#cmdTarget').children().remove()
+				$('#cmdType').children().remove();
+				op = $('<option value="">[device]</option>');
+				$('#cmdTarget').append(op)
+
+				if ((data.length) == 0) {
+					$('table.device_list tbody').append($('<tr><td colspan="6">No devices found.</td></tr>'));
+					return;
+				}
+				
+				$(Object.keys(data)).each(function(i,container) {
+					$(Object.keys(data[container])).each(function(i,devId) {
+						item = data[container][devId];
+						item["url"] = container;
+						myDevices[devId] = item;
+	
+						bFound = false;					
+						$(item["accepts"]).each(function(i,o) {
+							if (!["start","stop","stream","snapshot"].includes(o)) {
+								bFound = true;
+							}
+						});
+						
+						if (bFound) {
+							itemDesc = item["type"]+' - '+item["id"];
+							if (item["type"] == "brain") { itemDesc = "brain"; }
+							op = $('<option value="'+item["id"]+'">'+itemDesc+'</option>');
+							$('#cmdTarget').append(op)
+						}
+						
+						hn = $('<td valign="top"></td>').html(container);
+						dv = $('<td valign="top" class="break"></td>').html(item["type"]+"<small>" + item["id"] + "<br />" + item["groupName"] + "</small>");
+						st = $('<td valign="top"></td>').html((item["active"]) ? "<span class='started'>Started</span>": "<span class='stopped'>Stopped</span>");
+						
+						devButtons = "";
+						if (item["accepts"].includes("start")) {
+							devButtons += ' <button class="device-command" device-type="'+item["type"]+'" device-url="'+ '/device/' + item["id"] + '/start">Start</button>';
+						}
+						
+						if (item["accepts"].includes("stop")) {
+							devButtons += ' <button class="device-command" device-type="'+item["type"]+'" device-url="'+ '/device/' + item["id"] + '/stop">Stop</button>';
+						}
+						
+						if (item["accepts"].includes("stream")) {
+							devButtons += ' <button class="device-button" device-type="'+item["type"]+'" device-url="'+ '/device/' + item["id"] + '/stream" url-type="image">Stream</button>';
+						}
+						
+						if (item["accepts"].includes("snapshot")) {
+							devButtons += ' <button class="device-button" device-type="'+item["type"]+'" device-url="'+ '/device/' + item["id"] + '/snapshot" url-type="image">Snap</button>';
+						}
+						
+						bn = $('<td valign="top" class="break"></td>').html(devButtons);
+								
+						row = $('<tr></tr>');
+						row.append(hn);
+						row.append(dv);
+						row.append(st);
+						row.append(bn);
+								
+						$('table.device_list tbody').append(row);
+						
+						row.find('button.device-command').click(function() {
+							tgt = $(this).attr('device-url');
+							
+							$('#devices-request pre').text("GET " + tgt);
+							
+							$.ajax({
+								url: tgt,
+								type: "GET",
+								dataType: "json",
+								beforeSend: function() {
+									$('#devices-response pre').text('processing...');
+								},
+								success: function(data) {
+									$('#devices-response pre').text(JSON.stringify(data, null, 2));
+									refreshDevices(false);
+								},
+								error: function(jqXHR, textStatus) {
+									$('#devices-response pre').text(textStatus);
+								}
+							});
+							
+							return false;		
+						});
+						
+						row.find('button.device-button').click(function() {
+							myUrl = $(this).attr('device-url');
+							urlType = $(this).attr('url-type');
+							devType = $(this).attr('device-type');
+							
+							if (urlType == "image") {
+								showModal('<img class="image" src="'+myUrl+'" />', devType);
+							}
+							
+							return false;		
+						});
+					});	
+				});
+				
+			},
+			error: function(jqXHR, textStatus) {
+				if (displayResponses != false) {
+					$('#devices-response pre').text(textStatus);
+				}
+				
+				$('table.device_list tbody').children().remove();
+				$('table.device_list tbody').append($('<tr><td colspan="6">Error loading devices.</td></tr>'));
+			}
+		});
+	}
+	
+	$(document).ready(function() { 
+		
+		refreshDevices(true);
+		
+		$('#devices-button').click(function() {
+			refreshDevices();
+			
+			return false;
+		});
+		
+		$('#cmdTarget').change(function() {
+			id = $(this).val();
+			if (id != "") {
+				$('#cmdType').children().remove();
+				$(myDevices[id]["accepts"]).each(function(i,o) {
+					if (!["start","stop","stream","snapshot"].includes(o)) {
+						op = $('<option value="'+o+'">'+o+'</option>');
+						$('#cmdType').append(op);
+					}
+				});
+			}
+		});
+		
+		$('#btnSendCmd').click(function() {
+			devId = $('#cmdTarget').val();
+			myType = $('#cmdType').val();
+			myData = $('#cmdValue').val();
+			
+			url = "/device/" + devId + "/" + myType
+			
+			if ("container" == myDevices[devId]["type"]) {
+				url = "/" + myDevices[devId]["type"] + "/" + devId + "/" + myType;
+			}
+			
+			if ("brain" == myDevices[devId]["type"]) {
+				url = "/" + myDevices[devId]["type"] + "/" + myType;
+			}
+			
+			my_cmd_text = myData
+			if (myData == "") {
+				$('#command-request pre').text("POST " + url);
+			} else {
+				my_cmd_text = JSON.stringify(JSON.parse(myData));
+				dataVal = JSON.stringify(JSON.parse(myData), null, 2);
+				$('#command-request pre').text("POST " + url + "\n\n" + dataVal);
+			}
+			
+			$.ajax({
+				url: url,
+				data: my_cmd_text,
+				type: "POST",
+				contentType: "application/json",
+				dataType: "json",
+				beforeSend: function() {
+					$('#command-response pre').text('processing...');
+				},
+				success: function(data) {
+					$('#command-response pre').text(JSON.stringify(data, null, 2));
+				},
+				error: function(jqXHR, textStatus) {
+					$('#command-response pre').text(textStatus);
+				}
+			});
+			
+			return false;
+		});
+		
+		/* Basic Page Functions */
+		
+		$(document).keyup(function(e) {
+			var code = e.keyCode || e.which;
+			if (code == 27) {
+				hideModal()
+			}
+		});
+		
+		$('.modal-close').click(function() {
+			hideModal();
+			return false;
+		});
+		
+		$('a.button').click(function() {
+			$('.page_block').slideUp('fast');
+			$($(this).prop('rel')).slideDown('fast');
+			$('a.button').removeClass('active');
+			$(this).addClass('active');
+			$('#sidebar').addClass('inactive');
+			return false;
+		});
+		
+		$('input.toggle-target').click(function() {
+			if ($(this).prop('checked') == true) {
+				$($(this).val()).slideDown('fast');
+			} else {
+				$($(this).val()).slideUp('fast');
+			}
+		});
+		
+		$('input.toggle-wrap').click(function() {
+			if ($($(this).val()).hasClass('wrap')) {
+				$($(this).val()).removeClass('wrap');
+			} else {
+				$($(this).val()).addClass('wrap');
+			}
+		});
+		
+		$('#bars').click(function() {
+			if ($('#sidebar').hasClass('inactive')) {
+				$('#sidebar').removeClass('inactive');
+			} else {
+				$('#sidebar').addClass('inactive');
+			}
+			return false;
+		});
+		
+	});
+	</script>
+</head>
+<body>
+<div class="modal" tabindex="-1" role="dialog">
+	<div class="modal-background"></div>
+	<div class="modal-container">
+		<div class="modal-title">
+			<a href="#" title="Close" class="modal-close">X</a>
+			<span>My Title</span>
+		</div>
+		<div class="modal-content">
+			CONTENT HERE
+		</div>
+	</div>
+</div>
+<div class="page_header">
+	<a href="#" id="bars"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><path d="M16 132h416c8.837 0 16-7.163 16-16V76c0-8.837-7.163-16-16-16H16C7.163 60 0 67.163 0 76v40c0 8.837 7.163 16 16 16zm0 160h416c8.837 0 16-7.163 16-16v-40c0-8.837-7.163-16-16-16H16c-8.837 0-16 7.163-16 16v40c0 8.837 7.163 16 16 16zm0 160h416c8.837 0 16-7.163 16-16v-40c0-8.837-7.163-16-16-16H16c-8.837 0-16 7.163-16 16v40c0 8.837 7.163 16 16 16z"/></svg></a>
+	<div class="title">KENZY.Ai<small>[__APP_VERSION__]</small></div>
+</div>
+<div id="sidebar" class="page_sidebar inactive">
+	<a href="#" class="button active" rel="#devices" id="devices-button">
+		Devices
+	</a>
+	<a href="#" class="button" rel="#commands">
+		Commands
+	</a>
+	<a href="#" class="button" rel="#about">
+		About
+	</a>
+</div>
+<div class="content_container">
+	
+	<form id="devices" class="page_block active">
+		<div class="">
+			<h2>Devices</h2>
+			
+			<table class="device_list" cellspacing="1" cellpadding="0">
+			<thead>
+			<tr>
+				<th>Container</th>
+				<th>Device</th>
+				<th>Status</th>
+				<th>Action</th>
+			</tr>
+			</thead>
+			<tbody>
+			<tr>
+				<td colspan="6">No devices found.</td>
+			</tr>
+			</tbody>
+			</table>
+			
+			<div class="options">
+				<input type="checkbox" class="toggle-target" value="#devices-log" id="checkbox6" checked="checked"><label for="checkbox6"> Show Log</label>
+				<input type="checkbox" class="toggle-wrap" value="#devices-log" id="checkbox5" checked="checked"><label for="checkbox5"> Word Wrap</label>
+			</div>
+			
+			<div class="log wrap" id="devices-log">
+				<div id="devices-request" class="request">
+					<h3>Request</h3>
+					<pre></pre>
+				</div>
+				
+				<div id="devices-response" class="request">
+					<h3>Output</h3>
+					<pre></pre>
+				</div>
+			</div>
+			
+		</div>
+	</form>
+
+	<form id="commands" class="page_block">
+		<div class="">
+			<h2>Commands</h2>
+			
+			<select id="cmdTarget">
+				<option value="">[device]</option>
+			</select>
+			<br />
+			<select id="cmdType">
+				<option value="">[command]</option>
+			</select>
+			
+			<br />
+			<textarea id="cmdValue" placeholder="Enter JSON Data"></textarea>
+			<br />
+			<button class="send" id="btnSendCmd">Send &raquo;</button>
+			
+			<div class="options">
+				<input type="checkbox" class="toggle-target" value="#command-log" id="checkbox2" checked="checked"><label for="checkbox2"> Show Log</label>
+				<input type="checkbox" class="toggle-wrap" value="#command-log" id="checkbox3" checked="checked"><label for="checkbox3"> Word Wrap</label>
+			</div>
+			
+			<div class="log wrap" id="command-log">
+				<div id="command-request" class="request">
+					<h3>Request</h3>
+					<pre></pre>
+				</div>
+				
+				<div id="command-response" class="request">
+					<h3>Output</h3>
+					<pre></pre>
+				</div>
+			</div>
+		</div>
+	</form>
+
+	<form id="about" class="page_block">
+		<div class="">
+			<h2>About</h2>
+			
+			<p><a href="http://kenzy.ai">Kenzy</a> is a foundation of Python code that enables hardware interactions leveraging Machine Learning to create Artificial Intelligence. Wow, that's a mouthful. Let's try again, Kenzy is a set of Python classes and functions that you can use to build your own personal assistant similar to Apple's Siri, Google's Assistant, or Amazon's Alexa. There are libraries for speech recognition, speech synthesis, face and object detection, and even face recognition. So basically Kenzy can see you, hear you, and respond to you.</p>
+
+			<p>Kenzy is 100% customizable. Its modular design allows you to create your own skills or integrate new hardware to fit your specific needs. The code is open source and shared with a business-friendly license.</p>
+
+			<h3>What Should You Expect?</h3>
+			<p><a href="http://kenzy.ai">Kenzy</a>'s main goal is to share knowledge and grow organically based on feedback and support from people like you. On the project web site, the github project, and within each of Kenzy's code modules you will find lots of documentation, examples, sample code, and other artifacts to help you grow in your own experience with Ai/ML and coding.</p>
+
+			<h3>Who Built Me</h3>
+			<p>Kenzy was originally designed by <a href="http://twitter.com/lnxusr1">@lnxusr1</a> during the Covid-19 lockdown in 2020.</p>
+		</div>
+	</form>
+
+</div>
+<div class="page_footer">
+	<div class="copyright"><a href="http://kenzy.ai">kenzy.ai</a></div>
+</div>
+</body>
+</html>
