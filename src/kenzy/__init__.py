@@ -15,8 +15,8 @@ except ModuleNotFoundError:
     logging.info("GenericSkill not available due to missing libraries.")
 
 
-VERSION = (0, 9, 0)
+VERSION = (0, 9, 1)
 
 __app_name__ = "kenzy"
-__app_title__ = "K-NZ"
+__app_title__ = "KENZY.Ai"
 __version__ = ".".join([str(x) for x in VERSION])
