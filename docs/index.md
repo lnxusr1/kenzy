@@ -1,12 +1,15 @@
-# Kenzy.Ai &middot; [![GitHub license](https://img.shields.io/github/license/lnxusr1/kenzy)](https://github.com/lnxusr1/kenzy/blob/master/LICENSE) ![Python Versions](https://img.shields.io/pypi/pyversions/yt2mp3.svg) ![Read the Docs](https://img.shields.io/readthedocs/kenzy-ai) ![GitHub release (latest by date)](https://img.shields.io/github/v/release/lnxusr1/kenzy)
+# KENZY.Ai &middot; [![GitHub license](https://img.shields.io/github/license/lnxusr1/kenzy)](https://github.com/lnxusr1/kenzy/blob/master/LICENSE) ![Python Versions](https://img.shields.io/pypi/pyversions/yt2mp3.svg) ![Read the Docs](https://img.shields.io/readthedocs/kenzy-ai) ![GitHub release (latest by date)](https://img.shields.io/github/v/release/lnxusr1/kenzy)
 
-This project is dedicated to building a "Synthetic Human" which is called Kenzy for which we have assigned the female gender pronoun of "she". She has visual face recognition ([opencv/opencv](https://github.com/opencv/opencv)), speech transcription ([coqui](https://github.com/coqui-ai)), and speech synthesis ([mimic3](https://github.com/MycroftAI/mimic3)).  Kenzy is written in Python and is targeted primarily at the single board computer (SBC) platforms like the [Raspberry Pi](https://www.raspberrypi.org/).
+This project is dedicated to building a "Synthetic Human" which is called Kenzy for which we have assigned the female gender pronoun of "she". She has visual face recognition ([opencv/opencv](https://github.com/opencv/opencv)), speech transcription ([coqui](https://github.com/coqui-ai)), and speech synthesis ([festival](http://www.cstr.ed.ac.uk/projects/festival/) or [mimic3](https://github.com/MycroftAI/mimic3)).  Kenzy is written in Python and is targeted primarily at the single board computer (SBC) platforms like the [Raspberry Pi](https://www.raspberrypi.org/).
 
 Visit our main site: [https://kenzy.ai/](https://kenzy.ai/)
 
 ## Kenzy's Architecture
 
 Kenzy's architecture is divided into two main components:  Containers and Devices.  The containers focus on communication between other containers and devices are designed to control input and output operations.  The most important container is the Brain which is a special type of container as it collects data and provides the skill engine for reacting to inputs.  While a Brain does support all the methods of a normal container it is recommended to create a separate container to store all your devices.
+
+All options, configurations, and startup parameters are driven by the configuration file saved to the following location:
+```~/.kenzy/config.json```
 
 __Python Module Overview__
 
@@ -17,13 +20,13 @@ __Python Module Overview__
 
 __Python Device Module Overview__
 
-| Class/Object            | Description                                                 |
-| :---------------------- | :---------------------------------------------------------- |
-| kenzy.devices.Speaker   | Audio output device for text-to-speech conversion           |
-| kenzy.devices.Listener  | Microphone device for speech-to-text conversion             |
-| kenzy.devices.Watcher   | Video/Camera device for object recognition                  |
-| kenzy.devices.KasaPlug  | Smart plug device for Kasa devices                          |
-| kenzy.panels.RaspiPanel | Panel device designed for Raspberry Pi 7" screen @ 1024x600 |
+| Class/Object              | Description                                                 |
+| :------------------------ | :---------------------------------------------------------- |
+| kenzy.devices.Speaker     | Audio output device for text-to-speech conversion           |
+| kenzy.devices.Listener    | Microphone device for speech-to-text conversion             |
+| kenzy.devices.Watcher     | Video/Camera device for object recognition                  |
+| kenzy.devices.KasaDevice  | Smart plug device for Kasa devices                          |
+| kenzy.panels.RaspiPanel   | Panel device designed for Raspberry Pi 7" screen @ 1024x600 |
 
 ## Installation
 

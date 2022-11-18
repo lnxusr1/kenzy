@@ -10,15 +10,15 @@ You can build your own devices by inheriting ```kenzy.GenericDevice``` which has
 import kenzy.GenericDevice
 
 class MyCustomDevice(kenzy.GenericDevice):
-    def __init__(self,
-            parent=None,
-            callback=None):
+    def __init__(self, **kwargs):
         
-        self.parent = parent
-        self.callback = callback
+        self.args = kwargs
         self._isRunning = False 
+
         self.version = "1.0.0"
-        
+
+        super(MyCustomDevice, self).__init__(**kwargs)
+
 	@property
     def accepts(self):
         return ["start","stop"] # Add "upgrade" to allow 

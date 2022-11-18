@@ -6,9 +6,9 @@ While it isn't necessary, you can build your own devices by inheriting ```kenzy.
 import kenzy.GenericContainer
 
 class MyCustomContainer(kenzy.GenericContainer):
-    def initialize(self):
+    def initialize(self, **kwargs):
 
-        super().initialize()
+        super().initialize(**kwargs)
         
         self.registerThread = None
         self.version = "1.0.0"

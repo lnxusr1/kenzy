@@ -18,10 +18,11 @@ class Brain(GenericContainer):
     """
     Brain
     """
-    def initialize(self, skillFolder=None, startUPNP=True):
+    def initialize(self, **kwargs):
+        self.args = kwargs
+        
         self.tcp_port = 8080
-
-        self.skill_manager = SkillManager(self, skill_folder=skillFolder)
+        self.skill_manager = SkillManager(self, skill_folder=self.args.get("skillFolder"))
         self.skill_manager.initialize()
 
         self._upnpServer = None
@@ -53,10 +54,10 @@ class Brain(GenericContainer):
 
         self.callbacks = {"ask": None}
 
-        super().initialize()
+        super().initialize(**kwargs)
 
         upnp_server = UPNPServer(parent=self)
-        self.addDevice("UPNP_Service", upnp_server, autoStart=startUPNP)
+        self.addDevice("UPNP_Service", upnp_server, autoStart=self.args.get("startUPNP", True))
 
         return True
 

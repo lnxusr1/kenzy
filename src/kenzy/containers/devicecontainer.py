@@ -9,10 +9,11 @@ from urllib.parse import urljoin
 
 
 class DeviceContainer(GenericContainer):
-    def initialize(self):
+    def initialize(self, **kwargs):
 
+        self.args = kwargs
         self.registerThread = None
-        super().initialize()
+        super().initialize(**kwargs)
 
         return True
     
@@ -26,11 +27,10 @@ class DeviceContainer(GenericContainer):
         res = sendSDCPRequest()
         if isinstance(res, list):
             for item in res:
-                if item.get("headers",{}).get("X-KENZY-TYPE",'') == "BRAIN":
-                    self.brain_url = item.get("headers",{}).get("LOCATION", self.brain_url)
+                if item.get("headers", {}).get("X-KENZY-TYPE", '') == "BRAIN":
+                    self.brain_url = item.get("headers", {}).get("LOCATION", self.brain_url)
                     self.logger.info("Using BRAIN @ " + str(self.brain_url))
                     return True
-
 
     @threaded
     def stayConnected(self):

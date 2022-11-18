@@ -4,7 +4,15 @@ import random
 import sys
 import pathlib
 from .shared import dayPart
-from padatious import IntentContainer
+import traceback
+
+try:
+    from padatious import IntentContainer
+except ModuleNotFoundError:
+    logging.debug(str(sys.exc_info()[0]))
+    logging.debug(str(traceback.format_exc()))
+    logging.info("SkillManager disabled due to missing libraries.")
+    pass
 
 
 class SkillManager:
@@ -33,7 +41,10 @@ class SkillManager:
         
         self.logger.debug("Initalizing")
         
-        self.intentParser = IntentContainer('/tmp/intent_cache')
+        try:
+            self.intentParser = IntentContainer('/tmp/intent_cache')
+        except NameError:
+            self.intentParser = None
 
         if self.skill_folder is None:
             self.skill_folder = os.path.join(os.path.dirname(__file__), "skills")
@@ -54,9 +65,12 @@ class SkillManager:
             
         self.logger.debug("Skills load is complete.")
         
-        self.intentParser.train(False)  # False = be quiet and don't print messages to stdout
-
-        self.logger.debug("Training completed.")
+        try:
+            self.intentParser.train(False)  # False = be quiet and don't print messages to stdout
+            self.logger.debug("Training completed.")
+        except AttributeError:
+            self.logger.error("Training failed.  IntentParser not loaded.")
+            pass
 
         self.logger.info("Initialization completed.")
 
@@ -73,56 +87,6 @@ class SkillManager:
         """
                         
         def audioFallback(in_text, context):
-            
-#            if "thanks" in in_text or "thank you" in in_text:
-#                if self.brain is not None:
-#                    res = self.brain.say("You're welcome.", context=context)
-#                    if res:
-#                        return True
-                
-#            # Some simple responses to important questions
-#            elif "who are you" in in_text or "who are u" in in_text or "what are you" in in_text or "what are u" in in_text:
-#                res = self.brain.say("I am a synthetic human.  You may call me Kenzy.", context=context)
-#                if res:
-#                    return True
-#            elif "how are you" in in_text:
-#                res = self.brain.say("I am online and functioning properly.", context=context)
-#                if res:
-#                    return True
-#            elif "you real" in in_text and len(in_text) <= 15:
-#                res = self.brain.say(
-#                    "What is real?  If you define real as electrical impulses flowing through your brain then yes, I am real.", 
-#                    context=context
-#                )
-
-#                if res:
-#                    return True
-#            elif "you human" in in_text and len(in_text) <= 17:
-#                res = self.brain.say("More or less.  My maker says that I am a synthetic human.", context=context)
-#                if res:
-#                    return True
-#            elif ("is your maker" in in_text or "is your father" in in_text) and len(in_text) <= 20:
-#                res = self.brain.say("I was designed by lnx user one in 2020 during the Covid 19 lockdown.", context=context)
-#                if res:
-#                    return True
-#            elif ("please power down" in in_text) and len(in_text) <= 20:
-#                my_brain = self.brain
-
-#                def doConfirmShutdown(text, context):
-#                    if text.lower() == "yes" and my_brain.say("Your wish is my command.", context) and my_brain.shutdown(context.httpRequest):
-#                        return True
-#                    else:
-#                        return False 
-
-#                res = self.brain.ask(
-#                    "Are you sure that you don't need me anymore?", 
-#                    lambda text, context: doConfirmShutdown(text, context), 
-#                    timeout=15, 
-#                    context=context
-#                )
-                
-#                if res:
-#                    return True
                                         
             self.logger.debug("fallback: " + in_text)
             return False
@@ -142,7 +106,7 @@ class SkillManager:
                         else:
                             return True  # Default return is True in case the returned value isn't boolean
             else:
-                return audioFallback(text, context) # Old code for hardcoded responses
+                return audioFallback(text, context)  # Old code for hardcoded responses
         except Exception as e:
             self.logger.error(e, exc_info=True)
             return False
@@ -217,15 +181,12 @@ class GenericSkill:
         
         if os.path.exists(df):
             with open(df, "r") as s:
-                m = s.readlines()
-                y = []
-                for i in range(0, len(m) - 1):
-                    x = m[i]
-                    z = len(x)
-                    a = x[:z - 1]
-                    y.append(a)
-                y.append(m[i + 1])
-                text = random.choice(y)
+                m = []
+                for line in s:
+                    if line.strip() != "":
+                        m.append(line.strip())
+
+                text = random.choice(m)
                     
             if ("*dayPart*" in text):
                 text = text.replace("*dayPart*", dayPart())
@@ -278,8 +239,12 @@ class GenericSkill:
         if os.path.exists(fldr):
             if os.path.exists(fldr):
                 if self.brain is not None:
-                    self.brain.skill_manager.intentParser.load_file(filename, os.path.join(fldr, "vocab", "en_us", filename), reload_cache=True)
-                    self.brain.skill_manager.skills.append({ "intent_file": filename, "callback": callback, "object": self })
+                    try:
+                        self.brain.skill_manager.intentParser.load_file(filename, os.path.join(fldr, "vocab", "en_us", filename), reload_cache=True)
+                        self.brain.skill_manager.skills.append({ "intent_file": filename, "callback": callback, "object": self })
+                    except AttributeError:
+                        self.logger.error("Error registering intent file due to AttributeError.")
+                        return False
                 else:
                     self.logger.error("BRAIN not referenced")
             else:

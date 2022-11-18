@@ -10,34 +10,37 @@ class Speaker(GenericDevice):
     Speaker device to convert any text to speech send to the audio output device.
     """
     
-    def __init__(
-            self, 
-            parent=None,
-            callback=None,
-            useTempFile=True,
-            speakerExecFormat="festival --tts {FILENAME}"):
+    def __init__(self, **kwargs):
         """
         Speaker Initialization
 
         Args:
             parent (object): Containing object's reference.  Normally this would be the device container. (optional)
             callback (function): Callback function for which to send any captured data.
+            useTempFile (bool): Indicates if the speaking process should use a temp file or a string replacement.
+            speakerExecFormat (str): The command line and arguments for executing the TTS command.
+                Use {FILENAME} for temp file and {TEXT} for in-line text replacement.
         """
 
-        super(Speaker, self).__init__(parent=parent, callback=callback)
-                
-        from kenzy import __version__
-        self.version = __version__
-        
-        self._packageName = "kenzy"
-        
         # Local variable instantiation and initialization
         self.type = "SPEAKER"
         self.logger = logging.getLogger(self.type)
 
-        self.useTempFile = useTempFile
-        self.speakerExecFormat = speakerExecFormat
-        
+        from kenzy import __version__
+        self.version = __version__
+
+        self._packageName = "kenzy"
+
+        super(Speaker, self).__init__(**kwargs)
+
+    def updateSettings(self):
+
+        self.parent = self.args.get("parent")
+        self.useTempFile = self.args.get("useTempFile", True)
+        self.speakerExecFormat = self.args.get("speakerExecFormat", "festival --tts {FILENAME}")
+
+        return True
+
     @threaded
     def _doCallback(self, inData):
         """
@@ -73,17 +76,17 @@ class Speaker(GenericDevice):
             if self.useTempFile:
                 fd, say_file = tempfile.mkstemp()
                 
-                execLine = self.speakerExecFormat.replace("{FILENAME}",say_file)
+                execLine = self.speakerExecFormat.replace("{FILENAME}", say_file)
                 with open(say_file, 'w') as f:
                     f.write(str(text)) 
                 
                 self.logger.info("SAYING " + str(text))
 
-                #"festival --tts " + say_file
+                # DEFAULT: "festival --tts " + say_file
                 os.system(execLine)
                 os.close(fd)
             else:
-                execLine = self.speakerExecFormat.replace("{TEXT}",text.replace("\"",""))
+                execLine = self.speakerExecFormat.replace("{TEXT}", text.replace("\"", ""))
                 self.logger.info("SAYING " + str(text))
                 os.system(execLine)
         

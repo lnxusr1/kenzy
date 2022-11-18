@@ -12,7 +12,7 @@ import traceback
 class GenericContainer():
     def __init__(self, tcpPort=None, hostName="", sslCertFile=None, sslKeyFile=None, brainUrl=None, groupName=None, authentication=None):
         """
-        Brain Server Initialization
+        Generic Container Initialization
         
         Args:
             tcpPort (int): The TCP port on which the TCP server will listen for incoming connections
@@ -80,10 +80,12 @@ class GenericContainer():
         self.accepts = ["stop", "stopDevices", "status", "restart", "upgrade"]
         self.devices = {}
         
-    def initialize(self):
+    def initialize(self, **kwargs):
         """
         Base initialization intended to be overridden in child classes.
         """
+
+        self.args = kwargs
 
         if self.my_url is None:
             my_ip = getIPAddress() if self.hostname is None or self.hostname == "" else self.hostname
@@ -590,13 +592,25 @@ class GenericContainer():
     
 
 class GenericDevice():
-    def __init__(self, parent=None, callback=None):
+    def __init__(self, **kwargs):
         
-        self.version = "0.0.0"
+        self.args = kwargs
+
+        if not hasattr(self, "version"):
+            self.version = "0.0.0"
+        
+        if not hasattr(self, "_packageName"):
+            self._packageName = None
+        
         self.deviceId = uuid.uuid4()
-        self.parent = parent
-        self._callbackHandler = callback
-        self._isRunning = False 
+        self._isRunning = False
+
+        self.updateSettings()
+
+    def updateSettings(self):
+        self.parent = self.args.get("parent")
+        self._callbackHandler = self.args.get("callback")
+        return True
 
     def callback(self, inType, data, context=None):
         """

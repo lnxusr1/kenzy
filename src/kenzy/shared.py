@@ -318,6 +318,10 @@ def threaded(fn):
 
 
 def upgradePackage(packageName):
+    if packageName is None:
+        logging.debug("No package name provided to upgrade.")
+        return True
+
     logger = logging.getLogger(packageName)
     
     cmd = sys.executable + " -m pip install --upgrade --no-input " + packageName

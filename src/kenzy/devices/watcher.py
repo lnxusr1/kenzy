@@ -14,17 +14,7 @@ class Watcher(GenericDevice):
     Watcher device to capture and process inbound video stream for objects and faces.
     """
     
-    def __init__(
-            self, 
-            parent=None,
-            classifierFile=None,
-            recognizerFile=None,
-            namesFile=None,
-            trainingSourceFolder=None,
-            videoDeviceIndex=0,
-            framesPerSecond=29.97,
-            orientation=0,
-            callback=None):  # Callback is a function that accepts ONE positional argument which will contain the text identified
+    def __init__(self, **kwargs):
         """
         Watcher Initialization
 
@@ -33,7 +23,6 @@ class Watcher(GenericDevice):
             recognizerFile (str): Trained file to be used to identify specific objects. (optional)
             namesFile (str):  File with friendly names tied to recognizer trained data set. (optional)
             trainingSourceFolder (str):  The source directory that contains all the images to use for building a new recognizerFile.
-            videoDeviceIndex (int): Video Device identifier. (optional)
             framesPerSecond (float): Number of frames per second.  Defaults to NTSC.
             orientation (int): Device orientation which can be 0, 90, 180, or 270.  (optional)
             videoDeviceIndex (int): Video device index number.  If not set then will use default video capture device.
@@ -41,43 +30,57 @@ class Watcher(GenericDevice):
             parent (object): Containing object's reference.  Normally this would be the device container. (optional)
         """
 
-        from kenzy import __version__
-        self.version = __version__
-
-        self._packageName = "kenzy"
-        
         # Local variable instantiation and initialization
         self.type = "WATCHER"
-        self.callback = callback
         self.logger = logging.getLogger(self.type)
-        self.parent = parent
+
+        self.clients = []
+        self._isRunning = False
+        self.lastFrame = None
+
+        from kenzy import __version__
+        self.version = __version__
+        self._packageName = "kenzy"
+
+        super(Watcher, self).__init__(**kwargs)
+        
+    def updateSettings(self):
+
+        self.parent = self.args.get("parent")
+        self._callbackHandler = self.args.get("callback")                       # Callback function accepts two positional args (Type, Text)
         
         fPath = os.path.join(os.path.dirname(__file__), "..", "data", "models", "watcher")
-        self.classifierFile = classifierFile if classifierFile is not None else os.path.abspath(os.path.join(fPath, "haarcascade_frontalface_default.xml"))
+        self.classifierFile = self.args.get("classifierFile", os.path.abspath(os.path.join(fPath, "haarcascade_frontalface_default.xml")))
         
         hPath = os.path.join(os.path.expanduser("~/.kenzy"), "data", "models", "watcher")
-        self.recognizerFile = recognizerFile if recognizerFile is not None else os.path.abspath(os.path.join(hPath, "recognizer.yml"))
-        self.namesFile = namesFile if namesFile is not None else os.path.abspath(os.path.join(hPath, "names.json"))
+        self.recognizerFile = self.args.get("recognizerFile", os.path.abspath(os.path.join(hPath, "recognizer.yml")))
 
-        if recognizerFile is None or namesFile is None:
-            os.makedirs(os.path.dirname(self.namesFile), exist_ok=True)
+        self.namesFile = self.args.get("namesFile", os.path.abspath(os.path.join(hPath, "names.json")))
+
+        if not os.path.isdir(os.path.dirname(self.namesFile)):
+            try:
+                self.logger.debug("Attempting to create names file location.")
+                os.makedirs(os.path.dirname(self.namesFile), exist_ok=True)
+            except Exception:
+                self.logger.debug("Unable to create names file location.")
+                pass
         
-        self.trainingSourceFolder = trainingSourceFolder
-        self.videoDeviceIndex = videoDeviceIndex if videoDeviceIndex is not None else 0
-        self.framesPerSecond = float(framesPerSecond) if framesPerSecond is not None else 29.97
+        self.trainingSourceFolder = self.args.get("trainingSourceFolder")
+        self.videoDeviceIndex = self.args.get("videoDeviceIndex", 0)
+        self.framesPerSecond = float(self.args.get("framesPerSecond", 29.97))
         
         self.orientation = None
+
+        orientation = self.args.get("orientation", 0)
         if orientation == 90:
             self.orientation = cv2.ROTATE_90_CLOCKWISE
         elif orientation == 180:
             self.orientation = cv2.ROTATE_180
         elif orientation == 270 or orientation == -90:
             self.orientation = cv2.ROTATE_90_COUNTERCLOCKWISE
-        
-        self.clients = []
-        self._isRunning = False
-        self.lastFrame = None
-        
+
+        return True
+
     @threaded
     def _doCallback(self, inData):
         """
