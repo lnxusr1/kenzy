@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.9.2]
+
+### Modified
+
+- PyPi integrations updated and streamlined build
+- Modified versioning storage/processing
+- Updated to a basic README for PyPi download page
+
 ## [0.9.1]
 
 ### Added

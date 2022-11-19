@@ -2,6 +2,7 @@ global-exclude *.py[cod]
 include CHANGELOG.md
 include README.md
 include requirements.txt
+include src/kenzy/VERSION
 include src/kenzy/models/watcher/*.xml
 include src/kenzy/skills/HelloSkill/vocab/en_us/*.*
 include src/kenzy/skills/KnockKnockSkill/vocab/en_us/*.*
