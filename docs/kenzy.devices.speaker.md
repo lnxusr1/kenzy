@@ -1,6 +1,12 @@
 # kenzy.devices.Speaker
 
-TBD
+## Parameters
+| Parameter           | Type    | Default | Description |
+| :------------------ | :------ | :------ | :---------- |
+| useTempFile         | bool    | True    | Pass test through file at runtime. |
+| speakerExecFormat   | str     | festival --tts {FILENAME} | TTS shell command. |
+
+For the __speakerExecFormat__ you can use {FILENAME} to represent a temp file generated at runtime and {TEXT} for in-line text replacement.
 
 -----
 

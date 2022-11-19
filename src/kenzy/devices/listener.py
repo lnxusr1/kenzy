@@ -17,19 +17,7 @@ class Listener(GenericDevice):
     Listener device to capture audio from microphone and convert any speech to text and send to callback method.
     """
     
-    def __init__(
-            self, 
-            parent=None,
-            speechModel=None,           # Speech Model file.  Ideally this could be searched for in a default location
-            speechScorer=None,          # Scorer file.  Okay for this to be None as scorer file is not required
-            audioChannels=1,            # VAD requires this to be 1 channel
-            audioSampleRate=16000,      # VAD requires this to be 16000
-            vadAggressiveness=1,        # VAD accepts 1 thru 3
-            speechRatio=0.75,           # Must be between 0 and 1 as a decimal
-            speechBufferSize=50,        # Buffer size for speech frames
-            speechBufferPadding=350,    # Padding, in milliseconds, of speech frames
-            audioDeviceIndex=None,
-            callback=None):             # Callback is a function that accepts ONE positional argument which will contain the text identified
+    def __init__(self, **kwargs):
         """
         Listener Initialization
 
@@ -48,26 +36,37 @@ class Listener(GenericDevice):
             callback (function): Callback function for which to send capture text    
         """
 
-        from kenzy import __version__
-        self.version = __version__
-        
-        self._packageName = "kenzy"
-
         # Local variable instantiation and initialization
         self.type = "LISTENER"
-        self.callback = callback
         self.logger = logging.getLogger(self.type)
-        self.parent = parent
+
+        self.stream = None
+        self.thread = None
+        self._isRunning = False 
+        self._isAudioOut = False 
         
-        self.speechModel = speechModel
-        self.speechScorer = speechScorer                  
-        self.audioChannels = audioChannels                
-        self.audioSampleRate = audioSampleRate            
-        self.vadAggressiveness = vadAggressiveness        
-        self.speechRatio = speechRatio                    
-        self.speechBufferSize = speechBufferSize          
-        self.speechBufferPadding = speechBufferPadding
-        self.audioDeviceIndex = audioDeviceIndex
+        from kenzy import __version__
+        self.version = __version__
+        self._packageName = "kenzy"
+
+        super(Listener, self).__init__(**kwargs)
+
+    def updateSettings(self):
+        """
+        Updates the settings based on values in self.args
+        """
+
+        self.parent = self.args.get("parent")
+        self.speechModel = self.args.get("speechModel")                         # Speech Model file.  Ideally this could be searched for in a default location
+        self.speechScorer = self.args.get("speechScorer")                       # Scorer file.  Okay for this to be None as scorer file is not required
+        self.audioChannels = self.args.get("audioChannels", 1)                  # VAD requires this to be 1 channel
+        self.audioSampleRate = self.args.get("audioSampleRate", 16000)          # VAD requires this to be 16000
+        self.vadAggressiveness = self.args.get("vadAggressiveness", 1)          # VAD accepts 1 thru 3
+        self.speechRatio = self.args.get("speechRatio", 0.75)                   # Must be between 0 and 1 as a decimal
+        self.speechBufferSize = self.args.get("speechBufferSize", 50)           # Buffer size for speech frames
+        self.speechBufferPadding = self.args.get("speechBufferPadding", 350)    # Padding, in milliseconds, of speech frames
+        self.audioDeviceIndex = self.args.get("audioDeviceIndex")               # Device by index as it applies to PyAudio
+        self._callbackHandler = self.args.get("callback")                       # Callback function accepts two positional args (Type, Text)
 
         if self.speechModel is None:
             # Search for speech model?
@@ -104,12 +103,9 @@ class Listener(GenericDevice):
         if self.speechModel is None:
             # FIXME: Should we try to download the models if they don't exist?
             raise Exception("Invalid speech model.  Unable to start listener.")
-        
-        self.stream = None
-        self.thread = None
-        self._isRunning = False 
-        self._isAudioOut = False 
-        
+
+        return True 
+
     @threaded
     def _doCallback(self, inData):
         """
@@ -123,8 +119,8 @@ class Listener(GenericDevice):
         """
 
         try:
-            if self.callback is not None:
-                self.callback("AUDIO_INPUT", inData)
+            if self._callbackHandler is not None:
+                self._callbackHandler("AUDIO_INPUT", inData)
         except Exception:
             pass
         

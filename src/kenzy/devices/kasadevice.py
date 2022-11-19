@@ -11,12 +11,7 @@ class KasaDevice(GenericDevice):
     Kasa SmartDevice to control a python-kasa plug device.
     """
     
-    def __init__(
-            self, 
-            parent=None,
-            alias=None,
-            address=None,
-            callback=None):
+    def __init__(self, **kwargs):
         """
         KasaPlug Initialization
 
@@ -27,25 +22,31 @@ class KasaDevice(GenericDevice):
             callback (function): Callback function for which to send any captured data.
         """
 
-        super(KasaDevice, self).__init__(parent=parent, callback=callback)
-                
-        from kenzy import __version__
-        self.version = __version__
-        
-        self._packageName = "kenzy"
-        
         # Local variable instantiation and initialization
         self.type = "KASADEV"
         self.logger = logging.getLogger(self.type)
         
-        self.alias = alias
-        self.address = address
         self.is_on = False
+        self.thread = None
+
+        from kenzy import __version__
+        self.version = __version__
+        self._packageName = "kenzy"
+
+        super(KasaDevice, self).__init__(**kwargs)
+
+    def updateSettings(self):
+
+        self.parent = self.args.get("parent")
+        self._callbackHandler = self.args.get("callback")                       # Callback function accepts two positional args (Type, Text)
+
+        self.alias = self.args.get("alias")
+        self.address = self.args.get("address")
 
         if self.alias is None and self.address is None:
             self.logger.error("KasaDevice requires an alias or address to be specified.  Unable to start kasa device.")
 
-        self.thread = None
+        return True
 
     @threaded
     def _doCallback(self, inData):
@@ -60,8 +61,8 @@ class KasaDevice(GenericDevice):
         """
 
         try:
-            if self.callback is not None:
-                self.callback("KASADEV_INPUT", inData, deviceId=self.deviceId)
+            if self._callbackHandler is not None:
+                self._callbackHandler("KASADEV_INPUT", inData, deviceId=self.deviceId)
         except Exception:
             pass
         

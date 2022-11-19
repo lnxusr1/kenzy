@@ -1,10 +1,13 @@
-site_name: Kenzy.Ai Docs
+site_name: KENZY.Ai Docs
 site_url: https://kenzy.ai/
 repo_url: https://github.com/lnxusr1/kenzy/
 
 theme: 
     name: readthedocs
     highlightjs: true
+    prev_next_buttons_location: none
+    titles_only: true
+    collapse_navigation: false
 
 nav:
     - Overview: 'index.md'

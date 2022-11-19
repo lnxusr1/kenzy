@@ -8,40 +8,52 @@ sudo apt-get -y install python3-pip
 
 # Install the required system packages
 sudo apt-get -y install \
-  libfann2 \
   python3-fann2 \
   python3-pyaudio \
+  python3-pyqt5 \
   python3-dev \
+  libespeak-ng1 \
   festival \
   festvox-us-slt-hts  \
   libportaudio2 \
+  portaudio19-dev \
   libasound2-dev \
   libatlas-base-dev \
   cmake \
   swig
 
-# Optionally create your local environment and then activate it
+# Create your local environment and then activate it
 python3 -m venv /path/to/virtual/env --system-site-packages
-/path/to/virtual/env/bin/activate
+source /path/to/virtual/env/bin/activate
 
 # Install the required build libraries
 python3 -m pip install scikit-build 
 
-# Install required runtime libraries
+# Install core required runtime libraries
 python3 -m pip install urllib3 \
   requests \
   netifaces \
-  numpy \
-  deepspeech \
+  padatious \
+  traceback
+
+# Install libraries for SpeakerDevice (Required only if using ```mimic3``` in place of festival)
+python3 -m pip install mycroft-mimic3-tts[all]
+
+# Install optional libraries for WatcherDevice
+python3 -m pip install opencv-contrib-python \
+  Pillow
+
+# Install optional libraries for KasaDevice
+python3 -m pip install asyncio \
+  python-kasa
+
+# Install optional libraries for ListenerDevice
+python3 -m pip install --upgrade numpy \
   pyaudio \
   webrtcvad \
-  opencv-contrib-python \
-  Pillow \
-  padatious \
-  fann2 \
-  traceback \
-  asyncio \
-  python-kasa
+  stt
+
+python3 -m pip install coqui-stt-module-manager # (For model management, not required)
 
 # Install the kenzy module
 python3 -m pip install kenzy
@@ -66,18 +78,14 @@ sudo ln -s /usr/lib/x86_64-linux-gnu/libdoublefann.so.2 /usr/local/lib/libdouble
 ## Download the Speech Recognition Models
 ### Via CLI
 ```
-python3 -m kenzy --download-models --model-type pbmm  
+python3 -m kenzy --download-models  
 ```
-__NOTE:__ Use ```--model-type tflite``` if running on the Raspberry Pi.
 
 ### Via Python
 ```
 from kenzy.extras import download_models
-model_type = "pbmm"           # use "tflite" for Raspberry Pi
-download_models(model_type)   # Downloads models for deepspeech
+download_models("tflite")   
 ```
-
-__NOTE:__ Use ```model_type = "tflite"``` if running on the Raspberry Pi.
 
 ## Starting Up
 You can execute Kenzy directly as a module.  To do so try the following:

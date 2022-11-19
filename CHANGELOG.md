@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [0.9.0] - TBD
+## [0.9.1]
 
 ### Added
 
@@ -16,6 +16,12 @@ All notable changes to this project will be documented in this file.
 - Documentation for installing on Ubuntu 22.04 LTS (pyaudio and libfann source package installation workarounds)
 - Download Models option now defaults to tflite format and pulls the Coqui base models from the Coqui Model Zoo
 - Moved all request/response processing into Skills and removed hardcoded responses
+- Removed hard dependency on padatious library
+- Fixed bug in skills processing for multiple intents
+- Updated device callbacks to use the GenericDevice naming convention
+- Updated device settings to allow for store/update on the fly
+- Updated container settings to allow for store/update on the fly
+- Adjusted where version information is stored
 
 ### Removed
 
