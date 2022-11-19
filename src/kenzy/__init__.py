@@ -3,6 +3,7 @@ More info at Kenzy.Ai
 """
 
 import sys
+import os
 import logging 
 import traceback
 from .templates import GenericContainer, GenericDevice
@@ -15,8 +16,10 @@ except ModuleNotFoundError:
     logging.info("GenericSkill not available due to missing libraries.")
 
 
-VERSION = (0, 9, 1)
-
 __app_name__ = "kenzy"
 __app_title__ = "KENZY.Ai"
-__version__ = ".".join([str(x) for x in VERSION])
+
+with open(os.path.join(os.path.dirname(__file__), "VERSION"), "r", encoding="UTF-8") as fp:
+    __version__ = fp.readline().strip()
+
+VERSION = [(int(x) if x.isnumeric() else x) for x in __version__.split(".")]

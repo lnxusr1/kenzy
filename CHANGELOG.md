@@ -21,6 +21,7 @@ All notable changes to this project will be documented in this file.
 - Updated device callbacks to use the GenericDevice naming convention
 - Updated device settings to allow for store/update on the fly
 - Updated container settings to allow for store/update on the fly
+- Adjusted where version information is stored
 
 ### Removed
 
