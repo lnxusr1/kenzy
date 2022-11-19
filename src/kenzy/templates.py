@@ -31,7 +31,7 @@ class GenericContainer():
         self._appName = __app_title__
         
         self._packageName = __app_name__
-
+        self.nickname = None
         self.groupName = groupName
         self.authenticationKey = authentication["key"] if isinstance(authentication, dict) and "key" in authentication else None
         self.authUser = authentication["username"] if isinstance(authentication, dict) and "username" in authentication else "admin"
@@ -86,6 +86,8 @@ class GenericContainer():
         """
 
         self.args = kwargs
+
+        self.nickname = self.args.get("nickname")
 
         if self.my_url is None:
             my_ip = getIPAddress() if self.hostname is None or self.hostname == "" else self.hostname
@@ -231,6 +233,7 @@ class GenericContainer():
             item = self.devices[devId]
             myDevices[devId] = { 
                 "id": devId, 
+                "nickname": None,
                 "type": item["type"], 
                 "accepts": item["accepts"], 
                 "active": True, 
@@ -239,6 +242,7 @@ class GenericContainer():
             }
             
             try:
+                myDevices[devId]["nickname"] = item["device"].nickname
                 myDevices[devId]["active"] = item["device"].isRunning()
             except Exception:
                 self.logger.debug(str(sys.exc_info()[0]))
@@ -602,6 +606,9 @@ class GenericDevice():
         if not hasattr(self, "_packageName"):
             self._packageName = None
         
+        if not hasattr(self, "nickname"):
+            self.nickname = self.args.get("nickname")
+
         self.deviceId = uuid.uuid4()
         self._isRunning = False
 

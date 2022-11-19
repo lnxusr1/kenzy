@@ -10,6 +10,7 @@
 | recognizerFile       | str     | -       | (Optional) Trained faces file in YML format |
 | namesFile            | str     | -       | (Optional) Friendly names file in JSON format |
 | trainingSourceFolder | str     | -       | (Optional) Source folder for training routine |
+| nickname             | str     | None    | (Optional) Nickname of the device |
 
 -----
 

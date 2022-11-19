@@ -146,7 +146,7 @@ cfg = {
                 },
                 {
                     'autoStart': True,
-                    'module': 'kenzy.devices.KasaDevice'
+                    'module': 'kenzy.devices.KasaPlug'
                 },
                 {
                     'autoStart': True,

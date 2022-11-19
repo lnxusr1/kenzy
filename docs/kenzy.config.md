@@ -10,7 +10,7 @@ The generic format of the container is as follows:
 
 ```
 {
-    "appVersion": "0.8.1",
+    "appVersion": "0.9.2",
     "settings": {
         "modulesFolder": "/path/to/modules/folder"
     },
@@ -19,7 +19,17 @@ The generic format of the container is as follows:
             "module": "path.and.module.Name",
             "autoStart": true,
             "settings": {
-                'tcpPort': 8081
+                'tcpPort': 8081,
+                'hostName': "localhost",
+                'sslCertFile': "/etc/ssl/certs/snakeoil.crt", 
+                'sslKeyFile': "/etc/ssl/private/snakeoil.key",
+                'brainUrl': "https://localhost:8080", 
+                'groupName': "Living Room", 
+                'authentication': {
+                    'key': "<API KEY HERE>",
+                    'username': "<USERNAME HERE>",
+                    'password': "<PASSWORD HERE>"
+                }
             },
             "initialize": {
                 "paramName1": "paramValue1",
@@ -49,7 +59,7 @@ It's worth mentioned that by default a DeviceContainer will search via UPNP for 
 
 ```
 {
-	"appVersion": "0.8.1",
+	"appVersion": "0.9.2",
 	"settings": {
 		"modulesFolder": null
 	},
@@ -84,13 +94,17 @@ It's worth mentioned that by default a DeviceContainer will search via UPNP for 
 						"speechRatio": 0.75,
 						"speechBufferSize": 50,
 						"speechBufferPadding": 350,
-						"audioDeviceIndex": null
+						"audioDeviceIndex": null,
+                        "nickname": "Table Mic"
 					}
 				},
 				{
 					"module": "kenzy.devices.Speaker",
 					"autoStart": true,
-					"uuid": null
+					"uuid": null,
+                    "parameters": {
+                        "nickname": "Table Speaker"
+                    }
 				}
 			]
 		}
@@ -105,7 +119,7 @@ You can create a brain instance by itself or include this section along with a D
 
 ```
 {
-	"appVersion": "0.8.1",
+	"appVersion": "0.9.2",
 	"settings": {
 		"modulesFolder": null
 	},
@@ -140,7 +154,7 @@ If you don't specify any parameters and just issue a ```python3 -m kenzy``` then
 
 ```
 {
-    "appVersion": "0.8.1",
+    "appVersion": "0.9.2",
     "settings": {
         "modulesFolder": null
     },

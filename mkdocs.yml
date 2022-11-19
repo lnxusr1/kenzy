@@ -21,6 +21,7 @@ nav:
       - Setting a Startup Configuration: 'kenzy.config.md'
     - Devices:
       - Creating a Device: 'kenzy.devices.md'
+      - kenzy.devices.KasaPlug: 'kenzy.devices.kasaplug.md'
       - kenzy.devices.Listener: 'kenzy.devices.listener.md'
       - kenzy.devices.Speaker: 'kenzy.devices.speaker.md'
       - kenzy.devices.Watcher: 'kenzy.devices.watcher.md'

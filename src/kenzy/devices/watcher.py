@@ -32,7 +32,7 @@ class Watcher(GenericDevice):
 
         # Local variable instantiation and initialization
         self.type = "WATCHER"
-        self.logger = logging.getLogger(self.type)
+        self.logger = logging.getLogger(kwargs.get("nickname", self.type))
 
         self.clients = []
         self._isRunning = False
