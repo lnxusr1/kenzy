@@ -128,7 +128,7 @@ class GenericContainer():
         i = len(self._threadPool) - 1
         while i >= 0:
             try:
-                if self._threadPool[i] is None or not self._threadPool[i].isAlive():
+                if self._threadPool[i] is None or not self._threadPool[i].is_alive():
                     self._threadPool.pop(i)
             except Exception:
                 self._threadPool.pop(i)
@@ -142,7 +142,7 @@ class GenericContainer():
         i = len(self._threadPool) - 1
         while i >= 0:
             try:
-                if self._threadPool[i] is not None and self._threadPool[i].isAlive():
+                if self._threadPool[i] is not None and self._threadPool[i].is_alive():
                     self._threadPool[i].abort()
             except Exception:
                 pass
