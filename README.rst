@@ -15,8 +15,7 @@ Visit our main site: https://kenzy.ai/
 
 --------------
 
-Help & Documentation
---------------
+##Help & Documentation##
 
 Help and additional details is available at https://docs.kenzy.ai/
 
