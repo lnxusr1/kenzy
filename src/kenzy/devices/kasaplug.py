@@ -1,14 +1,15 @@
 import logging
+import sys
+import traceback
 from kenzy.shared import threaded
 from kenzy import GenericDevice
 import asyncio
-from kasa import SmartDevice, Discover
-import time
+from kasa import SmartPlug, Discover, SmartDeviceException
 
 
-class KasaDevice(GenericDevice):
+class KasaPlug(GenericDevice):
     """
-    Kasa SmartDevice to control a python-kasa plug device.
+    Kasa SmartPlug to control a python-kasa plug device.
     """
     
     def __init__(self, **kwargs):
@@ -24,7 +25,7 @@ class KasaDevice(GenericDevice):
 
         # Local variable instantiation and initialization
         self.type = "KASADEV"
-        self.logger = logging.getLogger(self.type)
+        self.logger = logging.getLogger(kwargs.get("nickname", self.type))
         
         self.is_on = False
         self.thread = None
@@ -33,18 +34,22 @@ class KasaDevice(GenericDevice):
         self.version = __version__
         self._packageName = "kenzy"
 
-        super(KasaDevice, self).__init__(**kwargs)
+        super(KasaPlug, self).__init__(**kwargs)
 
     def updateSettings(self):
 
         self.parent = self.args.get("parent")
         self._callbackHandler = self.args.get("callback")                       # Callback function accepts two positional args (Type, Text)
 
-        self.alias = self.args.get("alias")
-        self.address = self.args.get("address")
+        self.alias = self.args.get("alias")                                     # Alias of the smart plug device
+        self.address = self.args.get("address")                                 # IP Address of the smart plug device
+        self.checkInterval = self.args.get("checkInterval", 10)                 # Number of seconds between on/off checks
 
         if self.alias is None and self.address is None:
             self.logger.error("KasaDevice requires an alias or address to be specified.  Unable to start kasa device.")
+
+        if self.alias is not None and self.nickname is None:
+            self.nickname = self.alias
 
         return True
 
@@ -76,33 +81,59 @@ class KasaDevice(GenericDevice):
             for addr, obj in devices.items():
                 if str(obj.alias).lower().strip() == str(self.alias).lower().strip():
                     self.address = addr
-                    self.logger.info("Found kasa device at " + str(self.address))
+                    self.logger.info(str(self.alias) + " - Found kasa device at " + str(self.address))
 
         if self.address is not None:
             asyncio.run(self._checkStatus())
 
     async def _checkStatus(self):
         while self._isRunning:
-            d = SmartDevice(self.address)
-            await d.update()
-            
-            if self.is_on != d.is_on:
-                self.logger.debug(str(self.address) + " status: " + str(self.is_on))
+            try:
+                d = SmartPlug(self.address)
+                await d.update()
 
-            self.is_on = d.is_on
-            time.sleep(5)
+                self.alias = d.alias
+                if self.nickname is None:
+                    self.nickname = self.alias
+
+                if self.is_on != d.is_on:
+                    self.logger.info(str(self.nickname) + " (" + str(self.address) + ") status: " + str(self.is_on))
+
+                self.is_on = d.is_on
+            except SmartDeviceException:
+                self.logger.debug(str(sys.exc_info()[0]))
+                self.logger.debug(str(traceback.format_exc()))
+                devName = self.nickname if self.nickname is not None else self.alias if self.alias is not None else self.address
+                self.logger.error(str(devName) + " - Unable to get status for KasaPlug")
+                pass
+
+            await asyncio.sleep(10)
 
     async def _on(self):
-        d = SmartDevice(self.address)
+        try:
+            d = SmartPlug(self.address)
 
-        await d.turn_on()
-        self.is_on = True
+            await d.turn_on()
+            self.is_on = True
+        except SmartDeviceException:
+            self.logger.debug(str(sys.exc_info()[0]))
+            self.logger.debug(str(traceback.format_exc()))
+            devName = self.nickname if self.nickname is not None else self.alias if self.alias is not None else self.address
+            self.logger.error(str(devName) + " - Unable to turn on KasaPlug")
+            pass
 
     async def _off(self):
-        d = SmartDevice(self.address)
+        try:
+            d = SmartPlug(self.address)
 
-        await d.turn_off()
-        self.is_on = False
+            await d.turn_off()
+            self.is_on = False
+        except SmartDeviceException:
+            self.logger.debug(str(sys.exc_info()[0]))
+            self.logger.debug(str(traceback.format_exc()))
+            devName = self.nickname if self.nickname is not None else self.alias if self.alias is not None else self.address
+            self.logger.error(str(devName) + " - Unable to turn off KasaPlug")
+            pass
 
     def on(self, httpRequest=None):
         asyncio.run(self._on())

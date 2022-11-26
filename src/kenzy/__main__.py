@@ -146,7 +146,7 @@ cfg = {
                 },
                 {
                     'autoStart': True,
-                    'module': 'kenzy.devices.KasaDevice'
+                    'module': 'kenzy.devices.KasaPlug'
                 },
                 {
                     'autoStart': True,
@@ -290,7 +290,7 @@ for container in cfg["containers"]:
                         exec("import " + m.strip())
                 
                     setting_args = device_config["parameters"] if "parameters" in device_config and isinstance(device_config["parameters"], dict) else {}
-                    autoStart = bool(device_config["start"]) if "start" in device_config and device_config["start"] is not None else True
+                    autoStart = bool(device_config["autoStart"]) if "autoStart" in device_config and device_config["autoStart"] is not None else True
                     groupName = str(device_config["groupName"]) if "groupName" in device_config and device_config["groupName"] is not None else None
                     
                     devId = str(device_config["uuid"]) if "uuid" in device_config and device_config["uuid"] is not None else None

@@ -18,8 +18,8 @@ except ModuleNotFoundError:
     logging.info("Watcher disabled due to missing libraries.")
 
 try:
-    from .kasadevice import KasaDevice
+    from .kasaplug import KasaPlug
 except ModuleNotFoundError:
     logging.debug(str(sys.exc_info()[0]))
     logging.debug(str(traceback.format_exc()))
-    logging.info("KasaDevice disabled due to missing libraries.")
+    logging.info("KasaPlug disabled due to missing libraries.")

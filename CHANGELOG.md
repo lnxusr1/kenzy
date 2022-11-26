@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.9.2]
+
+#### Added
+
+- Added ```nickname``` option to devices/containers
+
+### Modified
+
+- PyPi integrations updated and streamlined build
+- Modified versioning storage/processing
+- Updated to a basic README for PyPi download page
+- Multiple bugs fixed in KasaPlug for local, direct plug access
+- Bug fix for isAlive() to is_alive()
+
 ## [0.9.1]
 
 ### Added

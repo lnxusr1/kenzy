@@ -997,6 +997,7 @@ class UPNPServer(object):
         self._isRunning = False
         self.version = self.parent.version
         self.services = {}
+        self.nickname = "UPNP Server"
     
         if usn is None:
             if self.parent is not None:

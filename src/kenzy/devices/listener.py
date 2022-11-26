@@ -38,7 +38,7 @@ class Listener(GenericDevice):
 
         # Local variable instantiation and initialization
         self.type = "LISTENER"
-        self.logger = logging.getLogger(self.type)
+        self.logger = logging.getLogger(kwargs.get("nickname", self.type))
 
         self.stream = None
         self.thread = None

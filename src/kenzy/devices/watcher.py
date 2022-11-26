@@ -32,7 +32,7 @@ class Watcher(GenericDevice):
 
         # Local variable instantiation and initialization
         self.type = "WATCHER"
-        self.logger = logging.getLogger(self.type)
+        self.logger = logging.getLogger(kwargs.get("nickname", self.type))
 
         self.clients = []
         self._isRunning = False
@@ -266,7 +266,7 @@ class Watcher(GenericDevice):
                     i = len(threadPool) - 1
                     while i >= 0:
                         try:
-                            if not threadPool[i].isAlive():
+                            if not threadPool[i].is_alive():
                                 threadPool[i].join()
                                 threadPool.pop(i)
                         except Exception:
@@ -282,7 +282,7 @@ class Watcher(GenericDevice):
 
         videoDevice.release()
         for item in threadPool:
-            if not item.isAlive():
+            if not item.is_alive():
                 item.join()
             
     def stream(self, httpRequest):

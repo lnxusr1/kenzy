@@ -24,7 +24,7 @@ class Speaker(GenericDevice):
 
         # Local variable instantiation and initialization
         self.type = "SPEAKER"
-        self.logger = logging.getLogger(self.type)
+        self.logger = logging.getLogger(kwargs.get("nickname", self.type))
 
         from kenzy import __version__
         self.version = __version__
