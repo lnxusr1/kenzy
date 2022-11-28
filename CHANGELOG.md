@@ -4,7 +4,11 @@ All notable changes to this project will be documented in this file.
 
 ## [0.9.3]
 
+### Modified
 
+- (CRITICAL) Fixed skill inclusion breaking runtime due to missing "create_skill()" attributes
+- Cleaned up documentation on inclusion of libraries (added python3-venv and removed traceback)
+- Corrected documentation on PyAudio library installation
 
 ## [0.9.2]
 
