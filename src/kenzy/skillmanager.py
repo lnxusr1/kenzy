@@ -56,6 +56,10 @@ class SkillManager:
                         if os.path.isdir(os.path.join(self.skill_folder, o))]
         
         for f in skillModules:
+            s = os.path.basename(f)
+            if str(s).lower() == "__pycache__" or str(s).endswith(".py"):
+                continue 
+
             mySkillName = os.path.basename(f)
             self.logger.debug("Loading " + mySkillName) 
             mySkillModule = __import__(mySkillName)
