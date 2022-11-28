@@ -12,3 +12,5 @@ include src/kenzy/panel/resources/images/*.svg
 include src/kenzy/web/*.*
 include src/kenzy/skills/*/*.py
 include src/kenzy/skills/*/vocab/*/*.*
+include src/kenzy/panels/resources/*/*.*
+include src/kenzy/data/models/watcher/*.*
