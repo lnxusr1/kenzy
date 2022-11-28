@@ -55,8 +55,11 @@ sudo apt-get -y install \
   swig
 
 # Create your local environment and then activate it
-python3 -m venv /path/to/virtual/env --system-site-packages
-source /path/to/virtual/env/bin/activate
+sudo apt-get -y install python3-venv
+mkdir -p ~/kenzy
+cd ~/kenzy
+python3 -m venv ./.venv --system-site-packages
+source ./.venv/bin/activate
 
 # Install the required build libraries
 python3 -m pip install scikit-build 
@@ -65,8 +68,7 @@ python3 -m pip install scikit-build
 python3 -m pip install urllib3 \
   requests \
   netifaces \
-  padatious \
-  traceback
+  padatious
 
 # Install libraries for SpeakerDevice (Required only if using ```mimic3``` in place of festival)
 python3 -m pip install mycroft-mimic3-tts[all]
@@ -81,11 +83,15 @@ python3 -m pip install asyncio \
 
 # Install optional libraries for ListenerDevice
 python3 -m pip install --upgrade numpy \
-  pyaudio \
   webrtcvad \
   stt
 
-python3 -m pip install coqui-stt-module-manager # (For model management, not required)
+# If you have trouble with pyaudio then you may want try to upgrade it
+python3 -m pip install --upgrade pyaudio
+
+
+# For listener model management (optional)
+python3 -m pip install coqui-stt-module-manager 
 
 # Install the kenzy module
 python3 -m pip install kenzy

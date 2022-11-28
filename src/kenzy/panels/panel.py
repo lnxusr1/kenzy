@@ -21,19 +21,19 @@ class DeviceItem(QtWidgets.QWidget, settings_ui.Ui_DeviceItem):
 
 
 class PanelApp(QtWidgets.QMainWindow, form_ui_simple.Ui_MainWindow):
-    def __init__(self, parent=None, callback=None, screenSelection=None, fullScreen=None):
-        super(PanelApp, self).__init__(parent)
+    def __init__(self, **kwargs):
+        super(PanelApp, self).__init__(kwargs.get("parent"))
         self.setupUi(self)
         
         from . import __version__, __appyear__
         self.version = __version__
         
         self._packageName = "kenzy"
-        
         self._isRunning = False
         
-        self.fullScreen = fullScreen
-        self.screenSelection = screenSelection
+        self.nickname = kwargs.get("nickname")
+        self.fullScreen = kwargs.get("fullScreen", None)
+        self.screenSelection = kwargs.get("screenSelection", None)
             
         self.setWindowFlags(Qt.WindowStaysOnTopHint | Qt.FramelessWindowHint)
         
@@ -60,7 +60,7 @@ class PanelApp(QtWidgets.QMainWindow, form_ui_simple.Ui_MainWindow):
         self.lblDate.setText("")
         self.updateTime()
         
-        self.lblName.setText("KREN " + self.version.replace(".", "") + __appyear__)
+        self.lblName.setText("KN-Z " + self.version.replace(".", "") + __appyear__)
         
         self._timer = QtCore.QTimer()
         self._timer.setInterval(1000)

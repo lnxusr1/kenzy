@@ -15,9 +15,9 @@ Visit our main site: https://kenzy.ai/
 
 --------------
 
-##Help & Documentation##
+Help & Documentation
 
-Help and additional details is available at https://docs.kenzy.ai/
+Help and additional details are available at https://docs.kenzy.ai/
 
 .. |GitHub license| image:: https://img.shields.io/github/license/lnxusr1/kenzy
    :target: https://github.com/lnxusr1/kenzy/blob/master/LICENSE

@@ -2,9 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.9.8]
+
+### Modified
+
+- (CRITICAL) Fixed skill inclusion breaking runtime due to missing "create_skill()" attributes
+- Cleaned up documentation on inclusion of libraries (added python3-venv and removed traceback)
+- Corrected documentation on PyAudio library installation
+- (CRITICAL) Fixed inclusion of missing files in PyPi build
+
+- (Sorry about the version increments... still getting use to PyPi.org)
+
 ## [0.9.2]
 
-#### Added
+### Added
 
 - Added ```nickname``` option to devices/containers
 
