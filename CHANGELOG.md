@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [0.9.8]
 
+### Added
+
+- Downloadable installer script
+- Installer script documentation
+- Logo in docs
+
 ### Modified
 
 - (CRITICAL) Fixed skill inclusion breaking runtime due to missing "create_skill()" attributes
