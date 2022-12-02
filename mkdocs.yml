@@ -8,6 +8,7 @@ theme:
     prev_next_buttons_location: none
     titles_only: true
     collapse_navigation: false
+    logo: https://kenzy.ai/wp-content/uploads/2022/11/kenzy_logo_text_light.png
 
 nav:
     - Overview: 'index.md'
