@@ -53,17 +53,15 @@ class HelloSkill(GenericSkill):
             (bool): True on success or False on failure
         """
         
-        if message.conf > 0.6:
-            
-            if "help" in message.sent:
-                return self.ask("How can I assist you?", self.handle_help_response)
+        if "help" in message.sent:
+            return self.ask("How can I assist you?", self.handle_help_response)
+        else:
+            text = self.getMessageFromDialog("hello.dialog")
+            if (text != "") and (text.lower() != "good night"):
+                return self.say(text, context=context)
             else:
-                text = self.getMessageFromDialog("hello.dialog")
-                if (text != "") and (text.lower() != "good night"):
-                    return self.say(text, context=context)
-                else:
-                    return self.say("Hello", context=context)
-        
+                return self.say("Hello", context=context)
+    
         return False
     
     def stop(self):
