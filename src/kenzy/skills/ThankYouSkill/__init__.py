@@ -39,11 +39,9 @@ class ThankYouSkill(GenericSkill):
             (bool): True on success or False on failure
         """
         
-        if message.conf > 0.6:
-
-            text = self.getMessageFromDialog("thankyou.dialog")
-            if (text != ""):
-                return self.say(text, context=context)
+        text = self.getMessageFromDialog("thankyou.dialog")
+        if (text != ""):
+            return self.say(text, context=context)
         
         return False
     

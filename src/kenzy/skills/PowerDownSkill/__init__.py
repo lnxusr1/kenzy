@@ -58,13 +58,9 @@ class PowerDownSkill(GenericSkill):
             (bool): True on success or False on failure
         """
         
-        if message.conf == 1.0:
+        text = self.getMessageFromDialog("powerdown.dialog")
+        return self.ask(text, self.handle_powerdown_confirm, context=context)
             
-            text = self.getMessageFromDialog("powerdown.dialog")
-            return self.ask(text, self.handle_powerdown_confirm, context=context)
-        
-        return False
-    
     def stop(self):
         """
         Method to stop any daemons created during startup/initialization for this skill.
