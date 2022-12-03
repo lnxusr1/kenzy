@@ -68,11 +68,8 @@ class TellDateTimeSkill(GenericSkill):
             (bool): True on success or False on failure
         """
 
-        if message.conf == 1.0:
-            text = "It is " + time.strftime("%A, %B %d")
-            return self.say(text, context=context)
-        
-        return True
+        text = "It is " + time.strftime("%A, %B %d")
+        return self.say(text, context=context)
     
     def stop(self):
         """

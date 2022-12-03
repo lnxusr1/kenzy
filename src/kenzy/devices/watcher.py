@@ -110,8 +110,7 @@ class Watcher(GenericDevice):
         Returns:
             (thread):  The thread created for the watcher while capturing incoming video.
         """
-        self._isRunning = True
-        
+
         if self.classifierFile is None or not os.path.isfile(self.classifierFile):
             self.logger.error("Invalid classifier file specified. Unable to start Watcher.")
             self.classifierFile = None 
@@ -155,10 +154,21 @@ class Watcher(GenericDevice):
         isPaused = False 
         
         videoDevice = cv2.VideoCapture(self.videoDeviceIndex)
+
         threadPool = []
         
         lTime = 0  # should be current time but we need to seed the first image.
         yTime = 0
+        
+        # Test camera to make sure we can read a frame
+        ret, im = videoDevice.read()
+        if not ret:
+            self.logger.error("Unable to read from camera device. Is the device connected?")
+            self._isRunning = False
+            self.stop()
+            return False
+
+        self._isRunning = True
         
         while self._isRunning:
             ret, im = videoDevice.read()

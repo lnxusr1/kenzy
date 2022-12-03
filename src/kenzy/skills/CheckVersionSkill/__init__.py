@@ -40,10 +40,8 @@ class CheckVersionSkill(GenericSkill):
             (bool): True on success or False on failure
         """
         
-        if message.conf == 1.0:
-            
-            if self.brain is not None:
-                return self.say("The active version is " + str(self.brain.version), context=context)
+        if self.brain is not None:
+            return self.say("The active version is " + str(self.brain.version), context=context)
         
         return False
     

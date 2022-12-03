@@ -63,11 +63,9 @@ class AboutSkill(GenericSkill):
             (bool): True on success or False on failure
         """
         
-        if message.conf == 1.0:
-            
-            text = self.getMessageFromDialog("status.dialog")
-            if (text != ""):
-                return self.say(text, context=context)
+        text = self.getMessageFromDialog("status.dialog")
+        if (text != ""):
+            return self.say(text, context=context)
             
         return False
 

@@ -9,6 +9,8 @@ import queue
 import webrtcvad
 import collections
 import stt
+import sys
+import traceback
 from ctypes import CFUNCTYPE, cdll, c_char_p, c_int
 
 
@@ -169,17 +171,25 @@ class Listener(GenericDevice):
         _audio_device = pyaudio.PyAudio()
         
         # Open a stream on the audio device for reading frames
-        self.stream = _audio_device.open(
-            format=pyaudio.paInt16,
-            channels=self.audioChannels,
-            rate=self.audioSampleRate,
-            input=True,
-            frames_per_buffer=int(self.audioSampleRate / float(self.speechBufferSize)),
-            input_device_index=self.audioDeviceIndex,
-            stream_callback=proxy_callback)
-        
-        self.stream.start_stream()                               # Open audio device stream
-        
+        try:
+            self.stream = _audio_device.open(
+                format=pyaudio.paInt16,
+                channels=self.audioChannels,
+                rate=self.audioSampleRate,
+                input=True,
+                frames_per_buffer=int(self.audioSampleRate / float(self.speechBufferSize)),
+                input_device_index=self.audioDeviceIndex,
+                stream_callback=proxy_callback)
+            
+            self.stream.start_stream()                               # Open audio device stream
+        except Exception:
+            logging.debug(str(sys.exc_info()[0]))
+            logging.debug(str(traceback.format_exc()))
+            self.logger.error("Unable to read from listener device.")
+            self._isRunning = False
+            self.stop()
+            return False 
+
         # Context of audio frames is used to better identify the spoken words.
         stream_context = _model.createStream()
         

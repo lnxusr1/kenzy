@@ -42,12 +42,12 @@ wget -q -O install.sh https://kenzy.ai/installer && sh install.sh
 
 Running the script exactly as shown above will install Kenzy and all components.  If you want to be more selective you can add options as follows:
 
-* -b = Install brain dependencies
-* -l = Install listener dependencies
-* -s = Install speaker dependencies
-* -w = Install watcher dependencies
-* -p = Install panel dependencies
-* -v [PATH] = Python virtual environment path (will create new if does not already exist)
+* ```-b``` = Install brain dependencies
+* ```-l``` = Install listener dependencies
+* ```-s``` = Install speaker dependencies
+* ```-w``` = Install watcher dependencies
+* ```-p``` = Install panel dependencies
+* ```-v [PATH]``` = Python virtual environment path (will create new if does not already exist)
 
 Installer script has been tested on Ubuntu 22.04+, Debian Buster, and Raspberry Pi OS (Buster).
 
