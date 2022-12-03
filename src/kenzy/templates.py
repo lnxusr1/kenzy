@@ -10,7 +10,7 @@ import traceback
 
 
 class GenericContainer():
-    def __init__(self, tcpPort=None, hostName="", sslCertFile=None, sslKeyFile=None, brainUrl=None, groupName=None, authentication=None):
+    def __init__(self, **kwargs):
         """
         Generic Container Initialization
         
@@ -25,6 +25,9 @@ class GenericContainer():
         
         Both the ssl_cert_file and ssl_key_file must be present in order for SSL to be leveraged.
         """
+
+        # tcpPort=None, hostName="", sslCertFile=None, sslKeyFile=None, brainUrl=None, groupName=None, authentication=None
+        self.config = kwargs
         
         from . import __app_name__, __version__, __app_title__
         self._version = __version__
@@ -32,10 +35,10 @@ class GenericContainer():
         
         self._packageName = __app_name__
         self.nickname = None
-        self.groupName = groupName
-        self.authenticationKey = authentication["key"] if isinstance(authentication, dict) and "key" in authentication else None
-        self.authUser = authentication["username"] if isinstance(authentication, dict) and "username" in authentication else "admin"
-        self.authPassword = authentication["password"] if isinstance(authentication, dict) and "password" in authentication else "admin"
+        self.groupName = self.config.get("groupName")
+        self.authenticationKey = self.config.get("authentication", {}).get("key")
+        self.authUser = self.config.get("authentication", {}).get("username","admin")
+        self.authPassword = self.config.get("authentication", {}).get("password","admin")
         
         self.app = None
         
@@ -54,11 +57,11 @@ class GenericContainer():
         self.logger = logging.getLogger("CONTAINER")
         
         # TCP Command Interface
-        self.tcp_port = tcpPort if tcpPort is not None else 8081
-        self.hostname = hostName if hostName is not None else "" 
+        self.tcp_port = self.config.get("tcpPort", 8081)
+        self.hostname = self.config.get("hostName", "") 
         self.use_http = True
-        self.keyfile = sslCertFile
-        self.certfile = sslKeyFile
+        self.keyfile = self.config.get("sslCertFile")
+        self.certfile = self.config.get("sslKeyFile")
 
         self.use_http = False if self.keyfile is not None and self.certfile is not None else True
         
@@ -73,7 +76,7 @@ class GenericContainer():
         
         self.my_url = None
 
-        self.brain_url = brainUrl
+        self.brain_url = self.config.get("brainUrl")
         if self.brain_url is None:
             self.brain_url = "http://localhost:8080"
         

@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.9.9]
+
+### Modified
+
+- Listner error trapping for invalid audio devices to report stopped status on failure
+- Watcher error trapping for invalid camera devices to report stopped status on failure
+- GenericContainer now saves core init() args to ```self.config``` and initialize() args to ```self.args```
+
 ## [0.9.8]
 
 ### Added
