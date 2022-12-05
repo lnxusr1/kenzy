@@ -32,7 +32,7 @@ class PanelApp(QtWidgets.QMainWindow, form_ui_simple.Ui_MainWindow):
         self._isRunning = False
         
         self.nickname = kwargs.get("nickname")
-        self.fullScreen = kwargs.get("fullScreen", None)
+        self.fullScreen = kwargs.get("fullScreen", False)
         self.screenSelection = kwargs.get("screenSelection", None)
             
         self.setWindowFlags(Qt.WindowStaysOnTopHint | Qt.FramelessWindowHint)

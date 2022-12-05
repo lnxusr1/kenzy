@@ -2,11 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.0.0]
+
+### Modified
+
+- (MINOR) Fixed bug in autoStart conditions for devices preventing devices from honoring the setting when set to ```False```
+- Moved RaspiPanel into "panels" module
+- Set the running app to be PyQt5 specific
+- Adjusted the startup arguments for GenericContainer to be non-specific
+- Fixed build cleanup process
+- Set the PyQt5 example panel to be disabled by default (but available to 'start' in web UI)
+
 ## [0.9.9]
 
 ### Modified
 
-- Listner error trapping for invalid audio devices to report stopped status on failure
+- Listener error trapping for invalid audio devices to report stopped status on failure
 - Watcher error trapping for invalid camera devices to report stopped status on failure
 - GenericContainer now saves core init() args to ```self.config``` and initialize() args to ```self.args```
 

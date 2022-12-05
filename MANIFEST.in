@@ -7,8 +7,8 @@ include src/kenzy/models/watcher/*.xml
 include src/kenzy/skills/HelloSkill/vocab/en_us/*.*
 include src/kenzy/skills/KnockKnockSkill/vocab/en_us/*.*
 include src/kenzy/skills/TellDateTimeSkill/vocab/en_us/*.*
-include src/kenzy/panel/resources/fonts/*.ttf
-include src/kenzy/panel/resources/images/*.svg
+include src/kenzy/panels/example_panel/resources/fonts/*.ttf
+include src/kenzy/panels/example_panel/resources/images/*.svg
 include src/kenzy/web/*.*
 include src/kenzy/skills/*/*.py
 include src/kenzy/skills/*/vocab/*/*.*
