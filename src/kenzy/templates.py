@@ -383,9 +383,13 @@ class GenericContainer():
         }
         
         try:
-            if autoStart and "start" in accepts and not device.isRunning():
+            if (isPanel or autoStart) and "start" in accepts and not device.isRunning():
                 self.logger.info("Starting Device: " + str(id) + " (" + str(type) + ")")
                 self.devices[str(id)]["device"].start()
+
+                if isPanel and not autoStart and "stop" in accepts and device.isRunning():
+                    self.devices[str(id)]["device"].stop()
+
         except Exception:
             pass
         
