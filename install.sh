@@ -177,6 +177,11 @@ if [ $listener -eq 1 ]; then
 
 fi
 
+$pythonCmd -m compileall
+if [ $? -ne 0 ]; then
+    echo "Unable to compile libraries."
+fi
+
 echo "Installation completed successfully.";
 
 echo "";

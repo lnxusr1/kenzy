@@ -37,10 +37,10 @@ class GenericContainer():
         self.nickname = None
         self.groupName = self.config.get("groupName")
         self.authenticationKey = self.config.get("authentication", {}).get("key")
-        self.authUser = self.config.get("authentication", {}).get("username","admin")
-        self.authPassword = self.config.get("authentication", {}).get("password","admin")
+        self.authUser = self.config.get("authentication", {}).get("username", "admin")
+        self.authPassword = self.config.get("authentication", {}).get("password", "admin")
         
-        self.app = None
+        self.appQt5 = None
         
         self._doRestart = False
         self.isBrain = False
@@ -383,9 +383,13 @@ class GenericContainer():
         }
         
         try:
-            if autoStart and "start" in accepts and not device.isRunning():
+            if (isPanel or autoStart) and "start" in accepts and not device.isRunning():
                 self.logger.info("Starting Device: " + str(id) + " (" + str(type) + ")")
                 self.devices[str(id)]["device"].start()
+
+                if isPanel and not autoStart and "stop" in accepts and device.isRunning():
+                    self.devices[str(id)]["device"].stop()
+
         except Exception:
             pass
         
@@ -456,8 +460,8 @@ class GenericContainer():
             (bool):  True on success else will raise an exception.
         """
         
-        if self.app is not None:
-            self.app.exec_()
+        if self.appQt5 is not None:
+            self.appQt5.exec_()
                 
         if seconds > 0:
             self.logger.info("Shutting down in " + str(seconds) + " second(s).")
@@ -504,8 +508,8 @@ class GenericContainer():
             except Exception:
                 pass 
         
-        if self.app is not None:
-            self.app.quit()
+        if self.appQt5 is not None:
+            self.appQt5.quit()
         
         self.logger.debug(str(self.id) + ": Stopped.")
             

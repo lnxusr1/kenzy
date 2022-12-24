@@ -21,6 +21,7 @@ class Ui_MainWindow(object):
         self.frmMain = QtWidgets.QFrame(self.centralwidget)
         self.frmMain.setGeometry(QtCore.QRect(0, 0, 1024, 600))
         self.frmMain.setObjectName("frmMain")
+        self.frmMain.setStyleSheet("background-color: rgb(0, 0, 0);")
         self.frmSettings = QtWidgets.QFrame(self.frmMain)
         self.frmSettings.setGeometry(QtCore.QRect(0, 0, 1024, 524))
         self.frmSettings.setStyleSheet("background-color: rgb(0, 0, 0);")

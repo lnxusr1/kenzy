@@ -149,8 +149,9 @@ cfg = {
                     'module': 'kenzy.devices.KasaPlug'
                 },
                 {
-                    'autoStart': True,
+                    'autoStart': False,
                     'isPanel': True,
+                    'panelType': 'PyQt5',
                     'module': 'kenzy.panels.RaspiPanel'
                 }
             ]
@@ -232,11 +233,11 @@ except Exception:
     print("Invalid configuration provided.")
     raise
 
-app = None
+appQt5 = None
 if hasPanel:
     try:
         from PyQt5.QtWidgets import QApplication
-        app = QApplication(sys.argv)
+        appQt5 = QApplication(sys.argv)
     except ModuleNotFoundError:
         pass
 
@@ -264,7 +265,7 @@ for container in cfg["containers"]:
 
         setting_args = container["settings"] if "settings" in container and isinstance(container["settings"], dict) else {}
         obj = eval(str(container["module"]).strip() + "(**setting_args)")
-        obj.app = app
+        obj.appQt5 = appQt5
 
         init_args = container["initialize"] if "initialize" in container and isinstance(container["initialize"], dict) else {}
         exec("obj.initialize(**init_args)")
@@ -282,7 +283,7 @@ for container in cfg["containers"]:
                         continue
 
                     isPanel = bool(device_config["isPanel"]) if "isPanel" in device_config and device_config["isPanel"] is not None else False
-                    if isPanel and app is None:
+                    if isPanel and appQt5 is None:
                         raise Exception("QtApplication unavailable.  Unable to start panel.")
 
                     m = _getImport(libs, str(device_config["module"]).strip())
