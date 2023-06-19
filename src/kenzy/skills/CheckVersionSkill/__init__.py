@@ -27,7 +27,6 @@ class CheckVersionSkill(GenericSkill):
         self.register_intent_file("checkversion.intent", self.handle_checkversion_intent)
         return True
         
-
     def handle_checkversion_intent(self, message, context=None):
         """
         Primary function for intent matches.  Called by skill manager.
@@ -41,7 +40,7 @@ class CheckVersionSkill(GenericSkill):
         """
         
         if self.brain is not None:
-            return self.say("The active version is " + str(self.brain.version), context=context)
+            return self.say("My current system version is " + str(self.brain.version), context=context)
         
         return False
     

@@ -8,8 +8,6 @@ brain=0;
 speaker=0;
 listener=0;
 watcher=0;
-kasaplug=0;
-panel=0;
 
 while getopts bslwkpv: flag
 do
@@ -18,20 +16,16 @@ do
         s) speaker=1;;
         l) listener=1;;
         w) watcher=1;;
-        k) kasaplug=1;;
-        p) panel=1;;
         v) virtenv="${OPTARG}";;
     esac
 done
 
-if [ $brain -eq 0 ] && [ $speaker -eq 0 ] && [ $listener -eq 0 ] && [ $watcher -eq 0 ] && [ $kasaplug -eq 0 ] && [ $panel -eq 0 ]; then
+if [ $brain -eq 0 ] && [ $speaker -eq 0 ] && [ $listener -eq 0 ] && [ $watcher -eq 0 ]; then
     # Assume everything is to be installed
     brain=1;
     speaker=1;
     listener=1;
     watcher=1;
-    kasaplug=1;
-    panel=1;
 fi
 
 pythonCmd="python3"
@@ -102,23 +96,8 @@ if [ $watcher -eq 1 ]; then
     echo "Installing libraries for watcher module...";
     $pythonCmd -m pip install --upgrade \
         opencv-contrib-python \
-        Pillow;
+        kenzy-image;
     echo "watcher module installed.";
-fi
-
-if [ $kasaplug -eq 1 ]; then
-    echo "Installing libraries for kasaplug module...";
-    $pythonCmd -m pip install --upgrade \
-        asyncio \
-        python-kasa;
-    echo "kasaplug module installed.";
-fi
-
-if [ $panel -eq 1 ]; then
-    echo "Installing libraries for PyQt5 Panels...";
-    sudo apt-get -y install \
-        python3-pyqt5;
-    echo "PyQt5 installed successfully.";
 fi
 
 if [ $speaker -eq 1 ]; then
@@ -142,7 +121,12 @@ if [ $listener -eq 1 ]; then
         libatlas-base-dev;
 
     $pythonCmd -m pip install --upgrade \
-        webrtcvad;
+        webrtcvad \
+        transformers \
+        torch \
+        torchaudio \
+        soundfile \
+        sentencepiece;
 
     machine=`uname -m`
     if [ "${machine}" = "armv7l" ]; then

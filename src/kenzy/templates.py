@@ -40,8 +40,6 @@ class GenericContainer():
         self.authUser = self.config.get("authentication", {}).get("username", "admin")
         self.authPassword = self.config.get("authentication", {}).get("password", "admin")
         
-        self.appQt5 = None
-        
         self._doRestart = False
         self.isBrain = False
         self.id = uuid.uuid4()
@@ -316,7 +314,7 @@ class GenericContainer():
         ret = sendHTTPRequest(urljoin(self.brain_url, "brain/register"), jsonData=self._getStatus(), headers=headers)[0]
         return ret
     
-    def addDevice(self, type, device, id=None, autoStart=True, isPanel=False, groupName=None):
+    def addDevice(self, type, device, id=None, autoStart=True, groupName=None):
         """
         Add Device to list.
         
@@ -378,17 +376,13 @@ class GenericContainer():
             "device": device,
             "accepts": accepts,
             "active": True,
-            "isPanel": isPanel,
             "groupName": groupName
         }
         
         try:
-            if (isPanel or autoStart) and "start" in accepts and not device.isRunning():
+            if autoStart and "start" in accepts and not device.isRunning():
                 self.logger.info("Starting Device: " + str(id) + " (" + str(type) + ")")
                 self.devices[str(id)]["device"].start()
-
-                if isPanel and not autoStart and "stop" in accepts and device.isRunning():
-                    self.devices[str(id)]["device"].stop()
 
         except Exception:
             pass
@@ -460,9 +454,6 @@ class GenericContainer():
             (bool):  True on success else will raise an exception.
         """
         
-        if self.appQt5 is not None:
-            self.appQt5.exec_()
-                
         if seconds > 0:
             self.logger.info("Shutting down in " + str(seconds) + " second(s).")
             for i in range(0, seconds):
@@ -508,9 +499,6 @@ class GenericContainer():
             except Exception:
                 pass 
         
-        if self.appQt5 is not None:
-            self.appQt5.quit()
-        
         self.logger.debug(str(self.id) + ": Stopped.")
             
         return True
@@ -547,15 +535,7 @@ class GenericContainer():
                     self.logger.debug(str(self.id) + ": Device stopped (" + str(self.devices[item]["type"]) + ") " + str(item))
                 except Exception:
                     ret = False
-                    
-                try:
-                    if self.devices[item]["isPanel"]:
-                        self.logger.debug(str(self.id) + ": Attempting to close local panel: (" + str(self.devices[item]["type"]) + ") " + str(item))
-                        self.devices[item]["device"].close()
-                        self.logger.debug(str(self.id) + ": Panel closed (" + str(self.devices[item]["type"]) + ") " + str(item))
-                except Exception:
-                    pass
-        
+                            
         self.logger.debug(str(self.id) + ": Devices stopped.")
         return ret
     
@@ -603,7 +583,7 @@ class GenericContainer():
     
 
 class GenericDevice():
-    def __init__(self, **kwargs):
+    def __init__(self, parent=None, callback=None, **kwargs):
         
         self.args = kwargs
 
@@ -620,10 +600,10 @@ class GenericDevice():
         self._isRunning = False
 
         self.updateSettings()
+        self.parent = parent
+        self._callbackHandler = callback
 
     def updateSettings(self):
-        self.parent = self.args.get("parent")
-        self._callbackHandler = self.args.get("callback")
         return True
 
     def callback(self, inType, data, context=None):
@@ -639,7 +619,7 @@ class GenericDevice():
             (bool):  True on success or False on failure.
         """
 
-        if self._callbackHandler is not None:
+        if self._callbackHandler is None:
             return True 
 
         if context is None:

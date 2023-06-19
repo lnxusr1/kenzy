@@ -1,6 +1,4 @@
-import os
 import logging
-import numpy as np
 import time
 from kenzy.shared import threaded, py_error_handler
 from kenzy import GenericDevice
@@ -8,10 +6,13 @@ import pyaudio
 import queue
 import webrtcvad
 import collections
-import stt
 import sys
 import traceback
 from ctypes import CFUNCTYPE, cdll, c_char_p, c_int
+import io
+import wave
+import soundfile
+from transformers import AutoProcessor, AutoModelForSpeechSeq2Seq
 
 
 class Listener(GenericDevice):
@@ -19,15 +20,13 @@ class Listener(GenericDevice):
     Listener device to capture audio from microphone and convert any speech to text and send to callback method.
     """
     
-    def __init__(self, **kwargs):
+    def __init__(self, parent=None, callback=None, **kwargs):
         """
         Listener Initialization
 
         Args:
             parent (object): Containing object's reference.  Normally this would be the device container. (optional)
-            speechModel (str):  Path and filename of Coqui Speech Model file.  If not set then listener will do a 
-                basic seach for the PBMM or TFLite file.
-            speechScorer (str):  Path and filename of Coqui Scorer file.  Okay for this to be None as scorer file is not required.
+            speechModel (str):  Path or short name for huggingface transformer Seq2Seq model.
             audioChannels (int):  Audio channels for audio source.  VAD requires this to be 1 channel.
             audioSampleRate (int): Audio sample rate of audio source.  VAD requires this to be 16000.
             vadAggressiveness (int): Voice Activity Detection (VAD) aggressiveness for filtering noise.  Accepts 1 thru 3.
@@ -51,60 +50,24 @@ class Listener(GenericDevice):
         self.version = __version__
         self._packageName = "kenzy"
 
-        super(Listener, self).__init__(**kwargs)
+        super(Listener, self).__init__(parent=parent, callback=callback, **kwargs)
 
-    def updateSettings(self):
+    def updateSettings(self, args=None):
         """
         Updates the settings based on values in self.args
         """
 
-        self.parent = self.args.get("parent")
-        self.speechModel = self.args.get("speechModel")                         # Speech Model file.  Ideally this could be searched for in a default location
-        self.speechScorer = self.args.get("speechScorer")                       # Scorer file.  Okay for this to be None as scorer file is not required
+        if args is not None:
+            self.args = args
+
+        self.speechModel = self.args.get("speechModel", "openai/whisper-tiny.en")  # Speech Model Path or short name
         self.audioChannels = self.args.get("audioChannels", 1)                  # VAD requires this to be 1 channel
         self.audioSampleRate = self.args.get("audioSampleRate", 16000)          # VAD requires this to be 16000
-        self.vadAggressiveness = self.args.get("vadAggressiveness", 1)          # VAD accepts 1 thru 3
+        self.vadAggressiveness = self.args.get("vadAggressiveness", 0)          # VAD accepts 0 thru 3
         self.speechRatio = self.args.get("speechRatio", 0.75)                   # Must be between 0 and 1 as a decimal
         self.speechBufferSize = self.args.get("speechBufferSize", 50)           # Buffer size for speech frames
         self.speechBufferPadding = self.args.get("speechBufferPadding", 350)    # Padding, in milliseconds, of speech frames
         self.audioDeviceIndex = self.args.get("audioDeviceIndex")               # Device by index as it applies to PyAudio
-        self._callbackHandler = self.args.get("callback")                       # Callback function accepts two positional args (Type, Text)
-
-        if self.speechModel is None:
-            # Search for speech model?
-            self.logger.info("Speech model not specified.  Attempting to use defaults.")
-            local_path = os.path.join(os.path.expanduser("~/.kenzy"), "data", "models", "speech")
-            os.makedirs(local_path, exist_ok=True)
-            
-            files = os.listdir(local_path)
-            files = sorted(files, reverse=True)  # Very poor attempt to get the latest version of the model if multiple exist.
-            bFoundPBMM = False 
-            bFoundTFLITE = False
-            for file in files:
-                if not bFoundTFLITE:
-                    if file.endswith("model.tflite"):
-                        self.speechModel = os.path.abspath(os.path.join(local_path, file))
-                        self.logger.debug("Using speech model from " + str(self.speechModel))
-                        bFoundTFLITE = True
-
-                if not bFoundTFLITE and not bFoundPBMM:
-                    if file.endswith("model.pbmm"):
-                        self.speechModel = os.path.abspath(os.path.join(local_path, file))
-                        self.logger.debug("Using speech model from " + str(self.speechModel))
-                        bFoundPBMM = True
-                        
-                if self.speechScorer is None:
-                    if file.endswith("huge-vocabulary.scorer"):
-                        self.speechScorer = os.path.abspath(os.path.join(local_path, file))
-                        self.logger.debug("Using speech scorer from " + str(self.speechScorer))
-        
-            if bFoundPBMM and bFoundTFLITE:
-                self.logger.warning("Found both PBMM and TFLite deepspeech models.")
-                self.logger.warning("Defaulting to TFLITE model.")
-                
-        if self.speechModel is None:
-            # FIXME: Should we try to download the models if they don't exist?
-            raise Exception("Invalid speech model.  Unable to start listener.")
 
         return True 
 
@@ -154,13 +117,7 @@ class Listener(GenericDevice):
         # The size of the buffer is the length of the padding and thereby those chunks of audio.
         ring_buffer = collections.deque(
             maxlen=self.speechBufferPadding // (1000 * int(self.audioSampleRate / float(self.speechBufferSize)) // self.audioSampleRate))
-    
-        # Set up C lib error handler for Alsa programs to trap errors from Alsa spin up
-        # with SilenceStream(sys.stderr, log_file="/dev/null"):
-        _model = stt.Model(self.speechModel)
-        if self.speechScorer is not None:
-            _model.enableExternalScorer(self.speechScorer)
-            
+           
         _vad = webrtcvad.Vad(self.vadAggressiveness)
         
         ERROR_HANDLER_FUNC = CFUNCTYPE(None, c_char_p, c_int, c_char_p, c_int, c_char_p)
@@ -191,7 +148,16 @@ class Listener(GenericDevice):
             return False 
 
         # Context of audio frames is used to better identify the spoken words.
-        stream_context = _model.createStream()
+        processor = AutoProcessor.from_pretrained(self.speechModel)
+        model = AutoModelForSpeechSeq2Seq.from_pretrained(self.speechModel)
+        model.config.forced_decoder_ids = None
+
+        # We have to store the frames in memory when triggered
+        container = io.BytesIO()
+        wf = wave.open(container, "wb")
+        wf.setnchannels(self.audioChannels)
+        wf.setsampwidth(_audio_device.get_sample_size(pyaudio.paInt16))
+        wf.setframerate(self.audioSampleRate)
         
         # Used to flag whether we are above or below the ratio threshold set for speech frames to total frames
         triggered = False
@@ -238,7 +204,7 @@ class Listener(GenericDevice):
     
                         # Feed data into the deepspeech model for determing the words used
                         for f in ring_buffer:
-                            stream_context.feedAudioContent(np.frombuffer(f[0], np.int16))
+                            wf.writeframes(f[0])
     
                         # Since we've now fed every frame in the buffer to the deepspeech model
                         # we no longer need the frames collected up to this point
@@ -250,7 +216,7 @@ class Listener(GenericDevice):
                     # incoming frames into the deepspeech model until we fall below the threshold again.
                     
                     # Feed to deepspeech model the incoming frame
-                    stream_context.feedAudioContent(np.frombuffer(frame, np.int16))
+                    wf.writeframes(frame)
     
                     # Save to ring buffer for calculating the ratio of speech to total frames with speech
                     ring_buffer.append((frame, is_speech))
@@ -268,10 +234,25 @@ class Listener(GenericDevice):
                         triggered = False
                         
                         # Let's see if we heard anything that can be translated to words.
-                        # This is the invocation of the deepspeech's primary STT logic.
-                        # Note that this is outside the kill_switch block just to insure that all the
-                        # buffers are cleaned and closed properly.  (Arguably this is not needed if killed)
-                        text = str(stream_context.finishStream())
+                        container.seek(0)
+                        data, rate = soundfile.read(container)
+
+                        input_features = processor(
+                            data,
+                            sampling_rate=self.audioSampleRate,
+                            return_tensors="pt"
+                        ).input_features
+                        generated_ids = model.generate(input_features=input_features, max_new_tokens=448)
+
+                        text = processor.batch_decode(generated_ids, skip_special_tokens=True)
+                        text = text[0]
+                        if text.startswith("</s>"):
+                            text = text[4:]
+                        if text.endswith("</s>"):
+                            text = text[:-4]
+                        text = text.strip()
+
+                        wf.close()
     
                         # We've completed the hard part.  Now let's just clean up.
                         if self._isRunning:
@@ -283,7 +264,11 @@ class Listener(GenericDevice):
                                 self.logger.info("HEARD " + text)
                                 self._doCallback(text)
                                 
-                            stream_context = _model.createStream()  # Create a fresh new context
+                            container = io.BytesIO()
+                            wf = wave.open(container, "wb")
+                            wf.setnchannels(self.audioChannels)
+                            wf.setsampwidth(_audio_device.get_sample_size(pyaudio.paInt16))
+                            wf.setframerate(self.audioSampleRate)
     
                         ring_buffer.clear()  # Clear the ring buffer as we've crossed the threshold again
     

@@ -14,7 +14,6 @@ Running the script exactly as shown above will install Kenzy and all components.
 * ```-l``` = Install listener dependencies
 * ```-s``` = Install speaker dependencies
 * ```-w``` = Install watcher dependencies
-* ```-p``` = Install panel dependencies
 * ```-v [PATH]``` = Python virtual environment path (will create new if does not already exist)
 
 Installer script has been tested on Ubuntu 22.04+, Debian Buster, and Raspberry Pi OS (Buster).
@@ -64,28 +63,24 @@ python3 -m pip install mycroft-mimic3-tts[all]
 
 # Install optional libraries for WatcherDevice
 python3 -m pip install opencv-contrib-python \
-  Pillow
-
-# Install optional libraries for KasaDevice
-python3 -m pip install asyncio \
-  python-kasa
+  kenzy-image
 
 # Install optional libraries for ListenerDevice
 python3 -m pip install --upgrade numpy \
   webrtcvad \
-  stt
+  torch \
+  torchaudio \
+  transformers \
+  sentencepiece \
+  soundfile
 
 # If you have trouble with pyaudio then you may want try to upgrade it
 python3 -m pip install --upgrade pyaudio
 
-
-# For listener model management (optional)
-python3 -m pip install coqui-stt-module-manager 
-
 # Install the kenzy module
 python3 -m pip install kenzy
 ```
-__NOTE:__ The installation of OpenCV is  required when using the watcher device.  This may take a while on the Raspberry Pi OS as it has to recompile some of the libraries.  Patience is required here as the spinner icon appeared to get stuck several times in our tests... so just let it run until it completes.  If it encounters a problem then it'll print out the error for additional troubleshooting.  
+__NOTE:__ The installation of OpenCV is required when using the watcher device.  This may take a while on the Raspberry Pi OS as it has to recompile some of the libraries.  Patience is required here as the spinner icon appeared to get stuck several times in our tests... so just let it run until it completes.  If it encounters a problem then it will print out the error for additional troubleshooting.  
 
 If you prefer not to wait then you can install the opencv package that comes with most distributions however this version does not support facial recognition.  To use the package instead then issue ```apt-get install python3-opencv``` and remove the ```opencv-contrib-python``` from the pip package list above.  (This will spead up the installation time significantly on the Raspberry Pi at the cost of functionality.)
 
@@ -120,7 +115,7 @@ You can execute Kenzy directly as a module.  To do so try the following:
 ```
 python3 -m kenzy
 ```
-You can disable any of the built-in devices or containers with ```--disable-builtin-[speaker, watcher, listener, panels, brain, container]```.  Use the ```--help``` option for full listing of command line options including specifying a custom configuration file.
+You can disable any of the built-in devices or containers with ```--disable-builtin-[speaker, watcher, listener, brain, container]```.  Use the ```--help``` option for full listing of command line options including specifying a custom configuration file.
 
 __NOTE:__ The program will create/save a version of the configuration to ```~/.kenzy/config.json``` along with any other data elements it requires for operation.  The configuration file is fairly powerful and will allow you to add/remove devices and containers for custom configurations including 3rd party devices or custom skills.
 

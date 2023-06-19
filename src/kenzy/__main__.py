@@ -96,6 +96,7 @@ logger = logging.getLogger("STARTUP")
 if ARGS.log_level is not None and ARGS.log_level.strip().lower() == "debug":
     logging.getLogger("UPNP-SRV").setLevel(logging.INFO)
     logging.getLogger("urllib3").setLevel(logging.INFO)
+    logging.getLogger("DETECT_TIME").setLevel(logging.INFO)
 
 if ARGS.version:
     print(__app_name__, "v" + __version__)
@@ -142,17 +143,10 @@ cfg = {
                 },
                 {
                     'autoStart': True,
-                    'module': 'kenzy.devices.Watcher'
-                },
-                {
-                    'autoStart': True,
-                    'module': 'kenzy.devices.KasaPlug'
-                },
-                {
-                    'autoStart': False,
-                    'isPanel': True,
-                    'panelType': 'PyQt5',
-                    'module': 'kenzy.panels.RaspiPanel'
+                    'module': 'kenzy.devices.Watcher',
+                    'parameters': {
+                        'objDetectList': [ 'person', 'dog', 'cat' ]
+                    }
                 }
             ]
         }
@@ -180,7 +174,6 @@ else:
 with open(configFile, "r") as fp:
     cfg = json.load(fp)
 
-hasPanel = False
 try:
     for c_idx, container in enumerate(cfg["containers"]):
         if (ARGS.disable_builtin_brain and container["module"] == "kenzy.containers.Brain") \
@@ -193,8 +186,7 @@ try:
             for d_idx, device in enumerate(container["devices"]):
                 if (ARGS.disable_builtin_speaker and device["module"] == "kenzy.devices.Speaker") \
                         or (ARGS.disable_builtin_watcher and device["module"] == "kenzy.devices.Watcher") \
-                        or (ARGS.disable_builtin_listener and device["module"] == "kenzy.devices.Listener") \
-                        or (ARGS.disable_builtin_panels and device["module"].startswith("kenzy.panels")):
+                        or (ARGS.disable_builtin_listener and device["module"] == "kenzy.devices.Listener"):
 
                     cfg["containers"][c_idx]["devices"][d_idx] = None
                     continue 
@@ -226,20 +218,9 @@ try:
                         if os.path.exists(namesFile):
                             os.unlink(namesFile)
 
-                if "isPanel" in device and bool(device["isPanel"]):
-                    hasPanel = True
-
 except Exception:
     print("Invalid configuration provided.")
     raise
-
-appQt5 = None
-if hasPanel:
-    try:
-        from PyQt5.QtWidgets import QApplication
-        appQt5 = QApplication(sys.argv)
-    except ModuleNotFoundError:
-        pass
 
 try:
     modulesFolder = cfg["settings"]["modulesFolder"]
@@ -265,7 +246,6 @@ for container in cfg["containers"]:
 
         setting_args = container["settings"] if "settings" in container and isinstance(container["settings"], dict) else {}
         obj = eval(str(container["module"]).strip() + "(**setting_args)")
-        obj.appQt5 = appQt5
 
         init_args = container["initialize"] if "initialize" in container and isinstance(container["initialize"], dict) else {}
         exec("obj.initialize(**init_args)")
@@ -282,10 +262,6 @@ for container in cfg["containers"]:
                     if device_config is None or "module" not in device_config: 
                         continue
 
-                    isPanel = bool(device_config["isPanel"]) if "isPanel" in device_config and device_config["isPanel"] is not None else False
-                    if isPanel and appQt5 is None:
-                        raise Exception("QtApplication unavailable.  Unable to start panel.")
-
                     m = _getImport(libs, str(device_config["module"]).strip())
                     if m is not None:
                         exec("import " + m.strip())
@@ -297,7 +273,7 @@ for container in cfg["containers"]:
                     devId = str(device_config["uuid"]) if "uuid" in device_config and device_config["uuid"] is not None else None
 
                     dev = eval(str(device_config["module"]).strip() + "(callback=obj.callbackHandler, **setting_args)")
-                    obj.addDevice(device_config["module"], dev, id=devId, autoStart=autoStart, isPanel=isPanel, groupName=groupName)
+                    obj.addDevice(device_config["module"], dev, id=devId, autoStart=autoStart, groupName=groupName)
                 except Exception:
                     logging.debug(str(sys.exc_info()[0]))
                     logging.debug(str(traceback.format_exc()))
@@ -330,8 +306,8 @@ if doRestart:
 
     myEnv = dict(os.environ)
 
-    if "QT_QPA_PLATFORM_PLUGIN_PATH" in myEnv:
-        del myEnv["QT_QPA_PLATFORM_PLUGIN_PATH"]
+    # if "QT_QPA_PLATFORM_PLUGIN_PATH" in myEnv:
+    #     del myEnv["QT_QPA_PLATFORM_PLUGIN_PATH"]
 
     import subprocess
     subprocess.Popen(

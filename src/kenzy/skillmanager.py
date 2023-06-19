@@ -3,7 +3,7 @@ import logging
 import random
 import sys
 import pathlib
-from .shared import dayPart
+from .shared import dayPart, clean_text
 import traceback
 
 try:
@@ -98,7 +98,8 @@ class SkillManager:
         try:
             
             # This one line explains it all... link incoming command into actionable intent using Padatious library
-            intent = self.intentParser.calc_intent(text)
+            intentText = clean_text(text)
+            intent = self.intentParser.calc_intent(intentText)
             
             # I need to be at least 60% likely to be correct before I try to process the request.
             if intent.conf >= 0.6:

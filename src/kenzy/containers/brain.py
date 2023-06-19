@@ -291,15 +291,18 @@ class Brain(GenericContainer):
     
         return httpRequest.sendError()
     
-    def status(self, httpRequest):
+    def status(self, httpRequest=None):
         headers = None
         if self.authenticationKey is not None:
             headers = { "Cookie": "token=" + self.authenticationKey}
             
         stat = self._getStatus()
 
-        context = httpRequest.context
-        context.targetDevType = "container"
+        if httpRequest is not None:
+            context = httpRequest.context
+            context.targetDevType = "container"
+        else:
+            context = KContext()
         
         # Real-time
         for devId in self.clients:
@@ -313,8 +316,11 @@ class Brain(GenericContainer):
                     context=context)
                 if ret: 
                     stat[item["url"]] = retData[item["url"]]
-                    
-        return httpRequest.sendJSON(stat) 
+
+        if httpRequest is None:
+            return stat
+        else:
+            return httpRequest.sendJSON(stat) 
 
     def shutdown(self, httpRequest):
 

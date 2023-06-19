@@ -5,6 +5,7 @@ Shared library of functions used throughout Kenzy's various modules
 import time 
 import json
 import threading 
+import multiprocessing
 from http.server import BaseHTTPRequestHandler 
 from urllib.parse import parse_qs, urlparse, urlencode
 from cgi import parse_header
@@ -21,6 +22,16 @@ from errno import ENOPROTOOPT
 from email.utils import formatdate
 
 
+def clean_text(text):
+    if text is None:
+        return text
+    
+    ret = str(text)
+    ret = ret.replace("?", " ").replace(".", " ").replace(",", " ").replace(":", " ")
+    ret = ret.replace(";", " ").replace("!", " ").replace("  ", " ").lower().strip()
+    return ret
+
+    
 def dayPart():
     """
     Returns the part of the day based on the system time based on generally acceptable breakpoints.
@@ -317,6 +328,26 @@ def threaded(fn):
     return wrapper
 
 
+def pthreaded(fn):
+    """
+    Process wrapper shortcut using @pthreaded prefix
+    
+    Args:
+        fn (function):  The function to executed on a new process.
+        
+    Returns:
+        (process):  New process for executing function.
+    """
+
+    def wrapper(*args, **kwargs):
+        pthread = multiprocessing.Process(target=fn, args=args, kwargs=kwargs)
+        pthread.daemon = True
+        pthread.start()
+        return pthread
+
+    return wrapper
+
+
 def upgradePackage(packageName):
     if packageName is None:
         logging.debug("No package name provided to upgrade.")
@@ -328,8 +359,8 @@ def upgradePackage(packageName):
     
     myEnv = dict(os.environ)
 
-    if "QT_QPA_PLATFORM_PLUGIN_PATH" in myEnv:
-        del myEnv["QT_QPA_PLATFORM_PLUGIN_PATH"]
+    # if "QT_QPA_PLATFORM_PLUGIN_PATH" in myEnv:
+    #     del myEnv["QT_QPA_PLATFORM_PLUGIN_PATH"]
     
     p = subprocess.Popen(
         cmd, 

@@ -16,10 +16,3 @@ except ModuleNotFoundError:
     logging.debug(str(sys.exc_info()[0]))
     logging.debug(str(traceback.format_exc()))
     logging.info("Watcher disabled due to missing libraries.")
-
-try:
-    from .kasaplug import KasaPlug
-except ModuleNotFoundError:
-    logging.debug(str(sys.exc_info()[0]))
-    logging.debug(str(traceback.format_exc()))
-    logging.info("KasaPlug disabled due to missing libraries.")

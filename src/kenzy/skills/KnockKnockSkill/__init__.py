@@ -1,4 +1,5 @@
 from kenzy import GenericSkill 
+from kenzy.shared import clean_text
 import logging 
 
 
@@ -57,7 +58,7 @@ class KnockKnockSkill(GenericSkill):
             (bool):  True on success or False on failure
         """
         
-        return self.ask(str(message) + " who?", self.handle_knockknock_q2, timeout=10, context=context)
+        return self.ask(clean_text(str(message)) + " who?", self.handle_knockknock_q2, timeout=10, context=context)
 
     def handle_knockknock_intent(self, message, context=None):
         """

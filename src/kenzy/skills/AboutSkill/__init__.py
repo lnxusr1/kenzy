@@ -63,6 +63,7 @@ class AboutSkill(GenericSkill):
             (bool): True on success or False on failure
         """
         
+        # print(self.brain.status())
         text = self.getMessageFromDialog("status.dialog")
         if (text != ""):
             return self.say(text, context=context)

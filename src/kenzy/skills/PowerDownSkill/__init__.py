@@ -1,4 +1,5 @@
 from kenzy import GenericSkill
+from kenzy.shared import clean_text
 import logging 
 
 
@@ -40,12 +41,15 @@ class PowerDownSkill(GenericSkill):
         """
 
         text = self.getMessageFromDialog("powerdown_confirm.dialog")
-        if str(message).lower().strip() in ["yes","confirm","confirmed","ok"] and self.brain.say(text, context) and self.brain.shutdown(context.httpRequest):
+        
+        if clean_text(str(message)) in ["yes", "confirm", "confirmed", "okay", "ok"] \
+                and self.brain.say(text, context) \
+                and self.brain.shutdown(context.httpRequest):
+            
             return True
         
         return False
 
-        
     def handle_powerdown_intent(self, message, context=None):
         """
         Primary function for intent matches.  Called by skill manager.

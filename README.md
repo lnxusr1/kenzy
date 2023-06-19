@@ -63,7 +63,6 @@ sudo apt-get -y install python3-pip
 sudo apt-get -y install \
   python3-fann2 \
   python3-pyaudio \
-  python3-pyqt5 \
   python3-dev \
   libespeak-ng1 \
   festival \
@@ -96,23 +95,19 @@ python3 -m pip install mycroft-mimic3-tts[all]
 
 # Install optional libraries for WatcherDevice
 python3 -m pip install opencv-contrib-python \
-  Pillow
-
-# Install optional libraries for KasaDevice
-python3 -m pip install asyncio \
-  python-kasa
+  kenzy-image
 
 # Install optional libraries for ListenerDevice
 python3 -m pip install --upgrade numpy \
   webrtcvad \
-  stt
+  torch \
+  torchaudio \
+  sentencepiece \
+  transformers \
+  soundfile
 
 # If you have trouble with pyaudio then you may want try to upgrade it
 python3 -m pip install --upgrade pyaudio
-
-
-# For listener model management (optional)
-python3 -m pip install coqui-stt-module-manager 
 
 # Install the kenzy module
 python3 -m pip install kenzy
@@ -122,7 +117,7 @@ To start execute as follows:
 ```
 python3 -m kenzy
 ```
-You can disable one or more of the built-in devices or containers with ```--disable-builtin-[speaker, watcher, listener, panels, brain, container]```.  Use the ```--help``` option for full listing of command line options including specifying a custom configuration file.
+You can disable one or more of the built-in devices or containers with ```--disable-builtin-[speaker, watcher, listener, brain, container]```.  Use the ```--help``` option for full listing of command line options including specifying a custom configuration file.
 
 __NOTE:__ The program will create/save a version of the configuration to ```~/.kenzy/config.json``` along with any other data elements it requires for operation.  The configuration file is fairly powerful and will allow you to add/remove devices and containers for custom configurations including 3rd party devices or custom skills.
 

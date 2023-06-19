@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.0.0]
+
+### Added
+
+- Moved watcher process to multiprocessing subprocess to enable more CPU bandwidth
+- GPUs can be leveraged for torch and cuda enabled models
+
+### Modified
+
+- Modified listener to use OpenAi/Whisper for speech-to-text
+- Modified watcher to use kenzy-image supporting Yolov7 and MobileNet V3 SSD.
+
+### Removed
+
+- Dropped support for PyQt5 panels
+- Dropped support for Kasa smart switch/plug devices
+
 ## [1.0.0]
 
 ### Modified
