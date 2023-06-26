@@ -8,6 +8,7 @@ import cv2
 import sys
 import traceback
 import copy
+import collections
 
 
 try:
@@ -60,7 +61,6 @@ class Watcher(GenericDevice):
         self._callbackHandler = self.args.get("callback")                       # Callback function accepts two positional args (Type, Text)
                 
         self.videoDeviceIndex = self.args.get("videoDeviceIndex", 0)
-        self.framesPerSecond = float(self.args.get("framesPerSecond", 29.97))
         
         self.orientation = None
         orientation = self.args.get("orientation", 0)
@@ -179,7 +179,17 @@ class Watcher(GenericDevice):
                     continue 
 
         q_analyze.put("")
-        mp_analyze_process.join()
+        for i in range(0, 5):
+            if mp_analyze_process.is_alive():
+                time.sleep(1)
+            else:
+                break
+
+        if mp_analyze_process.is_alive():
+            try:
+                mp_analyze_process.terminate()
+            except Exception:
+                raise
 
         videoDevice.release()
         for item in threadPool:
@@ -314,6 +324,32 @@ def process(q, args, callback):
     numFaces = 0
     faceList = {}
     hasMotion = False
+    
+    timeDelay = 0
+    fps = args.get("framesPerSecond")
+    if fps is None:
+        frameBuffer = None
+    else:
+        frameBuffer = collections.deque(maxlen=int(fps) * 5)
+
+    enableRecording = args.get("enableRecording", False)
+    videoFolder = args.get("videoFolder")
+    if videoFolder is None:
+        enableRecording = False
+
+    try:
+        os.makedirs(videoFolder, exist_ok=True)
+    except Exception:
+        raise
+
+    videoWriter = None
+    fourcc = cv2.VideoWriter_fourcc(*args.get("videoFormat", "XVID"))
+
+    fileExtension = ".avi"
+    if str(args.get("videoFormat", "XVID")).lower() == "mp4v":
+        fileExtension = ".m4v"
+    elif str(args.get("videoFormat", "XVID")).lower() == "h264":
+        fileExtension = ".m4v"
 
     try:
         k_img = detector(**args)
@@ -352,8 +388,60 @@ def process(q, args, callback):
 
             detectFaces = True if k_img._detectFaces and ctime - 0.5 < lastFaceSeen else False
             k_img.analyze(im, detectFaces=detectFaces)
+            objListArr = [x["name"] for x in k_img.objects]
 
             lastFaceSeen = ctime
+
+            if enableRecording and k_img._detectObjects and "person" in k_img._objList:
+                if frameBuffer is not None:
+                    people = [x["name"] for x in k_img.objects]
+                    if "person" in people:
+                        timeDelay = data["time"]
+                        if videoWriter is None:
+                            fileName = os.path.join(
+                                videoFolder, 
+                                time.strftime("%Y%m%d", time.gmtime(data["time"])), 
+                                "vid_" + time.strftime("%Y%m%d_%H%M%S", time.gmtime(data["time"])) + fileExtension
+                            )
+
+                            try:
+                                os.makedirs(os.path.dirname(fileName), exist_ok=True)
+                            except Exception:
+                                raise
+
+                            videoWriter = cv2.VideoWriter(
+                                os.path.join(fileName), 
+                                fourcc, 
+                                fps, 
+                                (im.shape[1], im.shape[0])
+                            )
+                        
+                        for item in frameBuffer:
+                            videoWriter.write(item)
+
+                        frameBuffer.clear()
+                        videoWriter.write(im)
+
+                    else:
+                        if timeDelay != 0 and data["time"] > timeDelay + 5 and videoWriter is not None:
+                            for item in frameBuffer:
+                                videoWriter.write(item)
+
+                            videoWriter.write(im)
+                            videoWriter.release()
+                            frameBuffer.clear()
+                            videoWriter = None
+                        else:
+                            frameBuffer.append(im)
+                else:
+                    if timeDelay == 0:
+                        timeDelay = data["time"]
+                    else:
+                        try:
+                            fps = 1 / (data["time"] - timeDelay)
+                            frameBuffer = collections.deque(maxlen=int(fps) * 5)
+                        except Exception:
+                            pass
 
             if k_img._detectMotion and len(k_img.movements) > 0:
                 if not hasMotion:

@@ -8,6 +8,7 @@ All notable changes to this project will be documented in this file.
 
 - Moved watcher process to multiprocessing subprocess to enable more CPU bandwidth
 - GPUs can be leveraged for torch and cuda enabled models
+- Added options for saving video of detected people
 
 ### Modified
 
