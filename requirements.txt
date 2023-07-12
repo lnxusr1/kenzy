@@ -1,3 +1,6 @@
-urllib3
 requests
-netifaces
+pyyaml
+numpy
+opencv-contrib-python
+face_recognition
+yolov7detect

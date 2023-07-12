@@ -1,0 +1,634 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html lang="en-US">
+<head>
+	<meta name="apple-mobile-web-app-capable" content="yes" />
+	<meta charset="UTF-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="icon" type="image/x-icon" href="favicon.svg">
+	<link rel="apple-touch-icon" href="kenzy_touch.png" />
+
+	<title>Control Panel &raquo; KENZY.Ai [__APP_VERSION__]</title>
+	<script src="jquery.js"></script>
+
+<style type="text/css">
+body, html { 
+    font-family: Arial, Helvetica, Sans-Serif; 
+    font-size: 16px; 
+    min-height: 100%; 
+    width: 100%; 
+    padding: 0;
+    margin: 0; 
+
+    background-color: #d8d8d8;
+    /*
+    background-image: linear-gradient(to right, #aaa, #f7f7f7); 
+    background-size: calc(100% - 1000px), 100%; 
+    background-position: 1366px top; 
+    background-repeat: no-repeat; 
+    */
+}
+
+a { color: blue; }
+a:hover { color: #f17d42; }
+p { line-height: 1.6rem; }
+
+.page_header { 
+    position: fixed; 
+    top: 0;
+    height: 42px; 
+    background: #fff; 
+    line-height: 42px; 
+    width: 100%;
+
+    /*max-width: 1366px; */
+    z-index: 200;
+}
+
+.page_header > a#home-link { 
+    display: block;
+    float: left;
+    height: 42px; 
+    line-height: 42px; 
+    background-image: url(./favicon.svg); 
+    background-repeat: no-repeat; 
+    background-position: 20px 12px; 
+    background-size: 18px 18px; 
+    padding-left: 40px;
+    padding-right: 20px;
+    color: #000;
+    font-weight: bold;
+    text-decoration: none;
+}
+
+.page_header > a#home-link:hover {
+    color: #666;
+}
+
+.page_menu { 
+    position: fixed; 
+    left: 0;
+    background-color: #313131; 
+    width: 240px; 
+    top: 42px; 
+    height: calc(100% - 42px); 
+    overflow-y: auto; 
+    z-index: 100;
+}
+
+.page_menu > ul { margin: 0; padding: 15px 0 1px 0; list-style: none; }
+.page_menu > ul > li > a { 
+    display: block;
+    line-height: 48px;
+    height: 48px;
+    font-size: 1rem;
+    background-color: #313131;
+    border-top: 1px solid #353535;
+    padding-left: 20px;
+    text-decoration: none;
+    color: #fff;
+    text-shadow: 1px 1px 2px #222;
+}
+.page_menu > ul > li:last-child > a { border-bottom: 1px solid #353535; }
+.page_menu > ul > li > a:hover { background-color: #272727; }
+.page_menu > ul > li > a.active { background-color: #272727; color: #f17d42; text-shadow: 1px 1px 2px #111; }
+.page_menu > ul > li > a > span.icon {
+    display: block; float: left;
+    height: 100%;
+    width: 1.25rem;
+    padding-right: 10px;
+    background-repeat: no-repeat;
+    background-size: 1.25rem 1.25rem;
+    background-position: center left;
+    filter: invert(86%) sepia(0%) saturate(0%) hue-rotate(74deg) brightness(90%) contrast(86%) drop-shadow(1px 1px 2px rgb(0 0 0 / 0.8));
+}
+
+.page_menu > ul > li > a:hover > span.icon {
+    filter: invert(100%) sepia(100%) saturate(2%) hue-rotate(137deg) brightness(108%) contrast(101%) drop-shadow(1px 1px 2px rgb(0 0 0 / 0.8));
+}
+.page_menu > ul > li > a.active > span.icon {
+    filter: invert(77%) sepia(56%) saturate(5004%) hue-rotate(333deg) brightness(99%) contrast(91%) drop-shadow(1px 1px 2px rgb(0 0 0 / 0.8));
+}
+
+.page_menu > ol { 
+    margin: 0; 
+    padding: 0;
+    list-style: none; 
+    color: #999;
+    font-size: 0.85rem;
+    opacity: 0.7;
+}
+.page_menu > ol > li > a {
+    display: block;
+    line-height: 32px;
+    padding-right: 15px;
+    font-style: italic;
+    text-align: right;
+    color: #999;
+    text-decoration: none;
+}
+
+.page_menu > ol > li > a:hover { color: #f17d42; }
+
+#btnDashboard > span.icon { background-image: url(tachometer-alt.svg); }
+#btnCameras > span.icon { background-image: url(camera-solid.svg); }
+#btnDevices > span.icon { background-image: url(server-solid.svg); }
+#btnSkills > span.icon { background-image: url(lightbulb-solid.svg); }
+#btnActions > span.icon { background-image: url(bolt-solid.svg); }
+#btnLogs > span.icon { background-image: url(hdd-solid.svg); }
+#btnUpdates > span.icon { background-image: url(tools-solid.svg); }
+#btnAbout > span.icon { background-image: url(question-circle-solid.svg); }
+
+
+.page_content { 
+    position: relative;
+    margin-top: 42px;
+    margin-left: 240px;
+    width: calc(100% - 240px);
+    background: linear-gradient(rgba(0,0,0,.1), rgba(100,100,100,0));
+    background-repeat: no-repeat;
+    background-size: 100% 30px;
+    min-height: 100px;
+    /* max-width: 1126px; */
+}
+
+.content_container { padding: 0; margin: 0; }
+.content_page { margin: 0; padding: 20px; max-width: 1086px; }
+.content_page > *:first-child { margin-top: 0; }
+.content_page > h1 { font-size: 2rem; }
+
+.flx-row {
+    display: flex;
+}
+
+.flx-column {
+    flex: 1;
+    overflow-x: hidden;
+}
+
+
+.flx-column.flx-1 { flex: 1; }
+.flx-column.flx-2 { flex: 2; }
+.flx-column.flx-3 { flex: 3; }
+.flx-column.flx-4 { flex: 4; }
+
+.flx-table { min-width: 500px; background-color: #888; border-radius: 4px; box-shadow: 0px 0px 10px rgba(0,0,0,.5); }
+
+.flx-table ul { list-style:none; padding:0; margin:0;}
+
+.flx-table .flx-row:first-child { padding-top: 1px; }
+.flx-table .flx-row { padding-left: 1px;  }
+.flx-table .flx-row .flx-column { margin-right: 1px; margin-bottom: 1px; padding: 15px 10px; background-color: #fff; }
+.flx-table.thin .flx-row .flx-column { padding: 8px 10px; }
+.flx-table .flx-row:nth-child(odd) .flx-column { background-color: #ddd; }
+.flx-table .flx-row:last-child .flx-column:first-child { border-bottom-left-radius: 4px; }
+.flx-table .flx-row:last-child .flx-column:last-child { border-bottom-right-radius: 4px; }
+.flx-table.hover .flx-row:hover .flx-column { background-color: #a5d3e8; cursor: pointer; }
+.flx-table .flx-row.header .flx-column,
+.flx-table.hover .flx-row.header .flx-column { color: #fff; background-color: #013249; }
+.flx-table.hover .flx-row.header .flx-column:hover { background: none; background-color: #002131; }
+.flx-table .flx-row.header .flx-column:first-child { border-top-left-radius: 4px; }
+.flx-table .flx-row.header .flx-column:last-child { border-top-right-radius: 4px; }
+
+.flx-table .flx-row.header .flx-column { background-color: #002131; color: #eee; }
+
+.flx-form { min-width: 500px;  }
+
+.content_section { margin-bottom: 20px; }
+
+.status_bar { 
+    position: fixed; 
+    bottom: 0; 
+    margin-left: -20px;
+    width: calc(100% - 240px);
+    height: 48px; 
+    line-height: 48px; 
+    padding-left: 20px; 
+    background-color: #f1f1f1; 
+    border-top: 1px solid #666; 
+    box-shadow: 0px 0px 10px rgba(0,0,0,.5);
+}
+
+.status_bar button {     
+    height: 36px;
+    line-height: 34px;
+}
+
+#pgActions .content_section.form { max-width: 600px; }
+#pgDevices .content_section { margin-bottom: 60px; }
+
+textarea { 
+    width: 100%;
+    max-width: 600px;
+    height: 85px;
+    padding: 5px 10px;
+    box-sizing: border-box;
+    font-size: 1rem;
+    border-radius: 3px;
+    border: 1px solid #313131;
+    background-color: #fff;
+    margin-bottom: 10px;
+    resize: none; 
+}
+
+input[type="checkbox"], 
+label { cursor: pointer; }
+
+select {
+    width: 100%;
+    max-width: 600px;
+    height: 40px;
+    line-height: 40px;
+    padding: 0 10px;
+    font-size: 16px;
+    margin-bottom: 10px;
+    border-radius: 3px;
+    border: 1px solid #313131;
+    background-color: #fff;
+}
+
+button {
+    border: 1px solid #999;
+    background-color: #555;
+    background: linear-gradient(#979696, #979696, #777, #969696);
+    color: #000;
+    width: 175px;
+    height: 50px;
+    line-height: 48px;
+    border-radius: 4px;
+    font-size: 15px;
+    text-shadow: 1px 1px 10px #fff;
+}
+
+button:hover, button:focus {
+    background: linear-gradient(#002131, #013249, #013249, #002131);
+    background: none;
+    background-color: #013249;
+    text-shadow: none;
+    color: #fff;
+}
+
+button:active {
+    background: none;
+    background-color: #002131;
+    text-shadow: none;
+    color: #fff;
+}
+
+</style>
+<script type="text/javascript">
+
+function switchPage(btn) {
+    $('.menu-item').removeClass('active');
+    $('.content_page').hide();
+    $(btn).addClass("active");
+    $($(btn).attr('rel')).show();
+}
+
+$(document).ready(function() {
+    $('.menu-item').click(function() {
+        switchPage(this);
+        return false;
+    });
+
+    $('#btnDashboard').trigger('click');
+});
+
+</script>
+</head>
+<body>
+    <div class="page_header">
+        <a href="#" id="home-link">
+            <div>
+                <span>KENZY.Ai&nbsp;</span>
+                <small>Command Center</small>
+            </div>
+        </a>
+    </div>
+    <div class="page_menu">
+        <ul>
+            <li><a class="menu-item active" href="#" rel="#pgDashboard" id="btnDashboard"><span class="icon"></span><span>Dashboard</span></a></li>
+            <li><a class="menu-item" href="#" rel="#pgCameras" id="btnCameras"><span class="icon"></span><span>Cameras</span></a></li>
+            <li><a class="menu-item" href="#" rel="#pgDevices" id="btnDevices"><span class="icon"></span><span>Devices</span></a></li>
+            <li><a class="menu-item" href="#" rel="#pgSkills" id="btnSkills"><span class="icon"></span><span>Skills</span></a></li>
+            <li><a class="menu-item" href="#" rel="#pgActions" id="btnActions"><span class="icon"></span><span>Actions</span></a></li>
+            <li><a class="menu-item" href="#" rel="#pgLogs" id="btnLogs"><span class="icon"></span><span>Logs</span></a></li>
+            <li><a class="menu-item" href="#" rel="#pgUpdates" id="btnUpdates"><span class="icon"></span><span>Updates</span></a></li>
+            <li><a class="menu-item" href="#" rel="#pgAbout" id="btnAbout"><span class="icon"></span><span>About</span></a></li>
+            
+        </ul>
+        <ol>
+            <li><a target="_new" href="https://docs.kenzy.ai">Version 0.9.2</a></li>
+        </ol>
+    </div>
+    <div class="page_content">
+
+        <div class="content_container">
+
+            <div class="content_page" id="pgDashboard">
+                <h1>Dashboard</h1>
+                <div class="content_section">
+                    <ul>
+                        <li>Last 5 (or 10) heard messages (Listener)</li>
+                        <li>Last 5 (or 10) spoken messages (Speaker)</li>
+                        <li>Who is in which room (Watcher)</li>
+                        <li>Send Global Message (Speaker ... perhaps with room selector?)</li>
+                        <li>Device buttons to start/stop</li>
+                    </ul>
+
+                </div>
+                <div class="content_section">
+                    <div class="flx-table hover">
+                        <div class="flx-row header">
+                            <div class="flx-column">
+                                Column 1
+                            </div>
+                            <div class="flx-column">
+                                Column 2
+                            </div>
+                        </div>
+                        <div class="flx-row">
+                            <div class="flx-column">
+                                Column 1
+                            </div>
+                            <div class="flx-column">
+                                Column 2
+                            </div>
+                        </div>
+                        <div class="flx-row">
+                            <div class="flx-column">
+                                Column 1
+                            </div>
+                            <div class="flx-column">
+                                Column 2
+                            </div>
+                        </div>
+                        <div class="flx-row">
+                            <div class="flx-column">
+                                Column 1
+                            </div>
+                            <div class="flx-column">
+                                Column 2
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="content_page" id="pgCameras">
+                <h1>Cameras</h1>
+                <div class="content_section">
+                    TEST
+                </div>
+            </div>
+
+            <div class="content_page" id="pgDevices">
+                <h1>Devices</h1>
+                <div class="content_section">
+                    <div class="flx-table hover" id="device-list">
+                        <div class="flx-row header">
+                            <div class="flx-column flx-3">
+                                Type / Container
+                            </div>
+                            <div class="flx-column flx-2">
+                                Nickname / Group
+                            </div>
+                            <div class="flx-column">
+                                Version
+                            </div>
+                            <div class="flx-column flx-2">
+                                Accepts
+                            </div>
+                        </div>
+                        <div class="flx-row data">
+                            <div class="flx-column flx-3">
+                                <div title="193091-9aidofj0-2390jafdf-1930911">kenzy.devices.Listener</div>
+                                <div>http://localhost:8080</div>
+                            </div>
+                            <div class="flx-column flx-2">
+                                <div>My Microphone</div>
+                                <div>Living Room</div>
+                            </div>
+                            <div class="flx-column">
+                                <div>0.9.2</div>
+                            </div>
+                            <div class="flx-column flx-2">
+                                <ul>
+                                    <li>start</li>
+                                    <li>stop</li>
+                                    <li>audioOutStart</li>
+                                    <li>audioOutEnd</li>
+                                </ul>
+                            </div>
+                        </div>
+                        <div class="flx-row data">
+                            <div class="flx-column flx-3">
+                                <div title="193091-9aidofj0-2390jafdf-1930911">kenzy.devices.Listener</div>
+                                <div>http://localhost:8080</div>
+                            </div>
+                            <div class="flx-column flx-2">
+                                <div>My Microphone</div>
+                                <div>Living Room</div>
+                            </div>
+                            <div class="flx-column">
+                                <div>0.9.2</div>
+                            </div>
+                            <div class="flx-column flx-2">
+                                <ul>
+                                    <li>start</li>
+                                    <li>stop</li>
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="status_bar">
+                    <button>Add New Device</button>
+                    &nbsp;
+                </div>
+            </div>
+
+            <div class="content_page" id="pgSkills">
+                <h1>Skills</h1>
+                <div class="content_section">
+                    <div class="flx-table hover">
+                        <div class="flx-row header">
+                            <div class="flx-column">
+                                Column 1
+                            </div>
+                            <div class="flx-column">
+                                Column 2
+                            </div>
+                        </div>
+                        <div class="flx-row">
+                            <div class="flx-column">
+                                Column 1
+                            </div>
+                            <div class="flx-column">
+                                Column 2
+                            </div>
+                        </div>
+                        <div class="flx-row">
+                            <div class="flx-column">
+                                Column 1
+                            </div>
+                            <div class="flx-column">
+                                Column 2
+                            </div>
+                        </div>
+                        <div class="flx-row">
+                            <div class="flx-column">
+                                Column 1
+                            </div>
+                            <div class="flx-column">
+                                Column 2
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="content_page" id="pgActions">
+                <h1>Actions</h1>
+                <div class="content_section form">
+                    <div class="flx-form">
+                        <div class="flx-row">
+                            <div class="flx-column flx-3">
+                                <select>
+                                    <option>[device]</option>
+                                    <option value="529ff7be-1131-4148-9a5e-45e33ed1f886">container - 529ff7be-1131-4148-9a5e-45e33ed1f886</option>
+                                    <option value="dcc44a7e-73d3-4d73-96d3-66717386b6c0">kenzy.devices.Listener - dcc44a7e-73d3-4d73-96d3-66717386b6c0</option>
+                                    <option>TEST2</option>
+                                    <option>TEST3</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="flx-row">
+                            <div class="flx-column flx-3">
+                                <select>
+                                    <option>[action]</option>
+                                    <option>TEST1</option>
+                                    <option>TEST2</option>
+                                    <option>TEST3</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="flx-row">
+                            <div class="flx-column flx-3">
+                                <textarea placeholder="Enter JSON Data"></textarea>
+                            </div>
+                        </div>
+                        <div class="flx-row">
+                            <div class="flx-column flx-3">
+                                <button>Send &raquo;</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <hr />
+
+                <p>
+                <input type="checkbox" id="chkLog" value="1" checked="checked" /><label for="chkLog">Show Log</label>
+                <input type="checkbox" id="chkWordWrap" value="1" checked="checked" /><label for="chkWordWrap">Word Wrap</label>
+                </p>
+
+                <div class="content_section">
+                    <div class="flx-table thin">
+                        <div class="flx-row header">
+                            <div class="flx-column">
+                                Request
+                            </div>
+                        </div>
+                        <div class="flx-row">
+                            <div class="flx-column">
+                                Column 1
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="content_section">
+                    <div class="flx-table thin">
+                        <div class="flx-row header">
+                            <div class="flx-column">
+                                Response
+                            </div>
+                        </div>
+                        <div class="flx-row">
+                            <div class="flx-column">
+                                Column 1
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+            </div>
+
+            <div class="content_page" id="pgLogs">
+                <h1>Logs</h1>
+                <div class="content_section">
+                    <div class="flx-table thin hover">
+                        <div class="flx-row header">
+                            <div class="flx-column">
+                                Column 1
+                            </div>
+                            <div class="flx-column">
+                                Column 2
+                            </div>
+                        </div>
+                        <div class="flx-row">
+                            <div class="flx-column">
+                                Column 1
+                            </div>
+                            <div class="flx-column">
+                                Column 2
+                            </div>
+                        </div>
+                        <div class="flx-row">
+                            <div class="flx-column">
+                                Column 1
+                            </div>
+                            <div class="flx-column">
+                                Column 2
+                            </div>
+                        </div>
+                        <div class="flx-row">
+                            <div class="flx-column">
+                                Column 1
+                            </div>
+                            <div class="flx-column">
+                                Column 2
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="content_page" id="pgUpdates">
+                <h1>Updates</h1>
+                <div class="content_section">
+                    TEST
+                </div>
+            </div>
+
+            <div class="content_page" id="pgAbout">
+                <h1>About</h1>
+                <div class="content_section">
+                    <p>Kenzy is a foundation of Python code that enables hardware interactions leveraging Machine Learning to create Artificial Intelligence. Wow, that's a mouthful. Let's try again, Kenzy is a set of Python classes and functions that you can use to build your own personal assistant similar to Apple's Siri, Google's Assistant, or Amazon's Alexa. There are libraries for speech recognition, speech synthesis, face and object detection, and even face recognition. So basically Kenzy can see you, hear you, and respond to you.</p>
+
+                    <p>Kenzy is 100% customizable. Its modular design allows you to create your own skills or integrate new hardware to fit your specific needs. The code is open source and shared with a business-friendly license.</p>
+                    
+                    <h2>What Should You Expect?</h2>
+                    <p>Kenzy's main goal is to share knowledge and grow organically based on feedback and support from people like you. On the <a target="_new" href="https://kenzy.ai">project web site</a>, the <a target="_new" href="https://github.com/lnxusr1/kenzy">github project</a>, and within each of Kenzy's code modules you will find lots of <a target="_new" href="https://docs.kenzy.ai">documentation</a>, examples, sample code, and other artifacts to help you grow in your own experience with Ai/ML and coding.</p>
+
+                    <h2>Who Built Me</h2>
+                    <p>Kenzy was originally designed by <a target="_new" href="http://twitter.com/lnxusr1">@lnxusr1</a> during the Covid-19 lockdown in 2020.</p>
+                </div>
+            </div>
+
+        </div> <!-- content_container -->
+
+    </div>
+
+</body>
+</html>

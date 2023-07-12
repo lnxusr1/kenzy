@@ -1,0 +1,7 @@
+{
+    "libary": "yolov7",
+    "confidence": 0.5,
+    "iou": 0.45,
+    "size": 640,
+    "augment": false
+}
