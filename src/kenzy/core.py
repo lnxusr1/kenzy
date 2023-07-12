@@ -77,7 +77,7 @@ class KenzyHTTPServer(HTTPServer):
         if url is None:
             url = self.local_url
 
-        #self.devices[id] = DeviceEntry(server=self, id=id, device=device, url=url, **kwargs)
+        self.devices[id] = device
 
     def collect(self, **kwargs):
         # TODO: Add feature

@@ -20,6 +20,8 @@ class detector(object):
         self._faceNames = []
         self._faceEncodings = []
 
+        self.facesList = kwargs.get("facesList")
+
         orientation = int(kwargs.get("orientation", "0"))  # 0, 90, 180, 270
         self._orientation = None
         if orientation == 90:
@@ -164,6 +166,26 @@ class detector(object):
         self.movements = []
 
         self._loadLabels()
+        self.reloadFaces()
+
+    def reloadFaces(self):
+        ret = True
+        if self.facesList is not None and isinstance(self.facesList, dict):
+            for faceName in self.facesList:
+                if isinstance(self.facesList[faceName], list):
+                    for fileName in self.facesList[faceName]:
+                        if isinstance(fileName, str):
+                            try:
+                                self.addFace(fileName, faceName)
+                            except Exception:
+                                ret = False
+                elif isinstance(self.facesList[faceName], str):
+                    try:
+                        self.addFace(str(self.facesList[faceName]), faceName)
+                    except Exception:
+                        ret = False
+
+        return ret
         
     def addFace(self, fileName, faceName):
         if not os.path.isfile(fileName):
@@ -172,8 +194,19 @@ class detector(object):
         newFaceImage = face_recognition.load_image_file(fileName)
         newFaceEncoding = face_recognition.face_encodings(newFaceImage)[0]
 
+        faceName = str(faceName) if faceName is not None else ""
+
         self._faceEncodings.append(newFaceEncoding)
-        self._faceNames.append(str(faceName) if faceName is not None else "")
+        self._faceNames.append(faceName)
+
+        if self.facesList is None:
+            self.facesList = {}
+        
+        if faceName not in self.facesList:
+            self.facesList[faceName] = []
+
+        if fileName not in self.facesList[faceName]:
+            self.facesList[faceName].append(fileName)
 
         self.logger.info("Adding face (" + str(faceName) + "): " + str(fileName))
         

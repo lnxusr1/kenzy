@@ -3,7 +3,7 @@ import threading
 import queue
 import time
 import logging
-from kenzy.image.core import detector
+from kenzy.image import core
 
 
 class VideoDevice:
@@ -18,15 +18,13 @@ class VideoDevice:
     stop_event = threading.Event()
     frames = queue.Queue(20)
 
-    def __init__(self, server=None, **kwargs):
-        self.server = server
+    def __init__(self, component=None, server=None, **kwargs):
         self.settings = kwargs
 
-        self.video_device = kwargs.get("video_device", 0)
-        self.detector = detector(**kwargs)
+        self.server = server
+        self.detector = component if component is not None else core.detector()
 
-        # TODO: Process Faces Folder
-        self.faces_folder = kwargs.get("faces_folder")
+        self.video_device = kwargs.get("video_device", 0)
 
     def _read_from_device(self):
         self.dev = cv2.VideoCapture(self.video_device)

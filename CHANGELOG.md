@@ -6,19 +6,29 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
-- Moved watcher process to multiprocessing subprocess to enable more CPU bandwidth
+- Settings handler for consistency when customizing per device settings
 - GPUs can be leveraged for torch and cuda enabled models
 - Added options for saving video of detected people
+- Directly incorporated kenzy_image into kenzy.image.core.detector
+- Added reloadFaces logic to kenzy.image.detector (formerly of the kenzy-image package)
 
 ### Modified
 
-- Modified listener to use OpenAi/Whisper for speech-to-text
-- Modified watcher to use kenzy-image supporting Yolov7 and MobileNet V3 SSD.
+- Settings/Configuration files can now be stored in JSON or YAML files
+- Moved watcher to ```kenzy.image.device.VideoReader```
+- Moved listener to ```kenzy.stt.device.AudioReader```
+- Moved speaker to ```kenzy.tts.device.AudioWriter```
+- Restructured devices to allow for direct calls for "main" in each of image, stt, and tts
+- Split out detector/creator processes for each of hte core functions into their own modules (e.g. kenzy.image.detector, kenzy.stt.detector, etc.)
+- Moved all devices to their own HTTP server module when run as clients
+- Fixed the UPNP logic so that it honors the full UPNP spec for control interface lookups
 
 ### Removed
 
 - Dropped support for PyQt5 panels
 - Dropped support for Kasa smart switch/plug devices
+- Dropped unnecessary libraries (urllib3, netifaces)
+- Dropped support for MyCroft libraries (padatious, mimic3)
 
 ## [1.0.0]
 
