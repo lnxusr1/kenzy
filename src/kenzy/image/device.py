@@ -30,7 +30,7 @@ class VideoDevice:
         self.dev = cv2.VideoCapture(self.video_device)
         
         try:
-            while not self.stop_event.isSet():
+            while not self.stop_event.is_set():
                 ret, frame = self.dev.read()
                 if ret:
                     timestamp = time.time()
@@ -46,7 +46,7 @@ class VideoDevice:
 
     def _process(self):
         try:
-            while not self.stop_event.isSet():
+            while not self.stop_event.is_set():
                 try:
                     item = self.frames.get(timeout=0.1)
                     if item is None:
@@ -70,6 +70,7 @@ class VideoDevice:
         return ["start", "stop", "restart", "snapshot", "stream", "is_alive"]
 
     def start(self, **kwargs):
+        print("START")
         if self.read_thread is not None or self.proc_thread is not None:
             raise Exception("Unable to start.  Thread already exists.")
         
@@ -84,6 +85,7 @@ class VideoDevice:
         return True
 
     def stop(self, **kwargs):
+        print("STOP")
         self.stop_event.set()
 
         if self.read_thread is not None and self.read_thread.is_alive():
@@ -104,9 +106,9 @@ class VideoDevice:
                 return False
         
         return self.start()
-    
+
     def is_alive(self, **kwargs):
-        if self.stop_event.isSet():
+        if self.read_thread is not None or self.proc_thread is not None:
             return True
         
         return False

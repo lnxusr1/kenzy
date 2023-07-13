@@ -1,19 +1,28 @@
-#from kenzy.image.device import VideoDevice
 #import time 
-
-#dev = VideoDevice()
-#dev.start()
 
 #time.sleep(10)
 
-#dev.stop()
+#import kenzy.settings
 
-import kenzy.settings
+#kenzy.settings.save({ "type": "kenzy.image", "component": {  }, "device": {  }, "server": { } })
+#settings = kenzy.settings.load()
+#print(settings)
 
-kenzy.settings.save({ "type": "kenzy.image", "component": {  }, "device": {  }, "server": { } })
-settings = kenzy.settings.load()
-print(settings)
+#import kenzy.extras
 
-import kenzy.extras
+#print(kenzy.extras.get_local_ip_address())
 
-print(kenzy.extras.get_local_ip_address())
+import kenzy.core
+from kenzy.image.device import VideoDevice
+
+httpd = kenzy.core.KenzyHTTPServer(("0.0.0.0", 8080))
+
+dev = VideoDevice(server=httpd)
+dev.start()
+
+try:
+    httpd.devices["id"] = dev
+    httpd.serve_forever()
+except KeyboardInterrupt:
+    httpd.shutdown()
+    dev.stop()
