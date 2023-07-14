@@ -150,9 +150,8 @@ class KenzyRequestHandler(BaseHTTPRequestHandler):
 
 class KenzyHTTPServer(HTTPServer):
     logger = logging.getLogger("HTTP-SRV")
-    devices = {}
     settings = {}
-    config_file = os.path.join(os.path.expanduser("~"), ".kenzy", "config.yml")
+    device = None
     ssdp_server = None
     service_url = None
     local_url = None
@@ -240,13 +239,22 @@ class KenzyHTTPServer(HTTPServer):
         raise NotImplementedError("Feature not implemented")
     
     def serve_forever(self, poll_interval: float = 0.5, *args, **kwargs):
+        if not self.device.is_alive():
+            self.device.start()
+            
         if self.ssdp_server is not None:
             self.ssdp_server.start()
         
         self.logger.info("Server started on " + str("%s:%s" % self.server_address) + " (" + str(self.server_name) + ")")
         super().serve_forever(poll_interval)
 
+    def set_device(self, device):
+        self.device = device
+
     def shutdown(self, **kwargs):
+        if self.device.is_alive():
+            self.device.stop()
+
         if self.ssdp_server is not None:
             self.ssdp_server.stop()
             self.ssdp_server = None

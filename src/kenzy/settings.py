@@ -4,22 +4,25 @@ import json
 
 
 def load(file_name=None):
+    if file_name is not None and not os.path.isfile(file_name):
+        raise FileNotFoundError("Could not find configuration file.")
+
     if file_name is None:
         file_name = os.path.join(os.path.expanduser("~"), ".kenzy", "config.yml")
 
-    if not os.path.isfile(file_name):
-        return {}
-
-    if file_name.lower().endswith(".yml") or file_name.lower().endswith(".yaml"):
-        with open(file_name, "r", encoding="UTF-8") as fp:
-            return yaml.safe_load(fp)
+    if os.path.isfile(file_name):
+        if file_name.lower().endswith(".yml") or file_name.lower().endswith(".yaml"):
+            with open(file_name, "r", encoding="UTF-8") as fp:
+                return yaml.safe_load(fp)
+            
+        elif file_name.lower().endswith(".jsn") or file_name.lower().endswith(".json"):
+            with open(file_name, "r", encoding="UTF-8") as fp:
+                return json.load(fp)
         
-    elif file_name.lower().endswith(".jsn") or file_name.lower().endswith(".json"):
-        with open(file_name, "r", encoding="UTF-8") as fp:
-            return json.load(fp)
-        
+        else:
+            raise NotImplementedError("Unexpected file extension.")
     else:
-        raise NotImplementedError("Unexpected file extension.")
+        return {}
 
 
 def save(data, file_name=None):

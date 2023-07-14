@@ -1,43 +1,55 @@
+import sys
+import traceback
 import cv2
 import threading
 import queue
 import time
 import logging
-from kenzy.image import core
+import collections
+# from kenzy.image import core
 
 
-class VideoDevice:
-    logger = logging.getLogger("IMAGE-DEV")
+class VideoProcessor:
+    type = "kenzy.image"
+    logger = logging.getLogger("KNZY-IMG")
     settings = {}
     video_device = 0
-    faces_folder = None
     detector = None
-    server = None
+    service = None
     read_thread = None
     proc_thread = None
     stop_event = threading.Event()
     frames = queue.Queue(20)
+    frames_per_second = None
 
-    def __init__(self, component=None, server=None, **kwargs):
+    faces_detected = []
+    objects_detected = []
+    motion_detected = False
+
+    def __init__(self, **kwargs):
         self.settings = kwargs
-
-        self.server = server
-        self.detector = component if component is not None else core.detector()
-
         self.video_device = kwargs.get("video_device", 0)
+        self.frames_per_second = kwargs.get("frames_per_second")
 
     def _read_from_device(self):
         self.dev = cv2.VideoCapture(self.video_device)
-        
+        timestamp = 0
         try:
             while not self.stop_event.is_set():
                 ret, frame = self.dev.read()
                 if ret:
-                    timestamp = time.time()
-                    try:
-                        self.frames.put_nowait({ "frame": frame, "timestamp": timestamp })
-                    except queue.Full:
-                        pass
+                    if self.frames_per_second is None:
+                        if timestamp != 0:
+                            self.frames_per_second = 1 / (time.time() - timestamp)
+
+                        timestamp = time.time()
+
+                    else:
+                        timestamp = time.time()
+                        try:
+                            self.frames.put_nowait({ "frame": frame, "timestamp": timestamp })
+                        except queue.Full:
+                            pass
 
         except KeyboardInterrupt:
             self.stop()
@@ -45,19 +57,52 @@ class VideoDevice:
         self.dev.release()
 
     def _process(self):
+        time_lastface_check = 0
+        
+        if self.frames_per_second is None:
+            frame_buffer = None
+        else:
+            frame_buffer = collections.dequeue(maxlen=int(self.frames_per_second) * 5)
+
+        # TODO: setup video recording
+
         try:
             while not self.stop_event.is_set():
                 try:
                     item = self.frames.get(timeout=0.1)
-                    if item is None:
-                        continue 
+                    if item is None or not isinstance(item, dict) or item.get("timestamp") is None or item.get("frame") is None:
+                        continue
                     
-                    if item.get("timestamp") < time.time() - .1:
+                    current_time = time.time()
+
+                    if item.get("timestamp") < current_time - .1:
                         continue  # Skip processing this frame as it is too old
 
-                    # TODO: Analyze Images, Add snaps, Record if needed, Make callback
-                    self.detector.analyze(item.get("frame"))
-                    print(True if len(self.detector.movements) > 0 else False, len(self.detector.objects), len(self.detector.faces))
+                    detect_faces = True if self.detector._detectFaces and current_time - 0.5 < time_lastface_check else False
+                    time_lastface_check = current_time
+
+                    self.detector.analyze(item.get("frame"), detectFaces=detect_faces)
+                    
+                    motion_detected = False
+                    if self.detector._detectMotion and len(self.detector.movements) > 0:
+                        motion_detected = True
+
+                    objects_detected = [x["name"] for x in self.detector.objects]
+                    objects_detected.sort()
+
+                    if detect_faces:
+                        faces_detected = [x.get("name", self.detector._defaultFaceName) for x in self.detector.faces]
+                        faces_detected.sort()
+                    else:
+                        faces_detected = self.faces_detected
+                    
+                    if motion_detected != self.motion_detected or objects_detected != [x["name"] for x in self.objects_detected] or faces_detected != [x["name"] for x in self.faces_detected]:
+                        print(motion_detected, objects_detected, faces_detected)
+                        self.motion_detected = motion_detected
+                        self.objects_detected = [{"name": x, "timestamp": item.get("timestamp") } for x in objects_detected]
+                        self.faces_detected = [{"name": x, "timestamp": item.get("timestamp") } for x in faces_detected]
+
+                    #print(True if len(self.detector.movements) > 0 else False, len(self.detector.objects), len(self.detector.faces))
 
                 except queue.Empty:
                     pass
@@ -69,10 +114,20 @@ class VideoDevice:
     def accepts(self):
         return ["start", "stop", "restart", "snapshot", "stream", "is_alive"]
 
+    def set_component(self, component):
+        self.detector = component
+
+    def set_service(self, service):
+        self.service = service
+
     def start(self, **kwargs):
-        print("START")
+        if self.detector is None:
+            self.logger.error("Detector not set.  Start request failed.")
+            return False
+        
         if self.read_thread is not None or self.proc_thread is not None:
-            raise Exception("Unable to start.  Thread already exists.")
+            self.logger.error("Unable to start Video Processor.  Threads already exist.")
+            return False
         
         self.read_thread = threading.Thread(target=self._read_from_device)
         self.read_thread.daemon = True
@@ -82,10 +137,11 @@ class VideoDevice:
         self.proc_thread.daemon = True
         self.proc_thread.start()
 
+        self.logger.info("Started Video Processor")
+
         return True
 
     def stop(self, **kwargs):
-        print("STOP")
         self.stop_event.set()
 
         if self.read_thread is not None and self.read_thread.is_alive():
@@ -98,6 +154,7 @@ class VideoDevice:
         self.proc_thread = None
         self.stop_event.clear()
 
+        self.logger.info("Stopped Video Processor")
         return True
     
     def restart(self, **kwargs):
