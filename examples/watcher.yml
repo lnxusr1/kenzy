@@ -1,0 +1,58 @@
+type: kenzy.image
+
+component: 
+  orientation:          0
+  detectFaces:          true
+  detectObjects:        true
+  detectMotion:         true
+  imageMarkupFaces:     true
+  imageMarkupObjects:   true
+  imageMarkupMotion:    true
+  scaleFactor:          1.0
+  defaultFaceName:      "Unknown"
+  faceModel:            "hog"
+  faceFontColor:
+    - 255
+    - 255
+    - 255
+  faceOutlineColor:
+    - 0
+    - 0
+    - 255
+  showFaces:            true
+  objModelType:         "ssd"
+  # objDetectCfg: 
+  # objDetectModel:	
+  # objDetectLabels:	
+  objDetectList:
+    - person
+    - dog
+    - cat
+  objFontColor:
+    - 255
+    - 255
+    - 255
+  objOutlineColor:
+    - 255
+    - 0
+    - 0
+  showObjectNames:      true
+  motionThreshold:      20
+  motionMinArea:        50
+  motionOutlineColor:
+    - 255
+    - 0
+    - 0
+
+device: 
+  video_device:          0
+
+service:
+  enable_upnp:          true
+  service_url:          http://localhost:8080
+  host:                 0.0.0.0
+  port:                 8080
+  enable_ssl:           false
+  ssl_cert_file:        /etc/ssl/cert/snakeoil.crt
+  ssl_key_file:         /etc/ssl/private/snakeoil.key
+

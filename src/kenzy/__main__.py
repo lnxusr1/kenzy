@@ -2,7 +2,12 @@
 
 #time.sleep(10)
 
-#import kenzy.settings
+import os
+import json
+import kenzy.settings
+data = kenzy.settings.load("/home/lnxusr1/git/kenzy/examples/watcher.yml")
+print(json.dumps(data, indent=4))
+quit()
 
 #kenzy.settings.save({ "type": "kenzy.image", "component": {  }, "device": {  }, "server": { } })
 #settings = kenzy.settings.load()

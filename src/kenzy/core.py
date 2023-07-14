@@ -3,9 +3,10 @@ import logging
 import uuid
 import os
 from http.server import HTTPServer, BaseHTTPRequestHandler
+import ssl
 from urllib.parse import parse_qs
 from . import VERSION, __app_name__, __app_title__
-from .extras import SSDPServer, discover_ssdp_services, get_file
+from .extras import SSDPServer, discover_ssdp_services, get_file, get_local_ip_address
         
 
 class KenzyRequestHandler(BaseHTTPRequestHandler):
@@ -156,45 +157,45 @@ class KenzyHTTPServer(HTTPServer):
     service_url = None
     local_url = None
 
-    def __init__(self, server_address, RequestHandlerClass: BaseHTTPRequestHandler = KenzyRequestHandler, 
-                 bind_and_activate: bool = True, settings: dict = {}) -> None:
+    def __init__(self, **kwargs) -> None:
 
-        self.settings = settings if isinstance(settings, dict) else {}
-
-        settings["id"] = settings.get("id", str(uuid.uuid4()))
-        self.service_url = settings.get("service_url")
+        self.settings = kwargs
+        self.service_url = kwargs.get("service_url")
+        self.id = kwargs.get("id", uuid.uuid4())
 
         # Get Service URL and start UPNP/SSDP server is appropriate
-        http_settings = settings.get("http", {})
-        proto = "https" if http_settings.get("ssl", {}).get("enable", False) else "http"
+        proto = "https" if kwargs.get("enable_ssl", False) else "http"
+        host = kwargs.get("host", "0.0.0.0")
+        port = kwargs.get("port", 8080)
 
-        self.local_url = http_settings.get("url", "%s://%s:%s" % (proto, server_address[0], server_address[1]))
+        try:
+            ip_addr = host if host != "0.0.0.0" else get_local_ip_address()
+        except Exception:
+            ip_addr = "127.0.0.1"
+            
+        self.local_url = kwargs.get("service_url", "%s://%s:%s" % (proto, ip_addr, port))
 
-        if self.settings.get("upnp", False):
-            
-            if str(self.settings.get("type", "core")).lower().strip() == "core":
-                # start UPNP
-                if self.service_url is None:
-                    self.service_url = self.local_url 
-                self.ssdp_server = SSDPServer(usn_uuid=settings.get("id"), service_url="%s/upnp.xml" % self.service_url)
-            
-            else:
-                # search for UPNP service
-                url = discover_ssdp_services()
-                if url is not None:
-                    self.service_url = url
+        if str(kwargs.get("upnp", "server")).lower().strip() == "server":
+            # start UPNP
+            if self.service_url is None:
+                self.service_url = self.local_url 
+            self.ssdp_server = SSDPServer(usn_uuid=self.id, service_url="%s/upnp.xml" % self.service_url)
+        
+        else:
+            # search for UPNP service
+            url = discover_ssdp_services()
+            if url is not None:
+                self.service_url = url
 
         if self.service_url is None:
             self.service_url = self.local_url
 
         self.logger.info(f"Service URL set to {self.service_url}")
+        
+        super().__init__((host, port), KenzyRequestHandler)
 
-        # load devices
-        
-        #speaker = Speaker()
-        #self.add_device(id="speaker-device", device=speaker)
-        
-        super().__init__(server_address, RequestHandlerClass, bind_and_activate)
+        if kwargs.get("enable_ssl", False):
+            self.socket = ssl.wrap_socket(self.socket, certfile=kwargs.get("ssl_cert_file"), keyfile=kwargs.get("ssl_key_file"), server_side=True)
 
     def add_device(self, id=None, device=None, url=None, **kwargs):
 
