@@ -20,7 +20,9 @@ class detector(object):
         self._faceNames = []
         self._faceEncodings = []
 
+        self.facesCache = kwargs.get("facesCache")
         self.facesList = kwargs.get("facesList")
+        self.unknownFaceSeq = 1
 
         orientation = int(kwargs.get("orientation", "0"))  # 0, 90, 180, 270
         self._orientation = None
@@ -151,6 +153,7 @@ class detector(object):
         self.logger.debug("objDetectCfg       = " + str(self._objConfigFile))
         self.logger.debug("objDetectList      = " + str(self._objList))
         self.logger.debug("objDetectModel     = " + str(self._objModelFile))  
+
         self.logger.debug("objDetectLabels    = " + str(self._objLabelFile))  
         self.logger.debug("showObjectNames    = " + str(self._objShowNames))
         self.logger.debug("objFontColor       = " + str(self._objFontColor))
@@ -185,6 +188,30 @@ class detector(object):
                     except Exception:
                         ret = False
 
+        if self.facesCache is not None:
+            if not os.path.isdir(self.facesCache):
+                try:
+                    os.makedirs(self.facesCache, exist_ok=True)
+                except Exception:
+                    pass
+                
+            else:
+                files = os.listdir(self.facesCache)
+                for file in files:
+                    if file.lower().strip().endswith(".jpg") or file.lower().strip().endswith(".jpeg"):
+                        file_name = os.path.join(self.facesCache, file)
+                        face_name = file.rsplit(".", 1)[0]
+                        if "_" in file:
+                            try:
+                                seq = int(file.rsplit("_", 1)[1].rsplit(".", 1)[0])
+                                face_name = file.rsplit("_", 1)[0] + " - " + str(seq)
+                                if seq > self.unknownFaceSeq:
+                                    self.unknownFaceSeq = seq + 1
+                                
+                            except Exception:
+                                pass
+                        
+                        self.addFace(face_name, file_name)
         return ret
         
     def addFace(self, fileName, faceName):

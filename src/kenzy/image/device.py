@@ -78,7 +78,7 @@ class VideoProcessor:
                     if item.get("timestamp") < current_time - .1:
                         continue  # Skip processing this frame as it is too old
 
-                    detect_faces = True if self.detector._detectFaces and current_time - 0.5 < time_lastface_check else False
+                    detect_faces = True if self.detector._detectFaces and current_time - 0.3 < time_lastface_check else False
                     time_lastface_check = current_time
 
                     self.detector.analyze(item.get("frame"), detectFaces=detect_faces)
@@ -96,11 +96,44 @@ class VideoProcessor:
                     else:
                         faces_detected = self.faces_detected
                     
-                    if motion_detected != self.motion_detected or objects_detected != [x["name"] for x in self.objects_detected] or faces_detected != [x["name"] for x in self.faces_detected]:
-                        print(motion_detected, objects_detected, faces_detected)
+                    od = [x["name"] for x in self.objects_detected]
+                    od.sort()
+
+                    fd = [x["name"] for x in self.faces_detected]
+                    fd.sort()
+
+                    bChanged = False
+                    if motion_detected != self.motion_detected:
+                        bChanged = True
                         self.motion_detected = motion_detected
+
+                    if objects_detected != od:
+                        bChanged = True
                         self.objects_detected = [{"name": x, "timestamp": item.get("timestamp") } for x in objects_detected]
-                        self.faces_detected = [{"name": x, "timestamp": item.get("timestamp") } for x in faces_detected]
+
+                    if faces_detected != fd:
+                        bChanged = True
+                        # Clear out old names or unidentified faces
+                        for i in range(len(self.faces_detected), 0, -1):
+                            if self.faces_detected[i - 1]["name"] == self.detector._defaultFaceName \
+                                    or self.faces_detected[i - 1]["timestamp"] < item.get("timestamp") - 1:
+                                
+                                del self.faces_detected[i - 1]
+
+                        # Add in new names
+                        for faceName in faces_detected:
+                            bFound = False
+                            for face in self.faces_detected:
+                                if faceName != self.detector._defaultFaceName and faceName == face.get("name"):
+                                    bFound = True
+
+                            if not bFound and faceName:
+                                self.faces_detected.append({ "name": faceName, "timestamp": item.get("timestamp") })
+                        
+                        #self.faces_detected = [{"name": x, "timestamp": item.get("timestamp") } for x in faces_detected]
+
+                    if bChanged:
+                        print(motion_detected, objects_detected, self.faces_detected)
 
                     #print(True if len(self.detector.movements) > 0 else False, len(self.detector.objects), len(self.detector.faces))
 
