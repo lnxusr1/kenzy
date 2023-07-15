@@ -94,7 +94,7 @@ class VideoProcessor:
                         faces_detected = [x.get("name", self.detector._defaultFaceName) for x in self.detector.faces]
                         faces_detected.sort()
                     else:
-                        faces_detected = self.faces_detected
+                        faces_detected = [x["name"] for x in self.faces_detected]
                     
                     od = [x["name"] for x in self.objects_detected]
                     od.sort()
@@ -121,6 +121,7 @@ class VideoProcessor:
                                 del self.faces_detected[i - 1]
 
                         # Add in new names
+                        t_arr = []
                         for faceName in faces_detected:
                             bFound = False
                             for face in self.faces_detected:
@@ -128,8 +129,9 @@ class VideoProcessor:
                                     bFound = True
 
                             if not bFound and faceName:
-                                self.faces_detected.append({ "name": faceName, "timestamp": item.get("timestamp") })
+                                t_arr.append({ "name": faceName, "timestamp": item.get("timestamp") })
                         
+                        self.faces_detected.extend(t_arr)
                         #self.faces_detected = [{"name": x, "timestamp": item.get("timestamp") } for x in faces_detected]
 
                     if bChanged:

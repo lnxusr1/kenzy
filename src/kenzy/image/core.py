@@ -306,11 +306,11 @@ class detector(object):
             self.object_detection()
 
         if (detectFaces is None and self._detectFaces) or detectFaces:
-            # self.face_detection(filterByObjects=detectFaces if detectFaces is not None else self._detectObjects)
+            self.face_detection(filterByObjects=detectFaces if detectFaces is not None else self._detectObjects)
             
             # Hack to disable optimizations preventing multi-channel 
             # images from processing correctly in face recognition
-            self.face_detection(filterByObjects=False)
+            # self.face_detection(filterByObjects=True)
 
         end = time.time()
         
@@ -387,6 +387,9 @@ class detector(object):
                         right = loc["right"]
                         bottom = loc["bottom"]
                         im = self._scaledRGBImage[top:bottom, left:right]
+                        #cv2.imwrite("/tmp/test2.jpg", im)
+                        #im = cv2.imread("/tmp/test2.jpg")
+                        im = cv2.cvtColor(im, cv2.COLOR_BGR2RGB)
 
                         fl, fn = self._get_face_parts(im, top, left)
                         face_locations.extend(fl)
