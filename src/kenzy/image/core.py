@@ -27,6 +27,8 @@ class detector(object):
         self._unknownFaceSeq = 1
         self.filterFacesByObject = kwargs.get("filterFacesByObject", False)
 
+        self.faceTolerance = kwargs.get("faceTolerance", 0.6)
+
         orientation = int(kwargs.get("orientation", "0"))  # 0, 90, 180, 270
         self._orientation = None
         if orientation == 90:
@@ -187,6 +189,7 @@ class detector(object):
 
     def reloadFaces(self):
         ret = True
+
         if self.facesList is not None and isinstance(self.facesList, dict):
             for faceName in self.facesList:
                 if isinstance(self.facesList[faceName], list):
@@ -217,10 +220,12 @@ class detector(object):
         return ret
         
     def addFace(self, fileName, faceName):
-        if not os.path.isfile(fileName):
+        full_name = os.path.expanduser(fileName)
+
+        if not os.path.isfile(full_name):
             raise FileNotFoundError("Face file not found.")
 
-        newFaceImage = face_recognition.load_image_file(fileName)
+        newFaceImage = face_recognition.load_image_file(full_name)
         newFaceEncoding = face_recognition.face_encodings(newFaceImage)[0]
 
         faceName = str(faceName) if faceName is not None else ""
@@ -328,7 +333,7 @@ class detector(object):
 
             face_names = []
             for idx, face_encoding in enumerate(face_encodings):
-                matches = face_recognition.compare_faces(self._faceEncodings, face_encoding)
+                matches = face_recognition.compare_faces(self._faceEncodings, face_encoding, tolerance=self.faceTolerance)
                 name = None
 
                 face_distances = face_recognition.face_distance(self._faceEncodings, face_encoding)

@@ -1,11 +1,13 @@
 import sys
 import traceback
+import os
 import cv2
 import threading
 import queue
 import time
 import logging
 import collections
+import math
 # from kenzy.image import core
 
 
@@ -24,10 +26,17 @@ class VideoProcessor:
     image_decay = 1.0
     image_currency = 0.1
     image_check_frequency = 0.3
+    video_folder = None 
+    enable_recording = False
+    object_list = []
+    _use_objects = False
+    video_format = "XVID"
+    record_buffer = 5
 
     faces_detected = []
     objects_detected = []
     motion_detected = False
+    faces_last = {}
 
     def __init__(self, **kwargs):
         self.settings = kwargs
@@ -36,6 +45,34 @@ class VideoProcessor:
         self.image_decay = kwargs.get("image_decay", 1.0)
         self.image_currency = kwargs.get("image_currency", 0.1)
         self.image_check_frequency = kwargs.get("image_check_frequency", 0.3)
+        self.video_folder = kwargs.get("video_folder", os.path.join(os.path.expanduser("~"), ".kenzy", "image", "videos"))
+        self.enable_recording = kwargs.get("enable_recording", False)
+        self.object_list = kwargs.get("object_list", [])
+        self.video_format = kwargs.get("video_format", "XVID")
+        self.record_buffer = kwargs.get("record_buffer", 5)
+
+        self.validate_settings()
+
+    def validate_settings(self):
+        if self.video_folder is None: 
+            if self.enable_recording:
+                self.logger.info("Recording is disabled since video_folder was specified.")
+                self.enable_recording = False
+        else:
+            self.video_folder = os.path.expanduser(self.video_folder)
+            try:
+                os.makedirs(self.video_folder, exist_ok=True)
+            except Exception:
+                self.logger.error("Recording is disabled since video_folder could not be created.")
+                self.enable_recording = False
+
+        if self.object_list is None or len(self.object_list) == 0:
+            self._use_objects = False
+        else:
+            self._use_objects = True
+
+        self.logger.info(f"video_folder:      {self.video_folder}")
+        self.logger.info(f"enable_recording:  {self.enable_recording}")
 
     def _read_from_device(self):
         self.dev = cv2.VideoCapture(self.video_device)
@@ -64,13 +101,19 @@ class VideoProcessor:
 
     def _process(self):
         time_lastface_check = 0
-        
-        if self.frames_per_second is None:
-            frame_buffer = None
-        else:
-            frame_buffer = collections.dequeue(maxlen=int(self.frames_per_second) * 5)
+        frame_buffer = None
 
-        # TODO: setup video recording
+        do_record = False
+        record_delay = 0
+
+        video_writer = None
+        fourcc = cv2.VideoWriter_fourcc(*self.video_format)
+
+        file_extension = ".avi"
+        if self.video_format.lower() == "mp4v":
+            file_extension = ".m4v"
+        elif self.video_format.lower() == "h264":
+            file_extension = ".m4v"
 
         try:
             while not self.stop_event.is_set():
@@ -78,7 +121,49 @@ class VideoProcessor:
                     item = self.frames.get(timeout=0.1)
                     if item is None or not isinstance(item, dict) or item.get("timestamp") is None or item.get("frame") is None:
                         continue
-                    
+
+                    # Prep for video recording
+                    if self.frames_per_second is not None:
+                        if frame_buffer is None:
+                            frame_buffer = collections.deque(maxlen=int(math.ceil(self.frames_per_second)) * int(self.record_buffer))
+
+                        if do_record or (record_delay + self.record_buffer) > item.get("timestamp"):
+                            if video_writer is None:
+
+                                file_name = os.path.join(
+                                    self.video_folder, 
+                                    time.strftime("%Y%m%d", time.gmtime(item.get("timestamp"))), 
+                                    time.strftime("%Y%m%d_%H%M%S", time.gmtime(item.get("timestamp"))) + file_extension
+                                )
+
+                                try:
+                                    os.makedirs(os.path.dirname(file_name), exist_ok=True)
+                                except Exception:
+                                    raise
+
+                                video_writer = cv2.VideoWriter(
+                                    os.path.join(file_name), 
+                                    fourcc, 
+                                    math.ceil(self.frames_per_second), 
+                                    (item.get("frame").shape[1], item.get("frame").shape[0])
+                                )
+
+                            if frame_buffer is not None:
+                                for frame in frame_buffer:
+                                    video_writer.write(frame.get("frame"))
+
+                                frame_buffer.clear()
+                            
+                            video_writer.write(item.get("frame"))
+                        else:
+                            if video_writer is not None:
+                                video_writer.release()
+                                frame_buffer.clear()
+                                video_writer = None
+
+                            frame_buffer.append(item)
+
+                    # Main queue processor
                     current_time = time.time()
 
                     if item.get("timestamp") < current_time - self.image_currency:
@@ -95,6 +180,14 @@ class VideoProcessor:
 
                     objects_detected = [x["name"] for x in self.detector.objects]
                     objects_detected.sort()
+
+                    if self.enable_recording and self._use_objects:
+                        for ob in self.object_list:
+                            if ob in objects_detected:
+                                do_record = True
+                                record_delay = item.get("timestamp")
+
+                        do_record = False
 
                     if detect_faces:
                         faces_detected = [x.get("name", self.detector._defaultFaceName) for x in self.detector.faces if x.get("name") is not None]
@@ -133,6 +226,7 @@ class VideoProcessor:
                             for face in self.faces_detected:
                                 if faceName != self.detector._defaultFaceName and faceName == face.get("name"):
                                     bFound = True
+                                    self.faces_last[str(face.get("name"))] = item.get("timestamp")
 
                             if not bFound and faceName is not None:
                                 t_arr.append({ "name": faceName, "timestamp": item.get("timestamp") })

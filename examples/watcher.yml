@@ -45,12 +45,20 @@ component:
     - 0
   cacheFolder:              ~/.kenzy/image/faces/unknown
   filterFacesByObject:      false
+  facesList:
+    lnxusr1:
+      - ~/Pictures/faces/lnxusr1/user.1.9.jpg
+
 
 device: 
   video_device:             0
   image_decay:              1.0
   image_currency:           0.1
   image_check_frequency:    0.3
+  video_folder:         ~/Videos/kenzy
+  enable_recording:     true
+  object_list:
+    - person
 
 service:
   enable_upnp:              true
