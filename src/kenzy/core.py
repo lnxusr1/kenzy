@@ -194,7 +194,9 @@ class KenzyHTTPServer(HTTPServer):
         super().__init__((host, port), KenzyRequestHandler)
 
         if kwargs.get("enable_ssl", False):
-            self.socket = ssl.wrap_socket(self.socket, certfile=kwargs.get("ssl_cert_file"), keyfile=kwargs.get("ssl_key_file"), server_side=True)
+            cert_file = os.path.expanduser(kwargs.get("ssl_cert_file"))
+            key_file = os.path.expanduser(kwargs.get("ssl_key_file"))
+            self.socket = ssl.wrap_socket(self.socket, certfile=cert_file, keyfile=key_file, server_side=True)
 
     def add_device(self, id=None, device=None, url=None, **kwargs):
 

@@ -4,6 +4,8 @@ import cv2
 import numpy as np
 import time
 import logging
+import uuid
+import kenzy.settings
 
 
 class detector(object):
@@ -20,9 +22,10 @@ class detector(object):
         self._faceNames = []
         self._faceEncodings = []
 
-        self.facesCache = kwargs.get("facesCache")
+        self.cacheFolder = os.path.expanduser(kwargs.get("cacheFolder")) if kwargs.get("cacheFolder") is not None else None
         self.facesList = kwargs.get("facesList")
-        self.unknownFaceSeq = 1
+        self._unknownFaceSeq = 1
+        self.filterFacesByObject = kwargs.get("filterFacesByObject", False)
 
         orientation = int(kwargs.get("orientation", "0"))  # 0, 90, 180, 270
         self._orientation = None
@@ -171,6 +174,17 @@ class detector(object):
         self._loadLabels()
         self.reloadFaces()
 
+    def get_next_cache_name(self):
+        file_name = self._defaultFaceName + "-" + str(self._unknownFaceSeq)
+        if self.facesList is None:
+            return file_name
+        
+        while file_name in self.facesList:
+            self._unknownFaceSeq += 1
+            file_name = self._defaultFaceName + "-" + str(self._unknownFaceSeq)
+        
+        return file_name
+
     def reloadFaces(self):
         ret = True
         if self.facesList is not None and isinstance(self.facesList, dict):
@@ -188,30 +202,18 @@ class detector(object):
                     except Exception:
                         ret = False
 
-        if self.facesCache is not None:
-            if not os.path.isdir(self.facesCache):
-                try:
-                    os.makedirs(self.facesCache, exist_ok=True)
-                except Exception:
-                    pass
-                
+        if self.cacheFolder is not None:
+            if not os.path.isdir(self.cacheFolder):
+                return ret
+
             else:
-                files = os.listdir(self.facesCache)
-                for file in files:
-                    if file.lower().strip().endswith(".jpg") or file.lower().strip().endswith(".jpeg"):
-                        file_name = os.path.join(self.facesCache, file)
-                        face_name = file.rsplit(".", 1)[0]
-                        if "_" in file:
-                            try:
-                                seq = int(file.rsplit("_", 1)[1].rsplit(".", 1)[0])
-                                face_name = file.rsplit("_", 1)[0] + " - " + str(seq)
-                                if seq > self.unknownFaceSeq:
-                                    self.unknownFaceSeq = seq + 1
-                                
-                            except Exception:
-                                pass
-                        
-                        self.addFace(face_name, file_name)
+                if os.path.isfile(os.path.join(self.cacheFolder, "cache.yml")):
+                    data = kenzy.settings.load(os.path.join(self.cacheFolder, "cache.yml"))
+                    for faceName in data:
+                        try:
+                            self.addFace(os.path.join(self.cacheFolder, data[faceName]), faceName)
+                        except Exception:
+                            ret = False
         return ret
         
     def addFace(self, fileName, faceName):
@@ -306,11 +308,7 @@ class detector(object):
             self.object_detection()
 
         if (detectFaces is None and self._detectFaces) or detectFaces:
-            self.face_detection(filterByObjects=detectFaces if detectFaces is not None else self._detectObjects)
-            
-            # Hack to disable optimizations preventing multi-channel 
-            # images from processing correctly in face recognition
-            # self.face_detection(filterByObjects=True)
+            self.face_detection(filterByObjects=self.filterFacesByObject)
 
         end = time.time()
         
@@ -329,14 +327,19 @@ class detector(object):
             face_encodings = face_recognition.face_encodings(im, face_locations)
 
             face_names = []
-            for face_encoding in face_encodings:
+            for idx, face_encoding in enumerate(face_encodings):
                 matches = face_recognition.compare_faces(self._faceEncodings, face_encoding)
-                name = self._defaultFaceName
+                name = None
 
                 face_distances = face_recognition.face_distance(self._faceEncodings, face_encoding)
-                best_match_index = np.argmin(face_distances)
-                if matches[best_match_index]:
-                    name = self._faceNames[best_match_index]
+                if face_distances is not None and len(face_distances) > 0:
+                    best_match_index = np.argmin(face_distances)
+                    if matches[best_match_index]:
+                        name = self._faceNames[best_match_index]
+                
+                if name is None:
+                    name = self._defaultFaceName
+                    self.save_image_to_cache(im, face_locations[idx])
 
                 face_names.append(name)
 
@@ -367,16 +370,9 @@ class detector(object):
                 return
             
             else:
-                # Theoretically, since we can do object detection for "person" then we could carve out of the
-                # main picture the "person" entries and feed those individually which should make the whole
-                # process run faster since it'd be covering fewer pixels... thus enabling larger scale images.
-                #
-                # Obviously this only works if detect objects is enabled and we include person detection there.
-                # So to make this "real" we would need a new variable to use object/face optimizations while
-                # still enabling the end user to supply their own inference model which may not map person or
-                # may map it in an incompatible way.
-
-                # TODO: FIX THIS (currently disabled due to multi-channel image issues in face recognition)
+                # Theoretically this can improve performance, but it comes with some downside specifically
+                # in relation to double-counting faces if they overlap in the image segment.
+                # Use with care (self.filterFacesByObject = True)
 
                 for item in self.objects:
                     if item.get("name").lower().strip() == "person":
@@ -386,9 +382,8 @@ class detector(object):
                         top = loc["top"]
                         right = loc["right"]
                         bottom = loc["bottom"]
+
                         im = self._scaledRGBImage[top:bottom, left:right]
-                        #cv2.imwrite("/tmp/test2.jpg", im)
-                        #im = cv2.imread("/tmp/test2.jpg")
                         im = cv2.cvtColor(im, cv2.COLOR_BGR2RGB)
 
                         fl, fn = self._get_face_parts(im, top, left)
@@ -581,3 +576,40 @@ class detector(object):
         
         end = time.time()
         self.rt_logger.debug("MOTION TIME = " + str(end - start) + " seconds")
+
+    def save_image_to_cache(self, im, location):
+        if self.cacheFolder is None:
+            return True
+
+        top = location[0]
+        right = location[1]
+        bottom = location[2]
+        left = location[3]
+
+        cropped_im = im[top:bottom, left:right]
+        cropped_im = cv2.cvtColor(cropped_im, cv2.COLOR_BGR2RGB)
+
+        uid = uuid.uuid4()
+        file_name = os.path.join(self.cacheFolder, f"{uid}.jpg")
+        face_name = self.get_next_cache_name()
+
+        if not os.path.isdir(self.cacheFolder):
+            os.makedirs(self.cacheFolder, exist_ok=True)
+
+        cv2.imwrite(file_name, cropped_im)
+
+        try:
+            self.addFace(file_name, face_name)
+
+            data = {}
+            if os.path.isfile(os.path.join(self.cacheFolder, "cache.yml")):
+                data = kenzy.settings.load(os.path.join(self.cacheFolder, "cache.yml"))
+
+            data[face_name] = os.path.basename(file_name)
+
+            kenzy.settings.save(data, os.path.join(self.cacheFolder, "cache.yml"))
+        except Exception:
+            if os.path.isfile(file_name):
+                os.remove(file_name)
+
+        return True

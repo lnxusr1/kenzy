@@ -21,6 +21,9 @@ class VideoProcessor:
     stop_event = threading.Event()
     frames = queue.Queue(20)
     frames_per_second = None
+    image_decay = 1.0
+    image_currency = 0.1
+    image_check_frequency = 0.3
 
     faces_detected = []
     objects_detected = []
@@ -30,6 +33,9 @@ class VideoProcessor:
         self.settings = kwargs
         self.video_device = kwargs.get("video_device", 0)
         self.frames_per_second = kwargs.get("frames_per_second")
+        self.image_decay = kwargs.get("image_decay", 1.0)
+        self.image_currency = kwargs.get("image_currency", 0.1)
+        self.image_check_frequency = kwargs.get("image_check_frequency", 0.3)
 
     def _read_from_device(self):
         self.dev = cv2.VideoCapture(self.video_device)
@@ -75,10 +81,10 @@ class VideoProcessor:
                     
                     current_time = time.time()
 
-                    if item.get("timestamp") < current_time - .1:
+                    if item.get("timestamp") < current_time - self.image_currency:
                         continue  # Skip processing this frame as it is too old
 
-                    detect_faces = True if self.detector._detectFaces and current_time - 0.3 < time_lastface_check else False
+                    detect_faces = True if self.detector._detectFaces and current_time - self.image_check_frequency < time_lastface_check else False
                     time_lastface_check = current_time
 
                     self.detector.analyze(item.get("frame"), detectFaces=detect_faces)
@@ -91,7 +97,7 @@ class VideoProcessor:
                     objects_detected.sort()
 
                     if detect_faces:
-                        faces_detected = [x.get("name", self.detector._defaultFaceName) for x in self.detector.faces]
+                        faces_detected = [x.get("name", self.detector._defaultFaceName) for x in self.detector.faces if x.get("name") is not None]
                         faces_detected.sort()
                     else:
                         faces_detected = [x["name"] for x in self.faces_detected]
@@ -116,7 +122,7 @@ class VideoProcessor:
                         # Clear out old names or unidentified faces
                         for i in range(len(self.faces_detected), 0, -1):
                             if self.faces_detected[i - 1]["name"] == self.detector._defaultFaceName \
-                                    or self.faces_detected[i - 1]["timestamp"] < item.get("timestamp") - 1:
+                                    or self.faces_detected[i - 1]["timestamp"] < item.get("timestamp") - self.image_decay:
                                 
                                 del self.faces_detected[i - 1]
 
@@ -128,7 +134,7 @@ class VideoProcessor:
                                 if faceName != self.detector._defaultFaceName and faceName == face.get("name"):
                                     bFound = True
 
-                            if not bFound and faceName:
+                            if not bFound and faceName is not None:
                                 t_arr.append({ "name": faceName, "timestamp": item.get("timestamp") })
                         
                         self.faces_detected.extend(t_arr)
@@ -151,6 +157,8 @@ class VideoProcessor:
 
     def set_component(self, component):
         self.detector = component
+
+        self.detector._recognizeFaces = True
 
     def set_service(self, service):
         self.service = service
