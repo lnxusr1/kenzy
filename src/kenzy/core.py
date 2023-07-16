@@ -5,9 +5,92 @@ import os
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import ssl
 from urllib.parse import parse_qs
+import requests
 from . import VERSION, __app_name__, __app_title__
 from .extras import SSDPServer, discover_ssdp_services, get_file, get_local_ip_address
         
+
+class KenzyContext:
+    url = None
+    type = None
+    location = None
+    group = None
+
+    def __init__(self, url=None, type=None, location=None, group=None):
+        self.url = url
+        self.type = type
+        self.location = location
+        self.group = group
+
+    def get(self):
+        return {
+            "url": self.url,
+            "type": self.type,
+            "location": self.location,
+            "group": self.group
+        }
+
+
+class KenzyRequest:
+    action = None
+    payload = None
+    context = None
+
+    def __init__(self, action=None, payload=None, context=None):
+        self.action = action
+        self.payload = payload
+        self.context = context
+
+    def get(self):
+        return {
+            "status": self.status,
+            "errors": self.errors,
+            "data": self.data
+        }
+
+
+class KenzyResponse:
+    status = None
+    errors = None
+    data = None
+
+    def __init__(self, status=None, data=None, errors=None):
+        if status is not None:
+            self.status = status
+        
+        if errors is not None:
+            self.errors = errors
+        
+        if data is not None:
+            self.data = data
+
+    def is_success(self):
+        if self.status is not None and str(self.status) == "success":
+            return True
+        
+        return False
+
+    def get(self):
+        return {
+            "status": self.status,
+            "errors": self.errors,
+            "data": self.data
+        }
+
+
+class KenzySuccessResponse(KenzyResponse):
+    status = "success"
+
+    def __init(self, data=None, errors=None):
+        super().__init__(data=data, errors=errors)
+
+
+class KenzyErrorResponse(KenzyResponse):
+    status = "failed"
+
+    def __init(self, errors=None, data=None):
+        super().__init__(data=data, errors=errors)
+
 
 class KenzyRequestHandler(BaseHTTPRequestHandler):
     logger = logging.getLogger("HTTP-REQ")
@@ -73,11 +156,6 @@ class KenzyRequestHandler(BaseHTTPRequestHandler):
                 self.path = "/favicon.svg"
             
             if not self.path.lower().startswith("/api/"):
-                #if self.server.devices["id"].is_alive():
-                #    self.server.devices["id"].stop()
-                #else:
-                #    self.server.devices["id"].start()
-
                 self.send_file(self.path)
                 return
             
@@ -98,18 +176,40 @@ class KenzyRequestHandler(BaseHTTPRequestHandler):
         try:
             content_type = self.headers['Content-Type']
             content_length = int(self.headers['Content-Length'])
+
+            if not self.server.authenticate(self.headers["Authorization"]):
+                response_data = KenzyResponse("failed", None, "Unauthorized").get()
+                response_body = json.dumps(response_data).encode('utf-8')
+
+                # Send response status code
+                self.send_response(200)
+
+                # Send headers
+                self.send_header('Content-type', 'application/json')
+                self.end_headers()
+
+                # Send response body
+                self.wfile.write(response_body)
+                return
+
             payload = self.rfile.read(content_length)
 
             if content_type.startswith('application/json'):
                 try:
                     data = json.loads(payload.decode('utf-8'))
                     # Process the JSON data as needed
-                    resp = None
-                    if isinstance(data, dict):
-                        if data.get("action") == "status":
-                            resp = self.server.status()
+                    if not isinstance(data, dict):
+                        response_data = KenzyResponse("failed", None, "Invalid request")
+                    else:
+                        context = KenzyContext()
+                        if isinstance(data.get("context"), dict):
+                            context = KenzyContext(**data.get("context"))
 
-                    response_data = {'message': 'Received JSON data', 'data': data, 'response': resp }
+                        if data.get("action") is not None:
+                            response_data = self.server.command(data.get("action"), data.get("payload"), context).get()
+                        else:
+                            response_data = KenzyResponse("failed", None, "Unrecognized request")
+
                     response_body = json.dumps(response_data).encode('utf-8')
 
                     # Send response status code
@@ -174,13 +274,13 @@ class KenzyHTTPServer(HTTPServer):
             
         self.local_url = kwargs.get("service_url", "%s://%s:%s" % (proto, ip_addr, port))
 
-        if str(kwargs.get("upnp", "server")).lower().strip() == "server":
+        if str(kwargs.get("upnp", "standalone")).lower().strip() == "server":
             # start UPNP
             if self.service_url is None:
                 self.service_url = self.local_url 
             self.ssdp_server = SSDPServer(usn_uuid=self.id, service_url="%s/upnp.xml" % self.service_url)
         
-        else:
+        elif str(kwargs.get("upnp", "standalone")).lower().strip() == "client":
             # search for UPNP service
             url = discover_ssdp_services()
             if url is not None:
@@ -198,37 +298,55 @@ class KenzyHTTPServer(HTTPServer):
             key_file = os.path.expanduser(kwargs.get("ssl_key_file"))
             self.socket = ssl.wrap_socket(self.socket, certfile=cert_file, keyfile=key_file, server_side=True)
 
-    def add_device(self, id=None, device=None, url=None, **kwargs):
+    def command(self, action=None, payload=None, context=None):
+        if context is None:
+            context = KenzyContext()
 
-        try:
-            if id is None and device is not None:
-                v = device.id
-                if v is not None and str(v).strip() > 0:
-                    id = str(v).strip()
-        except Exception:
-            pass
+        for item in self.device.accepts:
+            if str(item).strip().lower() == str(action).strip().lower():
+                return eval("self.device." + str(item).strip().lower() + "(data=payload, context=context)")
+                
+        if str(action).lower() == "collect":
+            return KenzySuccessResponse({"hello": "there", "context": context.get() }, None)
 
-        if url is None:
-            url = self.local_url
+        elif str(action).lower() == "status":
+            return KenzySuccessResponse({"hello": "there"})
 
-        self.devices[id] = device
+        return KenzyErrorResponse("Unrecognized command.")
 
-    def collect(self, **kwargs):
-        # TODO: Add feature
-        raise NotImplementedError("Feature not implemented")
+    def authenticate(self, api_key):
+        #TODO: Fix this
+        return True
 
-    def delete_device(self, id):
-        if id in self.devices and self.devices[id].get("active", False):
-            self.stop(id=id)
+    def get_local_context(self):
+        return KenzyContext(
+            url=self.local_url,
+            type=self.device.type,
+            location=self.device.location,
+            group=self.device.group
+        )
 
-            # if device_url != local_url then tell device_url and remove (this is on core)
-            # if device_url == local_url and device_url != service_url then remove
-            del self.devices[id]
-
-    def notify(self, **kwargs):
-        # TODO: Add feature
-        raise NotImplementedError("Feature not implemented")
+    def collect(self, data=None, context=None):
+        if not isinstance(context, KenzyContext):
+            context = self.get_local_context()
     
+        if self.service_url != self.local_url:
+            # Send to service_url
+            req = {
+                "action": "collect",
+                "payload": data,
+                "context": context
+            }
+
+            self.send_request(req)
+        else:
+            if self.device is not None and "collect" in self.device.accepts:
+                self.device.collect(data, context)
+            
+            self.logger.debug(f"{data}, {self.device.type}, {context.get()}")
+
+        return True
+
     def register(self, **kwargs):
         if str(self.settings.get("type", "core")).lower().strip() == "core":
             # Save local
@@ -240,6 +358,31 @@ class KenzyHTTPServer(HTTPServer):
         # TODO: Add feature
         raise NotImplementedError("Feature not implemented")
     
+    def send_request(self, payload, headers=None):
+        token = uuid.uuid4()
+
+        if not isinstance(payload, dict):
+            return False
+        
+        try:
+            if headers is None or not isinstance(headers, dict):
+                headers = {}
+
+            headers["Authorization"] = f"Bearer {token}"
+            headers["Content-Type"] = "application/json"
+
+            print(payload)
+
+            response = requests.post(self.service_url, json=payload, headers=headers, verify=False)
+            print("Request sent")
+            response_data = response.json()
+            print("Response:", response_data)
+        except requests.exceptions.RequestException as e:
+            print("An error occurred:", e)
+            return False
+
+        return True
+
     def serve_forever(self, poll_interval: float = 0.5, *args, **kwargs):
         if not self.device.is_alive():
             self.device.start()
@@ -265,20 +408,12 @@ class KenzyHTTPServer(HTTPServer):
 
         super().shutdown()
 
-    def start(self, **kwargs):
-        # TODO: Add feature
-        raise NotImplementedError("Feature not implemented")
-
     def status(self, **kwargs):
         # TODO: Local vs. Remote Status
         r = []
         for item in self.devices:
             r.append(item)
         return r
-    
-    def stop(self, **kwargs):
-        # TODO: Add feature
-        raise NotImplementedError("Feature not implemented")
 
     def upgrade(self, **kwargs):
         # TODO: Add feature

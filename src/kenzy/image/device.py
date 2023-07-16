@@ -1,5 +1,5 @@
-import sys
-import traceback
+# import sys
+# import traceback
 import os
 import cv2
 import threading
@@ -8,16 +8,20 @@ import time
 import logging
 import collections
 import math
+from kenzy.core import KenzyResponse, KenzySuccessResponse, KenzyErrorResponse
 # from kenzy.image import core
 
 
 class VideoProcessor:
     type = "kenzy.image"
+    location = None
+    group = None
+    detector = None
+    service = None
+
     logger = logging.getLogger("KNZY-IMG")
     settings = {}
     video_device = 0
-    detector = None
-    service = None
     read_thread = None
     proc_thread = None
     stop_event = threading.Event()
@@ -40,6 +44,10 @@ class VideoProcessor:
 
     def __init__(self, **kwargs):
         self.settings = kwargs
+
+        self.location = kwargs.get("location")
+        self.group = kwargs.get("group")
+
         self.video_device = kwargs.get("video_device", 0)
         self.frames_per_second = kwargs.get("frames_per_second")
         self.image_decay = kwargs.get("image_decay", 1.0)
@@ -230,14 +238,20 @@ class VideoProcessor:
 
                             if not bFound and faceName is not None:
                                 t_arr.append({ "name": faceName, "timestamp": item.get("timestamp") })
-                        
+                        errors=None
                         self.faces_detected.extend(t_arr)
-                        #self.faces_detected = [{"name": x, "timestamp": item.get("timestamp") } for x in faces_detected]
 
                     if bChanged:
-                        print(motion_detected, objects_detected, self.faces_detected)
+                        self.service.collect({ 
+                            "data": {
+                                "motion": motion_detected,
+                                "objects": objects_detected,
+                                "faces": self.faces_detected
+                            },
+                            "type": self.type
+                        })
 
-                    #print(True if len(self.detector.movements) > 0 else False, len(self.detector.objects), len(self.detector.faces))
+                        # print(motion_detected, objects_detected, self.faces_detected)
 
                 except queue.Empty:
                     pass
@@ -260,11 +274,11 @@ class VideoProcessor:
     def start(self, **kwargs):
         if self.detector is None:
             self.logger.error("Detector not set.  Start request failed.")
-            return False
+            return KenzyErrorResponse("Detector not set.  Start request failed.")
         
         if self.read_thread is not None or self.proc_thread is not None:
             self.logger.error("Unable to start Video Processor.  Threads already exist.")
-            return False
+            return KenzyErrorResponse("Unable to start Video Processor.  Threads already exist.")
         
         self.read_thread = threading.Thread(target=self._read_from_device)
         self.read_thread.daemon = True
@@ -275,8 +289,7 @@ class VideoProcessor:
         self.proc_thread.start()
 
         self.logger.info("Started Video Processor")
-
-        return True
+        return KenzySuccessResponse("Started Video Processor")
 
     def stop(self, **kwargs):
         self.stop_event.set()
@@ -292,12 +305,13 @@ class VideoProcessor:
         self.stop_event.clear()
 
         self.logger.info("Stopped Video Processor")
-        return True
+        return KenzySuccessResponse("Stopped Video Processor")
     
     def restart(self, **kwargs):
         if self.read_thread is not None or self.proc_thread is not None:
-            if not self.stop():
-                return False
+            ret = self.stop()
+            if not ret.is_success():
+                return ret
         
         return self.start()
 

@@ -51,6 +51,8 @@ component:
 
 
 device: 
+  location:                 Living Room
+  group:                    Primary
   video_device:             0
   image_decay:              1.0
   image_currency:           0.1
@@ -61,7 +63,7 @@ device:
     - person
 
 service:
-  enable_upnp:              true
+  upnp:                     standalone
   service_url:              http://localhost:8080
   host:                     0.0.0.0
   port:                     8080

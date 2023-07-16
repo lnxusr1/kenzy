@@ -16,6 +16,7 @@ parser.add_argument('-v', '--version', action="store_true", help="Print Version"
 
 startup_group = parser.add_argument_group('Startup Options')
 parser.add_argument('-t', '--type', default=None, help="Specify instance type (override config value if set)")
+parser.add_argument('--upnp', default=None, help="Enable UPNP as server, client, or leave blank to disable")
 
 logging_group = parser.add_argument_group('Logging Options')
 
@@ -46,6 +47,8 @@ logging.basicConfig(
     format='%(asctime)s %(name)-12s - %(levelname)-9s - %(message)s',
     level=logLevel)
 
+logging.getLogger("DETECT_TIME").setLevel(logging.INFO)
+
 # INSTANCE START
 
 logger = logging.getLogger("STARTUP")
@@ -54,8 +57,13 @@ cfg = settings.load(ARGS.config)
 if ARGS.type is not None:
     cfg["type"] = ARGS.type
 
+if ARGS.upnp is not None and str(ARGS.upnp).lower() in ["server", "client", "standalone"]:
+    if not isinstance(cfg.get("service"), dict):
+        cfg["service"] = {}
+    cfg["service"]["upnp"] = str(ARGS.upnp).lower()
+
 if cfg.get("type") is None:
-    logger.critical("Unable to identify instance type. (Configuration file requires a \"type\" attribute.)")
+    logger.critical("Unable to identify instance type. (Use --type to dynamically specify)")
     quit(1)
 
 app_type = str(clean_string(cfg.get("type"))).replace("..", ".").replace("/", "").replace("\\", "").replace("-", "_")
