@@ -80,15 +80,17 @@ class KenzyResponse:
 
 class KenzySuccessResponse(KenzyResponse):
     status = "success"
+    data = None
+    errors = None
 
-    def __init(self, data=None, errors=None):
+    def __init__(self, data=None, errors=None):
         super().__init__(data=data, errors=errors)
 
 
 class KenzyErrorResponse(KenzyResponse):
     status = "failed"
 
-    def __init(self, errors=None, data=None):
+    def __init__(self, errors=None, data=None):
         super().__init__(data=data, errors=errors)
 
 

@@ -22,7 +22,7 @@
                     contentType: "application/json",
                     data: req,
                     success: function(data) {
-                        alert(JSON.stringify(data, null, 4));
+                        $('#message').html(JSON.stringify(data, null, 4));
                     }
                 })
                 return false;
@@ -51,8 +51,14 @@
         "group": "Primary"
     }
 }
-</textarea>
+</textarea><br/>
     <input type="button" id="submit" value="Submit" />
+
+<div>
+    <pre id="message">
+
+    </pre>
+</div>
 
 </form>
 </body>

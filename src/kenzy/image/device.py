@@ -8,7 +8,7 @@ import time
 import logging
 import collections
 import math
-from kenzy.core import KenzyResponse, KenzySuccessResponse, KenzyErrorResponse
+from kenzy.core import KenzySuccessResponse, KenzyErrorResponse
 # from kenzy.image import core
 
 
@@ -231,14 +231,16 @@ class VideoProcessor:
                         t_arr = []
                         for faceName in faces_detected:
                             bFound = False
+                            if faceName != self.detector._defaultFaceName:
+                                self.faces_last[str(faceName)] = item.get("timestamp")
+
                             for face in self.faces_detected:
                                 if faceName != self.detector._defaultFaceName and faceName == face.get("name"):
                                     bFound = True
-                                    self.faces_last[str(face.get("name"))] = item.get("timestamp")
 
                             if not bFound and faceName is not None:
                                 t_arr.append({ "name": faceName, "timestamp": item.get("timestamp") })
-                        errors=None
+                        
                         self.faces_detected.extend(t_arr)
 
                     if bChanged:
@@ -246,7 +248,8 @@ class VideoProcessor:
                             "data": {
                                 "motion": motion_detected,
                                 "objects": objects_detected,
-                                "faces": self.faces_detected
+                                "faces": self.faces_detected,
+                                "faces_last": self.faces_last
                             },
                             "type": self.type
                         })
@@ -261,15 +264,23 @@ class VideoProcessor:
 
     @property
     def accepts(self):
-        return ["start", "stop", "restart", "snapshot", "stream", "is_alive"]
+        return ["start", "stop", "restart", "snapshot", "stream", "status", "get_settings", "set_settings"]
+
+    def get_settings(self, **kwargs):
+        return KenzySuccessResponse({
+            "component": self.detector.settings,
+            "device": self.settings
+        })
 
     def set_component(self, component):
         self.detector = component
-
         self.detector._recognizeFaces = True
 
     def set_service(self, service):
         self.service = service
+
+    def set_settings(self, **kwargs):
+        return KenzyErrorResponse("Not implemented")
 
     def start(self, **kwargs):
         if self.detector is None:
@@ -304,6 +315,10 @@ class VideoProcessor:
         self.proc_thread = None
         self.stop_event.clear()
 
+        self.motion_detected = False
+        self.objects_detected = []
+        self.faces_detected = []
+
         self.logger.info("Stopped Video Processor")
         return KenzySuccessResponse("Stopped Video Processor")
     
@@ -322,7 +337,19 @@ class VideoProcessor:
         return False
 
     def snapshot(self, **kwargs):
-        raise NotImplementedError("Feature not implemented.")
+        return KenzyErrorResponse("Not implemented")
 
+    def status(self, **kwargs):
+        return KenzySuccessResponse({
+            "active": self.is_alive(),
+            "type": self.type,
+            "data": {
+                "motion": self.motion_detected,
+                "objects": self.objects_detected,
+                "faces": self.faces_detected,
+                "faces_last": self.faces_last
+            }
+        })
+    
     def stream(self, **kwargs):
-        raise NotImplementedError("Feature not implemented.")
+        return KenzyErrorResponse("Not implemented")

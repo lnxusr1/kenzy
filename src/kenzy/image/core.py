@@ -11,6 +11,8 @@ import kenzy.settings
 class detector(object):
     def __init__(self, **kwargs):
 
+        self.settings = kwargs
+
         self.logger = logging.getLogger("DETECTOR")
         self.rt_logger = logging.getLogger("DETECT_TIME")
 
