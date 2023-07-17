@@ -30,6 +30,7 @@ class detector(object):
         self.filterFacesByObject = kwargs.get("filterFacesByObject", False)
 
         self.faceTolerance = kwargs.get("faceTolerance", 0.6)
+        self.objectTolerance = kwargs.get("objectTolerance", 0.6)
 
         orientation = int(kwargs.get("orientation", "0"))  # 0, 90, 180, 270
         self._orientation = None
@@ -509,15 +510,22 @@ class detector(object):
 
             predictions = results.pred[0]
             for item in predictions:
-                bounding_box = (int(item[0]), int(item[1]), int(item[2]) - int(item[0]), int(item[3]) - int(item[1]))
                 conf = item[4]
+                if conf < self.objectTolerance:
+                    continue
+
+                bounding_box = (int(item[0]), int(item[1]), int(item[2]) - int(item[0]), int(item[3]) - int(item[1]))
                 classInd = int(item[5])
+
                 self._parse_obj_detect_info(classInd, conf, bounding_box)
         else:
             classIndex, confidence, bbox = self._objModel.detect(self._scaledBGRImage, confThreshold=0.5)
 
             try:
                 for classInd, conf, bounding_box in zip(classIndex.flatten(), confidence.flatten(), bbox):
+                    if conf < self.objectTolerance:
+                        continue
+
                     # classInd = index starting at 1 for ssd/mobilenet so we need to subtract one from it
                     self._parse_obj_detect_info(classInd - 1, conf, bounding_box)
 

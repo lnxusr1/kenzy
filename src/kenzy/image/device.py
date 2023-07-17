@@ -25,7 +25,7 @@ class VideoProcessor:
     read_thread = None
     proc_thread = None
     stop_event = threading.Event()
-    frames = queue.Queue(20)
+    frames = None
     frames_per_second = None
     image_decay = 1.0
     image_currency = 0.1
@@ -84,6 +84,18 @@ class VideoProcessor:
 
     def _read_from_device(self):
         self.dev = cv2.VideoCapture(self.video_device)
+
+        if self.frames_per_second is None:
+            (major_ver, minor_ver, subminor_ver) = (cv2.__version__).split('.')
+            if int(major_ver) < 3:
+                self.frames_per_second = self.dev.get(cv2.cv.CV_CAP_PROP_FPS)
+                self.logger.debug("Setting frame rate: {0}".format(self.frames_per_second))
+            else:
+                self.frames_per_second = self.dev.get(cv2.CAP_PROP_FPS)
+                self.logger.debug("Setting frame rate: {0}".format(self.frames_per_second))
+
+            self.frames = queue.Queue(int(math.ceil(self.frames_per_second)) * int(self.record_buffer))
+        
         timestamp = 0
         try:
             while not self.stop_event.is_set():
@@ -126,6 +138,9 @@ class VideoProcessor:
         try:
             while not self.stop_event.is_set():
                 try:
+                    if self.frames is None:
+                        continue 
+
                     item = self.frames.get(timeout=0.1)
                     if item is None or not isinstance(item, dict) or item.get("timestamp") is None or item.get("frame") is None:
                         continue
@@ -175,6 +190,7 @@ class VideoProcessor:
                     current_time = time.time()
 
                     if item.get("timestamp") < current_time - self.image_currency:
+                        print("dropping frame", time.time(), item.get("timestamp"))
                         continue  # Skip processing this frame as it is too old
 
                     detect_faces = True if self.detector._detectFaces and current_time - self.image_check_frequency < time_lastface_check else False
@@ -185,7 +201,7 @@ class VideoProcessor:
                     motion_detected = False
                     if self.detector._detectMotion and len(self.detector.movements) > 0:
                         motion_detected = True
-
+                    
                     objects_detected = [x["name"] for x in self.detector.objects]
                     objects_detected.sort()
 
@@ -343,6 +359,7 @@ class VideoProcessor:
         return KenzySuccessResponse({
             "active": self.is_alive(),
             "type": self.type,
+            "accepts": self.accepts,
             "data": {
                 "motion": self.motion_detected,
                 "objects": self.objects_detected,
