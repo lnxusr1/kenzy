@@ -3,11 +3,6 @@ import logging
 import traceback
 
 try:
-    from kenzy.image import core
-
-    class component(core.detector):
-        pass
-
     from kenzy.image import device
 
     class device(device.VideoProcessor):

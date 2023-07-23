@@ -1,66 +1,22 @@
 type: kenzy.image
 
-component: 
-  orientation:              0
-  detectFaces:              true
-  detectObjects:            true
-  detectMotion:             true
-  imageMarkupFaces:         true
-  imageMarkupObjects:       true
-  imageMarkupMotion:        true
-  scaleFactor:              1.0
-  defaultFaceName:          "Unknown"
-  faceModel:                "hog"
-  faceFontColor:
-    - 255
-    - 255
-    - 255
-  faceOutlineColor:
-    - 0
-    - 0
-    - 255
-  showFaces:                true
-  objModelType:             "ssd"
-  # objDetectCfg: 
-  # objDetectModel:	
-  # objDetectLabels:	
-  objDetectList:
-    - person
-    - dog
-    - cat
-  objFontColor:
-    - 255
-    - 255
-    - 255
-  objOutlineColor:
-    - 255
-    - 0
-    - 0
-  showObjectNames:          true
-  motionThreshold:          20
-  motionMinArea:            50
-  motionOutlineColor:
-    - 255
-    - 0
-    - 0
-  cacheFolder:              ~/.kenzy/image/faces/unknown
-  filterFacesByObject:      false
-  facesList:
-    lnxusr1:
-      - ~/Pictures/faces/lnxusr1/user.1.9.jpg
-
-
 device: 
   location:                 Living Room
   group:                    Primary
   video_device:             0
-  image_decay:              1.0
-  image_currency:           0.1
-  image_check_frequency:    0.3
-  video_folder:         ~/Videos/kenzy
-  enable_recording:     true
-  object_list:
-    - person
+  orientation:              0       # 0, 90, 180, 270
+  frames_per_second:        30      # From video device (exclude for FPS auto-detection)
+  motion_threshold:         20      # color change per pixel
+  motion_area:              0.0003  # As a percentage of the entire image
+  object_threshold:         0.6     # Probability as a percentage (higher is more restrictive)
+  face_tolerance:           0.5     # Euclidean distance limit (lower is more restrictive)
+  video_format:             XVID    # Format of saved videos (XVID, MPV4)
+  record_buffer:            5       # Number of seconds to record before and after movement
+  cache_folder:             ~/.kenzy/image/faces/unknown
+  video_folder:             ~/Videos/kenzy
+  faces:
+    lnxusr1:
+      - ~/Pictures/faces/lnxusr1/user.1.9.jpg
 
 service:
   upnp:                     standalone

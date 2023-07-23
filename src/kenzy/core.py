@@ -345,7 +345,14 @@ class KenzyHTTPServer(HTTPServer):
             if self.device is not None and "collect" in self.device.accepts:
                 self.device.collect(data, context)
             
-            self.logger.debug(f"{data}, {self.device.type}, {context.get()}")
+            #TODO: Remove as this is for debugging only
+            if "motion" in data:
+                motion = data.get("motion")
+                objects = data.get("objects")
+                faces = data.get("faces")
+                print(motion, len(objects), [{ "name": faces.get(x).get("name"), "timestamp": faces.get(x).get("timestamp") } for x in faces])
+            else:
+                self.logger.debug(f"{data}, {self.device.type}, {context.get()}")
 
         return True
 

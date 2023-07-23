@@ -47,7 +47,7 @@ logging.basicConfig(
     format='%(asctime)s %(name)-12s - %(levelname)-9s - %(message)s',
     level=logLevel)
 
-logging.getLogger("DETECT_TIME").setLevel(logging.INFO)
+#logging.getLogger("DETECT_TIME").setLevel(logging.INFO)
 
 # INSTANCE START
 
@@ -71,12 +71,12 @@ app_type = str(clean_string(cfg.get("type"))).replace("..", ".").replace("/", ""
 if app_type not in ["kenzy.core"]:
     exec(f"import {app_type}")
 
-component = eval(f"{app_type}.component(**cfg.get('component', dict()))")
+# component = eval(f"{app_type}.component(**cfg.get('component', dict()))")
 device = eval(f"{app_type}.device(**cfg.get('device', dict()))")
 service = kenzy.core.KenzyHTTPServer(**cfg.get('service', dict()))
 
 # Interlinking objects
-device.set_component(component)  # Add component to device
+#device.set_component_settings(**cfg.get('component', dict()))  # Add component to device
 device.set_service(service)      # Tell device about service wrapper
 service.set_device(device)       # Add device to service
 
