@@ -15,7 +15,7 @@ def image_blur(image=None):
     return cv2.GaussianBlur(src=image, ksize=(5, 5), sigmaX=0)
 
 
-def motion_detection(image=None, last_image=None, threshold=20, motion_area=0.0003, markup=False, line_color=(255, 0, 0)):
+def motion_detection(image=None, last_image=None, threshold=20, motion_area=0.0003):
         
     movements = []
 
@@ -50,17 +50,24 @@ def motion_detection(image=None, last_image=None, threshold=20, motion_area=0.00
                 } 
             })
 
-        if markup:
-            cv2.rectangle(
-                img=image, 
-                pt1=(int(x), int(y)), 
-                pt2=(int(x) + int(w), 
-                     int(y) + int(h)), 
-                color=line_color, 
-                thickness=2
-            )
-
     return movements
+
+
+def image_markup(image, elements=[], line_color=(255, 0, 0)):
+    for item in elements:
+        x = item.get("location").get("left")
+        y = item.get("location").get("top")
+        w = item.get("location").get("right") - x
+        h = item.get("location").get("bottom") - y
+
+        cv2.rectangle(
+            img=image, 
+            pt1=(int(x), int(y)), 
+            pt2=(int(x) + int(w), 
+                 int(y) + int(h)), 
+            color=line_color, 
+            thickness=2
+        )
 
 
 def object_labels(label_file=os.path.join(os.path.dirname(__file__), 

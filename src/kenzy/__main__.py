@@ -7,13 +7,13 @@ from . import settings
 
 
 parser = argparse.ArgumentParser(
-    description=__app_title__ + " v" + __version__,
+    description=__app_title__ + " " + __version__,
     formatter_class=argparse.RawTextHelpFormatter,
     epilog='''For more information visit:\nhttp://kenzy.ai''')
 
 parser.add_argument('-c', '--config', default=None, help="Configuration file")
 parser.add_argument('-v', '--version', action="store_true", help="Print Version")
-parser.add_argument('-s', '--setting', action="append", help="Override settings as: name=value")
+parser.add_argument('-s', '--set', action="append", help="Override settings as: name=value")
 
 device_options = parser.add_argument_group('Device Options')
 device_options.add_argument('-t', '--type', default=None, help="Specify instance type (override config value if set)")
@@ -76,15 +76,15 @@ app_type = str(clean_string(cfg.get("type"))).replace("..", ".").replace("/", ""
 if app_type not in ["kenzy.core"]:
     exec(f"import {app_type}")
 
-if ARGS.setting is not None:
+if ARGS.set is not None:
     if "device" not in cfg:
         cfg["device"] = {}
     
     if "service" not in cfg:
         cfg["service"] = {}
     
-    if isinstance(ARGS.setting, list):
-        for item in ARGS.setting:
+    if isinstance(ARGS.set, list):
+        for item in ARGS.set:
             if "=" in item:
                 parent_type = "device"
                 setting_name = item.split("=", 1)[0]
