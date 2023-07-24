@@ -257,12 +257,14 @@ class KenzyHTTPServer(HTTPServer):
     ssdp_server = None
     service_url = None
     local_url = None
+    api_key = None
 
     def __init__(self, **kwargs) -> None:
 
         self.settings = kwargs
         self.service_url = kwargs.get("service_url")
         self.id = kwargs.get("id", uuid.uuid4())
+        self.api_key = kwargs.get("api_key")
 
         # Get Service URL and start UPNP/SSDP server is appropriate
         proto = "https" if kwargs.get("enable_ssl", False) else "http"
@@ -276,13 +278,13 @@ class KenzyHTTPServer(HTTPServer):
             
         self.local_url = kwargs.get("service_url", "%s://%s:%s" % (proto, ip_addr, port))
 
-        if str(kwargs.get("upnp", "standalone")).lower().strip() == "server":
+        if str(kwargs.get("upnp", "client")).lower().strip() == "server":
             # start UPNP
             if self.service_url is None:
                 self.service_url = self.local_url 
             self.ssdp_server = SSDPServer(usn_uuid=self.id, service_url="%s/upnp.xml" % self.service_url)
         
-        elif str(kwargs.get("upnp", "standalone")).lower().strip() == "client":
+        elif str(kwargs.get("upnp", "client")).lower().strip() == "client":
             # search for UPNP service
             url = discover_ssdp_services()
             if url is not None:
@@ -317,8 +319,14 @@ class KenzyHTTPServer(HTTPServer):
         return KenzyErrorResponse("Unrecognized command.")
 
     def authenticate(self, api_key):
-        #TODO: Fix this
-        return True
+        if str(api_key).lower().startswith("bearer "):
+            api_key = str(api_key)[7:].strip().strip("\"").strip("'")
+        
+        server_key = self.api_key
+        if server_key is None or server_key == api_key:
+            return True
+        
+        return False
 
     def get_local_context(self):
         return KenzyContext(
@@ -344,15 +352,6 @@ class KenzyHTTPServer(HTTPServer):
         else:
             if self.device is not None and "collect" in self.device.accepts:
                 self.device.collect(data, context)
-            
-            #TODO: Remove as this is for debugging only
-            if "motion" in data:
-                motion = data.get("motion")
-                objects = data.get("objects")
-                faces = data.get("faces")
-                print(motion, len(objects), [{ "name": faces.get(x).get("name"), "timestamp": faces.get(x).get("timestamp") } for x in faces])
-            else:
-                self.logger.debug(f"{data}, {self.device.type}, {context.get()}")
 
         return True
 

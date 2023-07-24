@@ -239,19 +239,24 @@ def face_detection(image, model="hog", face_encodings=None, face_names=None, tol
         return []
 
     found_names = None
+    found_distances = None
+
     if face_encodings is not None and face_names is not None:
         # Determine whose face this is
         fes = face_recognition.face_encodings(image, face_locations)
 
         found_names = []
+        found_distances = []
         for idx, face_encoding in enumerate(fes):
             name = None
+            distance = None
 
             face_distances = face_recognition.face_distance(face_encodings, face_encoding)
             if face_distances is not None and len(face_distances) > 0:
                 best_match_index = np.argmin(face_distances)
                 if face_distances[best_match_index] < tolerance and best_match_index < len(face_names):
                     name = face_names[best_match_index]
+                    distance = face_distances[best_match_index]
             
             if name is None:
                 if len(face_distances) > best_match_index and face_distances[best_match_index] > (tolerance * 1.5):
@@ -264,10 +269,12 @@ def face_detection(image, model="hog", face_encodings=None, face_names=None, tol
                     name = default_name
 
             found_names.append(name)
+            found_distances.append(distance)
 
     for idx, (top, right, bottom, left) in enumerate(face_locations):
 
         face_name = found_names[idx] if found_names is not None else default_name
+        face_distance = found_distances[idx] if found_distances is not None else None
 
         if markup:
             cv2.rectangle(image, (left, top), (right, bottom), line_color, 2)
@@ -280,6 +287,7 @@ def face_detection(image, model="hog", face_encodings=None, face_names=None, tol
         faces.append({ 
             "type": "face", 
             "confidence": 1.0, 
+            "distance": face_distance,
             "name": face_name, 
             "location": { 
                 "left": left, 

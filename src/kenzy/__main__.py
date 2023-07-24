@@ -2,12 +2,12 @@ import logging
 import argparse
 import kenzy.core
 from kenzy.extras import clean_string
-from . import __app_name__, __version__
+from . import __app_title__, __version__
 from . import settings
 
 
 parser = argparse.ArgumentParser(
-    description=__app_name__ + " v" + __version__,
+    description=__app_title__ + " v" + __version__,
     formatter_class=argparse.RawTextHelpFormatter,
     epilog='''For more information visit:\nhttp://kenzy.ai''')
 
@@ -30,7 +30,7 @@ ARGS = parser.parse_args()
 
 # VERSION 
 if ARGS.version:
-    print(__app_name__, "v" + __version__)
+    print(__app_title__, __version__)
     quit()
 
 # LOG LEVEL
@@ -49,8 +49,6 @@ logging.basicConfig(
     filename=ARGS.log_file,
     format='%(asctime)s %(name)-12s - %(levelname)-9s - %(message)s',
     level=logLevel)
-
-#logging.getLogger("DETECT_TIME").setLevel(logging.INFO)
 
 # INSTANCE START
 

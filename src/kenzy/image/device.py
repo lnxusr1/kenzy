@@ -395,7 +395,10 @@ class VideoProcessor:
 
     @property
     def accepts(self):
-        return ["start", "stop", "restart", "snapshot", "stream", "status", "get_settings", "set_settings"]
+        return ["start", "stop", "restart", "snapshot", "stream", "status", "get_settings", "set_settings", "collect"]
+
+    def collect(self, data=None, context=None):
+        self.logger.debug(f"{data}, {self.type}, {context.get()}")
 
     def set_component_settings(self, **kwargs):
         if kwargs is None or not isinstance(kwargs, dict):
