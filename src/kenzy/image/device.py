@@ -10,7 +10,7 @@ import copy
 import collections
 import math
 from kenzy.core import KenzySuccessResponse, KenzyErrorResponse
-from kenzy.image.core import image_blur, image_gray, rotate_image, resize_image, \
+from kenzy.image.core import image_blur, image_gray, image_rotate, image_resize, \
     object_model, object_labels, get_face_encoding, \
     motion_detection, object_detection, face_detection
 import kenzy.settings
@@ -234,13 +234,13 @@ class VideoProcessor:
                 image = data["frame"]
 
                 if width_calc > 1000:
-                    image = resize_image(image, 0.2)
+                    image = image_resize(image, 0.2)
                 elif width_calc > 600:
-                    image = resize_image(image, 0.3)
+                    image = image_resize(image, 0.3)
                 elif width_calc > 300:
-                    image = resize_image(image, 0.5)
+                    image = image_resize(image, 0.5)
                 elif width_calc > 200:
-                    image = resize_image(image, 0.7)
+                    image = image_resize(image, 0.7)
 
                 ret = face_detection(image=image, face_encodings=self.face_encodings, face_names=self.face_names, 
                                      tolerance=self.face_tolerance,
@@ -366,7 +366,7 @@ class VideoProcessor:
                 ret, frame = dev.read()
 
                 if ret:
-                    frame = rotate_image(frame, self.orientation)
+                    frame = image_rotate(frame, self.orientation)
                     try:
                         self.obj_queue.put_nowait({ "frame": frame, "timestamp": time.time() })
                     except queue.Full:

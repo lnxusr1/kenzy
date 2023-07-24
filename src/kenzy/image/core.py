@@ -319,7 +319,7 @@ def get_face_encoding(file_name):
     return new_encoding
 
 
-def rotate_image(image, orientation=0):
+def image_rotate(image, orientation=0):
     if orientation is None or orientation == 0:
         return image
     
@@ -333,7 +333,7 @@ def rotate_image(image, orientation=0):
     return cv2.rotate(image, orientation)
 
 
-def resize_image(image, scale_factor):
+def image_resize(image, scale_factor):
     if scale_factor == 1.0:
         return image
     

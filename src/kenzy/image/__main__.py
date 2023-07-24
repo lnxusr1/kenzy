@@ -5,7 +5,8 @@ import cv2
 import copy
 import os
 import json
-from kenzy.image.core import motion_detection, image_blur, image_gray, image_markup, object_detection, object_labels, object_model, face_detection, resize_image
+from kenzy.image.core import motion_detection, image_blur, image_gray, image_markup, object_detection, \
+    object_labels, object_model, face_detection, image_resize, image_rotate
 
 
 def get_raw_value(setting_value):
@@ -30,6 +31,7 @@ parser = argparse.ArgumentParser(
 
 parser.add_argument('-v', '--version', action="store_true", help="Print Version")
 parser.add_argument('-d', '--video-device', default="0", help="Video Device")
+parser.add_argument('-o', '--orientation', default="0", help="Image orientation (0, 90, 180, 270)")
 parser.add_argument('--scale', default="1.0", help="Scale percentage (as decimal)")
 parser.add_argument('-s', '--set', action="append", help="Override settings as: name=value")
 
@@ -106,7 +108,9 @@ labels = object_labels(label_file=cfg.get("object").get("label_file",
 while True:
     ret, image = video_device.read()
     
-    image = resize_image(image, get_raw_value(ARGS.scale))
+    image = image_resize(image, get_raw_value(ARGS.scale))
+    image = image_rotate(image, get_raw_value(ARGS.orientation))
+
     gray = image_blur(image_gray(image))
 
     movements = motion_detection(image=gray, last_image=last_image, 
