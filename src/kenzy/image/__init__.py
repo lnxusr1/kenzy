@@ -11,4 +11,4 @@ try:
 except ModuleNotFoundError:
     logging.debug(str(sys.exc_info()[0]))
     logging.debug(str(traceback.format_exc()))
-    logging.info("Unable to start analyzer due to missing libraries")
+    logging.info("Unable to start image processor due to missing libraries")

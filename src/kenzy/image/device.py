@@ -346,6 +346,7 @@ class VideoProcessor:
                 motion = False
 
             self.service.collect(data={
+                "type": "kenzy.image",
                 "motion": motion,
                 "objects": objects,
                 "faces": faces
