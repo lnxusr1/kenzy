@@ -113,61 +113,64 @@ class AudioProcessor:
         wf.setsampwidth(_audio_device.get_sample_size(pyaudio.paInt16))
         wf.setframerate(audio_sample_rate)
 
-        while not self.stop_event.is_set():
-            frame = buffer_queue.get()
+        try:
+            while not self.stop_event.is_set():
+                frame = buffer_queue.get()
 
-            if len(frame) >= 640:  # and not self._isAudioOut:
-                is_speech = _vad.is_speech(frame, audio_sample_rate)
-            
-                if not triggered:
-                    ring_buffer.append((frame, is_speech))
-                    num_voiced = len([f for f, speech in ring_buffer if speech])
+                if len(frame) >= 640:  # and not self._isAudioOut:
+                    is_speech = _vad.is_speech(frame, audio_sample_rate)
+                
+                    if not triggered:
+                        ring_buffer.append((frame, is_speech))
+                        num_voiced = len([f for f, speech in ring_buffer if speech])
 
-                    if num_voiced > speech_ratio * ring_buffer.maxlen:
-                        triggered = True
+                        if num_voiced > speech_ratio * ring_buffer.maxlen:
+                            triggered = True
 
-                        for f in ring_buffer:
-                            wf.writeframes(f[0])
+                            for f in ring_buffer:
+                                wf.writeframes(f[0])
 
-                        ring_buffer.clear()
-                else:
-                    wf.writeframes(frame)
-                    ring_buffer.append((frame, is_speech))
-                    num_unvoiced = len([f for f, speech in ring_buffer if not speech])
-                    if num_unvoiced > speech_ratio * ring_buffer.maxlen:
-                        triggered = False
+                            ring_buffer.clear()
+                    else:
+                        wf.writeframes(frame)
+                        ring_buffer.append((frame, is_speech))
+                        num_unvoiced = len([f for f, speech in ring_buffer if not speech])
+                        if num_unvoiced > speech_ratio * ring_buffer.maxlen:
+                            triggered = False
 
-                        container.seek(0)
-                        data, _ = soundfile.read(container)
+                            container.seek(0)
+                            data, _ = soundfile.read(container)
 
-                        input_features = processor(
-                            data,
-                            sampling_rate=audio_sample_rate,
-                            return_tensors="pt"
-                        ).input_features  # Batch size 1
-                        generated_ids = model.generate(input_features=input_features)
+                            input_features = processor(
+                                data,
+                                sampling_rate=audio_sample_rate,
+                                return_tensors="pt"
+                            ).input_features  # Batch size 1
+                            generated_ids = model.generate(input_features=input_features)
 
-                        text = processor.batch_decode(generated_ids, skip_special_tokens=True)
-                        text = text[0]
-                        if text.startswith("</s>"):
-                            text = text[4:]
-                        if text.endswith("</s>"):
-                            text = text[:-4]
-                        text = text.strip()
+                            text = processor.batch_decode(generated_ids, skip_special_tokens=True)
+                            text = text[0]
+                            if text.startswith("</s>"):
+                                text = text[4:]
+                            if text.endswith("</s>"):
+                                text = text[:-4]
+                            text = text.strip()
 
-                        wf.close()
+                            wf.close()
 
-                        if not self.stop_event.is_set():
-                            if text.strip() != "":
+                            if not self.stop_event.is_set():
+                                if text.strip() != "":
 
-                                self.logger.info("HEARD " + text)
-                                self.callback_queue.put(text)
+                                    self.logger.info("HEARD " + text)
+                                    self.callback_queue.put(text)
 
-                            container = io.BytesIO()
-                            wf = wave.open(container, "wb")
-                            wf.setnchannels(audio_channels)
-                            wf.setsampwidth(_audio_device.get_sample_size(pyaudio.paInt16))
-                            wf.setframerate(audio_sample_rate)
+                                container = io.BytesIO()
+                                wf = wave.open(container, "wb")
+                                wf.setnchannels(audio_channels)
+                                wf.setsampwidth(_audio_device.get_sample_size(pyaudio.paInt16))
+                                wf.setframerate(audio_sample_rate)
+        except KeyboardInterrupt:
+            self.stop()
 
     def collect(self, data=None, context=None):
         self.logger.debug(f"{data}, {self.type}, {context.get()}")
@@ -192,16 +195,16 @@ class AudioProcessor:
         self.main_thread.start()
 
         if self.is_alive():
-            self.logger.info("Started Video Processor")
-            return KenzySuccessResponse("Started Video Processor")
+            self.logger.info("Started Audio Processor")
+            return KenzySuccessResponse("Started Audio Processor")
         else:
-            self.logger.error("Unable to start Video Processor")
-            return KenzyErrorResponse("Unable to start Video Processor")
+            self.logger.error("Unable to start Audio Processor")
+            return KenzyErrorResponse("Unable to start Audio Processor")
         
     def stop(self, **kwargs):
         if self.main_thread is None or not self.main_thread.is_alive():
-            self.logger.error("Video Processor is not running")
-            return KenzyErrorResponse("Video Processor is not running")
+            self.logger.error("Audio Processor is not running")
+            return KenzyErrorResponse("Audio Processor is not running")
         
         self.stop_event.set()
         self.main_thread.join()
@@ -210,11 +213,11 @@ class AudioProcessor:
         self.callback_thread.join()
 
         if not self.is_alive():
-            self.logger.info("Stopped Video Processor")
-            return KenzySuccessResponse("Stopped Video Processor")
+            self.logger.info("Stopped Audio Processor")
+            return KenzySuccessResponse("Stopped Audio Processor")
         else:
-            self.logger.error("Unable to stop Video Processor")
-            return KenzyErrorResponse("Unable to stop Video Processor")
+            self.logger.error("Unable to stop Audio Processor")
+            return KenzyErrorResponse("Unable to stop Audio Processor")
     
     def restart(self, **kwargs):
         if self.read_thread is not None or self.proc_thread is not None:
