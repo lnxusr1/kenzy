@@ -4,3 +4,8 @@ numpy
 opencv-contrib-python
 face_recognition
 yolov7detect
+webrtcvad
+pyaudio
+soundfile
+torch
+transformers
