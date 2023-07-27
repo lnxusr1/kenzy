@@ -1,6 +1,8 @@
 import threading
 import logging
 import queue
+import sys
+import traceback
 from kenzy.core import KenzySuccessResponse, KenzyErrorResponse
 from kenzy.stt.core import read_from_device
 
@@ -50,6 +52,11 @@ class AudioProcessor:
                 self.callback_queue.put(text)
         except KeyboardInterrupt:
             self.stop()
+        except Exception:
+            logging.debug(str(sys.exc_info()[0]))
+            logging.debug(str(traceback.format_exc()))
+            self.logger.error("Unable to read from listener device.")
+            self.stop_event.set()
 
     def collect(self, data=None, context=None):
         self.logger.debug(f"{data}, {self.type}, {context.get()}")
