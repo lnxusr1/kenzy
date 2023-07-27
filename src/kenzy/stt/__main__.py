@@ -2,6 +2,7 @@ from kenzy import __app_title__, __version__
 import argparse
 import logging
 import threading
+import os
 from kenzy.extras import get_raw_value
 from kenzy.stt.core import read_from_device
 
@@ -14,6 +15,7 @@ parser = argparse.ArgumentParser(
 parser.add_argument('-v', '--version', action="store_true", help="Print Version")
 parser.add_argument('-d', '--audio-device', default=None, help="Audio Device")
 parser.add_argument('-s', '--set', action="append", help="Override settings as: name=value")
+parser.add_argument('--offline', action="store_true", help="Run in offline mode.")
 
 logging_group = parser.add_argument_group('Logging Options')
 
@@ -44,6 +46,10 @@ logging.basicConfig(
     format='%(asctime)s %(name)-12s - %(levelname)-9s - %(message)s',
     level=logLevel)
 
+# OFFLINE
+if ARGS.offline:
+    os.environ["TRANSFORMERS_OFFLINE"] = "1"
+    os.environ["HF_DATASETS_OFFLINE"] = "1"
 
 # CORE FUNCTION
 

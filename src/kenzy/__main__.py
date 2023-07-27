@@ -1,5 +1,6 @@
 import logging
 import argparse
+import os
 import kenzy.core
 from kenzy.extras import clean_string
 from . import __app_title__, __version__
@@ -14,6 +15,7 @@ parser = argparse.ArgumentParser(
 parser.add_argument('-c', '--config', default=None, help="Configuration file")
 parser.add_argument('-v', '--version', action="store_true", help="Print Version")
 parser.add_argument('-s', '--set', action="append", help="Override settings as: name=value")
+parser.add_argument('--offline', action="store_true", help="Run in offline mode.")
 
 device_options = parser.add_argument_group('Device Options')
 device_options.add_argument('-t', '--type', default=None, help="Specify instance type (override config value if set)")
@@ -49,6 +51,11 @@ logging.basicConfig(
     filename=ARGS.log_file,
     format='%(asctime)s %(name)-12s - %(levelname)-9s - %(message)s',
     level=logLevel)
+
+# OFFLINE MODE
+if ARGS.offline:
+    os.environ["TRANSFORMERS_OFFLINE"] = "1"
+    os.environ["HF_DATASETS_OFFLINE"] = "1"
 
 # INSTANCE START
 
