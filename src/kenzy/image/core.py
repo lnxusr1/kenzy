@@ -70,10 +70,22 @@ def image_markup(image, elements=[], line_color=(255, 0, 0)):
         )
 
 
-def object_labels(label_file=os.path.join(os.path.dirname(__file__), 
-                                          "resources", 
-                                          "mobilenet_v3", 
-                                          "labels.txt")):
+def object_labels(label_file=None, model_type="ssd"):
+    if label_file is None:
+        if model_type is None:
+            model_type = "ssd"
+
+        if model_type == "yolo":
+            label_file = os.path.join(os.path.dirname(__file__), 
+                                      "resources", 
+                                      "yolov7", 
+                                      "labels.txt")
+        else:
+            label_file = os.path.join(os.path.dirname(__file__), 
+                                      "resources", 
+                                      "mobilenet_v3", 
+                                      "labels.txt")
+            
     labels = []
     if label_file is not None and os.path.isfile(label_file):
         with open(label_file, "r", encoding="UTF-8") as fp:
@@ -256,6 +268,7 @@ def face_detection(image, model="hog", face_encodings=None, face_names=None, tol
         found_distances = []
         for idx, face_encoding in enumerate(fes):
             name = None
+            best_match_index = None
             distance = None
 
             face_distances = face_recognition.face_distance(face_encodings, face_encoding)
@@ -266,11 +279,11 @@ def face_detection(image, model="hog", face_encodings=None, face_names=None, tol
                     distance = face_distances[best_match_index]
             
             if name is None:
-                if len(face_distances) > best_match_index and face_distances[best_match_index] > (tolerance * 1.5):
+                if best_match_index is not None and len(face_distances) > best_match_index and face_distances[best_match_index] > (tolerance * 1.5):
                     name = save_image_to_cache(image, face_position=face_locations[idx], cache_folder=cache_folder, 
                                                default_name=default_name, face_encoding=face_encoding, 
                                                known_face_encodings=face_encodings, face_names=face_names)
-                elif len(face_distances) > best_match_index and face_distances[best_match_index] < (tolerance * 1.5):
+                elif best_match_index is not None and len(face_distances) > best_match_index and face_distances[best_match_index] < (tolerance * 1.5):
                     name = face_names[best_match_index]
                 else:
                     name = default_name

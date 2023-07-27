@@ -19,11 +19,10 @@ device:
       - ~/Pictures/faces/lnxusr1/user.1.9.jpg
 
 service:
-  upnp:                     standalone
-  service_url:              http://localhost:8080
+  upnp:                     client # standalone
+  # service_url:              http://localhost:8080
   host:                     0.0.0.0
   port:                     8080
   enable_ssl:               false
   ssl_cert_file:            /etc/ssl/cert/snakeoil.crt
   ssl_key_file:             /etc/ssl/private/snakeoil.key
-

@@ -1,6 +1,5 @@
 import threading
 import logging
-import time
 import queue
 import collections
 import webrtcvad
@@ -67,16 +66,13 @@ class AudioProcessor:
         processor, model = speech_model(self.settings.get("speech_model", "openai/whisper-tiny.en"))
 
         buffer_queue = queue.Queue()
-        self._isRunning = True
 
         def proxy_callback(in_data, frame_count, time_info, status):
             buffer_queue.put(in_data)
             return (None, pyaudio.paContinue)
 
         ring_buffer = collections.deque(
-            maxlen=speech_buffer_padding //
-            (1000 * int(audio_sample_rate /
-                        float(speech_buffer_size)) // audio_sample_rate))
+            maxlen=speech_buffer_padding // (1000 * int(audio_sample_rate / float(speech_buffer_size)) // audio_sample_rate))
 
         _vad = webrtcvad.Vad(vad_aggressiveness)
 

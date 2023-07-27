@@ -25,6 +25,7 @@ class VideoProcessor:
     service = None
     orientation = 0
     video_device = 0
+    scale_factor = 1.0
     frames_per_second = None
     record_buffer = 5
     motion_threshold = 20
@@ -61,19 +62,24 @@ class VideoProcessor:
         self.group = kwargs.get("group")
 
         self.video_device = kwargs.get("video_device", 0)
+        self.scale_factor = kwargs.get("scale", 1.0)
         self.frames_per_second = kwargs.get("frames_per_second")
 
         self.orientation = kwargs.get("orientation", 0)
 
-        self.motion_threshold = kwargs.get("motion_threshold", 20)
-        self.motion_area = kwargs.get("motion_area", 0.0003)
-        self.object_threshold = kwargs.get("object_threshold", 0.6)
+        self.motion_threshold = kwargs.get("motion.threshold", 20)
+        self.motion_area = kwargs.get("motion.area", 0.0003)
+        self.object_threshold = kwargs.get("object.threshold", 0.6)
+        self.object_model_type = kwargs.get("object.model_type", "ssd")
+        self.object_model_config = kwargs.get("object.model_config")
+        self.object_model_file = kwargs.get("object.model_file")
+        self.object_label_file = kwargs.get("objects.label_file")
 
-        self.face_tolerance = kwargs.get("face_tolerance", 0.5)
+        self.face_tolerance = kwargs.get("face.tolerance", 0.5)
 
-        self.video_format = kwargs.get("video_format", "XVID")
-        self.video_folder = kwargs.get("video_folder")
-        self.record_buffer = kwargs.get("record_buffer", 5)
+        self.video_format = kwargs.get("record.format", "XVID")
+        self.video_folder = kwargs.get("record.folder")
+        self.record_buffer = kwargs.get("record.buffer", 5)
 
         self.initialize_settings()
 
@@ -102,8 +108,8 @@ class VideoProcessor:
         if self.settings.get("faces") is not None:
             self.face_names = []
             self.face_encodings = []
-            for face_name in self.settings.get("faces", {}):
-                image_list = self.settings.get("faces", {}).get(face_name)
+            for face_name in self.settings.get("face.entries", {}):
+                image_list = self.settings.get("face.entries", {}).get(face_name)
                 if isinstance(image_list, list):
                     for img in image_list:
                         self.face_encodings.append(get_face_encoding(img))    
@@ -112,8 +118,8 @@ class VideoProcessor:
                     self.face_encodings.append(get_face_encoding(image_list))
                     self.face_names.append(face_name)
 
-        if self.settings.get("cache_folder") is not None:
-            cache_folder = os.path.expanduser(self.settings.get("cache_folder"))
+        if self.settings.get("face.cache_folder") is not None:
+            cache_folder = os.path.expanduser(self.settings.get("face.cache_folder"))
             if os.path.isfile(os.path.join(cache_folder, "cache.yml")):
                 
                 if self.face_names is None:
@@ -141,8 +147,8 @@ class VideoProcessor:
         last_image = None
         skip = 0
 
-        model_labels = object_labels()
-        model = object_model()
+        model_labels = object_labels(label_file=self.object_label_file, model_type=self.object_model_type)
+        model = object_model(model_type=self.object_model_type, model_config=self.object_model_config, model_file=self.object_model_file)
 
         last_person_seen = 0
 
@@ -244,8 +250,8 @@ class VideoProcessor:
 
                 ret = face_detection(image=image, face_encodings=self.face_encodings, face_names=self.face_names, 
                                      tolerance=self.face_tolerance,
-                                     default_name=self.settings.get("default_name"),
-                                     cache_folder=self.settings.get("cache_folder"))
+                                     default_name=self.settings.get("face.default_name"),
+                                     cache_folder=self.settings.get("face.cache_folder"))
                 faces.extend(ret)
 
                 end = time.time()
@@ -367,7 +373,11 @@ class VideoProcessor:
                 ret, frame = dev.read()
 
                 if ret:
+                    if self.scale_factor != 1.0:
+                        frame = image_resize(frame, self.scale_factor)
+
                     frame = image_rotate(frame, self.orientation)
+
                     try:
                         self.obj_queue.put_nowait({ "frame": frame, "timestamp": time.time() })
                     except queue.Full:
@@ -401,18 +411,12 @@ class VideoProcessor:
     def collect(self, data=None, context=None):
         self.logger.debug(f"{data}, {self.type}, {context.get()}")
 
-    def set_component_settings(self, **kwargs):
-        if kwargs is None or not isinstance(kwargs, dict):
-            kwargs = {}
-
-        if self.motion_area is not None and self.raw_height is not None and self.raw_width is not None:
-            kwargs["motionMinArea"] = int((self.raw_width * self.raw_height) * self.motion_area)
-
-        self.component_settings = kwargs
-
     def set_service(self, service):
         self.service = service
 
+    def get_settings(self, **kwargs):
+        return KenzyErrorResponse("Not Implemented")
+    
     def set_settings(self, **kwargs):
         return KenzyErrorResponse("Not implemented")
 
@@ -501,6 +505,7 @@ class VideoProcessor:
             "type": self.type,
             "accepts": self.accepts,
             "data": {
+                
             }
         })
     
