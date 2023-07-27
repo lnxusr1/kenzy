@@ -9,8 +9,25 @@ import uuid
 import requests
 import xml.etree.ElementTree as ET
 from . import __app_title__, __version__
+import json
+
 
 SSDP_DEVICE_TYPE = "urn:schemas-upnp-org:device:Kenzy-Core:1"
+
+
+def get_raw_value(setting_value):
+    if "." in setting_value and setting_value.replace(",", "").replace(".", "").isdigit():
+        setting_value = float(setting_value.replace(",", ""))
+    elif "." not in setting_value and setting_value.replace(",", "").replace(".", "").isdigit():
+        setting_value = int(setting_value.replace(",", ""))
+    elif setting_value.lower().strip() in ["true", "false"]:
+        setting_value = bool(setting_value.lower().strip())
+    elif setting_value.startswith("{") and setting_value.endswith("}"):
+        setting_value = json.loads(setting_value)
+    elif setting_value.startswith("[") and setting_value.endswith("]"):
+        setting_value = json.loads(setting_value)
+
+    return setting_value
 
 
 def clean_string(input_string):

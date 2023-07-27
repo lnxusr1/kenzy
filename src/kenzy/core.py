@@ -267,7 +267,7 @@ class KenzyHTTPServer(HTTPServer):
         self.api_key = kwargs.get("api_key")
 
         # Get Service URL and start UPNP/SSDP server is appropriate
-        proto = "https" if kwargs.get("enable_ssl", False) else "http"
+        proto = "https" if kwargs.get("ssl.enable", False) else "http"
         host = kwargs.get("host", "0.0.0.0")
         port = kwargs.get("port", 8080)
 
@@ -297,9 +297,9 @@ class KenzyHTTPServer(HTTPServer):
         
         super().__init__((host, port), KenzyRequestHandler)
 
-        if kwargs.get("enable_ssl", False):
-            cert_file = os.path.expanduser(kwargs.get("ssl_cert_file"))
-            key_file = os.path.expanduser(kwargs.get("ssl_key_file"))
+        if kwargs.get("ssl.enable", False):
+            cert_file = os.path.expanduser(kwargs.get("ssl.cert_file"))
+            key_file = os.path.expanduser(kwargs.get("ssl.key_file"))
             self.socket = ssl.wrap_socket(self.socket, certfile=cert_file, keyfile=key_file, server_side=True)
 
     def command(self, action=None, payload=None, context=None):

@@ -3,25 +3,9 @@ import argparse
 import logging
 import cv2
 import copy
-import os
-import json
+from kenzy.extras import get_raw_value
 from kenzy.image.core import motion_detection, image_blur, image_gray, image_markup, object_detection, \
     object_labels, object_model, face_detection, image_resize, image_rotate
-
-
-def get_raw_value(setting_value):
-    if "." in setting_value and setting_value.replace(",", "").replace(".", "").isdigit():
-        setting_value = float(setting_value.replace(",", ""))
-    elif "." not in setting_value and setting_value.replace(",", "").replace(".", "").isdigit():
-        setting_value = int(setting_value.replace(",", ""))
-    elif setting_value.lower().strip() in ["true", "false"]:
-        setting_value = bool(setting_value.lower().strip())
-    elif setting_value.startswith("{") and setting_value.endswith("}"):
-        setting_value = json.loads(setting_value)
-    elif setting_value.startswith("[") and setting_value.endswith("]"):
-        setting_value = json.loads(setting_value)
-
-    return setting_value
 
 
 parser = argparse.ArgumentParser(

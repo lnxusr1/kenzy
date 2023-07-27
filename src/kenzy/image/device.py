@@ -206,8 +206,8 @@ class VideoProcessor:
     def _process_faces(self):
         skip = 0
 
-        model_labels = object_labels()
-        model = object_model()
+        model_labels = object_labels(label_file=self.object_label_file, model_type=self.object_model_type)
+        model = object_model(model_type=self.object_model_type, model_config=self.object_model_config, model_file=self.object_model_file)
         
         while True:
             data = self.face_queue.get()
