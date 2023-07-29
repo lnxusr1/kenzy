@@ -3,7 +3,7 @@ import argparse
 import logging
 import os
 from kenzy.extras import get_raw_value
-from kenzy.tts.core import model_type, speak
+from kenzy.tts.core import model_type, create_speech
 
 
 parser = argparse.ArgumentParser(
@@ -65,4 +65,4 @@ if ARGS.set is not None:
                 quit(1)
 
 m = model_type(cfg.get("model_type"))
-speak(m, ARGS.text, speaker=cfg.get("speaker", "slt"))
+create_speech(m, ARGS.text, speaker=cfg.get("speaker", "slt"))

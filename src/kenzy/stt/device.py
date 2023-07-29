@@ -116,6 +116,9 @@ class AudioProcessor:
     def set_service(self, service):
         self.service = service
 
+    def get_settings(self, **kwargs):
+        return KenzyErrorResponse("Not implemented")
+
     def set_settings(self, **kwargs):
         return KenzyErrorResponse("Not implemented")
     

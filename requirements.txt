@@ -11,4 +11,3 @@ torch
 transformers
 datasets
 sentencepiece
-wave

@@ -47,7 +47,7 @@ def model_type(type="speecht5"):
     return model
 
 
-def speak(model, text, speaker="slt", cache_folder="~/.kenzy/cache/speach"):
+def create_speech(model, text, speaker="slt", cache_folder="~/.kenzy/cache/speech"):
 
     if cache_folder is not None:
         os.makedirs(os.path.expanduser(cache_folder), exist_ok=True)

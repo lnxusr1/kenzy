@@ -309,12 +309,6 @@ class KenzyHTTPServer(HTTPServer):
         for item in self.device.accepts:
             if str(item).strip().lower() == str(action).strip().lower():
                 return eval("self.device." + str(item).strip().lower() + "(data=payload, context=context)")
-                
-        if str(action).lower() == "collect":
-            return KenzySuccessResponse({"hello": "there", "context": context.get() }, None)
-
-        elif str(action).lower() == "status":
-            return KenzySuccessResponse({"hello": "there"})
 
         return KenzyErrorResponse("Unrecognized command.")
 
