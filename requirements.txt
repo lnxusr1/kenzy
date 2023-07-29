@@ -9,3 +9,5 @@ pyaudio
 soundfile
 torch
 transformers
+datasets
+sentencepiece
