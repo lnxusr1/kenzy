@@ -80,6 +80,8 @@ class VideoProcessor:
         self.video_format = kwargs.get("record.format", "XVID")
         self.video_folder = kwargs.get("record.folder")
         self.record_buffer = kwargs.get("record.buffer", 5)
+        self.default_name = kwargs.get("face.default_name")
+        self.cache_folder = kwargs.get("face.cache_folder")
 
         self.initialize_settings()
 
@@ -118,8 +120,8 @@ class VideoProcessor:
                     self.face_encodings.append(get_face_encoding(image_list))
                     self.face_names.append(face_name)
 
-        if self.settings.get("face.cache_folder") is not None:
-            cache_folder = os.path.expanduser(self.settings.get("face.cache_folder"))
+        if self.cache_folder is not None:
+            cache_folder = os.path.expanduser(self.cache_folder)
             if os.path.isfile(os.path.join(cache_folder, "cache.yml")):
                 
                 if self.face_names is None:
@@ -202,6 +204,7 @@ class VideoProcessor:
                 item["timestamp"] = curr_time
 
             self.callback_queue.put(ret)
+            self.obj_queue.task_done()
         
     def _process_faces(self):
         skip = 0
@@ -250,8 +253,8 @@ class VideoProcessor:
 
                 ret = face_detection(image=image, face_encodings=self.face_encodings, face_names=self.face_names, 
                                      tolerance=self.face_tolerance,
-                                     default_name=self.settings.get("face.default_name"),
-                                     cache_folder=self.settings.get("face.cache_folder"))
+                                     default_name=self.default_name,
+                                     cache_folder=self.cache_folder)
                 faces.extend(ret)
 
                 end = time.time()
@@ -268,6 +271,8 @@ class VideoProcessor:
                     item["timestamp"] = data.get("timestamp")
 
                 self.callback_queue.put(faces)
+
+            self.face_queue.task_done()
 
     def _process_record(self):
 
@@ -287,6 +292,7 @@ class VideoProcessor:
                     video_writer.release()
                     video_writer = None
                     self.record_event.clear()
+                    self.rec_queue.task_done()
                 break
 
             if self.video_folder is not None and self.record_event.is_set():
@@ -328,16 +334,22 @@ class VideoProcessor:
                     video_writer.release()
                     video_writer = None
 
+            self.rec_queue.task_done()
+
     def _process_callback(self):
         motion = False
         last_motion = 0
         faces = {}
+
+        last_motion_notify = False
+        last_object_list = []
 
         while True:
             data = self.callback_queue.get()
             if data is None or not isinstance(data, list):
                 break
 
+            is_face_notice = False
             objects = []
             for item in data:
                 if item.get("type") == "movement":
@@ -347,16 +359,26 @@ class VideoProcessor:
                     objects.append(item)    
                 elif item.get("type") == "face":
                     faces[item.get("name", "Unknown")] = item
+                    is_face_notice = True
 
             if motion and (time.time() - 1) > last_motion:
                 motion = False
 
-            self.service.collect(data={
-                "type": "kenzy.image",
-                "motion": motion,
-                "objects": objects,
-                "faces": faces
-            })
+            if not is_face_notice:
+                object_list = [x.get("name") for x in objects]
+                object_list.sort()
+                if motion != last_motion_notify or object_list != last_object_list:
+                    self.service.collect(data={
+                        "type": "kenzy.image",
+                        "motion": motion,
+                        "objects": objects,
+                        "faces": faces
+                    })
+
+                    last_motion_notify = motion
+                    last_object_list = object_list
+
+            self.callback_queue.task_done()
 
     def _read_from_device(self):
         self.stop_event.clear()

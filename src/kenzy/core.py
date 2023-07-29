@@ -340,7 +340,9 @@ class KenzyHTTPServer(HTTPServer):
         if not isinstance(context, KenzyContext):
             context = self.get_local_context()
     
-        if self.service_url != self.local_url:
+        local_url = self.local_url
+        service_url = self.service_url
+        if service_url != local_url:
             # Send to service_url
             req = {
                 "action": "collect",
@@ -379,12 +381,10 @@ class KenzyHTTPServer(HTTPServer):
             headers["Authorization"] = f"Bearer {token}"
             headers["Content-Type"] = "application/json"
 
-            print(payload)
-
             response = requests.post(self.service_url, json=payload, headers=headers, verify=False)
-            print("Request sent")
+
             response_data = response.json()
-            print("Response:", response_data)
+            self.logger.debug(f"{response_data}")
         except requests.exceptions.RequestException as e:
             print("An error occurred:", e)
             return False
