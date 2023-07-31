@@ -1,0 +1,79 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html lang="en-US">
+<head>
+	<meta name="apple-mobile-web-app-capable" content="yes" />
+	<meta charset="UTF-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="icon" type="image/x-icon" href="favicon.svg">
+	<link rel="apple-touch-icon" href="kenzy_touch.png" />
+
+	<title>Control Panel &raquo; KENZY.Ai [__APP_VERSION__]</title>
+	<script src="jquery.js"></script>
+<style type="text/css">
+html, body { padding: 0; margin: 0; font-size: 12pt; color: #000000; background-color: #aaaaaa; min-height: 100%; font-family: Arial, Helvetica, Sans-Serif; }
+page, section, header, content { display: block; }
+page { display: block; }
+sidebar { display: block; position: fixed; top: 0; left: 0; width: 260px; height: 100%; padding: 20px; }
+sidebar > content { display: block; background-image: linear-gradient(165deg, #42424a 0%, #191919 100%); COLOR: #ffffff; border-radius: 6px; max-height: 100%;  }
+sidebar section { padding: 15px; }
+sidebar button { background: transparent; border: 0; display: block; width: 100%; height: 48px; line-height: 48px; color: #ffffff; border-radius: 6px; font-size: 0.95rem; margin-bottom: 2px; cursor: pointer; text-align: left; padding: 0 15px; }
+sidebar button i { display: inline-block; width: 24px; height: 24px; border: 1px solid #fff; vertical-align: middle; margin-right:8px; }
+sidebar button:hover { background-color: rgba(255, 255, 255, 0.1); }
+sidebar button.active { background: linear-gradient(195deg, #de6c3c 0%, #dc5c25 100%); }
+sidebar section header { font-size: 0.8rem; text-transform: uppercase; text-align: center; padding: 15px; }
+sidebar title { display: block; border-bottom: 1px solid rgba(255,255,255, .2); padding: 15px; text-align: center; font-size: 1.2rem; line-height: 36px; }
+page > content > section { display: block; padding: 20px 20px 20px 300px; }
+page > content > section:first-child { display: block; padding: 20px 20px 20px 300px; background-color: #f0f2f5; }
+</style>
+</head>
+<body>
+
+<page>
+    <sidebar>
+        <content>
+            <title>KENZY</title>
+            <section>
+                <content>
+                    <button class="active"><i></i>Dashboard</button>
+                    <button><i></i>Devices</button>
+                    <button><i></i>Cameras</button>
+                    <button><i></i>Skills</button>
+                    <button><i></i>Logs</button>
+                    <button><i></i>Settings</button>
+                    <button><i></i>Logout</button>
+                </content>
+            </section>
+            <section>
+                <header>TEST</header>
+                <content>
+                    <button class="active"><i></i>Dashboard</button>
+                    <button><i></i>Dashboard</button>
+                    <button><i></i>Dashboard</button>
+                    <button><i></i>Dashboard</button>
+                </content>
+            </section>
+        </content>
+    </sidebar>
+    <content>
+        <section>
+            <header>TEST1</header>
+            <content>
+                TEST1
+                <p>test</p>
+                <p>test</p>
+                <p>test</p>
+                <p>test</p>
+                <p>test</p>
+                <p>test</p>
+                <p>test</p>
+            </content>
+        </section>
+        <section>
+            <header>TEST2</header>
+            <content>TEST2</content>
+        </section>
+    </content>
+</page>
+
+</body>
+</html>
