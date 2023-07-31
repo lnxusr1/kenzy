@@ -17,13 +17,34 @@ sidebar { display: block; position: fixed; top: 0; left: 0; width: 260px; height
 sidebar > content { display: block; background-image: linear-gradient(165deg, #42424a 0%, #191919 100%); COLOR: #ffffff; border-radius: 6px; max-height: 100%;  }
 sidebar section { padding: 15px; }
 sidebar button { background: transparent; border: 0; display: block; width: 100%; height: 48px; line-height: 48px; color: #ffffff; border-radius: 6px; font-size: 0.95rem; margin-bottom: 2px; cursor: pointer; text-align: left; padding: 0 15px; }
-sidebar button i { display: inline-block; width: 24px; height: 24px; border: 1px solid #fff; vertical-align: middle; margin-right:8px; }
+sidebar button icon { display: inline-block; width: 24px; height: 24px; vertical-align: middle; margin-right:8px; background-repeat: no-repeat; background-position: center 0; background-size: 20px 20px; }
+
+sidebar button icon.tachometer { background-image: url(tachometer-alt.svg); }
+sidebar button icon.camera { background-image: url(camera-solid.svg); }
+sidebar button icon.server { background-image: url(server-solid.svg); }
+sidebar button icon.bolt { background-image: url(bolt-solid.svg); }
+sidebar button icon.hdd { background-image: url(hdd-solid.svg); }
+sidebar button icon.tools { background-image: url(tools-solid.svg); }
+sidebar button icon.sign-out { background-image: url(sign-out-alt-solid.svg); }
+
 sidebar button:hover { background-color: rgba(255, 255, 255, 0.1); }
 sidebar button.active { background: linear-gradient(195deg, #de6c3c 0%, #dc5c25 100%); }
 sidebar section header { font-size: 0.8rem; text-transform: uppercase; text-align: center; padding: 15px; }
 sidebar title { display: block; border-bottom: 1px solid rgba(255,255,255, .2); padding: 15px; text-align: center; font-size: 1.2rem; line-height: 36px; }
+
 page > content > section { display: block; padding: 20px 20px 20px 300px; }
 page > content > section:first-child { display: block; padding: 20px 20px 20px 300px; background-color: #f0f2f5; }
+page > content > section > header { font-weight: bold; font-size: .9rem; margin-bottom: 20px; margin-top: 10px; }
+
+#main > group { display: block; clear: left; }
+#main > group > * { display: block; float: left; }
+#main > group.col-3 > * { width: 33.33%; }
+#main > group.col-3 > *:nth-child(2) { width: 33.34%; }
+#main > group.col-2 > * { width: 50%; }
+#main > group.col-4 > * { width: 25%; }
+
+#main gauge > content { display: block; padding: 20px; border: 10px solid rgba(0,0,0,.2); text-align: center; border-radius: 10px; margin: 10px; }
+
 </style>
 </head>
 <body>
@@ -32,40 +53,57 @@ page > content > section:first-child { display: block; padding: 20px 20px 20px 3
     <sidebar>
         <content>
             <title>KENZY</title>
+            <!-- start_section -->
             <section>
                 <content>
-                    <button class="active"><i></i>Dashboard</button>
-                    <button><i></i>Devices</button>
-                    <button><i></i>Cameras</button>
-                    <button><i></i>Skills</button>
-                    <button><i></i>Logs</button>
-                    <button><i></i>Settings</button>
-                    <button><i></i>Logout</button>
+                    <button class="active"><icon class="tachometer"></icon>Dashboard</button>
+                    <button><icon class="server"></icon>Devices</button>
+                    <button><icon class="camera"></icon>Cameras</button>
+                    <button><icon class="bolt"></icon>Skills</button>
+                    <button><icon class="hdd"></icon>Logs</button>
+                    <button><icon class="tools"></icon>Settings</button>
                 </content>
             </section>
             <section>
-                <header>TEST</header>
                 <content>
-                    <button class="active"><i></i>Dashboard</button>
-                    <button><i></i>Dashboard</button>
-                    <button><i></i>Dashboard</button>
-                    <button><i></i>Dashboard</button>
+                    <button><icon class="sign-out"></icon>Logout</button>
                 </content>
             </section>
+            <!-- end_section -->
         </content>
     </sidebar>
     <content>
         <section>
-            <header>TEST1</header>
-            <content>
-                TEST1
-                <p>test</p>
-                <p>test</p>
-                <p>test</p>
-                <p>test</p>
-                <p>test</p>
-                <p>test</p>
-                <p>test</p>
+            <header>Welcome</header>
+            <content id="main">
+                <group class="col-4">
+                    <gauge>
+                        <content>
+                            # of Devices
+                        </content>
+                    </gauge>
+                    <gauge>
+                        <content>
+                            # of Skills
+                        </content>
+                    </gauge>
+                    <gauge>
+                        <content>
+                            # of Faces
+                        </content>
+                    </gauge>
+                    <gauge>
+                        <content>
+                            Uptime
+                        </content>
+                    </gauge>
+                </group>
+                <group>
+
+                </group>
+                <p>List of where people are</p>
+                <p>Last Activity from Logs</p>
+
             </content>
         </section>
         <section>
