@@ -32,18 +32,25 @@ sidebar button.active { background: linear-gradient(195deg, #de6c3c 0%, #dc5c25 
 sidebar section header { font-size: 0.8rem; text-transform: uppercase; text-align: center; padding: 15px; }
 sidebar title { display: block; border-bottom: 1px solid rgba(255,255,255, .2); padding: 15px; text-align: center; font-size: 1.2rem; line-height: 36px; }
 
-page > content > section { display: block; padding: 20px 20px 20px 300px; }
-page > content > section:first-child { display: block; padding: 20px 20px 20px 300px; background-color: #f0f2f5; }
-page > content > section > header { font-weight: bold; font-size: .9rem; margin-bottom: 20px; margin-top: 10px; }
+page > content > section { display: block; padding: 20px calc(100% - 1200px) 20px 300px; }
+page > content > section:first-child { display: block; background-color: #f0f2f5; }
+page > content > section > header { display: block; font-size: 1rem; margin-bottom: 10px; margin-top: 10px; }
+page > content > section > header > title { display: block; font-weight: bold; line-height: 24px; }
+page > content > section > header > subtitle { display: block; font-size: 0.9rem; }
 
-#main > group { display: block; clear: left; }
+#main { padding-right: 20px; }
+
+#main > group { display: block; clear: left; margin: 0 -10px; }
 #main > group > * { display: block; float: left; }
 #main > group.col-3 > * { width: 33.33%; }
 #main > group.col-3 > *:nth-child(2) { width: 33.34%; }
 #main > group.col-2 > * { width: 50%; }
 #main > group.col-4 > * { width: 25%; }
 
-#main gauge > content { display: block; padding: 20px; border: 10px solid rgba(0,0,0,.2); text-align: center; border-radius: 10px; margin: 10px; }
+#main > group.col-2l > *:first-child { width: 75%; }
+#main > group.col-2l > *:last-child { width: 25%; }
+
+#main gauge > content { display: block; padding: 20px; height: 70px; background-color: orange; text-align: center; border-radius: 10px; margin: 10px; }
 
 </style>
 </head>
@@ -74,9 +81,12 @@ page > content > section > header { font-weight: bold; font-size: .9rem; margin-
     </sidebar>
     <content>
         <section>
-            <header>Welcome</header>
+            <header>
+                <title>Welcome</title>
+                <subtitle>Test</subtitle>
+            </header>
             <content id="main">
-                <group class="col-4">
+                <group class="top-row col-4">
                     <gauge>
                         <content>
                             # of Devices
@@ -98,11 +108,20 @@ page > content > section > header { font-weight: bold; font-size: .9rem; margin-
                         </content>
                     </gauge>
                 </group>
-                <group>
-
+                <group class="col-2l">
+                    <gauge>
+                        <content>
+                            List of where people are
+                        </content>
+                    </gauge>
+                    <gauge>
+                        <content>
+                            Last Activity from Logs
+                        </content>
+                    </gauge>
                 </group>
-                <p>List of where people are</p>
-                <p>Last Activity from Logs</p>
+                <group></group>
+
 
             </content>
         </section>
