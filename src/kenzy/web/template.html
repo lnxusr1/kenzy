@@ -32,13 +32,13 @@ sidebar button.active { background: linear-gradient(195deg, #de6c3c 0%, #dc5c25 
 sidebar section header { font-size: 0.8rem; text-transform: uppercase; text-align: center; padding: 15px; }
 sidebar title { display: block; border-bottom: 1px solid rgba(255,255,255, .2); padding: 15px; text-align: center; font-size: 1.2rem; line-height: 36px; }
 
-page > content > section { display: block; padding: 20px calc(100% - 1200px) 20px 300px; }
+page > content > section { display: block; padding: 20px calc(100% - 1280px) 20px 300px; }
 page > content > section:first-child { display: block; background-color: #f0f2f5; }
 page > content > section > header { display: block; font-size: 1rem; margin-bottom: 10px; margin-top: 10px; }
 page > content > section > header > title { display: block; font-weight: bold; line-height: 24px; }
-page > content > section > header > subtitle { display: block; font-size: 0.9rem; }
+page > content > section > header > subtitle { display: block; font-size: 0.9rem; color: rgba(0, 0, 0, .5); }
 
-#main { padding-right: 20px; }
+#main { padding-right: 20px; padding-top: 10px; }
 
 #main > group { display: block; clear: left; margin: 0 -10px; }
 #main > group > * { display: block; float: left; }
@@ -50,7 +50,17 @@ page > content > section > header > subtitle { display: block; font-size: 0.9rem
 #main > group.col-2l > *:first-child { width: 75%; }
 #main > group.col-2l > *:last-child { width: 25%; }
 
-#main gauge > content { display: block; padding: 20px; height: 70px; background-color: orange; text-align: center; border-radius: 10px; margin: 10px; }
+#main gauge { display: block; position: relative; }
+#main gauge > header { display: block; position: relative; height: 6px; width: 100%; }
+#main gauge > header > icon { display: block; position: absolute; height: 32px; width: 32px; left: 24px; z-index: 100; background-color: #42424a; background-repeat: no-repeat; background-size: 16px 16px; background-position: center center; border-radius: 4px; box-shadow: 2px 2px 2px #ccc; }
+#main gauge > header > icon.server { background-image: url(server-solid.svg); }
+#main gauge > header > icon.bolt { background-image: url(bolt-solid.svg); }
+#main gauge > header > icon.expand { background-image: url(expand-solid.svg); }
+#main gauge > header > icon.stopwatch { background-image: url(stopwatch-solid.svg); }
+#main gauge > content { position: relative; display: block; background-color: #ffffff; margin: 10px; z-index: 99; box-shadow: 2px 2px 8px #c4c4c4; border-radius: 10px; background: linear-gradient(#ffffff, #fafafa, #f3f3f3);  }
+#main gauge > content > metric { display: block; padding: 20px 20px 0 20px; text-align: right; font-size: 2rem; font-weight: bold; border-radius: 10px; line-height: 36px; height: 36px; overflow: hidden; }
+#main gauge > content > divider { display: block; background: linear-gradient(90deg, transparent, #cccccc); height: 1px; margin-top: 8px;}
+#main gauge > content > title { display: block; color: #777777; padding-top: 8px; text-align: right; padding: 8px 20px 10px 20px; text-transform: uppercase; font-size: 0.7rem; }
 
 </style>
 </head>
@@ -82,29 +92,41 @@ page > content > section > header > subtitle { display: block; font-size: 0.9rem
     <content>
         <section>
             <header>
-                <title>Welcome</title>
-                <subtitle>Test</subtitle>
+                <title>System Overview</title>
+                <subtitle>Dashboard</subtitle>
             </header>
             <content id="main">
                 <group class="top-row col-4">
                     <gauge>
+                        <header><icon class="server"></icon></header>
                         <content>
-                            # of Devices
+                            <metric>23</metric>
+                            <divider></divider>
+                            <title>Devices</title>
                         </content>
                     </gauge>
                     <gauge>
+                        <header><icon class="bolt"></icon></header>
                         <content>
-                            # of Skills
+                            <metric>406</metric>
+                            <divider></divider>
+                            <title>Skills</title>
                         </content>
                     </gauge>
                     <gauge>
+                        <header><icon class="expand"></icon></header>
                         <content>
-                            # of Faces
+                            <metric>99</metric>
+                            <divider></divider>
+                            <title>Faces</title>
                         </content>
                     </gauge>
                     <gauge>
+                        <header><icon class="stopwatch"></icon></header>
                         <content>
-                            Uptime
+                            <metric>192d 13h</metric>
+                            <divider></divider>
+                            <title>Uptime</title>
                         </content>
                     </gauge>
                 </group>
