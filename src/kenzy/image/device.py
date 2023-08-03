@@ -107,7 +107,7 @@ class VideoProcessor:
             self.raw_width = frame.shape[1]
             self.raw_height = frame.shape[0]
 
-        if self.settings.get("faces") is not None:
+        if self.settings.get("face.entries") is not None:
             self.face_names = []
             self.face_encodings = []
             for face_name in self.settings.get("face.entries", {}):
