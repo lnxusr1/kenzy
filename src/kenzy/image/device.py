@@ -177,9 +177,11 @@ class VideoProcessor:
 
             end = time.time()
             
-            actual_fps = int(float(1 / (end - start)))  
-            if actual_fps < self.frames_per_second:
-                skip = math.ceil(self.frames_per_second / actual_fps) - 1
+            if (end - start) > 0:
+                actual_fps = int(float(1 / (end - start)))  
+                if actual_fps < self.frames_per_second:
+                    if actual_fps > 0:
+                        skip = math.ceil(self.frames_per_second / actual_fps) - 1
 
             ret = []
             if movements is not None:
@@ -263,9 +265,11 @@ class VideoProcessor:
                 if secs == 0:
                     continue 
 
-                actual_fps = float(1 / secs)
-                if actual_fps < self.frames_per_second:
-                    skip = math.ceil(float(self.frames_per_second) / actual_fps) - 1
+                if secs > 0:
+                    actual_fps = float(1 / secs)
+                    if actual_fps < self.frames_per_second:
+                        if actual_fps > 0:
+                            skip = math.ceil(float(self.frames_per_second) / actual_fps) - 1
 
                 for item in faces:
                     item["timestamp"] = data.get("timestamp")
