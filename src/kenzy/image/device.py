@@ -149,10 +149,16 @@ class VideoProcessor:
         last_image = None
         skip = 0
 
+        self.logger.debug("Starting object and motion detection thread")
+
+        frames_per_second = self.frames_per_second
+
         model_labels = object_labels(label_file=self.object_label_file, model_type=self.object_model_type)
         model = object_model(model_type=self.object_model_type, model_config=self.object_model_config, model_file=self.object_model_file)
 
         last_person_seen = 0
+
+        self.logger.debug("Object and motion detection thread started")
 
         while True:
             data = self.obj_queue.get()
@@ -179,9 +185,9 @@ class VideoProcessor:
             
             if (end - start) > 0:
                 actual_fps = int(float(1 / (end - start)))  
-                if actual_fps < self.frames_per_second:
+                if actual_fps < frames_per_second:
                     if actual_fps > 0:
-                        skip = math.ceil(self.frames_per_second / actual_fps) - 1
+                        skip = math.ceil(frames_per_second / actual_fps) - 1
 
             ret = []
             if movements is not None:
@@ -211,8 +217,15 @@ class VideoProcessor:
     def _process_faces(self):
         skip = 0
 
+        time.sleep(2)
+        self.logger.debug("Starting face detection thread")
+
+        frames_per_second = self.frames_per_second
+        
         model_labels = object_labels(label_file=self.object_label_file, model_type=self.object_model_type)
         model = object_model(model_type=self.object_model_type, model_config=self.object_model_config, model_file=self.object_model_file)
+
+        self.logger.debug("Face detection thread started")
         
         while True:
             data = self.face_queue.get()
@@ -267,9 +280,9 @@ class VideoProcessor:
 
                 if secs > 0:
                     actual_fps = float(1 / secs)
-                    if actual_fps < self.frames_per_second:
+                    if actual_fps < frames_per_second:
                         if actual_fps > 0:
-                            skip = math.ceil(float(self.frames_per_second) / actual_fps) - 1
+                            skip = math.ceil(float(frames_per_second) / actual_fps) - 1
 
                 for item in faces:
                     item["timestamp"] = data.get("timestamp")
