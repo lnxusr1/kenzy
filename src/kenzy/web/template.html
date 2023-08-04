@@ -19,13 +19,16 @@ sidebar section { padding: 15px; }
 sidebar button { background: transparent; border: 0; display: block; width: 100%; height: 48px; line-height: 48px; color: #ffffff; border-radius: 6px; font-size: 0.95rem; margin-bottom: 2px; cursor: pointer; text-align: left; padding: 0 15px; }
 sidebar button icon { display: inline-block; width: 24px; height: 24px; vertical-align: middle; margin-right:8px; background-repeat: no-repeat; background-position: center 0; background-size: 20px 20px; }
 
-sidebar button icon.tachometer { background-image: url(tachometer-alt.svg); }
-sidebar button icon.camera { background-image: url(camera-solid.svg); }
-sidebar button icon.server { background-image: url(server-solid.svg); }
-sidebar button icon.bolt { background-image: url(bolt-solid.svg); }
-sidebar button icon.hdd { background-image: url(hdd-solid.svg); }
-sidebar button icon.tools { background-image: url(tools-solid.svg); }
-sidebar button icon.sign-out { background-image: url(sign-out-alt-solid.svg); }
+icon.tachometer { background-image: url(tachometer-alt.svg); }
+icon.camera { background-image: url(camera-solid.svg); }
+icon.server { background-image: url(server-solid.svg); }
+icon.bolt { background-image: url(bolt-solid.svg); }
+icon.hdd { background-image: url(hdd-solid.svg); }
+icon.tools { background-image: url(tools-solid.svg); }
+icon.sign-out { background-image: url(sign-out-alt-solid.svg); }
+icon.eye { background-image: url(eye-solid.svg); }
+icon.person { background-image: url(person-walking-solid.svg); }
+icon.dog { background-image: url(dog-solid.svg); }
 
 sidebar button:hover { background-color: rgba(255, 255, 255, 0.1); }
 sidebar button.active { background: linear-gradient(195deg, #de6c3c 0%, #dc5c25 100%); }
@@ -61,6 +64,34 @@ page > content > section > header > subtitle { display: block; font-size: 0.9rem
 #main gauge > content > metric { display: block; padding: 20px 20px 0 20px; text-align: right; font-size: 2rem; font-weight: bold; border-radius: 10px; line-height: 36px; height: 36px; overflow: hidden; }
 #main gauge > content > divider { display: block; background: linear-gradient(90deg, transparent, #cccccc); height: 1px; margin-top: 8px;}
 #main gauge > content > title { display: block; color: #777777; padding-top: 8px; text-align: right; padding: 8px 20px 10px 20px; text-transform: uppercase; font-size: 0.7rem; }
+
+#main list { display: block; position: relative; }
+#main list > content { display: block; margin: 10px; background-color: #fff; border-radius: 6px; background: linear-gradient(#ffffff, #fafafa, #f3f3f3); box-shadow: 2px 2px 8px #c4c4c4; }
+#main table { width: 100%; }
+th { text-transform: uppercase; padding: 0 10px; font-size: 0.8rem; color: rgba(0, 0, 0, .7); line-height: 32px; height: 32px; border-bottom: 1px solid rgba(0, 0, 0, .2); }
+td { height: 32px; line-height: 32px; padding: 0 10px 0 10px; font-size: 0.9rem; overflow: hidden; }
+td > content { display: inline-block; height: 32px; width: 100%; overflow: hidden; }
+td > content.short { width: calc(100% - 70px); }
+td icon { display: inline-block; width: 16px; height: 16px; background-repeat: no-repeat; background-size: 16px 16px; }
+td group { display: block; width: 66px; float: right; }
+td icon.disable { opacity: 0.3; }
+
+#main table tr:nth-child(even) td { background-color: rgba(0,0,0, .02); }
+
+.text-left { text-align: left; }
+.text-right { text-align: right; }
+
+#secondary { background: linear-gradient(rgba(0,0,0,.2), transparent); background-size: 100% 30px; background-repeat: no-repeat; }
+#secondary > header { font-weight: bold; text-transform: uppercase; font-size: 0.9rem; text-shadow: 1px 1px 2px rgba(255,255,255, .6); }
+#secondary > content > table { width: 100%; }
+#secondary > content > table td { line-height: 1.25rem; padding-top: 10px; padding-bottom: 10px;  }
+#secondary > content > table td > content { height: 1.25rem; }
+.time-col { width: 120px; }
+
+#secondary divider { display: block; background: linear-gradient(90deg, transparent, #cccccc, transparent); height: 1px; margin-top: 8px;}
+footer { display: block; padding: 20px 0 60px 0; text-align: center; font-size: 0.85rem; color: #444; }
+footer a { color: #444; }
+footer a:hover { color: #000; }
 
 </style>
 </head>
@@ -131,25 +162,136 @@ page > content > section > header > subtitle { display: block; font-size: 0.9rem
                     </gauge>
                 </group>
                 <group class="col-2l">
-                    <gauge>
+                    <list>
                         <content>
-                            List of where people are
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th class="text-left">Name</th>
+                                        <th class="text-left">Location</th>
+                                        <th>Time</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr>
+                                        <td><content>LNXUSR1</content></td>
+                                        <td><content>Living Room</content></td>
+                                        <td><content>5:15pm</content></td>
+                                    </tr>
+                                    <tr>
+                                        <td><content>LNXUSR1</content></td>
+                                        <td><content>Living Room</content></td>
+                                        <td><content>5:15pm</content></td>
+                                    </tr>
+                                    <tr>
+                                        <td><content>LNXUSR1</content></td>
+                                        <td><content>Living Room</content></td>
+                                        <td><content>5:15pm</content></td>
+                                    </tr>
+                                </tbody>
+                            </table>
                         </content>
-                    </gauge>
-                    <gauge>
+                    </list>
+                    <list>
                         <content>
-                            Last Activity from Logs
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th>Activity</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr>
+                                        <td title="Front Yard">
+                                            <group>
+                                                <icon class="eye"></icon>
+                                                <icon class="person disable"></icon>
+                                                <icon class="dog disable"></icon>
+                                            </group>
+                                            <content class="short">
+                                                Front Yard
+                                            </content>
+                                        </td>
+                                    </tr>
+                                    <tr>
+                                        <td title="Master Bedroom">
+                                            <group>
+                                                <icon class="eye"></icon>
+                                                <icon class="person"></icon>
+                                                <icon class="dog disable"></icon>
+                                            </group>
+                                            <content class="short">
+                                                Master Bedroom
+                                            </content>
+                                        </td>
+                                    </tr>
+                                    <tr>
+                                        <td title="Living Room">
+                                            <group>
+                                                <icon class="eye"></icon>
+                                                <icon class="person"></icon>
+                                                <icon class="dog"></icon>
+                                            </group>
+                                            <content class="short">
+                                                Living Room
+                                            </content>
+                                        </td>
+                                    </tr>
+                                </tbody>
+                            </table>
                         </content>
-                    </gauge>
+                    </list>
                 </group>
                 <group></group>
 
 
             </content>
         </section>
-        <section>
-            <header>TEST2</header>
-            <content>TEST2</content>
+        <section id="secondary">
+            <header>Recent Logs</header>
+            <content>
+                <table>
+                    <thead>
+                        <tr>
+                            <th class="time-col">Time</th>
+                            <th class="text-left">Message</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td valign="top">
+                                <content>
+                                    This is a long test long long test
+                                </content>
+                            </td>
+                            <td valign="top">
+                                This is a long test long long test
+                                This is a long test long long test
+                                This is a long test long long test
+                                This is a long test long long test
+                            </td>
+                        </tr>
+                        <tr>
+                            <td valign="top">
+                                <content>
+                                    This is a long test long long test
+                                </content>
+                            </td>
+                            <td valign="top">
+                                This is a long test long long test
+                                This is a long test long long test
+                                This is a long test long long test
+                                This is a long test long long test
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+
+                <divider></divider>
+                <footer>
+                    KENZY {version} | <a href="#">Documentation</a> | <a href="#">Blog</a> | <a href="#">Issues</a>
+                </footer>
+            </content>
         </section>
     </content>
 </page>
