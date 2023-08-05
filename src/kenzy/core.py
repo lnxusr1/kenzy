@@ -6,6 +6,8 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 import ssl
 from urllib.parse import parse_qs
 import requests
+import threading
+import time
 from . import VERSION, __app_name__, __app_title__
 from .extras import SSDPServer, discover_ssdp_services, get_file, get_local_ip_address
         
@@ -258,6 +260,8 @@ class KenzyHTTPServer(HTTPServer):
     service_url = None
     local_url = None
     api_key = None
+    restart_thread = None
+    restart_event = threading.Event()
 
     def __init__(self, **kwargs) -> None:
 
@@ -384,6 +388,21 @@ class KenzyHTTPServer(HTTPServer):
             return False
 
         return True
+    
+    def _restart_watcher(self):
+        self.restart_event.clear()
+
+        try:
+            while not self.restart_event.is_set():
+                if "restart" in self.device.accepts:
+                    if hasattr(self.device, 'restart_enabled'):
+                        do_restart = self.device.restart_enabled
+                        if do_restart:
+                            time.sleep(2)
+                            self.device.restart()
+
+        except KeyboardInterrupt:
+            pass
 
     def serve_forever(self, poll_interval: float = 0.5, *args, **kwargs):
         if not self.device.is_alive():
@@ -391,6 +410,9 @@ class KenzyHTTPServer(HTTPServer):
             
         if self.ssdp_server is not None:
             self.ssdp_server.start()
+
+        self.restart_thread = threading.Thread(target=self._restart_watcher, daemon=True)
+        self.restart_thread.start()
         
         self.logger.info("Server started on " + str("%s:%s" % self.server_address) + " (" + str(self.server_name) + ")")
         super().serve_forever(poll_interval)
@@ -405,6 +427,9 @@ class KenzyHTTPServer(HTTPServer):
         if self.ssdp_server is not None:
             self.ssdp_server.stop()
             self.ssdp_server = None
+
+        if self.restart_thread is not None and self.restart_thread.is_alive():
+            self.restart_event.set()
         
         self.logger.info("Server stopped on " + str("%s:%s" % self.server_address) + " (" + str(self.server_name) + ")")
 

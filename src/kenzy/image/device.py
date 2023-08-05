@@ -44,6 +44,7 @@ class VideoProcessor:
     main_thread = None
     stop_event = threading.Event()
     record_event = threading.Event()
+    restart_enabled = False
 
     obj_thread = None
     face_thread = None
@@ -292,7 +293,6 @@ class VideoProcessor:
             self.face_queue.task_done()
 
     def _process_record(self):
-
         video_writer = None
         fourcc = cv2.VideoWriter_fourcc(*self.video_format)
 
@@ -411,7 +411,9 @@ class VideoProcessor:
             while not self.stop_event.is_set():
                 ret, frame = dev.read()
 
-                if ret:
+                if not ret:
+                    raise Exception("Error")
+                else:
                     if self.scale_factor != 1.0:
                         frame = image_resize(frame, self.scale_factor)
 
@@ -440,6 +442,9 @@ class VideoProcessor:
 
         except KeyboardInterrupt:
             self.stop()
+        except Exception:
+            self.restart_enabled = True
+            self.logger.warning(f"Video read failed from {self.video_device}")
 
         dev.release()
 
@@ -460,10 +465,19 @@ class VideoProcessor:
         return KenzyErrorResponse("Not implemented")
 
     def start(self, **kwargs):
-
+        self.restart_enabled = False
         if self.is_alive():
             self.logger.error("Video Processor already running")
             return KenzyErrorResponse("Video Processor already running")
+
+        # Insure we're good to start without already running routines       
+        if (self.main_thread is not None and self.main_thread.is_alive()) \
+                or (self.obj_thread is not None and self.obj_thread.is_alive()) \
+                or (self.face_thread is not None and self.face_thread.is_alive()) \
+                or (self.rec_thread is not None and self.rec_thread.is_alive()) \
+                or (self.callback_thread is not None and self.callback_thread.is_alive()):
+
+            self.stop()
         
         self.frame_buffer.clear()
         
@@ -494,25 +508,36 @@ class VideoProcessor:
             return KenzyErrorResponse("Unable to start Video Processor")
 
     def stop(self, **kwargs):
-        if self.main_thread is None or not self.main_thread.is_alive():
+        if (self.main_thread is None or not self.main_thread.is_alive()) \
+                and (self.obj_thread is None or not self.obj_thread.is_alive()) \
+                and (self.face_thread is None or not self.face_thread.is_alive()) \
+                and (self.rec_thread is None or not self.rec_thread.is_alive()) \
+                and (self.callback_thread is None or not self.callback_thread.is_alive()):
+
             self.logger.error("Video Processor is not running")
             return KenzyErrorResponse("Video Processor is not running")
         
         self.record_event.clear()
         self.stop_event.set()
-        self.main_thread.join()
+        
+        if self.main_thread.is_alive():
+            self.main_thread.join()
 
-        self.obj_queue.put(None)
-        self.obj_thread.join()
+        if self.obj_thread.is_alive():
+            self.obj_queue.put(None)
+            self.obj_thread.join()
 
-        self.face_queue.put(None)
-        self.face_thread.join()
+        if self.face_thread.is_alive():
+            self.face_queue.put(None)
+            self.face_thread.join()
 
-        self.rec_queue.put(None)
-        self.rec_thread.join()
+        if self.rec_thread.is_alive():
+            self.rec_queue.put(None)
+            self.rec_thread.join()
 
-        self.callback_queue.put(None)
-        self.callback_thread.join()
+        if self.callback_thread.is_alive():
+            self.callback_queue.put(None)
+            self.callback_thread.join()
 
         if not self.is_alive():
             self.logger.info("Stopped Video Processor")
@@ -522,7 +547,8 @@ class VideoProcessor:
             return KenzyErrorResponse("Unable to stop Video Processor")
     
     def restart(self, **kwargs):
-        if self.read_thread is not None or self.proc_thread is not None:
+        self.restart_enabled = False
+        if self.rec_thread is not None or self.proc_thread is not None:
             ret = self.stop()
             if not ret.is_success():
                 return ret

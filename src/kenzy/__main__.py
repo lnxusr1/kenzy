@@ -14,7 +14,8 @@ parser = argparse.ArgumentParser(
 
 parser.add_argument('-c', '--config', default=None, help="Configuration file")
 parser.add_argument('-v', '--version', action="store_true", help="Print Version")
-parser.add_argument('-s', '--set', action="append", help="Override settings as: name=value")
+parser.add_argument('-d', '--set-device', action="append", help="Override settings as: name=value")
+parser.add_argument('-s', '--set-service', action="append", help="Override settings as: name=value")
 parser.add_argument('--offline', action="store_true", help="Run in offline mode.")
 
 device_options = parser.add_argument_group('Device Options')
@@ -83,23 +84,43 @@ app_type = str(clean_string(cfg.get("type"))).replace("..", ".").replace("/", ""
 if app_type not in ["kenzy.core"]:
     exec(f"import {app_type}")
 
-if ARGS.set is not None:
+if ARGS.set_device is not None:
     if "device" not in cfg:
         cfg["device"] = {}
     
-    if "service" not in cfg:
-        cfg["service"] = {}
-    
-    if isinstance(ARGS.set, list):
-        for item in ARGS.set:
+    if isinstance(ARGS.set_device, list):
+        for item in ARGS.set_device:
             if "=" in item:
                 parent_type = "device"
                 setting_name = item.split("=", 1)[0]
                 setting_value = item.split("=", 1)[1]
 
-                if "." in setting_name:
-                    parent_type = setting_name.split(".", 1)[0]
-                    setting_name = setting_name.split(".", 1)[1]
+                if "." in setting_value and setting_value.replace(",", "").replace(".", "").isdigit():
+                    setting_value = float(setting_value.replace(",", ""))
+                elif "." not in setting_value and setting_value.replace(",", "").replace(".", "").isdigit():
+                    setting_value = int(setting_value.replace(",", ""))
+                elif setting_value.lower().strip() in ["true", "false"]:
+                    setting_value = bool(setting_value.lower().strip())
+                elif setting_value.startswith("{") and setting_value.endswith("}"):
+                    setting_value = dict(setting_value)
+                elif setting_value.startswith("[") and setting_value.endswith("]"):
+                    setting_value = list(setting_value)
+
+                cfg[parent_type][setting_name] = setting_value
+            else:
+                logging.critical("Invalid setting provided.  Must be in form: name=value")
+                quit(1)
+
+if ARGS.set_service is not None:
+    if "service" not in cfg:
+        cfg["service"] = {}
+    
+    if isinstance(ARGS.set_service, list):
+        for item in ARGS.set_service:
+            if "=" in item:
+                parent_type = "service"
+                setting_name = item.split("=", 1)[0]
+                setting_value = item.split("=", 1)[1]
 
                 if "." in setting_value and setting_value.replace(",", "").replace(".", "").isdigit():
                     setting_value = float(setting_value.replace(",", ""))
