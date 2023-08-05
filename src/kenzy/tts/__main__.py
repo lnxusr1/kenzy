@@ -64,5 +64,5 @@ if ARGS.set is not None:
                 logging.critical("Invalid setting provided.  Must be in form: name=value")
                 quit(1)
 
-m = model_type(cfg.get("model_type"))
+m = model_type(cfg.get("model_type", "speecht5"))
 create_speech(m, ARGS.text, speaker=cfg.get("speaker", "slt"))
