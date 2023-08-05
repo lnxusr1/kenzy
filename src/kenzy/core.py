@@ -393,13 +393,15 @@ class KenzyHTTPServer(HTTPServer):
         self.restart_event.clear()
 
         try:
-            while not self.restart_event.is_set():
-                if "restart" in self.device.accepts:
-                    if hasattr(self.device, 'restart_enabled'):
+            if "restart" in self.device.accepts:
+                if hasattr(self.device, 'restart_enabled'):
+                    while not self.restart_event.is_set():
                         do_restart = self.device.restart_enabled
                         if do_restart:
                             time.sleep(2)
                             self.device.restart()
+                        else:
+                            time.sleep(.5)
 
         except KeyboardInterrupt:
             pass
