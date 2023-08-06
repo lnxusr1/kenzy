@@ -5,6 +5,7 @@ import sys
 import pathlib
 import time
 import traceback
+import importlib 
 
 try:
     from padatious import IntentContainer
@@ -70,9 +71,9 @@ class SkillManager:
         self.logger.debug("Initalizing")
         
         try:
-            self.intentParser = IntentContainer('/tmp/intent_cache')
+            self.intent_parser = IntentContainer('/tmp/intent_cache')
         except NameError:
-            self.intentParser = None
+            self.intent_parser = None
 
         if self.skill_folder is None:
             self.skill_folder = os.path.join(os.path.dirname(__file__), "skills")
@@ -90,7 +91,7 @@ class SkillManager:
 
             mySkillName = os.path.basename(f)
             self.logger.debug("Loading " + mySkillName) 
-            mySkillModule = __import__(mySkillName)
+            mySkillModule = importlib.import_module(mySkillName)
             mySkillClass = mySkillModule.create_skill()
             mySkillClass.brain = self.brain
             mySkillClass.initialize()
@@ -98,15 +99,15 @@ class SkillManager:
         self.logger.debug("Skills load is complete.")
         
         try:
-            self.intentParser.train(False)  # False = be quiet and don't print messages to stdout
+            self.intent_parser.train(False)  # False = be quiet and don't print messages to stdout
             self.logger.debug("Training completed.")
         except AttributeError:
-            self.logger.error("Training failed.  IntentParser not loaded.")
+            self.logger.error("Training failed.  intent_parser not loaded.")
             pass
 
         self.logger.info("Initialization completed.")
 
-    def parseInput(self, text, context=None):
+    def parse(self, text, context=None):
         """
         Parses inbound text leveraging skills and fallbacks to produce a response if possible.
         
@@ -118,7 +119,7 @@ class SkillManager:
             (bool):  True on success and False on failure.
         """
                         
-        def audioFallback(in_text, context):
+        def audio_fallback(in_text, context):
                                         
             self.logger.debug("fallback: " + in_text)
             return False
@@ -126,7 +127,7 @@ class SkillManager:
         try:
             
             # This one line explains it all... link incoming command into actionable intent using Padatious library
-            intent = self.intentParser.calc_intent(text)
+            intent = self.intent_parser.calc_intent(text)
             
             # I need to be at least 60% likely to be correct before I try to process the request.
             if intent.conf >= 0.6:
@@ -138,7 +139,7 @@ class SkillManager:
                         else:
                             return True  # Default return is True in case the returned value isn't boolean
             else:
-                return audioFallback(text, context)  # Old code for hardcoded responses
+                return audio_fallback(text, context)  # Old code for hardcoded responses
         except Exception as e:
             self.logger.error(e, exc_info=True)
             return False
@@ -272,7 +273,7 @@ class GenericSkill:
             if os.path.exists(fldr):
                 if self.brain is not None:
                     try:
-                        self.brain.skill_manager.intentParser.load_file(filename, os.path.join(fldr, "vocab", "en_us", filename), reload_cache=True)
+                        self.brain.skill_manager.intent_parser.load_file(filename, os.path.join(fldr, "vocab", "en_us", filename), reload_cache=True)
                         self.brain.skill_manager.skills.append({ "intent_file": filename, "callback": callback, "object": self })
                     except AttributeError:
                         self.logger.error("Error registering intent file due to AttributeError.")
