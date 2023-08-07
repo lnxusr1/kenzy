@@ -11,9 +11,36 @@ import xml.etree.ElementTree as ET
 from . import __app_title__, __version__
 import json
 
-
 SSDP_DEVICE_TYPE = "urn:schemas-upnp-org:device:Kenzy-Core:1"
 
+
+def dayPart():
+    """
+    Returns the part of the day based on the system time based on generally acceptable breakpoints.
+    
+    Returns:
+        (str):  The part of the day for the current moment (night, morning, evening, etc.).
+    """
+    
+    # All we need is the current hour in 24-hr notation as an integer
+    h = int(time.strftime("%H"))
+    
+    if (h < 4):
+        # Before 4am is still night in my mind.
+        return "night"
+    elif (h < 12):
+        # Before noon is morning
+        return "morning"
+    elif (h < 17):
+        # After noon ends at 5pm
+        return "afternoon"
+    elif (h < 21):
+        # Evening ends at 9pm
+        return "evening"
+    else:
+        # Night fills in everything else (9pm to 4am)
+        return "night"
+    
 
 def py_error_handler(filename, line, function, err, fmt):
     """

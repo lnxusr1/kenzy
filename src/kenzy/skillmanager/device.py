@@ -1,0 +1,79 @@
+import logging
+from kenzy.core import KenzySuccessResponse, KenzyErrorResponse
+from kenzy.skillmanager.core import SkillManager
+
+
+class SkillsDevice:
+    type = "kenzy.skillmanager"
+
+    location = None
+    group = None
+    service = None
+
+    skill_manager = None
+
+    logger = logging.getLogger("KNZY-SKM")
+    settings = {}
+
+    def __init__(self, **kwargs):
+        self.settings = kwargs
+
+        self.location = kwargs.get("location")
+        self.group = kwargs.get("group")
+
+        self.initialize()
+
+    def initialize(self):
+        skill_folder = self.settings.get("folder", "~/.kenzy/skills")
+        temp_folder = self.settings.get("temp_folder", "/tmp/intent_cache")
+        self.skill_manager = SkillManager(device=self, skill_folder=skill_folder, temp_folder=temp_folder)
+        self.skill_manager.initialize()
+
+    @property
+    def accepts(self):
+        return ["status", "get_settings", "set_settings", "collect"]
+    
+    def is_alive(self, **kwargs):
+        return True
+    
+    def collect(self, **kwargs):
+        self.skill_manager.parse(kwargs.get("data").get("in_text"))
+        return KenzySuccessResponse("Collect complete")
+    
+    def start(self, **kwargs):
+        return KenzySuccessResponse("Skill Manager started")
+    
+    def stop(self, **kwargs):
+        return KenzySuccessResponse("Skill Manager stopped")
+
+    def restart(self, **kwargs):
+        return KenzySuccessResponse("Skill Manager restarted")
+
+    def get_settings(self, **kwargs):
+        return KenzyErrorResponse("Not implemented")
+
+    def set_settings(self, **kwargs):
+        return KenzyErrorResponse("Not implemented")
+    
+    def status(self, **kwargs):
+        return KenzySuccessResponse({
+            "active": self.is_alive(),
+            "type": self.type,
+            "accepts": self.accepts,
+            "data": {
+            }
+        })
+    
+    def set_service(self, service):
+        self.service = service
+        self.skill_manager.service = service
+
+    def say(self, text, **kwargs):
+        # text, context=None
+        print(kwargs.get("text"))
+        return KenzySuccessResponse("Skill Manager restarted")
+    
+    def ask(self, **kwargs):
+        # text, in_callback, timeout=0, context=None
+        print(kwargs.get("text"))
+        return KenzySuccessResponse("Skill Manager restarted")

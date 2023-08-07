@@ -3,9 +3,9 @@ import logging
 import random
 import sys
 import pathlib
-import time
 import traceback
 import importlib 
+from kenzy.extras import dayPart
 
 try:
     from padatious import IntentContainer
@@ -16,53 +16,20 @@ except ModuleNotFoundError:
     pass
 
 
-def dayPart():
-    """
-    Returns the part of the day based on the system time based on generally acceptable breakpoints.
-    
-    Returns:
-        (str):  The part of the day for the current moment (night, morning, evening, etc.).
-    """
-    
-    # All we need is the current hour in 24-hr notation as an integer
-    h = int(time.strftime("%H"))
-    
-    if (h < 4):
-        # Before 4am is still night in my mind.
-        return "night"
-    elif (h < 12):
-        # Before noon is morning
-        return "morning"
-    elif (h < 17):
-        # After noon ends at 5pm
-        return "afternoon"
-    elif (h < 21):
-        # Evening ends at 9pm
-        return "evening"
-    else:
-        # Night fills in everything else (9pm to 4am)
-        return "night"
-
-
 class SkillManager:
-    """
-    Translates text commands into skill results.
-    """
-    
-    def __init__(self, brain_obj=None, skill_folder=None):
-        """
-        Skill Manager Initialization
-        
-        Args:
-            brain_obj (object): The brain object for which to process skills.
-            skill_folder (str):  The path to the folder containing the skill modules.  (optional)
-        """
-        self.logger = logging.getLogger("SKILLMANAGER")
-        self.skill_folder = skill_folder
-        self.brain = brain_obj
-        
-        self.skills = []
+    service = None
+    device = None
+    skill_folder = None
+    temp_folder = None
+    skills = []
+    logger = logging.getLogger("SKILLMANAGER")
 
+    def __init__(self, device=None, skill_folder="~/.kenzy/skills", temp_folder="/tmp/intent_cache"):
+
+        self.skill_folder = os.path.expanduser(skill_folder)
+        self.device = device
+        self.temp_folder = temp_folder
+        
     def initialize(self):
         """
         Loads all skills into memory for referencing as required.
@@ -70,13 +37,12 @@ class SkillManager:
         
         self.logger.debug("Initalizing")
         
+        # TODO: Download Skills (or unzip from included package)
+
         try:
-            self.intent_parser = IntentContainer('/tmp/intent_cache')
+            self.intent_parser = IntentContainer(self.temp_folder)
         except NameError:
             self.intent_parser = None
-
-        if self.skill_folder is None:
-            self.skill_folder = os.path.join(os.path.dirname(__file__), "skills")
 
         if self.skill_folder not in sys.path:
             sys.path.insert(0, str(pathlib.Path(self.skill_folder).absolute()))
@@ -93,7 +59,7 @@ class SkillManager:
             self.logger.debug("Loading " + mySkillName) 
             mySkillModule = importlib.import_module(mySkillName)
             mySkillClass = mySkillModule.create_skill()
-            mySkillClass.brain = self.brain
+            mySkillClass.device = self.device
             mySkillClass.initialize()
             
         self.logger.debug("Skills load is complete.")
@@ -175,9 +141,9 @@ class GenericSkill:
         """
         
         self._name = "Learned Skill"
-        self.brain = None 
+        self.device = None 
     
-    def ask(self, in_text, in_callback, timeout=0, context=None):
+    def ask(self, text, callback, timeout=0, context=None):
         """
         Encapsulates the frequently used function of "ask" in order to make it easier for new skill development.  Makes self.ask() method available.
         
@@ -191,10 +157,11 @@ class GenericSkill:
             (bool): True on success and False on failure.
         """
 
-        if self.brain is not None:
-            return self.brain.ask(in_text, in_callback, timeout=timeout, context=context)
+        if self.device is not None:
+            ret = self.device.ask(text=text, callback=callback, timeout=timeout, context=context)
+            return ret.is_success()
         else:
-            self.logger.error("BRAIN not referenced")
+            self.logger.error("Device not referenced")
 
         return False
     
@@ -210,7 +177,7 @@ class GenericSkill:
         """
         
         text = ""
-        df = os.path.join(self.brain.skill_manager.skill_folder, self.__class__.__name__, "vocab", "en_us", dialog_file)
+        df = os.path.join(self.device.skill_manager.skill_folder, self.__class__.__name__, "vocab", "en_us", dialog_file)
         
         if os.path.exists(df):
             with open(df, "r") as s:
@@ -238,7 +205,7 @@ class GenericSkill:
         Returns:
             (str): Full text of the specified file.
         """
-        filename = os.path.join(self.brain.skill_manager.skill_folder, self.__class__.__name__, "vocab", "en_us", filename)
+        filename = os.path.join(self.device.skill_manager.skill_folder, self.__class__.__name__, "vocab", "en_us", filename)
         if os.path.exists(filename):
             with open(filename, "r") as f:
                 text = f.read()
@@ -268,18 +235,18 @@ class GenericSkill:
             (bool):  True on success and False on failure.
         """
         
-        fldr = os.path.join(self.brain.skill_manager.skill_folder, self.__class__.__name__)
+        fldr = os.path.join(self.device.skill_manager.skill_folder, self.__class__.__name__)
         if os.path.exists(fldr):
             if os.path.exists(fldr):
-                if self.brain is not None:
+                if self.device is not None:
                     try:
-                        self.brain.skill_manager.intent_parser.load_file(filename, os.path.join(fldr, "vocab", "en_us", filename), reload_cache=True)
-                        self.brain.skill_manager.skills.append({ "intent_file": filename, "callback": callback, "object": self })
+                        self.device.skill_manager.intent_parser.load_file(filename, os.path.join(fldr, "vocab", "en_us", filename), reload_cache=True)
+                        self.device.skill_manager.skills.append({ "intent_file": filename, "callback": callback, "object": self })
                     except AttributeError:
                         self.logger.error("Error registering intent file due to AttributeError.")
                         return False
                 else:
-                    self.logger.error("BRAIN not referenced")
+                    self.logger.error("Device not referenced")
             else:
                 self.logger.error("Error registering intent file (" + str(filename) + ")")
         else:
@@ -288,7 +255,7 @@ class GenericSkill:
         
         return True
     
-    def say(self, in_text, context=None):
+    def say(self, text, context=None):
         """
         Encapsulates the frequently used function of "say" in order to make it easier for new skill development.  Makes self.say() method available.
         
@@ -299,11 +266,11 @@ class GenericSkill:
         Returns:
             (bool): True on success and False on failure.
         """
-
-        if self.brain is not None:
-            return self.brain.say(in_text, context=context)
+        if self.device is not None:
+            ret = self.device.say(text=text, context=context)
+            return ret.is_success()
         else:
-            self.logger.error("BRAIN not referenced")
+            self.logger.error("Device not referenced")
 
         return False
 
