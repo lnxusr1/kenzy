@@ -97,7 +97,7 @@ class AudioProcessor:
         
     def stop(self, **kwargs):
         if (self.main_thread is None or not self.main_thread.is_alive()) \
-                or (self.callback_thread is None or self.callback_thread.is_alive()):
+                and (self.callback_thread is None or self.callback_thread.is_alive()):
 
             self.logger.error("Audio Processor is not running")
             return KenzyErrorResponse("Audio Processor is not running")
@@ -119,7 +119,9 @@ class AudioProcessor:
             return KenzyErrorResponse("Unable to stop Audio Processor")
     
     def restart(self, **kwargs):
-        if self.read_thread is not None or self.proc_thread is not None:
+        if (self.main_thread is not None and self.main_thread.is_alive()) \
+                or (self.callback_thread is not None and self.callback_thread.is_alive()):
+            
             ret = self.stop()
             if not ret.is_success():
                 return ret
