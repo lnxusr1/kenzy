@@ -340,18 +340,22 @@ class KenzyHTTPServer(HTTPServer):
     
         local_url = self.local_url
         service_url = self.service_url
+
+        print(service_url, local_url)
         if service_url != local_url:
             # Send to service_url
             req = {
                 "action": "collect",
                 "payload": data,
-                "context": context
+                "context": context.get()
             }
 
             self.send_request(req)
         else:
-            if self.device is not None and "collect" in self.device.accepts:
+            if self.device is not None and not hasattr(self.device, "accepts") and "collect" in self.device.accepts:
                 self.device.collect(data, context)
+            else:
+                self.logger.debug(f"{data}, {context.get()}")
 
         return True
 
@@ -366,7 +370,7 @@ class KenzyHTTPServer(HTTPServer):
         # TODO: Add feature
         raise NotImplementedError("Feature not implemented")
     
-    def send_request(self, payload, headers=None):
+    def send_request(self, payload, headers=None, url=None):
         token = uuid.uuid4()
 
         if not isinstance(payload, dict):
@@ -379,7 +383,10 @@ class KenzyHTTPServer(HTTPServer):
             headers["Authorization"] = f"Bearer {token}"
             headers["Content-Type"] = "application/json"
 
-            response = requests.post(self.service_url, json=payload, headers=headers, verify=False)
+            if url is None:
+                url = self.service_url
+
+            response = requests.post(url, json=payload, headers=headers, verify=False)
 
             response_data = response.json()
             self.logger.debug(f"{response_data}")

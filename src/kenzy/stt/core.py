@@ -9,6 +9,7 @@ import traceback
 import wave
 import io
 import soundfile
+import threading
 from kenzy.extras import py_error_handler
 
 
@@ -25,7 +26,9 @@ def speech_model(model_name="openai/whisper-tiny.en"):
 def read_from_device(stop_event, **kwargs):
 
     stop_event.clear()
-
+    muted_event = kwargs.get("muted_event", threading.Event())
+    muted_event.clear()
+    
     audio_device_index = kwargs.get("audio_device")
     audio_channels = kwargs.get("audio_channels", 1)
     audio_sample_rate = kwargs.get("audio_sample_rate", 16000)
@@ -82,7 +85,7 @@ def read_from_device(stop_event, **kwargs):
     while not stop_event.is_set():
         frame = buffer_queue.get()
 
-        if len(frame) >= 640:  # and not self._isAudioOut:
+        if len(frame) >= 640 and not muted_event.is_set():
             is_speech = _vad.is_speech(frame, audio_sample_rate)
         
             if not triggered:

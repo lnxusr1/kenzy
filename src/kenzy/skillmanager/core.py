@@ -16,6 +16,41 @@ except ModuleNotFoundError:
     pass
 
 
+class GenericCommand:
+    data = None
+    pre_cmds = []
+    post_cmds = []
+
+    def __init__(self, **kwargs):
+        self.data = dict(kwargs)
+
+    def set(self, name, value):
+        self.data[name] = value
+
+    def get(self, name=None):
+        if name is not None:
+            return self.data.get(name)
+        else:
+            return self.data
+        
+    def pre(self, cmd):
+        self.pre_cmds.append(cmd)
+
+    def post(self, cmd):
+        self.post_cmds.append(cmd)
+
+
+class SpeakCommand(GenericCommand):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.data["type"] = "speak"
+        self.pre(GenericCommand(type="mute"))
+        self.post(GenericCommand(type="unmute"))
+
+    def text(self, value):
+        self.data["text"] = value
+
+
 class SkillManager:
     service = None
     device = None
@@ -73,7 +108,7 @@ class SkillManager:
 
         self.logger.info("Initialization completed.")
 
-    def parse(self, text, context=None):
+    def parse(self, text=None, context=None):
         """
         Parses inbound text leveraging skills and fallbacks to produce a response if possible.
         
@@ -86,15 +121,17 @@ class SkillManager:
         """
                         
         def audio_fallback(in_text, context):
-                                        
             self.logger.debug("fallback: " + in_text)
+            return False
+
+        if text is None or str(text).strip() == "":
             return False
 
         try:
             
             # This one line explains it all... link incoming command into actionable intent using Padatious library
             intent = self.intent_parser.calc_intent(text)
-            
+         
             # I need to be at least 60% likely to be correct before I try to process the request.
             if intent.conf >= 0.6:
                 for s in self.skills:

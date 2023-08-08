@@ -450,10 +450,7 @@ class VideoProcessor:
 
     @property
     def accepts(self):
-        return ["start", "stop", "restart", "snapshot", "stream", "status", "get_settings", "set_settings", "collect"]
-
-    def collect(self, data=None, context=None):
-        self.logger.debug(f"{data}, {self.type}, {context.get()}")
+        return ["start", "stop", "restart", "snapshot", "stream", "status", "get_settings", "set_settings"]
 
     def set_service(self, service):
         self.service = service

@@ -22,6 +22,7 @@ class AudioProcessor:
     callback_thread = None
     callback_queue = None
     restart_enabled = False
+    muted_event = threading.Event()
 
     def __init__(self, **kwargs):
         self.settings = kwargs
@@ -31,24 +32,31 @@ class AudioProcessor:
 
     @property
     def accepts(self):
-        return ["start", "stop", "restart", "status", "get_settings", "set_settings", "collect"]
+        return ["start", "stop", "restart", "status", "get_settings", "set_settings", "mute", "unmute"]
+
+    def mute(self, **kwargs):
+        self.muted_event.set()
+        KenzySuccessResponse("Mute command successful")
+
+    def unmute(self, **kwargs):
+        self.muted_event.clear()
+        KenzySuccessResponse("Unmute command successful")
 
     def _process_callback(self):
         while True:
-            data = self.callback_queue.get()
-            if data is None or not isinstance(data, str):
+            text = self.callback_queue.get()
+            if text is None or not isinstance(text, str):
                 break
 
-            print(data)
             self.service.collect(data={
                 "type": "kenzy.stt",
-                "data": data
+                "text": text
             })
 
     def _read_from_device(self):
 
         try:
-            for text in read_from_device(self.stop_event, **self.settings):
+            for text in read_from_device(self.stop_event, muted_event=self.muted_event, **self.settings):
                 self.logger.debug(f"HEARD: {text}")
                 self.callback_queue.put(text)
         except KeyboardInterrupt:
@@ -60,9 +68,6 @@ class AudioProcessor:
             self.stop_event.set()
             self.restart_enabled = True
 
-    def collect(self, data=None, context=None):
-        self.logger.debug(f"{data}, {self.type}, {context.get()}")
-
     def is_alive(self, **kwargs):
         if self.main_thread is not None and self.main_thread.is_alive():
             return True
@@ -71,6 +76,7 @@ class AudioProcessor:
     
     def start(self, **kwargs):
         self.restart_enabled = False
+        self.muted_event.clear()
 
         if self.is_alive():
             self.logger.error("Audio Processor already running")

@@ -1,6 +1,6 @@
 import logging
 from kenzy.core import KenzySuccessResponse, KenzyErrorResponse
-from kenzy.skillmanager.core import SkillManager
+from kenzy.skillmanager.core import SkillManager, SpeakCommand
 
 
 class SkillsDevice:
@@ -37,7 +37,15 @@ class SkillsDevice:
         return True
     
     def collect(self, **kwargs):
-        self.skill_manager.parse(kwargs.get("data").get("in_text"))
+        print(kwargs)
+        data = kwargs.get("data", {})
+        context = kwargs.get("context")
+
+        if data.get("type", "") == "kenzy.stt":
+            text = data.get("text")
+            print(text)
+            self.skill_manager.parse(text=text, context=context)
+
         return KenzySuccessResponse("Collect complete")
     
     def start(self, **kwargs):
@@ -70,10 +78,24 @@ class SkillsDevice:
 
     def say(self, text, **kwargs):
         # text, context=None
-        print(kwargs.get("text"))
-        return KenzySuccessResponse("Skill Manager restarted")
+        cmd = SpeakCommand()
+        cmd.text(text)
+
+        # use context = location (door), group (living room), all
+        context = kwargs.get("context")
+        if context is None:
+            # All
+            pass
+
+        print(context.location, context.group)
+
+        return KenzySuccessResponse("Say command complete")
     
-    def ask(self, **kwargs):
+    def ask(self, text, **kwargs):
         # text, in_callback, timeout=0, context=None
-        print(kwargs.get("text"))
-        return KenzySuccessResponse("Skill Manager restarted")
+        cmd = SpeakCommand()
+        cmd.text(text)
+
+        # use context = location (door), group (living room), all
+
+        return KenzySuccessResponse("Ask command complete")

@@ -1,0 +1,29 @@
+<?xml version="1.0"?>
+<root xmlns="urn:schemas-upnp-org:device-1-0">
+  <specVersion>
+    <major>1</major>
+    <minor>0</minor>
+  </specVersion>
+  <device>
+    <deviceType>urn:schemas-upnp-org:device:Kenzy-Core:1</deviceType>
+    <friendlyName>Kenzy Core</friendlyName>
+    <manufacturer>Kenzy.Ai</manufacturer>
+    <manufacturerURL>https://kenzy.ai</manufacturerURL>
+    <modelDescription>Kenzy Ai Core Services</modelDescription>
+    <modelName>Core</modelName>
+    <modelNumber>2.0</modelNumber>
+    <modelURL>https://kenzy.ai/core</modelURL>
+    <serialNumber>1000000001</serialNumber>
+    <UDN>uuid:{server_uuid}</UDN>
+    <presentationURL>{service_url}</presentationURL>
+    <iconList>
+        <icon>
+            <mimetype>image/svg</mimetype>
+            <width>128</width>
+            <height>128</height>
+            <depth>8</depth>
+            <url>favicon.svg</url>
+        </icon>
+    </iconList>
+  </device>
+</root>
