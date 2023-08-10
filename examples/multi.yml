@@ -1,14 +1,18 @@
 type: multi
 
-skillsmanager:
-  type: kenzy.skillmanager
-  
+default:
+  device:
+    location: Family Room
+    group: Listener
+
   service:
-    upnp: server
     port: 9700
 
-watcher:
-  type: kenzy.image
+skillsmanager:
+  type: kenzy.skillmanager
+
+#watcher:
+#  type: kenzy.image
   
 listener:
   type: kenzy.stt

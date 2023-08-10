@@ -41,6 +41,7 @@ class SkillsDevice:
         data = kwargs.get("data", {})
         context = kwargs.get("context")
 
+        print(data)
         if data.get("type", "") == "kenzy.stt":
             text = data.get("text")
             print(text)

@@ -119,7 +119,7 @@ class SkillManager:
         Returns:
             (bool):  True on success and False on failure.
         """
-                        
+        
         def audio_fallback(in_text, context):
             self.logger.debug("fallback: " + in_text)
             return False

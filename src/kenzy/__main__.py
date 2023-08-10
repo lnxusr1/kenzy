@@ -95,12 +95,29 @@ if str(cfg.get("type", "")).lower() in ["multi", "multiple", "many"]:
 
     last_port = 0
 
+    defaults = cfg.get("default", {})
+    defaults["device"] = defaults.get("device", {})
+    defaults["service"] = defaults.get("server", {})
+
     for grp in cfg:
-        if grp == "type":
+        if str(grp).lower() in ["type", "default"]:
             continue
 
-        grp_type = get_raw_value(cfg[grp].get("device", {}).get("type", "kenzy.skillmanager"))
-        port = get_raw_value(cfg[grp].get("service", {}).get("port", "9700"))
+        cfg[grp]["device"] = cfg[grp].get("device", {})
+        cfg[grp]["service"] = cfg[grp].get("service", {})
+
+        port = get_raw_value(cfg[grp].get("service", {}).get("port", defaults["service"].get("port", "9700")))
+
+        for item in defaults.get("device", {}):
+            cfg[grp]["device"][item] = cfg[grp].get("device", {}).get(item, defaults.get("device", {}).get(item))
+        
+        for item in defaults.get("service", {}):
+            cfg[grp]["service"][item] = cfg[grp].get("service", {}).get(item, defaults.get("service", {}).get(item))
+
+        grp_type = get_raw_value(cfg[grp].get("type", "kenzy.skillmanager"))
+        if grp_type == "kenzy.skillmanager":
+            cfg[grp]["service"]["upnp"] = cfg[grp].get("service", {}).get("upnp", "server")
+            print(cfg[grp]["service"]["upnp"])
 
         if port <= last_port:
             port = last_port + 1
