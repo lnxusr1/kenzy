@@ -359,7 +359,10 @@ class KenzyHTTPServer(HTTPServer):
         return True
 
     def register(self, **kwargs):
-        if str(self.settings.get("type", "core")).lower().strip() == "core":
+        local_url = self.local_url
+        service_url = self.service_url
+
+        if service_url == local_url:
             # Save local
             pass
         else:

@@ -82,13 +82,15 @@ class SkillsDevice:
         cmd = SpeakCommand()
         cmd.text(text)
 
+        print(text)
+
         # use context = location (door), group (living room), all
         context = kwargs.get("context")
         if context is None:
             # All
             pass
-
-        print(context.location, context.group)
+        else:
+            print(context.location, context.group)
 
         return KenzySuccessResponse("Say command complete")
     
