@@ -8,6 +8,9 @@ from kenzy.extras import clean_string, apply_vars, get_raw_value
 from . import __app_title__, __version__
 from . import settings
 
+global service
+services = []
+
 
 def startup(cfg):
     app_type = str(clean_string(cfg.get("type"))).replace("..", ".").replace("/", "").replace("\\", "").replace("-", "_")
@@ -21,6 +24,8 @@ def startup(cfg):
     # Interlinking objects
     device.set_service(service)      # Tell device about service wrapper
     service.set_device(device)       # Add device to service
+
+    services.insert(0, service)
 
     try:
         service.serve_forever()
@@ -94,6 +99,7 @@ if str(cfg.get("type", "")).lower() in ["multi", "multiple", "many"]:
         if grp == "type":
             continue
 
+        grp_type = get_raw_value(cfg[grp].get("device", {}).get("type", "kenzy.skillmanager"))
         port = get_raw_value(cfg[grp].get("service", {}).get("port", "9700"))
 
         if port <= last_port:
@@ -109,25 +115,27 @@ if str(cfg.get("type", "")).lower() in ["multi", "multiple", "many"]:
         t.start()
         thread_pool.append(t)
 
-        time.sleep(10)
+        if grp_type == "kenzy.skillmanager":
+            # Let the main server get fully online first
+            time.sleep(1)
 
     while True:
         alive = False
+        try:
+            for item in thread_pool:
+                item.join()
+        except KeyboardInterrupt:
+            for item in services:
+                item.shutdown()
 
         for item in thread_pool:
-            try:
-                item.join()
-            except KeyboardInterrupt:
-                print("HERE")
-                pass
-
             if item.is_alive():
                 alive = True
 
         if not alive:
             break
 
-        time.sleep(1)
+        time.sleep(.5)
 
 else:
 
