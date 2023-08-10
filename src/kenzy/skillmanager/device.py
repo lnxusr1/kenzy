@@ -37,7 +37,7 @@ class SkillsDevice:
         return True
     
     def collect(self, **kwargs):
-        print(kwargs)
+        # print(kwargs)
         data = kwargs.get("data", {})
         context = kwargs.get("context")
 

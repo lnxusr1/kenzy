@@ -74,6 +74,9 @@ def py_error_handler(filename, line, function, err, fmt):
 
 
 def get_raw_value(setting_value):
+    if not isinstance(setting_value, str):
+        return setting_value
+
     if "." in setting_value and setting_value.replace(",", "").replace(".", "").isdigit():
         setting_value = float(setting_value.replace(",", ""))
     elif "." not in setting_value and setting_value.replace(",", "").replace(".", "").isdigit():
@@ -86,6 +89,20 @@ def get_raw_value(setting_value):
         setting_value = json.loads(setting_value)
 
     return setting_value
+
+
+def apply_vars(cfg, vars):
+    for item in vars:
+        if "=" in item:
+            setting_name = item.split("=", 1)[0]
+            setting_value = item.split("=", 1)[1]
+
+            setting_value = get_raw_value(setting_value)
+
+            cfg[setting_name] = setting_value
+        else:
+            logging.critical("Invalid setting provided.  Must be in form: name=value")
+            quit(1)
 
 
 def clean_string(input_string):

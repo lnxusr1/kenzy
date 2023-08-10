@@ -273,7 +273,7 @@ class KenzyHTTPServer(HTTPServer):
         # Get Service URL and start UPNP/SSDP server is appropriate
         proto = "https" if kwargs.get("ssl.enable", False) else "http"
         host = kwargs.get("host", "0.0.0.0")
-        port = kwargs.get("port", 8080)
+        port = kwargs.get("port", 9700)
 
         try:
             ip_addr = host if host != "0.0.0.0" else get_local_ip_address()
@@ -341,7 +341,6 @@ class KenzyHTTPServer(HTTPServer):
         local_url = self.local_url
         service_url = self.service_url
 
-        print(service_url, local_url)
         if service_url != local_url:
             # Send to service_url
             req = {

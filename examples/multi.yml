@@ -1,0 +1,17 @@
+type: multi
+
+skillsmanager:
+  type: kenzy.skillmanager
+  
+  service:
+    upnp: server
+    port: 9700
+
+watcher:
+  type: kenzy.image
+  
+listener:
+  type: kenzy.stt
+
+speaker:
+  type: kenzy.tts

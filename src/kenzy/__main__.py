@@ -1,10 +1,31 @@
 import logging
 import argparse
 import os
+import threading
+import time
 import kenzy.core
-from kenzy.extras import clean_string
+from kenzy.extras import clean_string, apply_vars, get_raw_value
 from . import __app_title__, __version__
 from . import settings
+
+
+def startup(cfg):
+    app_type = str(clean_string(cfg.get("type"))).replace("..", ".").replace("/", "").replace("\\", "").replace("-", "_")
+
+    if app_type not in ["kenzy.core"]:
+        exec(f"import {app_type}")
+
+    device = eval(f"{app_type}.device(**cfg.get('device', dict()))")
+    service = kenzy.core.KenzyHTTPServer(**cfg.get('service', dict()))
+
+    # Interlinking objects
+    device.set_service(service)      # Tell device about service wrapper
+    service.set_device(device)       # Add device to service
+
+    try:
+        service.serve_forever()
+    except KeyboardInterrupt:
+        service.shutdown()
 
 
 parser = argparse.ArgumentParser(
@@ -63,89 +84,82 @@ if ARGS.offline:
 logger = logging.getLogger("STARTUP")
 cfg = settings.load(ARGS.config)
 
-if ARGS.type is not None:
-    cfg["type"] = ARGS.type
+if str(cfg.get("type", "")).lower() in ["multi", "multiple", "many"]:
+    # Multiple
+    thread_pool = []
 
-if ARGS.upnp is not None:
-    if str(ARGS.upnp).lower() in ["server", "client", "standalone"]:
-        if not isinstance(cfg.get("service"), dict):
-            cfg["service"] = {}
-        cfg["service"]["upnp"] = str(ARGS.upnp).lower()
-    else:
-        logger.critical("Unable to start.  Invalid UPNP value specified.  Must be one of server, client, or standalone.")
+    last_port = 0
+
+    for grp in cfg:
+        if grp == "type":
+            continue
+
+        port = get_raw_value(cfg[grp].get("service", {}).get("port", "9700"))
+
+        if port <= last_port:
+            port = last_port + 1
+
+        last_port = port
+        if "service" not in cfg[grp]:
+            cfg[grp]["service"] = {}
+
+        cfg[grp]["service"]["port"] = port
+
+        t = threading.Thread(target=startup, args=[cfg.get(grp)], daemon=True)
+        t.start()
+        thread_pool.append(t)
+
+        time.sleep(10)
+
+    while True:
+        alive = False
+
+        for item in thread_pool:
+            try:
+                item.join()
+            except KeyboardInterrupt:
+                print("HERE")
+                pass
+
+            if item.is_alive():
+                alive = True
+
+        if not alive:
+            break
+
+        time.sleep(1)
+
+else:
+
+    # Single
+    if ARGS.type is not None:
+        cfg["type"] = ARGS.type
+
+    if ARGS.upnp is not None:
+        if str(ARGS.upnp).lower() in ["server", "client", "standalone"]:
+            if not isinstance(cfg.get("service"), dict):
+                cfg["service"] = {}
+            cfg["service"]["upnp"] = str(ARGS.upnp).lower()
+        else:
+            logger.critical("Unable to start.  Invalid UPNP value specified.  Must be one of server, client, or standalone.")
+            quit(1)
+
+    if cfg.get("type") is None:
+        logger.critical("Unable to identify instance type. (Use --type to dynamically specify)")
         quit(1)
 
-if cfg.get("type") is None:
-    logger.critical("Unable to identify instance type. (Use --type to dynamically specify)")
-    quit(1)
+    if ARGS.set_device is not None:
+        if "device" not in cfg:
+            cfg["device"] = {}
+        
+        if isinstance(ARGS.set_device, list):
+            apply_vars(cfg["device"], ARGS.set_device)
 
-app_type = str(clean_string(cfg.get("type"))).replace("..", ".").replace("/", "").replace("\\", "").replace("-", "_")
+    if ARGS.set_service is not None:
+        if "service" not in cfg:
+            cfg["service"] = {}
+        
+        if isinstance(ARGS.set_service, list):
+            apply_vars(cfg["service"], ARGS.set_device)
 
-if app_type not in ["kenzy.core"]:
-    exec(f"import {app_type}")
-
-if ARGS.set_device is not None:
-    if "device" not in cfg:
-        cfg["device"] = {}
-    
-    if isinstance(ARGS.set_device, list):
-        for item in ARGS.set_device:
-            if "=" in item:
-                parent_type = "device"
-                setting_name = item.split("=", 1)[0]
-                setting_value = item.split("=", 1)[1]
-
-                if "." in setting_value and setting_value.replace(",", "").replace(".", "").isdigit():
-                    setting_value = float(setting_value.replace(",", ""))
-                elif "." not in setting_value and setting_value.replace(",", "").replace(".", "").isdigit():
-                    setting_value = int(setting_value.replace(",", ""))
-                elif setting_value.lower().strip() in ["true", "false"]:
-                    setting_value = bool(setting_value.lower().strip())
-                elif setting_value.startswith("{") and setting_value.endswith("}"):
-                    setting_value = dict(setting_value)
-                elif setting_value.startswith("[") and setting_value.endswith("]"):
-                    setting_value = list(setting_value)
-
-                cfg[parent_type][setting_name] = setting_value
-            else:
-                logging.critical("Invalid setting provided.  Must be in form: name=value")
-                quit(1)
-
-if ARGS.set_service is not None:
-    if "service" not in cfg:
-        cfg["service"] = {}
-    
-    if isinstance(ARGS.set_service, list):
-        for item in ARGS.set_service:
-            if "=" in item:
-                parent_type = "service"
-                setting_name = item.split("=", 1)[0]
-                setting_value = item.split("=", 1)[1]
-
-                if "." in setting_value and setting_value.replace(",", "").replace(".", "").isdigit():
-                    setting_value = float(setting_value.replace(",", ""))
-                elif "." not in setting_value and setting_value.replace(",", "").replace(".", "").isdigit():
-                    setting_value = int(setting_value.replace(",", ""))
-                elif setting_value.lower().strip() in ["true", "false"]:
-                    setting_value = bool(setting_value.lower().strip())
-                elif setting_value.startswith("{") and setting_value.endswith("}"):
-                    setting_value = dict(setting_value)
-                elif setting_value.startswith("[") and setting_value.endswith("]"):
-                    setting_value = list(setting_value)
-
-                cfg[parent_type][setting_name] = setting_value
-            else:
-                logging.critical("Invalid setting provided.  Must be in form: name=value")
-                quit(1)
-
-device = eval(f"{app_type}.device(**cfg.get('device', dict()))")
-service = kenzy.core.KenzyHTTPServer(**cfg.get('service', dict()))
-
-# Interlinking objects
-device.set_service(service)      # Tell device about service wrapper
-service.set_device(device)       # Add device to service
-
-try:
-    service.serve_forever()
-except KeyboardInterrupt:
-    service.shutdown()
+    startup(cfg)

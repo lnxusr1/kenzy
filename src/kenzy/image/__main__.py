@@ -3,7 +3,7 @@ import argparse
 import logging
 import cv2
 import copy
-from kenzy.extras import get_raw_value
+from kenzy.extras import get_raw_value, apply_vars
 from kenzy.image.core import motion_detection, image_blur, image_gray, image_markup, object_detection, \
     object_labels, object_model, face_detection, image_resize, image_rotate
 
@@ -55,13 +55,7 @@ cfg = { }
 
 if ARGS.set is not None:
     if isinstance(ARGS.set, list):
-        for item in ARGS.set:
-            if "=" in item:
-                setting_name, setting_value = item.split("=", 1)
-                cfg[setting_name] = get_raw_value(setting_value)
-            else:
-                logging.critical("Invalid setting provided.  Must be in form: name=value")
-                quit(1)
+        apply_vars(cfg, ARGS.set)
 
 video_device = cv2.VideoCapture(get_raw_value(ARGS.video_device))
 last_image = None

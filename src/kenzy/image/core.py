@@ -186,13 +186,13 @@ def object_detection(image=None, model=None, labels=None, threshold=0.5, markup=
             if isinstance(objects, list):
                 objects.append({ 
                     "type": "object", 
-                    "confidence": conf, 
+                    "confidence": float(conf), 
                     "name": class_name,
                     "location": { 
-                        "left": left, 
-                        "top": top, 
-                        "right": right, 
-                        "bottom": bottom 
+                        "left": int(left), 
+                        "top": int(top), 
+                        "right": int(right), 
+                        "bottom": int(bottom) 
                     } 
                 })
 
@@ -220,13 +220,13 @@ def object_detection(image=None, model=None, labels=None, threshold=0.5, markup=
                 if isinstance(objects, list):
                     objects.append({ 
                         "type": "object", 
-                        "confidence": conf, 
+                        "confidence": float(conf), 
                         "name": class_name,
                         "location": { 
-                            "left": left, 
-                            "top": top, 
-                            "right": right, 
-                            "bottom": bottom 
+                            "left": int(left), 
+                            "top": int(top), 
+                            "right": int(right), 
+                            "bottom": int(bottom) 
                         } 
                     })
 

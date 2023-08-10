@@ -2,7 +2,7 @@ from kenzy import __app_title__, __version__
 import argparse
 import logging
 import os
-from kenzy.extras import get_raw_value
+from kenzy.extras import apply_vars
 from kenzy.tts.core import model_type, create_speech
 
 
@@ -56,13 +56,7 @@ cfg = { }
 
 if ARGS.set is not None:
     if isinstance(ARGS.set, list):
-        for item in ARGS.set:
-            if "=" in item:
-                setting_name, setting_value = item.split("=", 1)
-                cfg[setting_name] = get_raw_value(setting_value)
-            else:
-                logging.critical("Invalid setting provided.  Must be in form: name=value")
-                quit(1)
+        apply_vars(cfg, ARGS.set)
 
 m = model_type(cfg.get("model_type", "speecht5"))
 create_speech(m, ARGS.text, speaker=cfg.get("speaker", "slt"))

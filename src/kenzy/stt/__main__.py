@@ -3,7 +3,7 @@ import argparse
 import logging
 import threading
 import os
-from kenzy.extras import get_raw_value
+from kenzy.extras import apply_vars
 from kenzy.stt.core import read_from_device
 
 
@@ -57,13 +57,7 @@ cfg = { }
 
 if ARGS.set is not None:
     if isinstance(ARGS.set, list):
-        for item in ARGS.set:
-            if "=" in item:
-                setting_name, setting_value = item.split("=", 1)
-                cfg[setting_name] = get_raw_value(setting_value)
-            else:
-                logging.critical("Invalid setting provided.  Must be in form: name=value")
-                quit(1)
+        apply_vars(cfg, ARGS.set)
 
 stop_event = threading.Event()
 
