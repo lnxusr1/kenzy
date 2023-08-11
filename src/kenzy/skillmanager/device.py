@@ -79,26 +79,19 @@ class SkillsDevice:
 
     def say(self, text, **kwargs):
         # text, context=None
-        cmd = SpeakCommand()
+        cmd = SpeakCommand(context=kwargs.get("context"))
         cmd.text(text)
 
-        print(text)
-
-        # use context = location (door), group (living room), all
-        context = kwargs.get("context")
-        if context is None:
-            # All
-            pass
-        else:
-            print(context.location, context.group)
+        self.service.send_request(payload=cmd)
 
         return KenzySuccessResponse("Say command complete")
     
     def ask(self, text, **kwargs):
         # text, in_callback, timeout=0, context=None
-        cmd = SpeakCommand()
+        cmd = SpeakCommand(context=kwargs.get("context"))
         cmd.text(text)
 
         # use context = location (door), group (living room), all
+        self.service.send_request(payload=cmd)
 
         return KenzySuccessResponse("Ask command complete")

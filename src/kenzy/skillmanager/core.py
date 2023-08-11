@@ -20,8 +20,8 @@ class SpeakCommand(GenericCommand):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.action = "speak"
-        self.pre(GenericCommand(type="mute"))
-        self.post(GenericCommand(type="unmute"))
+        self.pre(GenericCommand(type="mute", context=kwargs.get("context")))
+        self.post(GenericCommand(type="unmute", context=kwargs.get("context")))
 
     def text(self, value):
         self.payload["text"] = value

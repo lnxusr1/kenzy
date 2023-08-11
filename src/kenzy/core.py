@@ -423,7 +423,7 @@ class KenzyHTTPServer(HTTPServer):
                         cmd.set(item, st.get(item))
 
                 # Send to service_url
-                if not self.send_command(cmd):
+                if not self.send_request(cmd):
                     self._set_service_url()
 
     def send_request(self, payload, headers=None, url=None):
