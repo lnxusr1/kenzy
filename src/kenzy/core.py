@@ -9,8 +9,14 @@ import requests
 import threading
 import time
 from . import VERSION, __app_name__, __app_title__
-from .extras import SSDPServer, discover_ssdp_services, get_file, get_local_ip_address
+from .extras import SSDPServer, discover_ssdp_services, get_file, get_local_ip_address, GenericCommand
         
+
+class RegisterCommand(GenericCommand):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.data["type"] = "register"
+
 
 class KenzyContext:
     url = None
@@ -262,6 +268,8 @@ class KenzyHTTPServer(HTTPServer):
     api_key = None
     restart_thread = None
     restart_event = threading.Event()
+    register_thread = None
+    register_event = threading.Event()
 
     def __init__(self, **kwargs) -> None:
 
@@ -286,18 +294,15 @@ class KenzyHTTPServer(HTTPServer):
             # start UPNP
             if self.service_url is None:
                 self.service_url = self.local_url 
+                self.logger.info(f"Service URL set to {self.service_url}")
             self.ssdp_server = SSDPServer(usn_uuid=self.id, service_url="%s/upnp.xml" % self.service_url)
         
         elif str(kwargs.get("upnp", "client")).lower().strip() == "client":
-            # search for UPNP service
-            url = discover_ssdp_services()
-            if url is not None:
-                self.service_url = url
+            self._set_service_url()
 
         if self.service_url is None:
             self.service_url = self.local_url
-
-        self.logger.info(f"Service URL set to {self.service_url}")
+            self.logger.info(f"Service URL set to {self.service_url}")
         
         super().__init__((host, port), KenzyRequestHandler)
 
@@ -305,6 +310,13 @@ class KenzyHTTPServer(HTTPServer):
             cert_file = os.path.expanduser(kwargs.get("ssl.cert_file"))
             key_file = os.path.expanduser(kwargs.get("ssl.key_file"))
             self.socket = ssl.wrap_socket(self.socket, certfile=cert_file, keyfile=key_file, server_side=True)
+
+    def _set_service_url(self):
+        # search for UPNP service
+        url = discover_ssdp_services()
+        if url is not None and (self.service_url is None or self.service_url != url):
+            self.service_url = url
+            self.logger.info(f"Service URL set to {self.service_url}")
 
     def command(self, action=None, payload=None, context=None):
         if context is None:
@@ -358,6 +370,18 @@ class KenzyHTTPServer(HTTPServer):
 
         return True
 
+    def _register(self, **kwargs):
+        cnt = 0
+        self.register_event.clear()
+
+        while not self.register_event.is_set():
+            if cnt > 20:
+                self.register()
+                cnt = 0
+
+            cnt += 1
+            time.sleep(0.5)
+
     def register(self, **kwargs):
         local_url = self.local_url
         service_url = self.service_url
@@ -366,11 +390,23 @@ class KenzyHTTPServer(HTTPServer):
             # Save local
             pass
         else:
-            # Send to service_url
-            pass
+            if self.device is not None:
+                cmd = RegisterCommand()
+                data = {}
+                data["url"] = self.local_url
+
+                if "status" in self.device.accepts:
+                    st = self.device.status().get().get("data", {})
+                    for item in st:
+                        data[item] = st.get(item)
+
+                cmd.set("data", data)
+
+                print(cmd.get())
+                # Send to service_url
 
         # TODO: Add feature
-        raise NotImplementedError("Feature not implemented")
+        # raise NotImplementedError("Feature not implemented")
     
     def send_request(self, payload, headers=None, url=None):
         token = uuid.uuid4()
@@ -425,6 +461,10 @@ class KenzyHTTPServer(HTTPServer):
         self.restart_thread = threading.Thread(target=self._restart_watcher, daemon=True)
         self.restart_thread.start()
         
+        self.register_event.clear()
+        self.register_thread = threading.Thread(target=self.register, daemon=True)
+        self.register_thread.start()
+
         self.logger.info("Server started on " + str("%s:%s" % self.server_address) + " (" + str(self.server_name) + ")")
         super().serve_forever(poll_interval)
 
@@ -441,7 +481,10 @@ class KenzyHTTPServer(HTTPServer):
 
         if self.restart_thread is not None and self.restart_thread.is_alive():
             self.restart_event.set()
-        
+
+        if self.register_thread is not None and self.register_thread.is_alive():
+            self.register_event.set()
+
         self.logger.info("Server stopped on " + str("%s:%s" % self.server_address) + " (" + str(self.server_name) + ")")
 
         super().shutdown()

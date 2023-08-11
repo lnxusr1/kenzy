@@ -5,7 +5,7 @@ import sys
 import pathlib
 import traceback
 import importlib 
-from kenzy.extras import dayPart
+from kenzy.extras import dayPart, GenericCommand
 
 try:
     from padatious import IntentContainer
@@ -14,30 +14,6 @@ except ModuleNotFoundError:
     logging.debug(str(traceback.format_exc()))
     logging.info("SkillManager disabled due to missing libraries.")
     pass
-
-
-class GenericCommand:
-    data = None
-    pre_cmds = []
-    post_cmds = []
-
-    def __init__(self, **kwargs):
-        self.data = dict(kwargs)
-
-    def set(self, name, value):
-        self.data[name] = value
-
-    def get(self, name=None):
-        if name is not None:
-            return self.data.get(name)
-        else:
-            return self.data
-        
-    def pre(self, cmd):
-        self.pre_cmds.append(cmd)
-
-    def post(self, cmd):
-        self.post_cmds.append(cmd)
 
 
 class SpeakCommand(GenericCommand):
