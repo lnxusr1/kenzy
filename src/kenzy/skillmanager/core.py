@@ -17,14 +17,14 @@ except ModuleNotFoundError:
 
 
 class SpeakCommand(GenericCommand):
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        self.data["type"] = "speak"
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.action = "speak"
         self.pre(GenericCommand(type="mute"))
         self.post(GenericCommand(type="unmute"))
 
     def text(self, value):
-        self.data["text"] = value
+        self.payload["text"] = value
 
 
 class SkillManager:

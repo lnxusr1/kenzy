@@ -13,9 +13,9 @@ from .extras import SSDPServer, discover_ssdp_services, get_file, get_local_ip_a
         
 
 class RegisterCommand(GenericCommand):
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        self.data["type"] = "register"
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.action = "register"
 
 
 class KenzyContext:
@@ -29,6 +29,9 @@ class KenzyContext:
         self.type = type
         self.location = location
         self.group = group
+
+    def to_json(self):
+        return self.get()
 
     def get(self):
         return {
@@ -48,6 +51,9 @@ class KenzyRequest:
         self.action = action
         self.payload = payload
         self.context = context
+
+    def to_json(self):
+        return self.get()
 
     def get(self):
         return {
@@ -270,6 +276,9 @@ class KenzyHTTPServer(HTTPServer):
     restart_event = threading.Event()
     register_thread = None
     register_event = threading.Event()
+    upnp = "client"
+
+    remote_devices = {}
 
     def __init__(self, **kwargs) -> None:
 
@@ -290,14 +299,15 @@ class KenzyHTTPServer(HTTPServer):
             
         self.local_url = kwargs.get("service_url", "%s://%s:%s" % (proto, ip_addr, port))
 
-        if str(kwargs.get("upnp", "client")).lower().strip() == "server":
+        self.upnp = str(kwargs.get("upnp", "client")).lower().strip() 
+        if self.upnp == "server":
             # start UPNP
             if self.service_url is None:
                 self.service_url = self.local_url 
                 self.logger.info(f"Service URL set to {self.service_url}")
             self.ssdp_server = SSDPServer(usn_uuid=self.id, service_url="%s/upnp.xml" % self.service_url)
         
-        elif str(kwargs.get("upnp", "client")).lower().strip() == "client":
+        elif self.upnp == "client":
             self._set_service_url()
 
         if self.service_url is None:
@@ -313,15 +323,19 @@ class KenzyHTTPServer(HTTPServer):
 
     def _set_service_url(self):
         # search for UPNP service
-        url = discover_ssdp_services()
-        if url is not None and (self.service_url is None or self.service_url != url):
-            self.service_url = url
-            self.logger.info(f"Service URL set to {self.service_url}")
+        if self.upnp == "client" or self.service_url is None:
+            url = discover_ssdp_services()
+            if url is not None and (self.service_url is None or self.service_url != url):
+                self.service_url = url
+                self.logger.info(f"Service URL set to {self.service_url}")
 
     def command(self, action=None, payload=None, context=None):
         if context is None:
             context = KenzyContext()
 
+        if str(action).strip().lower() == "register":
+            return self.register(data=payload, context=context)
+        
         for item in self.device.accepts:
             if str(item).strip().lower() == str(action).strip().lower():
                 return eval("self.device." + str(item).strip().lower() + "(data=payload, context=context)")
@@ -375,7 +389,7 @@ class KenzyHTTPServer(HTTPServer):
         self.register_event.clear()
 
         while not self.register_event.is_set():
-            if cnt > 20:
+            if cnt > 40:
                 self.register()
                 cnt = 0
 
@@ -387,33 +401,42 @@ class KenzyHTTPServer(HTTPServer):
         service_url = self.service_url
 
         if service_url == local_url:
-            # Save local
-            pass
+            data = kwargs.get("data", {})
+            url = data.get("url")
+            if url is not None:
+                if url not in self.remote_devices:
+                    self.logger.info(f"Registered remote device {url}")
+                else:
+                    self.logger.debug(f"Registered remote device {url}")
+
+                self.remote_devices[url] = data
+
+            return KenzySuccessResponse("Register completed successfully.")
         else:
             if self.device is not None:
                 cmd = RegisterCommand()
-                data = {}
-                data["url"] = self.local_url
+                cmd.set("url", self.local_url)
 
                 if "status" in self.device.accepts:
                     st = self.device.status().get().get("data", {})
                     for item in st:
-                        data[item] = st.get(item)
+                        cmd.set(item, st.get(item))
 
-                cmd.set("data", data)
-
-                print(cmd.get())
                 # Send to service_url
+                if not self.send_request(payload=cmd):
+                    self._set_service_url()
 
-        # TODO: Add feature
-        # raise NotImplementedError("Feature not implemented")
-    
     def send_request(self, payload, headers=None, url=None):
         token = uuid.uuid4()
 
-        if not isinstance(payload, dict):
+        if isinstance(payload, dict):
+            payload["context"] = payload.get("context", self.get_local_context())
+        elif isinstance(payload, GenericCommand):
+            payload.set_context(self.get_local_context())
+            payload = payload.get()
+        else:
             return False
-        
+            
         try:
             if headers is None or not isinstance(headers, dict):
                 headers = {}
@@ -460,10 +483,11 @@ class KenzyHTTPServer(HTTPServer):
 
         self.restart_thread = threading.Thread(target=self._restart_watcher, daemon=True)
         self.restart_thread.start()
-        
-        self.register_event.clear()
-        self.register_thread = threading.Thread(target=self.register, daemon=True)
-        self.register_thread.start()
+
+        if self.service_url != self.local_url:
+            self.register_event.clear()
+            self.register_thread = threading.Thread(target=self._register, daemon=True)
+            self.register_thread.start()
 
         self.logger.info("Server started on " + str("%s:%s" % self.server_address) + " (" + str(self.server_name) + ")")
         super().serve_forever(poll_interval)

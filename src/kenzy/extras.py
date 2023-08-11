@@ -15,27 +15,38 @@ SSDP_DEVICE_TYPE = "urn:schemas-upnp-org:device:Kenzy-Core:1"
 
 
 class GenericCommand:
-    data = None
+    payload = None
     pre_cmds = []
     post_cmds = []
+    action = ""
+    context = None
 
-    def __init__(self, **kwargs):
-        self.data = dict(kwargs)
+    def __init__(self, *args, **kwargs):
+        self.action = args[0] if len(args) > 0 else ""
+        self.payload = dict(kwargs)
+        self.context = kwargs.get("context")
 
     def set(self, name, value):
-        self.data[name] = value
+        self.payload[name] = value
+
+    def to_json(self):
+        return self.get()
 
     def get(self, name=None):
         if name is not None:
-            return self.data.get(name)
+            return self.payload.get(name)
         else:
-            return self.data
+            context = self.context.get() if self.context is not None and not isinstance(self.context, dict) else self.context
+            return { "action": self.action, "payload": self.payload, "context": context }
         
     def pre(self, cmd):
         self.pre_cmds.append(cmd)
 
     def post(self, cmd):
         self.post_cmds.append(cmd)
+
+    def set_context(self, context, overwrite=False):
+        self.context = context if self.context is None or overwrite else self.context
         
 
 def dayPart():
