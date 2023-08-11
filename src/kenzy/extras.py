@@ -20,11 +20,13 @@ class GenericCommand:
     post_cmds = []
     action = ""
     context = None
+    url = None
 
     def __init__(self, *args, **kwargs):
         self.action = args[0] if len(args) > 0 else ""
         self.payload = dict(kwargs)
         self.context = kwargs.get("context")
+        self.url = kwargs.get("url")
 
     def set(self, name, value):
         self.payload[name] = value
@@ -32,6 +34,12 @@ class GenericCommand:
     def to_json(self):
         return self.get()
 
+    def get_url(self):
+        return self.url
+
+    def set_url(self, url=None):
+        self.url = url
+    
     def get(self, name=None):
         if name is not None:
             return self.payload.get(name)

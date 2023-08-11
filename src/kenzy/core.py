@@ -423,17 +423,33 @@ class KenzyHTTPServer(HTTPServer):
                         cmd.set(item, st.get(item))
 
                 # Send to service_url
-                if not self.send_request(payload=cmd):
+                if not self.send_command(cmd):
                     self._set_service_url()
 
     def send_request(self, payload, headers=None, url=None):
+        if isinstance(payload, dict):
+            return self._send_request(payload=payload, headers=headers, url=url)
+
+        if isinstance(payload, GenericCommand):
+            return self._send_command(payload, headers=headers, url=url)
+
+    def _send_command(self, payload):
+        # Set context
+        # Send PRE
+        # Send Primary
+        # Send POST
+
+        payload.set_context(self.get_local_context())
+        payload = payload.get()
+        url = payload.get_url()
+    
+        return self.send_request(payload=payload, url=url)
+
+    def _send_request(self, payload, headers=None, url=None):
         token = uuid.uuid4()
 
         if isinstance(payload, dict):
             payload["context"] = payload.get("context", self.get_local_context())
-        elif isinstance(payload, GenericCommand):
-            payload.set_context(self.get_local_context())
-            payload = payload.get()
         else:
             return False
             
