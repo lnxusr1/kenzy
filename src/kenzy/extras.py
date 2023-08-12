@@ -22,11 +22,13 @@ class GenericCommand:
     context = None
     url = None
 
-    def __init__(self, *args, **kwargs):
-        self.action = args[0] if len(args) > 0 else ""
+    def __init__(self, action=None, context=None, url=None, **kwargs):
+        self.pre_cmds = []
+        self.post_cmds = []
+        self.action = action
         self.payload = dict(kwargs)
-        self.context = kwargs.get("context")
-        self.url = kwargs.get("url")
+        self.context = context
+        self.url = url
 
     def set(self, name, value):
         self.payload[name] = value

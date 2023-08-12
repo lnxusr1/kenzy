@@ -8,6 +8,7 @@ from urllib.parse import parse_qs
 import requests
 import threading
 import time
+import concurrent.futures
 from . import VERSION, __app_name__, __app_title__
 from .extras import SSDPServer, discover_ssdp_services, get_file, get_local_ip_address, GenericCommand
         
@@ -67,16 +68,13 @@ class KenzyResponse:
     status = None
     errors = None
     data = None
+    request = None
 
-    def __init__(self, status=None, data=None, errors=None):
-        if status is not None:
-            self.status = status
-        
-        if errors is not None:
-            self.errors = errors
-        
-        if data is not None:
-            self.data = data
+    def __init__(self, status=None, data=None, errors=None, request=None):
+        self.status = status
+        self.errors = errors
+        self.data = data
+        self.request = request
 
     def is_success(self):
         if self.status is not None and str(self.status) == "success":
@@ -222,11 +220,13 @@ class KenzyRequestHandler(BaseHTTPRequestHandler):
                             context = KenzyContext(**data.get("context"))
 
                         if data.get("action") is not None:
-                            response_data = self.server.command(data.get("action"), data.get("payload"), context).get()
+                            self.server.thread_pool.submit(self.server.command, data.get("action"), data.get("payload"), context)
+                            #response_data = self.server.command(data.get("action"), data.get("payload"), context).get()
+                            response_data = KenzySuccessResponse("Message Received")
                         else:
                             response_data = KenzyResponse("failed", None, "Unrecognized request")
 
-                    response_body = json.dumps(response_data).encode('utf-8')
+                    response_body = json.dumps(response_data.get()).encode('utf-8')
 
                     # Send response status code
                     self.send_response(200)
@@ -281,6 +281,7 @@ class KenzyHTTPServer(HTTPServer):
     remote_devices = {}
 
     def __init__(self, **kwargs) -> None:
+        self.thread_pool = concurrent.futures.ThreadPoolExecutor(max_workers=20)
 
         self.settings = kwargs
         self.service_url = kwargs.get("service_url")
@@ -338,7 +339,8 @@ class KenzyHTTPServer(HTTPServer):
         
         for item in self.device.accepts:
             if str(item).strip().lower() == str(action).strip().lower():
-                return eval("self.device." + str(item).strip().lower() + "(data=payload, context=context)")
+                ret = eval("self.device." + str(item).strip().lower() + "(data=payload, context=context)")
+                return ret
 
         return KenzyErrorResponse("Unrecognized command.")
 
@@ -431,17 +433,17 @@ class KenzyHTTPServer(HTTPServer):
             return self._send_request(payload=payload, headers=headers, url=url)
 
         if isinstance(payload, GenericCommand):
-            return self._send_command(payload, headers=headers, url=url)
+            return self._send_command(payload)
 
     def _send_command(self, payload):
-        # Set context
         # Send PRE
         # Send Primary
         # Send POST
 
         payload.set_context(self.get_local_context())
-        payload = payload.get()
         url = payload.get_url()
+        payload = payload.get()
+        print(payload)
     
         return self.send_request(payload=payload, url=url)
 
