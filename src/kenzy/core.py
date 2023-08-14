@@ -436,16 +436,41 @@ class KenzyHTTPServer(HTTPServer):
             return self._send_command(payload)
 
     def _send_command(self, payload):
-        # Send PRE
-        # Send Primary
-        # Send POST
+        ret = True
 
         payload.set_context(self.get_local_context())
+        
+        # use payload context to get group/location
+
+        pre_cmds = payload.pre()
+        post_cmds = payload.post()
+
+        # Send PRE
+        for cmd in pre_cmds:
+            cmd.set_context(payload.get_context())
+            url = cmd.get_url()
+            x_payload = cmd.get()
+            print("PRE:", x_payload)
+            if not self.send_request(payload=x_payload, url=url):
+                ret = False
+
+        # Send Primary
         url = payload.get_url()
-        payload = payload.get()
-        print(payload)
+        x_payload = payload.get()
+        print("PRI:", x_payload)
+        if not self.send_request(payload=x_payload, url=url):
+            ret = False
+
+        # Send POST
+        for cmd in post_cmds:
+            cmd.set_context(payload.get_context())
+            url = cmd.get_url()
+            x_payload = cmd.get()
+            print("POST:", x_payload)
+            if not self.send_request(payload=x_payload, url=url):
+                ret = False
     
-        return self.send_request(payload=payload, url=url)
+        return ret
 
     def _send_request(self, payload, headers=None, url=None):
         token = uuid.uuid4()

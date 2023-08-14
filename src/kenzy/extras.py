@@ -49,14 +49,23 @@ class GenericCommand:
             context = self.context.get() if self.context is not None and not isinstance(self.context, dict) else self.context
             return { "action": self.action, "payload": self.payload, "context": context }
         
-    def pre(self, cmd):
-        self.pre_cmds.append(cmd)
+    def pre(self, cmd=None):
+        if cmd is not None:
+            self.pre_cmds.append(cmd)
+        
+        return self.pre_cmds
 
-    def post(self, cmd):
-        self.post_cmds.append(cmd)
+    def post(self, cmd=None):
+        if cmd is not None:
+            self.post_cmds.append(cmd)
 
+        return self.post_cmds
+        
     def set_context(self, context, overwrite=False):
         self.context = context if self.context is None or overwrite else self.context
+
+    def get_context(self):
+        return self.context
         
 
 def dayPart():
