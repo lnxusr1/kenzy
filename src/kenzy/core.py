@@ -91,19 +91,15 @@ class KenzyResponse:
 
 
 class KenzySuccessResponse(KenzyResponse):
-    status = "success"
-    data = None
-    errors = None
-
     def __init__(self, data=None, errors=None):
         super().__init__(data=data, errors=errors)
+        self.status = "success"
 
 
 class KenzyErrorResponse(KenzyResponse):
-    status = "failed"
-
     def __init__(self, errors=None, data=None):
         super().__init__(data=data, errors=errors)
+        self.status = "failed"
 
 
 class KenzyRequestHandler(BaseHTTPRequestHandler):
@@ -221,7 +217,7 @@ class KenzyRequestHandler(BaseHTTPRequestHandler):
 
                         if data.get("action") is not None:
                             self.server.thread_pool.submit(self.server.command, data.get("action"), data.get("payload"), context)
-                            #response_data = self.server.command(data.get("action"), data.get("payload"), context).get()
+                            # response_data = self.server.command(data.get("action"), data.get("payload"), context).get()
                             response_data = KenzySuccessResponse("Message Received")
                         else:
                             response_data = KenzyResponse("failed", None, "Unrecognized request")
@@ -506,10 +502,12 @@ class KenzyHTTPServer(HTTPServer):
         try:
             if "restart" in self.device.accepts:
                 if hasattr(self.device, 'restart_enabled'):
+                    self.logger.debug("Restart watcher enabled.")
                     while not self.restart_event.is_set():
                         do_restart = self.device.restart_enabled
                         if do_restart:
                             time.sleep(2)
+                            self.logger.debug("Restart Flag Identified.")
                             self.device.restart()
                         else:
                             time.sleep(.5)

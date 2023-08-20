@@ -5,10 +5,13 @@ import cv2
 import threading
 import queue
 import time
+from datetime import datetime
 import logging
 import copy
 import collections
 import math
+import sys
+import traceback
 from kenzy.core import KenzySuccessResponse, KenzyErrorResponse
 from kenzy.image.core import image_blur, image_gray, image_rotate, image_resize, \
     object_model, object_labels, get_face_encoding, \
@@ -205,6 +208,7 @@ class VideoProcessor:
                     self.record_event.set()
                 last_person_seen = curr_time
                 self.recording_stop_time = 0
+                rec_stop_time = 0
 
             elif rec_stop_time == 0 and self.record_event.is_set() and (last_person_seen + self.record_buffer) < curr_time:
                 self.recording_stop_time = curr_time
@@ -317,12 +321,20 @@ class VideoProcessor:
                 rec_stop_time = self.recording_stop_time  # Attempt to avoid segfault (should be atomic operation)
                 if rec_stop_time != 0 and rec_stop_time <= data.get("timestamp"):
                     self.record_event.clear()
+                    if video_writer is not None:
+                        video_writer.release()
+                        video_writer = None
+                        self.record_event.clear()
+                        self.rec_queue.task_done()
+                    continue
 
                 if video_writer is None:
+                    ts = datetime.fromtimestamp(data.get("timestamp"))
+
                     file_name = os.path.join(
                         self.video_folder, 
-                        time.strftime("%Y%m%d", time.gmtime(data.get("timestamp"))), 
-                        time.strftime("%Y%m%d_%H%M%S", time.gmtime(data.get("timestamp"))) + file_extension
+                        ts.strftime("%Y%m%d"), 
+                        ts.strftime("%Y%m%d_%H%M%S") + file_extension
                     )
                     self.logger.debug(f"Recording to {file_name}")
 
@@ -437,14 +449,17 @@ class VideoProcessor:
                         else:
                             self.frame_buffer.append(frame)
                     except queue.Full:
-                        self.logger.debug("RECORD - Queue full.  Consider increasing frame_buffer_size.")
+                        # self.logger.debug("RECORD - Queue full.  Consider increasing frame_buffer_size.")
                         pass
 
         except KeyboardInterrupt:
             self.stop()
         except Exception:
-            self.restart_enabled = True
             self.logger.warning(f"Video read failed from {self.video_device}")
+            self.logger.error(str(sys.exc_info()[0]))
+            self.logger.error(str(traceback.format_exc()))
+            self.logger.debug("Flagging for restart.")
+            self.restart_enabled = True
 
         dev.release()
 
@@ -545,9 +560,15 @@ class VideoProcessor:
     
     def restart(self, **kwargs):
         self.restart_enabled = False
-        if self.rec_thread is not None or self.proc_thread is not None:
+        if (self.main_thread is not None and self.main_thread.is_alive()) \
+                or (self.obj_thread is not None and self.obj_thread.is_alive()) \
+                or (self.face_thread is not None and self.face_thread.is_alive()) \
+                or (self.rec_thread is not None and self.rec_thread.is_alive()) \
+                or (self.callback_thread is not None and self.callback_thread.is_alive()):
+            
             ret = self.stop()
             if not ret.is_success():
+                print(ret.get())
                 return ret
         
         return self.start()
