@@ -412,6 +412,7 @@ class VideoProcessor:
     def _read_from_device(self):
         self.stop_event.clear()
         self.record_event.clear()
+        read_counter = 0
         
         if self.frames_per_second is None:
             self.logger.critical("Invalid Frames Per Second.  Cancelling start")
@@ -424,8 +425,11 @@ class VideoProcessor:
                 ret, frame = dev.read()
 
                 if not ret:
-                    raise Exception("Error")
+                    read_counter += 1
+                    if read_counter > 5:
+                        raise Exception("Error, images failing reader.")
                 else:
+                    read_counter = 0
                     if self.scale_factor != 1.0:
                         frame = image_resize(frame, self.scale_factor)
 
