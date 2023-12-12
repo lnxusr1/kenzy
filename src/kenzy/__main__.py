@@ -23,9 +23,11 @@ def startup(cfg):
 
     # Interlinking objects
     device.set_service(service)      # Tell device about service wrapper
-    service.set_device(device)       # Add device to service
 
+    service.set_device(device)       # Add device to service
     services.insert(0, service)
+
+    device.start()
 
     try:
         service.serve_forever()

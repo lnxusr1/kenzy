@@ -90,6 +90,7 @@ class SkillsDevice:
     def ask(self, text, **kwargs):
         # text, in_callback, timeout=0, context=None
         cmd = SpeakCommand(context=kwargs.get("context"))
+        cmd.text(text)
         
         # use context = location (door), group (living room), all
         self.service.send_request(payload=cmd)

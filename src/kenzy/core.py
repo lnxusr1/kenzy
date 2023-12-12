@@ -440,10 +440,7 @@ class KenzyHTTPServer(HTTPServer):
                         device = self.remote_devices.get(device_url)
                         if device.get("active", False) and device.get("location") == ctx.location:
                             if payload.action in device.get("accepts", []):
-                                print("=======")
-                                print(device_url)
                                 payload.set_url(device_url)
-                                print(payload.get())
                                 ret = self._send_command(payload)
                     
                     return ret

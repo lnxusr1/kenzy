@@ -96,10 +96,10 @@ def create_speech(model, text, speaker="slt", cache_folder="~/.kenzy/cache/speec
                 sample_rate = 16000
                 # save the generated speech to a file with 16KHz sampling rate
                 sf.write(full_file_path, speech.cpu().numpy(), samplerate=sample_rate)
-            except:
+            except Exception:
                 logging.debug(str(sys.exc_info()[0]))
                 logging.debug(str(traceback.format_exc()))
-                logging.info("Unable to start audio processor due to missing libraries")
+                logging.info("Unable to start speech output due to an internal error")
                 print("ERROR HERE ====================================")
 
         play_wav_file(full_file_path)
