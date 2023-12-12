@@ -591,6 +591,8 @@ class VideoProcessor:
             "active": self.is_alive(),
             "type": self.type,
             "accepts": self.accepts,
+            "location": self.location,
+            "group": self.group,
             "data": {
                 
             }

@@ -425,10 +425,29 @@ class KenzyHTTPServer(HTTPServer):
                     self._set_service_url()
 
     def send_request(self, payload, headers=None, url=None):
+
         if isinstance(payload, dict):
             return self._send_request(payload=payload, headers=headers, url=url)
 
         if isinstance(payload, GenericCommand):
+            if payload.get_url() is None:
+                ctx = payload.get_context()
+                if isinstance(ctx, KenzyContext) and ctx.location is not None:
+
+                    print(payload.action)
+                    ret = False
+                    for device_url in self.remote_devices:
+                        device = self.remote_devices.get(device_url)
+                        if device.get("active", False) and device.get("location") == ctx.location:
+                            if payload.action in device.get("accepts", []):
+                                print("=======")
+                                print(device_url)
+                                payload.set_url(device_url)
+                                print(payload.get())
+                                ret = self._send_command(payload)
+                    
+                    return ret
+
             return self._send_command(payload)
 
     def _send_command(self, payload):

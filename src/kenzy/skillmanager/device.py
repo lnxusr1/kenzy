@@ -44,7 +44,6 @@ class SkillsDevice:
         print(data)
         if data.get("type", "") == "kenzy.stt":
             text = data.get("text")
-            print(text)
             self.skill_manager.parse(text=text, context=context)
 
         return KenzySuccessResponse("Collect complete")
@@ -69,6 +68,8 @@ class SkillsDevice:
             "active": self.is_alive(),
             "type": self.type,
             "accepts": self.accepts,
+            "location": self.location,
+            "group": self.group,
             "data": {
             }
         })
@@ -89,8 +90,7 @@ class SkillsDevice:
     def ask(self, text, **kwargs):
         # text, in_callback, timeout=0, context=None
         cmd = SpeakCommand(context=kwargs.get("context"))
-        cmd.text(text)
-
+        
         # use context = location (door), group (living room), all
         self.service.send_request(payload=cmd)
 

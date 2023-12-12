@@ -18,15 +18,15 @@ class SpeakerDevice:
     cache_folder = None 
 
     def __init__(self, **kwargs):
+        print(kwargs)
         self.settings = kwargs
-
         self.location = kwargs.get("location")
         self.group = kwargs.get("group")
 
         self.initialize()
 
     def initialize(self):
-        self.model = model_type(self.settings.get("model_type", "speecht5"))
+        self.model = model_type(self.settings.get("model_type", "speecht5"), target=self.settings.get("model_target"))
         self.speaker = self.settings.get("speaker", "slt")
         self.cache_folder = self.settings.get("cache_folder", "~/.kenzy/cache/speech")
 
@@ -63,6 +63,8 @@ class SpeakerDevice:
             "active": self.is_alive(),
             "type": self.type,
             "accepts": self.accepts,
+            "location": self.location,
+            "group": self.group,
             "data": {
             }
         })

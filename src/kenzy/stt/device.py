@@ -36,10 +36,12 @@ class AudioProcessor:
 
     def mute(self, **kwargs):
         self.muted_event.set()
+        self.logger.debug("Device is muted.")
         KenzySuccessResponse("Mute command successful")
 
     def unmute(self, **kwargs):
         self.muted_event.clear()
+        self.logger.debug("Device is unmuted.")
         KenzySuccessResponse("Unmute command successful")
 
     def _process_callback(self):
@@ -148,6 +150,8 @@ class AudioProcessor:
             "active": self.is_alive(),
             "type": self.type,
             "accepts": self.accepts,
+            "location": self.location,
+            "group": self.group,
             "data": {
             }
         })

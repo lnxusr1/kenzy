@@ -19,3 +19,6 @@ listener:
 
 speaker:
   type: kenzy.tts
+
+  device:
+    model_target: cpu

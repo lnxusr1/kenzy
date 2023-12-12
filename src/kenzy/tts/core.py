@@ -5,20 +5,25 @@ import hashlib
 import pyaudio
 import wave
 import os
+import sys
+import traceback
 from kenzy.extras import py_error_handler
 import logging
 import tempfile
 
 
-def model_type(type="speecht5"):
+def model_type(type="speecht5", target=None):
     model = { "type": type }
 
     if str(type).lower().strip() == "speecht5":
         from transformers import SpeechT5Processor, SpeechT5ForTextToSpeech, SpeechT5HifiGan
         from datasets import load_dataset
 
-        device = "cuda" if torch.cuda.is_available() else "cpu"
+        device = target
+        if device is None:
+            device = "cuda" if torch.cuda.is_available() else "cpu"
 
+        logging.info(f"Using device={device} for speech generation.")
         processor = SpeechT5Processor.from_pretrained("microsoft/speecht5_tts")
         tts_model = SpeechT5ForTextToSpeech.from_pretrained("microsoft/speecht5_tts").to(device)
         vocoder = SpeechT5HifiGan.from_pretrained("microsoft/speecht5_hifigan").to(device)
@@ -71,25 +76,31 @@ def create_speech(model, text, speaker="slt", cache_folder="~/.kenzy/cache/speec
 
         if not os.path.isfile(full_file_path):
 
-            logging.getLogger("KNZY-TTS").debug(f"Caching speach segment to {output_filename}")
-            processor = model.get("processor")
-            device = model.get("device")
-            tts_model = model.get("model")
-            embeddings_dataset = model.get("dataset")
-            vocoder = model.get("vocoder")
-            speakers = model.get("speakers")
-            speaker_id = speakers.get(speaker)
+            logging.getLogger("KNZY-TTS").debug(f"Caching speach segment to {full_file_path}")
+            try:
+                processor = model.get("processor")
+                device = model.get("device")
+                tts_model = model.get("model")
+                embeddings_dataset = model.get("dataset")
+                vocoder = model.get("vocoder")
+                speakers = model.get("speakers")
+                speaker_id = speakers.get(speaker)
 
-            # preprocess text
-            inputs = processor(text=text, return_tensors="pt").to(device)
-            speaker_embeddings = torch.tensor(embeddings_dataset[speaker_id]["xvector"]).unsqueeze(0).to(device)
+                # preprocess text
+                inputs = processor(text=text, return_tensors="pt").to(device)
+                speaker_embeddings = torch.tensor(embeddings_dataset[speaker_id]["xvector"]).unsqueeze(0).to(device)
 
-            # generate speech with the models
-            speech = tts_model.generate_speech(inputs["input_ids"], speaker_embeddings, vocoder=vocoder)
+                # generate speech with the models
+                speech = tts_model.generate_speech(inputs["input_ids"], speaker_embeddings, vocoder=vocoder)
 
-            sample_rate = 16000
-            # save the generated speech to a file with 16KHz sampling rate
-            sf.write(full_file_path, speech.cpu().numpy(), samplerate=sample_rate)
+                sample_rate = 16000
+                # save the generated speech to a file with 16KHz sampling rate
+                sf.write(full_file_path, speech.cpu().numpy(), samplerate=sample_rate)
+            except:
+                logging.debug(str(sys.exc_info()[0]))
+                logging.debug(str(traceback.format_exc()))
+                logging.info("Unable to start audio processor due to missing libraries")
+                print("ERROR HERE ====================================")
 
         play_wav_file(full_file_path)
 
