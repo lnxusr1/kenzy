@@ -23,10 +23,9 @@ def speech_model(model_name="openai/whisper-tiny.en"):
     return processor, model
 
 
-def read_from_device(stop_event, **kwargs):
+def read_from_device(stop_event, muted_event=threading.Event(), **kwargs):
 
     stop_event.clear()
-    muted_event = kwargs.get("muted_event", threading.Event())
     muted_event.clear()
     
     audio_device_index = kwargs.get("audio_device")
@@ -70,8 +69,8 @@ def read_from_device(stop_event, **kwargs):
 
         stream.start_stream()
     except Exception:
-        logging.debug(str(sys.exc_info()[0]))
-        logging.debug(str(traceback.format_exc()))
+        logging.getLogger("AUD-READ").debug(str(sys.exc_info()[0]))
+        logging.getLogger("AUD-READ").debug(str(traceback.format_exc()))
         logging.getLogger("AUD-READ").error("Unable to read from listener device.")
         return
 
@@ -85,7 +84,10 @@ def read_from_device(stop_event, **kwargs):
     while not stop_event.is_set():
         frame = buffer_queue.get()
 
-        if len(frame) >= 640 and not muted_event.is_set():
+        if len(frame) >= 640:
+            if muted_event.is_set():
+                continue
+
             is_speech = _vad.is_speech(frame, audio_sample_rate)
         
             if not triggered:

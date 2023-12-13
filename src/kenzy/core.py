@@ -2,6 +2,8 @@ import json
 import logging
 import uuid
 import os
+import sys
+import traceback
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import ssl
 from urllib.parse import parse_qs
@@ -9,7 +11,7 @@ import requests
 import threading
 import time
 import concurrent.futures
-from . import VERSION, __app_name__, __app_title__
+from . import VERSION, __app_name__, __app_title__, __version__
 from .extras import SSDPServer, discover_ssdp_services, get_file, get_local_ip_address, GenericCommand
         
 
@@ -180,8 +182,10 @@ class KenzyRequestHandler(BaseHTTPRequestHandler):
                 self.send_error(500, str(e))
             else:
                 self.send_error(500, "An internal error occurred")
-                self.logger.error(str(e))
-
+                self.logger.debug(str(sys.exc_info()[0]))
+                self.logger.debug(str(traceback.format_exc()))
+                self.logger.debug(str(e))
+                
     def do_POST(self):
         try:
             content_type = self.headers['Content-Type']
@@ -216,9 +220,10 @@ class KenzyRequestHandler(BaseHTTPRequestHandler):
                             context = KenzyContext(**data.get("context"))
 
                         if data.get("action") is not None:
-                            self.server.thread_pool.submit(self.server.command, data.get("action"), data.get("payload"), context)
-                            # response_data = self.server.command(data.get("action"), data.get("payload"), context).get()
-                            response_data = KenzySuccessResponse("Message Received")
+                            response_data = self.server.command(data.get("action"), data.get("payload"), context)
+                            if not isinstance(response_data, KenzyResponse):
+                                logging.error(str(response_data))
+                                response_data = KenzyErrorResponse("Unrecognized response from device.")
                         else:
                             response_data = KenzyResponse("failed", None, "Unrecognized request")
 
@@ -258,6 +263,8 @@ class KenzyRequestHandler(BaseHTTPRequestHandler):
 
         except Exception as e:
             self.send_error(500, str(e))
+            self.logger.debug(str(sys.exc_info()[0]))
+            self.logger.debug(str(traceback.format_exc()))
 
 
 class KenzyHTTPServer(HTTPServer):
@@ -326,6 +333,10 @@ class KenzyHTTPServer(HTTPServer):
                 self.service_url = url
                 self.logger.info(f"Service URL set to {self.service_url}")
 
+    @property
+    def version(self):
+        return __version__
+    
     def command(self, action=None, payload=None, context=None):
         if context is None:
             context = KenzyContext()
@@ -434,7 +445,6 @@ class KenzyHTTPServer(HTTPServer):
                 ctx = payload.get_context()
                 if isinstance(ctx, KenzyContext) and ctx.location is not None:
 
-                    print(payload.action)
                     ret = False
                     for device_url in self.remote_devices:
                         device = self.remote_devices.get(device_url)
@@ -462,14 +472,12 @@ class KenzyHTTPServer(HTTPServer):
             cmd.set_context(payload.get_context())
             url = cmd.get_url()
             x_payload = cmd.get()
-            print("PRE:", x_payload)
-            if not self.send_request(payload=x_payload, url=url):
+            if not self.send_request(payload=cmd, url=url):
                 ret = False
 
         # Send Primary
         url = payload.get_url()
         x_payload = payload.get()
-        print("PRI:", x_payload)
         if not self.send_request(payload=x_payload, url=url):
             ret = False
 
@@ -478,8 +486,7 @@ class KenzyHTTPServer(HTTPServer):
             cmd.set_context(payload.get_context())
             url = cmd.get_url()
             x_payload = cmd.get()
-            print("POST:", x_payload)
-            if not self.send_request(payload=x_payload, url=url):
+            if not self.send_request(payload=cmd, url=url):
                 ret = False
     
         return ret
@@ -506,8 +513,10 @@ class KenzyHTTPServer(HTTPServer):
 
             response_data = response.json()
             self.logger.debug(f"{response_data}")
-        except requests.exceptions.RequestException as e:
-            print("An error occurred:", e)
+        except requests.exceptions.RequestException:
+            logging.debug(str(sys.exc_info()[0]))
+            logging.debug(str(traceback.format_exc()))
+            logging.error("An error occurred")
             return False
 
         return True

@@ -119,8 +119,11 @@ class SkillManager:
                             return True  # Default return is True in case the returned value isn't boolean
             else:
                 return audio_fallback(text, context)  # Old code for hardcoded responses
-        except Exception as e:
-            self.logger.error(e, exc_info=True)
+        except Exception:
+            self.logger.debug(str(sys.exc_info()[0]))
+            self.logger.debug(str(traceback.format_exc()))
+            self.logger.error("An error occurred")
+            
             return False
 
         return False
@@ -155,6 +158,10 @@ class GenericSkill:
         
         self._name = "Learned Skill"
         self.device = None 
+
+    @property
+    def service(self):
+        return self.device.service if self.device is not None else None
     
     def ask(self, text, callback, timeout=0, context=None):
         """

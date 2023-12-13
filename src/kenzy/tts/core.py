@@ -99,8 +99,7 @@ def create_speech(model, text, speaker="slt", cache_folder="~/.kenzy/cache/speec
             except Exception:
                 logging.debug(str(sys.exc_info()[0]))
                 logging.debug(str(traceback.format_exc()))
-                logging.info("Unable to start speech output due to an internal error")
-                print("ERROR HERE ====================================")
+                logging.error("Unable to start speech output due to an internal error")
 
         play_wav_file(full_file_path)
 
