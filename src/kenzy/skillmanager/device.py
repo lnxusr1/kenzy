@@ -1,25 +1,21 @@
 import logging
-from kenzy.core import KenzySuccessResponse, KenzyErrorResponse
+import time
+from kenzy.core import KenzySuccessResponse, KenzyErrorResponse, KenzyContext
 from kenzy.skillmanager.core import SkillManager, SpeakCommand
 
 
 class SkillsDevice:
     type = "kenzy.skillmanager"
-
-    location = None
-    group = None
-    service = None
-
-    skill_manager = None
-
     logger = logging.getLogger("KNZY-SKM")
-    settings = {}
 
     def __init__(self, **kwargs):
         self.settings = kwargs
+        self.service = None
+        self.skill_manager = None
 
         self.location = kwargs.get("location")
         self.group = kwargs.get("group")
+        self.timeouts = {}
 
         self.initialize()
 
@@ -44,7 +40,14 @@ class SkillsDevice:
         print(data)
         if data.get("type", "") == "kenzy.stt":
             text = data.get("text")
-            self.skill_manager.parse(text=text, context=context)
+            dev_url = self.get_context_url(context)
+            if time.time() < self.timeouts.get(dev_url, {}).get("timeout", 0):
+                print(self.timeouts.get(dev_url, {}))
+                func = self.timeouts.get(dev_url, {}).get("callback")
+                if func is not None:
+                    func(text, context=context)
+            else:
+                self.skill_manager.parse(text=text, context=context)
 
         return KenzySuccessResponse("Collect complete")
     
@@ -87,12 +90,28 @@ class SkillsDevice:
 
         return KenzySuccessResponse("Say command complete")
     
-    def ask(self, text, **kwargs):
+    def ask(self, text, callback=None, **kwargs):
         # text, in_callback, timeout=0, context=None
         cmd = SpeakCommand(context=kwargs.get("context"))
         cmd.text(text)
         
+        context = kwargs.get("context")
+        dev_url = self.get_context_url(context)
+
+        timeout = kwargs.get("timeout")
+        if timeout is None or float(timeout) <= 0:
+            timeout = self.settings.get("ask_timeout", 10)
+
+        self.timeouts[dev_url] = { "timeout": time.time() + float(timeout), "callback": callback }
         # use context = location (door), group (living room), all
         self.service.send_request(payload=cmd)
 
         return KenzySuccessResponse("Ask command complete")
+    
+    def get_context_url(self, context):
+        if isinstance(context, KenzyContext) and context.url is not None:
+            dev_url = context.url
+        else:
+            dev_url = "self"
+
+        return dev_url

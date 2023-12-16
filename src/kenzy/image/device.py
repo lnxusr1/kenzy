@@ -22,48 +22,33 @@ import kenzy.settings
 
 class VideoProcessor:
     type = "kenzy.image"
-
-    location = None
-    group = None
-    service = None
-    orientation = 0
-    video_device = 0
-    scale_factor = 1.0
-    frames_per_second = None
-    record_buffer = 5
-    motion_threshold = 20
-    motion_area = 0.0003
-    object_threshold = 0.5
-    face_tolerance = 0.6
-    video_format = "XVID"
-    video_folder = None
-
     logger = logging.getLogger("KNZY-IMG")
-    settings = {}
-    face_encodings = None
-    face_names = None
-    raw_width = None
-    raw_height = None
-    main_thread = None
-    stop_event = threading.Event()
-    record_event = threading.Event()
-    restart_enabled = False
-
-    obj_thread = None
-    face_thread = None
-    rec_thread = None
-    callback_thread = None
-
-    obj_queue = None
-    face_queue = None
-    rec_queue = None
-    callback_queue = None
-
+    
     def __init__(self, **kwargs):
         self.settings = kwargs
 
+        self.face_encodings = None
+        self.face_names = None
+        self.raw_width = None
+        self.raw_height = None
+        self.main_thread = None
+        self.stop_event = threading.Event()
+        self.record_event = threading.Event()
+        self.restart_enabled = False
+
+        self.obj_thread = None
+        self.face_thread = None
+        self.rec_thread = None
+        self.callback_thread = None
+
+        self.obj_queue = None
+        self.face_queue = None
+        self.rec_queue = None
+        self.callback_queue = None
+
         self.location = kwargs.get("location")
         self.group = kwargs.get("group")
+        self.service = None
 
         self.video_device = kwargs.get("video_device", 0)
         self.scale_factor = kwargs.get("scale", 1.0)
@@ -402,7 +387,7 @@ class VideoProcessor:
                         "motion": motion,
                         "objects": objects,
                         "faces": faces
-                    })
+                    }, wait=False)
 
                     last_motion_notify = motion
                     last_object_list = object_list

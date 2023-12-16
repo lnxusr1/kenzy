@@ -15,12 +15,6 @@ SSDP_DEVICE_TYPE = "urn:schemas-upnp-org:device:Kenzy-Core:1"
 
 
 class GenericCommand:
-    payload = None
-    pre_cmds = []
-    post_cmds = []
-    action = ""
-    context = None
-    url = None
 
     def __init__(self, action=None, context=None, url=None, **kwargs):
         self.pre_cmds = []
@@ -29,6 +23,8 @@ class GenericCommand:
         self.payload = dict(kwargs)
         self.context = context
         self.url = url
+        self.timeout = kwargs.get("timeout")
+        self.wait = kwargs.get("wait")
 
     def set(self, name, value):
         self.payload[name] = value

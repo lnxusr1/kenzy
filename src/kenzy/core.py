@@ -4,10 +4,12 @@ import uuid
 import os
 import sys
 import traceback
+import copy
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import ssl
 from urllib.parse import parse_qs
 import requests
+import urllib3
 import threading
 import time
 import concurrent.futures
@@ -22,10 +24,6 @@ class RegisterCommand(GenericCommand):
 
 
 class KenzyContext:
-    url = None
-    type = None
-    location = None
-    group = None
 
     def __init__(self, url=None, type=None, location=None, group=None):
         self.url = url
@@ -67,10 +65,6 @@ class KenzyRequest:
 
 
 class KenzyResponse:
-    status = None
-    errors = None
-    data = None
-    request = None
 
     def __init__(self, status=None, data=None, errors=None, request=None):
         self.status = status
@@ -130,23 +124,33 @@ class KenzyRequestHandler(BaseHTTPRequestHandler):
         )
 
     def send_file(self, file_name=None):
-        file_path = self.path if file_name is None else file_name
-        mime_type, content = get_file(file_path)
+        try:
+            file_path = self.path if file_name is None else file_name
+            mime_type, content = get_file(file_path)
 
-        if mime_type is None and content is None:
-            self.send_response(404)
-            self.send_header('Content-type', 'text/plain')
+            if mime_type is None and content is None:
+                self.send_response(404)
+                self.send_header('Content-type', 'text/plain')
+                self.end_headers()
+                self.wfile.write(b'File Not Found')
+                return
+
+            if file_path.lower().endswith("upnp.xml") or file_path.lower().endswith(".html"):
+                content = self.set_vars(content)
+
+            self.send_response(200)
+            self.send_header('Content-type', mime_type)
             self.end_headers()
-            self.wfile.write(b'File Not Found')
-            return
+            self.wfile.write(content)
+            self.wfile.flush()
 
-        if file_path.lower().endswith("upnp.xml") or file_path.lower().endswith(".html"):
-            content = self.set_vars(content)
-
-        self.send_response(200)
-        self.send_header('Content-type', mime_type)
-        self.end_headers()
-        self.wfile.write(content)
+        except BrokenPipeError:
+            pass
+        
+        except Exception as e:
+            self.send_error(500, str(e))
+            self.logger.debug(str(sys.exc_info()[0]))
+            self.logger.debug(str(traceback.format_exc()))
 
     def do_GET(self):
         try:
@@ -177,6 +181,9 @@ class KenzyRequestHandler(BaseHTTPRequestHandler):
             self.wfile.write(b"<html><head><title>Error: Unsupported Request</title></head><body>")
             self.wfile.write(b"<h1>Unsupported Request</h1><p>Please use POST for data transmission.</p></body></html>")
 
+        except BrokenPipeError:
+            pass
+
         except Exception as e:
             if logging.getLogger().getEffectiveLevel() == logging.DEBUG:
                 self.send_error(500, str(e))
@@ -185,7 +192,7 @@ class KenzyRequestHandler(BaseHTTPRequestHandler):
                 self.logger.debug(str(sys.exc_info()[0]))
                 self.logger.debug(str(traceback.format_exc()))
                 self.logger.debug(str(e))
-                
+
     def do_POST(self):
         try:
             content_type = self.headers['Content-Type']
@@ -261,6 +268,9 @@ class KenzyRequestHandler(BaseHTTPRequestHandler):
             else:
                 self.send_error(415, "Unsupported Media Type")
 
+        except BrokenPipeError:
+            pass
+
         except Exception as e:
             self.send_error(500, str(e))
             self.logger.debug(str(sys.exc_info()[0]))
@@ -269,22 +279,20 @@ class KenzyRequestHandler(BaseHTTPRequestHandler):
 
 class KenzyHTTPServer(HTTPServer):
     logger = logging.getLogger("HTTP-SRV")
-    settings = {}
-    device = None
-    ssdp_server = None
-    service_url = None
-    local_url = None
-    api_key = None
-    restart_thread = None
-    restart_event = threading.Event()
-    register_thread = None
-    register_event = threading.Event()
-    upnp = "client"
-
-    remote_devices = {}
 
     def __init__(self, **kwargs) -> None:
+        self.device = None
+        self.ssdp_server = None
+        self.remote_devices = {}
+        self.restart_event = threading.Event()
+        self.restart_thread = None
+        self.register_event = threading.Event()
+        self.register_thread = None
+        self.upnp = "client"
+        self.timers = {}
+
         self.thread_pool = concurrent.futures.ThreadPoolExecutor(max_workers=20)
+        self.active = False
 
         self.settings = kwargs
         self.service_url = kwargs.get("service_url")
@@ -343,8 +351,18 @@ class KenzyHTTPServer(HTTPServer):
 
         if str(action).strip().lower() == "register":
             return self.register(data=payload, context=context)
-        
+
+        print("=== COMMAND:", self.device.type)
+
         for item in self.device.accepts:
+            if str(action).strip().lower() == "shutdown":
+                t = threading.Thread(target=self.shutdown)
+                t.daemon = True
+                t.start()
+                self.timers["shutdown"] = t
+
+                return KenzySuccessResponse("Shutdown commencing.")
+
             if str(item).strip().lower() == str(action).strip().lower():
                 ret = eval("self.device." + str(item).strip().lower() + "(data=payload, context=context)")
                 return ret
@@ -369,7 +387,8 @@ class KenzyHTTPServer(HTTPServer):
             group=self.device.group
         )
 
-    def collect(self, data=None, context=None):
+    def collect(self, data=None, context=None, wait=True, timeout=None):
+        print("=== COLLECT:", self.device.type)
         if not isinstance(context, KenzyContext):
             context = self.get_local_context()
     
@@ -384,7 +403,7 @@ class KenzyHTTPServer(HTTPServer):
                 "context": context.get()
             }
 
-            self.send_request(req)
+            self.send_request(req, wait=wait, timeout=timeout)
         else:
             if self.device is not None and not hasattr(self.device, "accepts") and "collect" in self.device.accepts:
                 self.device.collect(data, context)
@@ -435,10 +454,13 @@ class KenzyHTTPServer(HTTPServer):
                 if not self.send_request(cmd):
                     self._set_service_url()
 
-    def send_request(self, payload, headers=None, url=None):
-
+    def send_request(self, payload, headers=None, url=None, wait=True, timeout=None):
         if isinstance(payload, dict):
-            return self._send_request(payload=payload, headers=headers, url=url)
+            if wait:
+                return self._send_request(payload=payload, headers=headers, url=url, timeout=timeout)
+            else:
+                self.thread_pool.submit(self._send_request, payload=payload, headers=headers, url=url, timeout=timeout)
+                return True
 
         if isinstance(payload, GenericCommand):
             if payload.get_url() is None:
@@ -451,13 +473,14 @@ class KenzyHTTPServer(HTTPServer):
                         if device.get("active", False) and device.get("location") == ctx.location:
                             if payload.action in device.get("accepts", []):
                                 payload.set_url(device_url)
-                                ret = self._send_command(payload)
+                                ret = self._send_command(copy.copy(payload))
                     
                     return ret
+            if timeout is not None:
+                payload.timeout = timeout
+            return self._send_command(payload, wait=wait)
 
-            return self._send_command(payload)
-
-    def _send_command(self, payload):
+    def _send_command(self, payload, wait=True):
         ret = True
 
         payload.set_context(self.get_local_context())
@@ -472,13 +495,13 @@ class KenzyHTTPServer(HTTPServer):
             cmd.set_context(payload.get_context())
             url = cmd.get_url()
             x_payload = cmd.get()
-            if not self.send_request(payload=cmd, url=url):
+            if not self.send_request(payload=cmd, url=url, wait=wait, timeout=payload.timeout):
                 ret = False
 
         # Send Primary
         url = payload.get_url()
         x_payload = payload.get()
-        if not self.send_request(payload=x_payload, url=url):
+        if not self.send_request(payload=x_payload, url=url, wait=wait, timeout=payload.timeout):
             ret = False
 
         # Send POST
@@ -486,12 +509,15 @@ class KenzyHTTPServer(HTTPServer):
             cmd.set_context(payload.get_context())
             url = cmd.get_url()
             x_payload = cmd.get()
-            if not self.send_request(payload=cmd, url=url):
+            if not self.send_request(payload=cmd, url=url, wait=wait, timeout=payload.timeout):
                 ret = False
     
         return ret
 
-    def _send_request(self, payload, headers=None, url=None):
+    def _send_request(self, payload, headers=None, url=None, timeout=None):
+        if payload.get("action") != "register":
+            print("=== SEND_REQUEST:", self.device.type, payload.get("action"), url)
+
         token = uuid.uuid4()
 
         if isinstance(payload, dict):
@@ -509,10 +535,22 @@ class KenzyHTTPServer(HTTPServer):
             if url is None:
                 url = self.service_url
 
-            response = requests.post(url, json=payload, headers=headers, verify=False)
+            kwargs = { "verify": False }
+            if timeout is not None:
+                kwargs["timeout"] = timeout
+
+            response = requests.post(url, json=payload, headers=headers, **kwargs)
 
             response_data = response.json()
             self.logger.debug(f"{response_data}")
+        except (requests.exceptions.ConnectTimeout, requests.exceptions.ReadTimeout, TimeoutError, urllib3.exceptions.ReadTimeoutError):
+            logging.error("Request timed out")
+            logging.debug("Timeout: url=%s action=%s", url, payload.get("action"))
+            return False
+        except (requests.exceptions.ConnectionError, ConnectionRefusedError, urllib3.exceptions.NewConnectionError, urllib3.exceptions.MaxRetryError):
+            logging.error("Request timed out")
+            logging.debug("Connection error: url=%s action=%s", url, payload.get("action"))
+            return False
         except requests.exceptions.RequestException:
             logging.debug(str(sys.exc_info()[0]))
             logging.debug(str(traceback.format_exc()))
@@ -541,6 +579,8 @@ class KenzyHTTPServer(HTTPServer):
             pass
 
     def serve_forever(self, poll_interval: float = 0.5, *args, **kwargs):
+        self.active = True
+
         if not self.device.is_alive():
             self.device.start()
             
@@ -562,22 +602,36 @@ class KenzyHTTPServer(HTTPServer):
         self.device = device
 
     def shutdown(self, **kwargs):
-        if self.device.is_alive():
-            self.device.stop()
+        for item in self.remote_devices:
+            cmd = GenericCommand("shutdown", context=self.get_local_context(), url=item)
+            print(self.device.type, item)
+            self.send_request(cmd, url=item)
+
+        self.logger.critical("=== SHUTDOWN: %s", self.device.type)
+        if self.restart_thread is not None and self.restart_thread.is_alive():
+            self.restart_event.set()
 
         if self.ssdp_server is not None:
             self.ssdp_server.stop()
             self.ssdp_server = None
 
-        if self.restart_thread is not None and self.restart_thread.is_alive():
-            self.restart_event.set()
-
         if self.register_thread is not None and self.register_thread.is_alive():
             self.register_event.set()
 
-        self.logger.info("Server stopped on " + str("%s:%s" % self.server_address) + " (" + str(self.server_name) + ")")
+        if self.device.is_alive():
+            self.device.stop()
 
+        self.logger.critical("Server attempting shutdown on " + str("%s:%s" % self.server_address) + " (" + str(self.server_name) + ")")
+        self.socket.close()
+        
+        if self.active:
+            self.active = False
+            self.timers["shutdown"] = threading.Thread(target=self.shutdown, daemon=True)
+            self.timers["shutdown"].start()
+            return
+        
         super().shutdown()
+        self.logger.critical("Server stopped on " + str("%s:%s" % self.server_address) + " (" + str(self.server_name) + ")")
 
     def status(self, **kwargs):
         # TODO: Local vs. Remote Status

@@ -119,7 +119,7 @@ if str(cfg.get("type", "")).lower() in ["multi", "multiple", "many"]:
         grp_type = get_raw_value(cfg[grp].get("type", "kenzy.skillmanager"))
         if grp_type == "kenzy.skillmanager":
             cfg[grp]["service"]["upnp"] = cfg[grp].get("service", {}).get("upnp", "server")
-            print(cfg[grp]["service"]["upnp"])
+            # print(cfg[grp]["service"]["upnp"])
 
         if port <= last_port:
             port = last_port + 1

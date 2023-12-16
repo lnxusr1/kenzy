@@ -5,21 +5,17 @@ from kenzy.tts.core import model_type, create_speech
 
 class SpeakerDevice:
     type = "kenzy.tts"
-
-    location = None
-    group = None
-    service = None
-
     logger = logging.getLogger("KNZY-TTS")
-    settings = {}
-
-    model_type = None
-    speaker = None
-    cache_folder = None 
 
     def __init__(self, **kwargs):
-        print(kwargs)
         self.settings = kwargs
+
+        self.service = None
+
+        self.model_type = None
+        self.speaker = None
+        self.cache_folder = None 
+
         self.location = kwargs.get("location")
         self.group = kwargs.get("group")
 

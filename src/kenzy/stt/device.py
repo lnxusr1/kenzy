@@ -9,23 +9,19 @@ from kenzy.stt.core import read_from_device
 
 class AudioProcessor:
     type = "kenzy.stt"
-
-    location = None
-    group = None
-    service = None
-
     logger = logging.getLogger("KNZY-STT")
-    settings = {}
- 
-    stop_event = threading.Event()
-    main_thread = None
-    callback_thread = None
-    callback_queue = None
-    restart_enabled = False
-    muted_event = threading.Event()
 
     def __init__(self, **kwargs):
         self.settings = kwargs
+
+        self.service = None
+
+        self.stop_event = threading.Event()
+        self.main_thread = None
+        self.callback_thread = None
+        self.callback_queue = None
+        self.restart_enabled = False
+        self.muted_event = threading.Event()
 
         self.location = kwargs.get("location")
         self.group = kwargs.get("group")
@@ -50,10 +46,12 @@ class AudioProcessor:
             if text is None or not isinstance(text, str):
                 break
 
+            print("====== START TEXT IN ========")
             self.service.collect(data={
                 "type": "kenzy.stt",
                 "text": text
-            })
+            }, wait=False, timeout=2)
+            print("====== STOP TEXT IN ========")
 
     def _read_from_device(self):
 
