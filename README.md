@@ -149,6 +149,15 @@ If everything is working properly you should be able to point your device to the
 
 __&raquo; [http://localhost:8080/](http://localhost:8080/)__
 
+
+## Offline Mode
+
+Set the following environment variables before starting the program to use the models offline:
+
+```
+TRANSFORMERS_OFFLINE=1 HF_DATASETS_OFFLINE=1
+```
+
 -----
 
 ## Help &amp; Support

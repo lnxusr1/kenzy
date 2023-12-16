@@ -1,6 +1,7 @@
 import logging
 from kenzy.core import KenzySuccessResponse, KenzyErrorResponse
 from kenzy.tts.core import model_type, create_speech
+from kenzy.tts.extras import number_to_words, numbers_in_string
 
 
 class SpeakerDevice:
@@ -44,7 +45,25 @@ class SpeakerDevice:
 
     def speak(self, **kwargs):
         text = kwargs.get("data", {}).get("text")
-        self.logger.debug(f"SPEAK: {text}")
+        numbers = numbers_in_string(text)
+        for num in numbers:
+
+            n = num.strip("$?!.:;").replace(",", "")
+            if "." in n:
+                n = n.split(".")
+                joiner = " point "
+                if "$" in num:
+                    joiner = " dollars and "
+                words = joiner.join([number_to_words(int(t)) for t in n])
+                if "$" in num:
+                    words = words + " cents"
+            else:
+                words = number_to_words(int(n.strip("$")))
+                if "$" in num:
+                    words = words + " dollars"
+
+            text = text.replace(num, words.replace("  ", " "), 1)
+        self.logger.debug(f"SPEAK: {text.replace(':', '-')}")
         create_speech(self.model, text, speaker=self.speaker, cache_folder=self.cache_folder)
         return KenzySuccessResponse("Complete")
 
