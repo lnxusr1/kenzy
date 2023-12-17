@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [2.0.0]
+## [2.0.1]
 
 ### Added
 
@@ -11,6 +11,14 @@ All notable changes to this project will be documented in this file.
 - Added options for saving video of detected people
 - Directly incorporated kenzy_image into kenzy.image.core.detector
 - Added reloadFaces logic to kenzy.image.detector (formerly of the kenzy-image package)
+- Added voice activation with configurable timeout
+- Added multi-model support for speak-to-text
+- Added configurable timeout for SSDP client requests
+- Added extras helpers to extract numbers from strings and convert numbers to english words.
+- Added clean text routine for supporting the rich output from OpenAi's Whisper model
+- Basic support for simultaneous actions (such as two listener+speakers in two rooms connected to same skillmanager)
+- Object recognition, Face detection, and Face recognition with optimizations to minimize processing time with support for multiple models
+- Configurable saving of videos based on object detection alerts
 
 ### Modified
 
@@ -22,13 +30,15 @@ All notable changes to this project will be documented in this file.
 - Split out detector/creator processes for each of hte core functions into their own modules (e.g. kenzy.image.detector, kenzy.stt.detector, etc.)
 - Moved all devices to their own HTTP server module when run as clients
 - Fixed the UPNP logic so that it honors the full UPNP spec for control interface lookups
+- Updated skills intent function signature to include ```**kwargs``` for additional values like raw text captured
+- Fixed the context inclusion and usage for action/response activities (uses "location" for relative responses)
 
 ### Removed
 
 - Dropped support for PyQt5 panels
-- Dropped support for Kasa smart switch/plug devices
+- Dropped direct support for Kasa smart switch/plug devices
 - Dropped unnecessary libraries (urllib3, netifaces)
-- Dropped support for MyCroft libraries (padatious, mimic3)
+- Dropped support for MyCroft libraries "mimic3" (created forked version of padatious for future internal support)
 
 ## [1.0.0]
 
