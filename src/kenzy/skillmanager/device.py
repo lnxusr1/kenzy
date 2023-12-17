@@ -15,6 +15,13 @@ class SkillsDevice:
 
         self.location = kwargs.get("location")
         self.group = kwargs.get("group")
+        self.wakeup_list = kwargs.get("wakeup_list", ["Kenzie", "Kenzi", "Kenzy", "Kinsay", "Kinsy", "Kinsie", "Kinsey"])
+
+        try:
+            self.activation_timeout = abs(float(kwargs.get("activation_timeout")))
+        except TypeError:
+            self.activation_timeout = 45
+        
         self.timeouts = {}
 
         self.initialize()
@@ -22,7 +29,15 @@ class SkillsDevice:
     def initialize(self):
         skill_folder = self.settings.get("folder", "~/.kenzy/skills")
         temp_folder = self.settings.get("temp_folder", "/tmp/intent_cache")
-        self.skill_manager = SkillManager(device=self, skill_folder=skill_folder, temp_folder=temp_folder)
+        
+        self.skill_manager = SkillManager(
+            device=self, 
+            skill_folder=skill_folder, 
+            temp_folder=temp_folder, 
+            wakeup_list=self.wakeup_list, 
+            activation_timeout=self.activation_timeout
+        )
+
         self.skill_manager.initialize()
 
     @property
@@ -41,6 +56,7 @@ class SkillsDevice:
             dev_url = self.get_context_url(context)
             if time.time() < self.timeouts.get(dev_url, {}).get("timeout", 0):
                 func = self.timeouts.get(dev_url, {}).get("callback")
+                self.skill_manager.activated = time.time()
                 if func is not None:
                     self.logger.debug("Initiating callback function")
                     func(text, context=context)

@@ -23,7 +23,7 @@ def model_type(type="speecht5", target=None):
         if device is None:
             device = "cuda" if torch.cuda.is_available() else "cpu"
 
-        logger = logging.get("KNZY-TTS")
+        logger = logging.getLogger("KNZY-TTS")
         logger.info(f"Using device={device} for speech generation.")
         processor = SpeechT5Processor.from_pretrained("microsoft/speecht5_tts")
         tts_model = SpeechT5ForTextToSpeech.from_pretrained("microsoft/speecht5_tts").to(device)

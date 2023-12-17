@@ -5,6 +5,7 @@ import sys
 import pathlib
 import traceback
 import importlib 
+import time
 from kenzy.extras import dayPart, GenericCommand, strip_punctuation
 
 
@@ -31,14 +32,22 @@ class SpeakCommand(GenericCommand):
 class SkillManager:
     logger = logging.getLogger("SKILLMANAGER")
 
-    def __init__(self, device=None, skill_folder="~/.kenzy/skills", temp_folder="/tmp/intent_cache"):
+    def __init__(self, device=None, skill_folder="~/.kenzy/skills", temp_folder="/tmp/intent_cache", wakeup_list=["Kenzy"], activation_timeout=45):
         self.service = None
         self.skills = []
 
         self.skill_folder = os.path.expanduser(skill_folder)
         self.device = device
         self.temp_folder = temp_folder
-        
+
+        if wakeup_list is None:
+            self.wakeup_list = ["Kenzie", "Kenzy"]
+        else:
+            self.wakeup_list = wakeup_list if isinstance(wakeup_list, list) else [wakeup_list]
+
+        self.activation_timeout = float(activation_timeout)
+        self.activated = 0
+
     def initialize(self):
         """
         Loads all skills into memory for referencing as required.
@@ -96,6 +105,18 @@ class SkillManager:
         
         clean_text = strip_punctuation(text)
 
+        if self.activated < time.time() - self.activation_timeout:
+            words = clean_text.lower().replace("'", " ").replace(".", " ").strip().split()
+            b_found = False
+            for wk in self.wakeup_list:
+                if wk.lower() in words:
+                    b_found = True
+                    break
+
+            if not b_found:
+                self.logger.debug("Not activated")
+                return False
+            
         def audio_fallback(in_text, context):
             self.logger.debug("fallback: " + in_text)
             return False
@@ -113,6 +134,8 @@ class SkillManager:
                 for s in self.skills:
                     if intent.name == s["intent_file"]:
                         ret_val = s["callback"](intent, context=context, raw=text)
+                        self.activated = time.time()
+
                         if isinstance(ret_val, bool):
                             return ret_val
                         else:
