@@ -56,10 +56,10 @@ class SkillsDevice:
             dev_url = self.get_context_url(context)
             if time.time() < self.timeouts.get(dev_url, {}).get("timeout", 0):
                 func = self.timeouts.get(dev_url, {}).get("callback")
-                self.skill_manager.activated = time.time()
                 if func is not None:
                     self.logger.debug("Initiating callback function")
                     func(text, context=context)
+                    self.skill_manager.activated = time.time()
                 else:
                     self.logger.error("Callback function expected but not found.")
 
