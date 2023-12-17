@@ -46,12 +46,10 @@ class AudioProcessor:
             if text is None or not isinstance(text, str):
                 break
 
-            print("====== START TEXT IN ========")
             self.service.collect(data={
                 "type": "kenzy.stt",
                 "text": text
             }, wait=False, timeout=2)
-            print("====== STOP TEXT IN ========")
 
     def _read_from_device(self):
 

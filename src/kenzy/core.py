@@ -289,6 +289,7 @@ class KenzyHTTPServer(HTTPServer):
         self.register_event = threading.Event()
         self.register_thread = None
         self.upnp = "client"
+        self.upnp_timeout = 45
         self.timers = {}
 
         self.thread_pool = concurrent.futures.ThreadPoolExecutor(max_workers=20)
@@ -312,6 +313,8 @@ class KenzyHTTPServer(HTTPServer):
         self.local_url = kwargs.get("service_url", "%s://%s:%s" % (proto, ip_addr, port))
 
         self.upnp = str(kwargs.get("upnp", "client")).lower().strip() 
+        self.upnp_timeout = int(kwargs.get("upnp.timeout", 45))
+
         if self.upnp == "server":
             # start UPNP
             if self.service_url is None:
@@ -336,7 +339,7 @@ class KenzyHTTPServer(HTTPServer):
     def _set_service_url(self):
         # search for UPNP service
         if self.upnp == "client" or self.service_url is None:
-            url = discover_ssdp_services()
+            url = discover_ssdp_services(timeout=self.upnp_timeout)
             if url is not None and (self.service_url is None or self.service_url != url):
                 self.service_url = url
                 self.logger.info(f"Service URL set to {self.service_url}")
@@ -351,8 +354,6 @@ class KenzyHTTPServer(HTTPServer):
 
         if str(action).strip().lower() == "register":
             return self.register(data=payload, context=context)
-
-        print("=== COMMAND:", self.device.type)
 
         for item in self.device.accepts:
             if str(action).strip().lower() == "shutdown":
@@ -388,7 +389,6 @@ class KenzyHTTPServer(HTTPServer):
         )
 
     def collect(self, data=None, context=None, wait=True, timeout=None):
-        print("=== COLLECT:", self.device.type)
         if not isinstance(context, KenzyContext):
             context = self.get_local_context()
     
@@ -515,9 +515,6 @@ class KenzyHTTPServer(HTTPServer):
         return ret
 
     def _send_request(self, payload, headers=None, url=None, timeout=None):
-        if payload.get("action") != "register":
-            print("=== SEND_REQUEST:", self.device.type, payload.get("action"), url)
-
         token = uuid.uuid4()
 
         if isinstance(payload, dict):
@@ -604,10 +601,9 @@ class KenzyHTTPServer(HTTPServer):
     def shutdown(self, **kwargs):
         for item in self.remote_devices:
             cmd = GenericCommand("shutdown", context=self.get_local_context(), url=item)
-            print(self.device.type, item)
             self.send_request(cmd, url=item)
 
-        self.logger.critical("=== SHUTDOWN: %s", self.device.type)
+        self.logger.info("SHUTDOWN: %s", self.device.type)
         if self.restart_thread is not None and self.restart_thread.is_alive():
             self.restart_event.set()
 
@@ -621,7 +617,7 @@ class KenzyHTTPServer(HTTPServer):
         if self.device.is_alive():
             self.device.stop()
 
-        self.logger.critical("Server attempting shutdown on " + str("%s:%s" % self.server_address) + " (" + str(self.server_name) + ")")
+        self.logger.info("Server attempting shutdown on " + str("%s:%s" % self.server_address) + " (" + str(self.server_name) + ")")
         self.socket.close()
         
         if self.active:
@@ -631,7 +627,7 @@ class KenzyHTTPServer(HTTPServer):
             return
         
         super().shutdown()
-        self.logger.critical("Server stopped on " + str("%s:%s" % self.server_address) + " (" + str(self.server_name) + ")")
+        self.logger.info("Server stopped on " + str("%s:%s" % self.server_address) + " (" + str(self.server_name) + ")")
 
     def status(self, **kwargs):
         # TODO: Local vs. Remote Status

@@ -5,7 +5,8 @@ import sys
 import pathlib
 import traceback
 import importlib 
-from kenzy.extras import dayPart, GenericCommand
+from kenzy.extras import dayPart, GenericCommand, strip_punctuation
+
 
 try:
     from padatious import IntentContainer
@@ -28,14 +29,11 @@ class SpeakCommand(GenericCommand):
 
 
 class SkillManager:
-    service = None
-    device = None
-    skill_folder = None
-    temp_folder = None
-    skills = []
     logger = logging.getLogger("SKILLMANAGER")
 
     def __init__(self, device=None, skill_folder="~/.kenzy/skills", temp_folder="/tmp/intent_cache"):
+        self.service = None
+        self.skills = []
 
         self.skill_folder = os.path.expanduser(skill_folder)
         self.device = device
@@ -96,23 +94,25 @@ class SkillManager:
             (bool):  True on success and False on failure.
         """
         
+        clean_text = strip_punctuation(text)
+
         def audio_fallback(in_text, context):
             self.logger.debug("fallback: " + in_text)
             return False
 
-        if text is None or str(text).strip() == "":
+        if clean_text is None or str(clean_text).strip() == "":
             return False
 
         try:
             
             # This one line explains it all... link incoming command into actionable intent using Padatious library
-            intent = self.intent_parser.calc_intent(text)
+            intent = self.intent_parser.calc_intent(clean_text)
          
             # I need to be at least 60% likely to be correct before I try to process the request.
             if intent.conf >= 0.6:
                 for s in self.skills:
                     if intent.name == s["intent_file"]:
-                        ret_val = s["callback"](intent, context=context)
+                        ret_val = s["callback"](intent, context=context, raw=text)
                         if isinstance(ret_val, bool):
                             return ret_val
                         else:

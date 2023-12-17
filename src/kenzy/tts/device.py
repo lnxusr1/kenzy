@@ -1,7 +1,7 @@
 import logging
 from kenzy.core import KenzySuccessResponse, KenzyErrorResponse
 from kenzy.tts.core import model_type, create_speech
-from kenzy.tts.extras import number_to_words, numbers_in_string
+from kenzy.extras import number_to_words, numbers_in_string
 
 
 class SpeakerDevice:

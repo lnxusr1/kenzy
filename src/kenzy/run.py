@@ -1,29 +1,7 @@
-import os
 import logging
 import ssl
-from .extras import get_local_ip_address, update_defaults
+from .extras import get_local_ip_address
 from .core import KenzyHTTPServer, KenzyRequestHandler
-
-
-def handle_startup_settings(args=None):
-    if args.config is not None:
-        if not os.path.isfile(args.config):
-            raise FileNotFoundError("Configuration file not found.")
-        
-        config_file = args.config
-    else:
-        config_file = os.path.join(os.path.expanduser("~"), ".kenzy", "config.yml")
-
-    #if not os.path.isfile(config_file):
-    #    settings = DEFAULT_SETTINGS
-    #else:       
-    #    settings = load_settings(config_file)
-    #    update_defaults(settings)
-
-    #if str(args.type).lower() in ["core", "client"]:
-    #    settings["type"] = str(args.type).lower()
-
-    #return config_file, settings
 
 
 def start_server(config_file=None, settings={}):

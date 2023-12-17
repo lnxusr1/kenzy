@@ -33,20 +33,22 @@ class SkillsDevice:
         return True
     
     def collect(self, **kwargs):
-        # print(kwargs)
         data = kwargs.get("data", {})
         context = kwargs.get("context")
 
-        print(data)
         if data.get("type", "") == "kenzy.stt":
             text = data.get("text")
             dev_url = self.get_context_url(context)
             if time.time() < self.timeouts.get(dev_url, {}).get("timeout", 0):
-                print(self.timeouts.get(dev_url, {}))
                 func = self.timeouts.get(dev_url, {}).get("callback")
                 if func is not None:
+                    self.logger.debug("Initiating callback function")
                     func(text, context=context)
+                else:
+                    self.logger.error("Callback function expected but not found.")
+
             else:
+                self.logger.debug("Checking intent for associated skill")
                 self.skill_manager.parse(text=text, context=context)
 
         return KenzySuccessResponse("Collect complete")
