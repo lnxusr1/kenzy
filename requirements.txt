@@ -1,14 +1,28 @@
+# ALL
 requests
+urllib3
 pyyaml
-numpy
-opencv-contrib-python
-face_recognition
-yolov7detect
-webrtcvad
-pyaudio
-soundfile
-torch
-transformers
-datasets
-sentencepiece
+scikit-build 
+
+# SKILL
+fann2==1.1.2
 padatious
+
+# TTS and STT
+PyAudio>=0.2.13
+soundfile
+wave
+torch
+fsspec==2023.9.2
+transformers==4.31.0
+datasets==2.14.3
+webrtcvad
+sentencepiece==0.1.99
+
+# IMAGE
+yolov7detect==1.0.1
+opencv-contrib-python==4.8.1.78
+face_recognition==1.3.0
+numpy
+
+

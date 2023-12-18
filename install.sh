@@ -68,7 +68,7 @@ $pythonCmd -m pip install --upgrade \
     scikit-build \
     urllib3 \
     requests \
-    netifaces;
+    pyyaml;
 
 if [ $brain -eq 1 ]; then
     echo "Installing libraries for brain module...";
@@ -96,24 +96,18 @@ if [ $watcher -eq 1 ]; then
     echo "Installing libraries for watcher module...";
     $pythonCmd -m pip install --upgrade \
         opencv-contrib-python \
-        kenzy-image;
+        yolov7detect==1.0.1 \
+        face_recognition \
+        numpy;
     echo "watcher module installed.";
 fi
 
-if [ $speaker -eq 1 ]; then
-    echo "Installing libraries for speaker module...";
+if [ $speaker -eq 1 ] || [ $listener -eq 1 ]; then
+    echo "Installing libraries for listener and speaker module...";
     sudo apt-get -y install \
         libespeak-ng1 \
         festival \
-        festvox-us-slt-hts;
-
-    #$pythonCmd -m pip install --upgrade mycroft-mimic3-tts[all];
-    echo "speaker module installed.";
-fi
-
-if [ $listener -eq 1 ]; then
-    echo "Installing libraries for listener module...";
-    sudo apt-get -y install \
+        festvox-us-slt-hts \
         python3-pyaudio \
         libportaudio2 \
         portaudio19-dev \
@@ -121,45 +115,23 @@ if [ $listener -eq 1 ]; then
         libatlas-base-dev;
 
     $pythonCmd -m pip install --upgrade \
-        webrtcvad \
-        transformers \
-        torch \
-        torchaudio \
+        PyAudio>=0.2.13 \
         soundfile \
-        sentencepiece;
+        wave \
+        torch \
+        fsspec==2023.9.2 \
+        transformers==4.31.0 \
+        datasets==2.14.3 \
+        webrtcvad \
+        sentencepiece==0.1.99;
 
-    machine=`uname -m`
-    if [ "${machine}" = "armv7l" ]; then
-        echo "It appears you are using an ARM processor.  Attempting to install STT manually."
-        wget -O stt-1.4.0-cp39-cp39-linux_armv7l.whl https://github.com/coqui-ai/STT/releases/download/v1.4.0/stt-1.4.0-cp39-cp39-linux_armv7l.whl;
-        $pythonCmd -m pip install stt-1.4.0-cp39-cp39-linux_armv7l.whl;
-    else
-        $pythonCmd -m pip install --upgrade \
-            stt;
-    fi
-
-    echo "listener module installed.";
+    #$pythonCmd -m pip install --upgrade mycroft-mimic3-tts[all];
+    echo "listener and speaker modules installed.";
 fi
 
 echo "Installing kenzy module...";
 $pythonCmd -m pip install --upgrade kenzy;
 echo "Kenzy module installed.";
-
-if [ $listener -eq 1 ]; then
-    echo "Downloading models for listener...";
-    $pythonCmd -m kenzy --download-models;
-    echo "Listener models downloaded";
-
-    # Force upgrade on pyaudio but don't fail if it doesn't work
-    set +e
-    echo "Checking for upgrade on PyAudio...";
-    $pythonCmd -m pip install --upgrade pyaudio 2>> /dev/null;
-    if [ $? -ne 0 ]; then
-        echo "PyAudio not upgraded, but it's probably okay to ignore this error.";
-    fi
-    set -e
-
-fi
 
 $pythonCmd -m compileall
 if [ $? -ne 0 ]; then
@@ -173,13 +145,13 @@ echo "";
 
 if [ -z $virtenv ] || [ "${virtenv}" = "" ]; then
     echo "To get started enter the following:";
-    echo "  python3 -m kenzy";
+    echo "  python3 -m kenzy --config CONFIG_FILE";
 else
     echo "To get started you need to activate your virtual environment:";
     echo "  source ${virtenv}/bin/activate";
     echo "";
     echo "Once activated you can start Kenzy with the following:";
-    echo "  python3 -m kenzy";
+    echo "  python3 -m kenzy --config CONFIG_FILE";
 fi
 
 echo "";

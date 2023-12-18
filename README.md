@@ -8,27 +8,20 @@ Read the docs: [https://docs.kenzy.ai/](https://docs.kenzy.ai/)
 
 ## Kenzy's Architecture
 
-Kenzy's architecture is divided into two main components:  Containers and Devices.  The containers focus on communication between other containers and devices are designed to control input and output operations.  The most important container is the Brain which is a special type of container as it collects data and provides the skill engine for reacting to inputs.  While a Brain does support all the methods of a normal container it is recommended to create a separate container to store all your devices.
+Kenzy's architecture is divided into compartments.  These compartments come with two main components:  Servers and Devices.  The servers focus on communication between other compartments and devices are designed to control input and output operations.  Devices are always run within a server and a server can execute only one device.  Servers talk to other servers using HTTP/HTTPS like standard web requests making customizing the communication fairly straightforward.  The most important device is the ```kenzy.skillmanager``` which is a special type of device that collects data and provides the skill engine for reacting to inputs.
 
-All options, configurations, and startup parameters are driven by the configuration file saved to the following location:
-```~/.kenzy/config.json```
+All options, configurations, and startup parameters are driven configuration files.  There are a few examples available in the repository under the examples folder.
 
 __Python Module Overview__
 
-| Class/Object                      | Description                      | TCP Port |
-| :-------------------------------- | :------------------------------- | :------: |
-| kenzy.containers.Brain            | Main service for processing I/O. | 8080     |
-| kenzy.containers.DeviceContainer  | Secondary service for devices.   | 8081     |
-
-__Python Device Module Overview__
-
-| Class/Object              | Description                                                 |
-| :------------------------ | :---------------------------------------------------------- |
-| kenzy.devices.Speaker     | Audio output device for text-to-speech conversion           |
-| kenzy.devices.Listener    | Microphone device for speech-to-text conversion             |
-| kenzy.devices.Watcher     | Video/Camera device for object recognition                  |
-| kenzy.devices.KasaDevice  | Smart plug device for Kasa devices                          |
-| kenzy.panels.RaspiPanel   | Panel device designed for Raspberry Pi 7" screen @ 1024x600 |
+| Class/Object         | Description                                                           |
+| :------------------- | :-------------------------------------------------------------------- |
+| kenzy.core           | Core logic with inheritable objects for each device.                  |
+| kenzy.extras         | Extra functions for UPNP/SSDP and other features.                     |
+| kenzy.skillmanager   | Core skill manager (a.k.a. "The Brain")                               |
+| kenzy.image          | Object/Face detection processing video capture (previously "Watcher") |
+| kenzy.tts            | Text-to-speech models processing audio-output (previously "Speaker")  |
+| kenzy.stt            | Speech-to-text models processing audio-input (previously "Listener")  |
 
 ## Installation
 
