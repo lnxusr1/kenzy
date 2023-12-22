@@ -404,8 +404,8 @@ def discover_ssdp_services(search_text=SSDP_DEVICE_TYPE, timeout=45):
 
 def strip_punctuation(text):
     allowed = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789$.'"
-    text = "".join([str(x if x in allowed else " ") for x in [*text]]).replace("  ", " ")
-    return text
+    text = "".join([str(x if x in allowed else " ") for x in [*text]]).replace("  ", " ").replace(". ", " ").strip(".")
+    return text.strip()
 
 
 def numbers_in_string(text):

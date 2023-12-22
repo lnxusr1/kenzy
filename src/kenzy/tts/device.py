@@ -1,3 +1,4 @@
+import os
 import logging
 from kenzy.core import KenzySuccessResponse, KenzyErrorResponse
 from kenzy.tts.core import model_type, create_speech
@@ -23,6 +24,10 @@ class SpeakerDevice:
         self.initialize()
 
     def initialize(self):
+        if self.settings.get("offline"):
+            os.environ["TRANSFORMERS_OFFLINE"] = "1"
+            os.environ["HF_DATASETS_OFFLINE"] = "1"
+
         self.model = model_type(self.settings.get("model_type", "speecht5"), target=self.settings.get("model_target"))
         self.speaker = self.settings.get("speaker", "slt")
         self.cache_folder = self.settings.get("cache_folder", "~/.kenzy/cache/speech")

@@ -1,34 +1,43 @@
 # KENZY.Ai &middot; [![GitHub license](https://img.shields.io/github/license/lnxusr1/kenzy)](https://github.com/lnxusr1/kenzy/blob/master/LICENSE) ![Python Versions](https://img.shields.io/pypi/pyversions/yt2mp3.svg) ![Read the Docs](https://img.shields.io/readthedocs/kenzy) ![GitHub release (latest by date)](https://img.shields.io/github/v/release/lnxusr1/kenzy)
 
-This project is dedicated to building a "Synthetic Human" which is called Kenzy for which we have assigned the female gender pronoun of "she". She has visual face recognition ([opencv/opencv](https://github.com/opencv/opencv)), speech transcription ([coqui](https://github.com/coqui-ai)), and speech synthesis ([festival](http://www.cstr.ed.ac.uk/projects/festival/) or [mimic3](https://github.com/MycroftAI/mimic3)).  Kenzy is written in Python and is targeted primarily at the single board computer (SBC) platforms like the [Raspberry Pi](https://www.raspberrypi.org/).
+This project is dedicated to building a "Synthetic Human" which is called Kenzy for which we have assigned the female gender pronoun of "she". She has intent determination ([padatious](https://github.com/MycroftAI/padatious)) visual face recognition ([opencv/opencv](https://github.com/opencv/opencv)), speech transcription ([whisper](https://openai.com/research/whisper)), and speech synthesis ([speecht5](https://github.com/microsoft/SpeechT5)/[festival](http://www.cstr.ed.ac.uk/projects/festival/).  Kenzy is written in Python and is targeted primarily at the single board computer (SBC) platforms like the [Raspberry Pi](https://www.raspberrypi.org/).
 
 Visit our main site: [https://kenzy.ai/](https://kenzy.ai/)
 
 ## Kenzy's Architecture
 
-Kenzy's architecture is divided into two main components:  Containers and Devices.  The containers focus on communication between other containers and devices are designed to control input and output operations.  The most important container is the Brain which is a special type of container as it collects data and provides the skill engine for reacting to inputs.  While a Brain does support all the methods of a normal container it is recommended to create a separate container to store all your devices.
+Kenzy's architecture is divided into compartments.  These compartments come with two main components:  Servers and Devices.  The servers focus on communication between other compartments and devices are designed to control input and output operations.  Devices are always run within a server and a server can execute only one device.  Servers talk to other servers using HTTP/HTTPS like standard web requests making customizing the communication fairly straightforward.  The most important device is the ```kenzy.skillmanager``` which is a special type of device that collects data and provides the skill engine for reacting to inputs.
 
-All options, configurations, and startup parameters are driven by the configuration file saved to the following location:
-```~/.kenzy/config.json```
+All options, configurations, and startup parameters are driven configuration files.  There are a few examples available in the repository under the examples folder.
 
 __Python Module Overview__
 
-| Class/Object                      | Description                      | TCP Port |
-| :-------------------------------- | :------------------------------- | :------: |
-| kenzy.containers.Brain            | Main service for processing I/O. | 8080     |
-| kenzy.containers.DeviceContainer  | Secondary service for devices.   | 8081     |
-
-__Python Device Module Overview__
-
-| Class/Object              | Description                                                 |
-| :------------------------ | :---------------------------------------------------------- |
-| kenzy.devices.Speaker     | Audio output device for text-to-speech conversion           |
-| kenzy.devices.Listener    | Microphone device for speech-to-text conversion             |
-| kenzy.devices.Watcher     | Video/Camera device for object recognition                  |
-| kenzy.devices.KasaDevice  | Smart plug device for Kasa devices                          |
-| kenzy.panels.RaspiPanel   | Panel device designed for Raspberry Pi 7" screen @ 1024x600 |
+| Class/Object         | Description                                                           |
+| :------------------- | :-------------------------------------------------------------------- |
+| kenzy.core           | Core logic with inheritable objects for each device.                  |
+| kenzy.extras         | Extra functions for UPNP/SSDP and other features.                     |
+| kenzy.skillmanager   | Core skill manager (a.k.a. "The Brain")                               |
+| kenzy.image          | Object/Face detection processing video capture (previously "Watcher") |
+| kenzy.tts            | Text-to-speech models processing audio-output (previously "Speaker")  |
+| kenzy.stt            | Speech-to-text models processing audio-input (previously "Listener")  |
 
 ## Installation
+
+The quickest and easiest way to install Kenzy is to use our installation script:
+
+```
+wget -q -O install.sh https://kenzy.ai/installer && sh install.sh
+```
+
+Running the script exactly as shown above will install Kenzy and all components.  If you want to be more selective you can add options as follows:
+
+* ```-b``` = Install skill manager dependencies (formerly the "Brain")
+* ```-l``` = Install stt dependencies (formerly the "Listener")
+* ```-s``` = Install tts dependencies (formerly the "Speaker")
+* ```-w``` = Install image dependencies (formerly the "Watcher")
+* ```-v [PATH]``` = Python virtual environment path (will create new if does not already exist)
+
+Installer script has been tested on Ubuntu 22.04+, Debian Buster, and Raspberry Pi OS (Buster).
 
 Kenzy is available through pip, but to use the built-in devices there are a few extra libraries you may require.  Please visit the [Basic Install](https://docs.kenzy.ai/en/latest/installation.basic/) page for more details.  
 
@@ -36,9 +45,9 @@ __&raquo; [HOWTO: Install](https://docs.kenzy.ai/en/latest/installation.basic/)_
 
 ## Web Control Panel
 
-If everything is working properly you should be able to point your device to the web control panel running on the __Brain__ engine to test it out.  The default URL is:
+If everything is working properly you should be able to point your device to the web control panel running on the __skillmanager__ device to test it out.  The default URL is:
 
-__&raquo; [http://localhost:8080/](http://localhost:8080/)__
+__&raquo; [http://localhost:9700/](http://localhost:9700/)__
 
 -----
 

@@ -22,7 +22,7 @@ paplay -d 1 /usr/share/sounds/alsa/Front_Center.wav
 parecord -d 1 test.wav
 ```
 
-## Picking a voice for Text-to-Speech
+## Picking a voice for Text-to-Speech (Festival)
 Next we need to configure output to Festival.  Festival will reference a file in the user's home directory just like the .bashrc above.  You can also set this in /etc, but we'll keep it simple with the following:
 ```
 echo "(Parameter.set 'Audio_Required_Format 'aiff)" > ~/.festivalrc

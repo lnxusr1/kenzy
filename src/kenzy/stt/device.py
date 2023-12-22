@@ -1,3 +1,4 @@
+import os
 import threading
 import logging
 import queue
@@ -52,6 +53,10 @@ class AudioProcessor:
             }, wait=False, timeout=2)
 
     def _read_from_device(self):
+
+        if self.settings.get("offline"):
+            os.environ["TRANSFORMERS_OFFLINE"] = "1"
+            os.environ["HF_DATASETS_OFFLINE"] = "1"
 
         try:
             for text in read_from_device(self.stop_event, muted_event=self.muted_event, **self.settings):

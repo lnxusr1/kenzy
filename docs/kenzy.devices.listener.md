@@ -1,19 +1,47 @@
-# kenzy.devices.Listener
+# KENZY: Speech-to-Text (STT)
+
+The Speech-to-Text device does exactly what it's name suggests.  It translates captured audio into text phrases.  Spoken phrases are separated by idle "gap" time.  
+
+The STT device also supports mute/unmute events which prevent it from capturing audio when it is set to "mute".  This is leveraged to keep Kenzy from listening to herself when she speaks.  Each "speak" command is preceded by a "mute" command and followed by an "unmute" command.  Since "speak" commands are processed sequentially this achieves the objective to avoid looping statements.
 
 ## Parameters
-| Parameter           | Type    | Default | Description |
-| :------------------ | :------ | :------ | :---------- |
-| audioChannels       | int     | 1       | Audio channels for audio source |
-| audioSampleRate     | int     | 16000   | Audio sample rate of audio source |
-| vadAggressiveness   | int     | 1       | Noise filtering level.  Accepts 1 thru 3. |
-| speechRatio         | float   | 0.75    | Must be between 0 and 1 as a decimal |
-| speechBufferSize    | int     | 50      | Buffer size for speech frames |
-| speechBufferPadding | int     | 350     | Padding, in milliseconds, of speech frames |
-| audioDeviceIndex    | int     | 0       | Microphone device accourding to PyAudio |
-| speechModel         | str     | None    | Path and filename of Coqui Speech Model file |
-| speechScorer        | str     | None    | (Optional) Path and filename of Coqui Scorer file |
-| nickname            | str     | None    | (Optional) Nickname of the device |
+| Parameter              | Type    | Default                | Description                             |
+| :--------------------- | :------ | :--------------------- | :-------------------------------------- |
+| group                  | str     | *None*                 | Device membership group                 |
+| location               | str     | *None*                 | Location, e.g. "Living Room"            |
+| audio_device           | int     | *None*                 | PyAudio microphone device index         |
+| audio_channels         | int     | 1                      | Audio channels for audio source         |
+| audio_sample_rate      | int     | 16000                  | Audio sample rate of audio source       |
+| vad_aggressiveness     | int     | 1                      | Noise filtering level.  Values 1 thru 3 |
+| speech_buffer_padding  | int     | 350                    | Speech gap time in milliseconds         |
+| speech_buffer_size     | int     | 50                     | Buffer size for speech frames           |
+| speech_ratio           | float   | 0.75                   | Must be decimal between 0 and 1         |
+| speech_model           | str     | openai/whisper-tiny.en | Path or name of Whisper Model           |
 
+## Example YAML File
+
+See [Service Settings](kenzy.containers.md) for options in the *service* group.
+
+```
+type: kenzy.stt
+
+device: 
+  location:                 Living Room
+  group:                    Primary
+  audio_device:             0
+  audio_channels:           1
+  audio_sample_rate:        16000
+  vad_aggressiveness:       0
+  speech_buffer_padding:    350
+  speech_buffer_size:       50
+  speech_ratio:             0.75
+  speech_model:             openai/whisper-tiny.en
+
+service:
+  upnp:                     client
+  host:                     0.0.0.0
+  port:                     9701
+```
 -----
 
 ## Help &amp; Support

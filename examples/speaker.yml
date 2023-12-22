@@ -9,6 +9,7 @@ service:
   upnp:                     client
   host:                     0.0.0.0
   port:                     9702
-  ssl.enable:               false
-  ssl.cert_file:            /etc/ssl/cert/snakeoil.crt
-  ssl.key_file:             /etc/ssl/private/snakeoil.key
+  ssl:
+    enable:               false
+    cert_file:            /etc/ssl/cert/snakeoil.crt
+    key_file:             /etc/ssl/private/snakeoil.key

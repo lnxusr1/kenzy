@@ -3,9 +3,9 @@
 The basic structure for a skill is laid out below:
 
 ```
-from kenzy_brain import Skill
+from kenzy import GenericSkill
 
-class MyCustomSkill(Skill):
+class MyCustomSkill(GenericSkill):
  	def __init__(self):
  		self._name = "My Custom Skill"
  		super().__init__()
@@ -14,11 +14,16 @@ class MyCustomSkill(Skill):
  		self.register_intent_file("customskill.intent", self.handle_custom_intent)
  		return True
        
- 	def handle_custom_intent(self, message, context=None):
- 		text = self.getMessageFromDialog("customskill.dialog")
+	def handle_custom_intent(self, message, context=None, **kwargs):
+ 		text = self.getMessageFromDialog("customskill_question.dialog")
+ 		self.ask(text, self.handle_custom_response, context=context, timeout=10)
+ 		return True
+
+	def handle_custom_response(self, message, context=None, **kwargs):
+ 		text = self.getMessageFromDialog("customskill_response.dialog")
  		self.say(text, context=context)
  		return True
-         
+     
  	def stop(self):
  		return True
         
@@ -26,7 +31,7 @@ def create_skill():
  	return MyCustomSkill()
 ```
 
-You can also create folders as follows:
+You then must also create folders as follows:
 ```
 /skills
     /MyCustomSkill
@@ -34,9 +39,26 @@ You can also create folders as follows:
         /vocab
             /en_us
                 /customskill.intent
-                /customskill.dialog
+				/customskill_question.dialog
+                /customskill_response.dialog
 ```
 
+Contents of ```customskill.intent```:
+
+```
+how are you (doing |) (today |)
+```
+
+Contents of ```customskill_question.dialog```:
+```
+I'm doing well, thank you.  How are you?
+I'm online and functioning properly.  How are you?
+```
+
+Contents of ```customskill_response.dialog```:
+```
+Thank you for the update.
+```
 -----
 
 ## Help &amp; Support

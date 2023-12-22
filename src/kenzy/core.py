@@ -338,7 +338,7 @@ class KenzyHTTPServer(HTTPServer):
 
     def _set_service_url(self):
         # search for UPNP service
-        if self.upnp == "client" or self.service_url is None:
+        if self.upnp == "client" and self.service_url is None:
             url = discover_ssdp_services(timeout=self.upnp_timeout)
             if url is not None and (self.service_url is None or self.service_url != url):
                 self.service_url = url

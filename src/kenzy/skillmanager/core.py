@@ -32,7 +32,7 @@ class SpeakCommand(GenericCommand):
 class SkillManager:
     logger = logging.getLogger("SKILLMANAGER")
 
-    def __init__(self, device=None, skill_folder="~/.kenzy/skills", temp_folder="/tmp/intent_cache", wakeup_list=["Kenzy"], activation_timeout=45):
+    def __init__(self, device=None, skill_folder="~/.kenzy/skills", temp_folder="/tmp/intent_cache", wake_words=["Kenzy"], activation_timeout=45):
         self.service = None
         self.skills = []
 
@@ -40,10 +40,10 @@ class SkillManager:
         self.device = device
         self.temp_folder = temp_folder
 
-        if wakeup_list is None:
-            self.wakeup_list = ["Kenzie", "Kenzy"]
+        if wake_words is None:
+            self.wake_words = ["Kenzie", "Kenzy"]
         else:
-            self.wakeup_list = wakeup_list if isinstance(wakeup_list, list) else [wakeup_list]
+            self.wake_words = wake_words if isinstance(wake_words, list) else [wake_words]
 
         self.activation_timeout = float(activation_timeout)
         self.activated = 0
@@ -103,20 +103,29 @@ class SkillManager:
             (bool):  True on success and False on failure.
         """
         
-        clean_text = strip_punctuation(text)
+        clean_text = strip_punctuation(text).replace("'", "")
 
         if self.activated < time.time() - self.activation_timeout:
-            words = clean_text.lower().replace("'", " ").replace(".", " ").strip().split()
+            words = clean_text.lower().replace("'", "").replace(".", " ").strip()
             b_found = False
-            for wk in self.wakeup_list:
-                if wk.lower() in words:
+            for wk in self.wake_words:
+                if words.startswith(wk.lower()):
+                    words = words[len(wk):].strip()
+                    self.activated = time.time()
                     b_found = True
                     break
 
             if not b_found:
                 self.logger.debug("Not activated")
                 return False
-            
+        
+        for wk in self.wake_words:
+            if clean_text.lower().startswith(wk.lower()):
+                clean_text = clean_text[len(wk):].strip()
+
+        if clean_text == "":
+            return True
+
         def audio_fallback(in_text, context):
             self.logger.debug("fallback: " + in_text)
             return False
@@ -125,7 +134,7 @@ class SkillManager:
             return False
 
         try:
-            
+            self.logger.debug("CLEAN TEXT = %s", clean_text)
             # This one line explains it all... link incoming command into actionable intent using Padatious library
             intent = self.intent_parser.calc_intent(clean_text)
          
@@ -141,6 +150,7 @@ class SkillManager:
                         else:
                             return True  # Default return is True in case the returned value isn't boolean
             else:
+                self.logger.debug(str(intent))
                 return audio_fallback(text, context)  # Old code for hardcoded responses
         except Exception:
             self.logger.debug(str(sys.exc_info()[0]))
@@ -279,12 +289,55 @@ class GenericSkill:
         """
         
         fldr = os.path.join(self.device.skill_manager.skill_folder, self.__class__.__name__)
+        if "/" in filename or "\\" in filename:
+            full_file_path = filename
+            filename = os.path.basename(filename)
+        else:
+            full_file_path = os.path.join(fldr, "vocab", "en_us", filename)
+
         if os.path.exists(fldr):
             if os.path.exists(fldr):
                 if self.device is not None:
                     try:
-                        self.device.skill_manager.intent_parser.load_file(filename, os.path.join(fldr, "vocab", "en_us", filename), reload_cache=True)
+                        self.device.skill_manager.intent_parser.load_file(filename, full_file_path, reload_cache=True)
                         self.device.skill_manager.skills.append({ "intent_file": filename, "callback": callback, "object": self })
+                    except AttributeError:
+                        self.logger.error("Error registering intent file due to AttributeError.")
+                        return False
+                else:
+                    self.logger.error("Device not referenced")
+            else:
+                self.logger.error("Error registering intent file (" + str(filename) + ")")
+        else:
+            self.logger.error("Intent file not found (" + str(filename) + ")")
+            return False
+        
+        return True
+    
+    def register_entity_file(self, filename):
+        """
+        Registers an intent file with the Padatious neural network engine.
+        
+        Args:
+            filename (str): The file in the vocab/local folder whose contents should be registered.
+            callback (function): The function to call when the determined intent matches this data set.
+            
+        Returns:
+            (bool):  True on success and False on failure.
+        """
+        
+        fldr = os.path.join(self.device.skill_manager.skill_folder, self.__class__.__name__)
+        if "/" in filename or "\\" in filename:
+            full_file_path = filename
+            filename = os.path.basename(filename)
+        else:
+            full_file_path = os.path.join(fldr, "vocab", "en_us", filename)
+
+        if os.path.exists(fldr):
+            if os.path.exists(fldr):
+                if self.device is not None:
+                    try:
+                        self.device.skill_manager.intent_parser.load_entity(filename.rsplit(".", 1)[0], full_file_path, reload_cache=True)
                     except AttributeError:
                         self.logger.error("Error registering intent file due to AttributeError.")
                         return False
@@ -316,6 +369,9 @@ class GenericSkill:
             self.logger.error("Device not referenced")
 
         return False
+
+    def get_setting(self, name):
+        return self.device.settings.get(self._name, {}).get(name)
 
     def stop(self):
         """

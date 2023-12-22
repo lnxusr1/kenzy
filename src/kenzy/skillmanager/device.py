@@ -9,32 +9,40 @@ class SkillsDevice:
     logger = logging.getLogger("KNZY-SKM")
 
     def __init__(self, **kwargs):
+        if not isinstance(kwargs.get("timeout", {}), dict):
+            kwargs["timeout"] = {}
+
         self.settings = kwargs
         self.service = None
         self.skill_manager = None
 
         self.location = kwargs.get("location")
         self.group = kwargs.get("group")
-        self.wakeup_list = kwargs.get("wakeup_list", ["Kenzie", "Kenzi", "Kenzy", "Kinsay", "Kinsy", "Kinsie", "Kinsey"])
+        self.wake_words = kwargs.get("wake_words", ["Kenzie", "Kenzi", "Kenzy", "Kinsay", "Kinsy", "Kinsie", "Kinsey"])
 
         try:
-            self.activation_timeout = abs(float(kwargs.get("activation_timeout")))
+            self.activation_timeout = abs(float(kwargs.get("timeout", {}).get("activation")))
         except TypeError:
             self.activation_timeout = 45
         
+        try:
+            self.ask_timeout = abs(float(kwargs.get("timeout", {}).get("ask")))
+        except TypeError:
+            self.ask_timeout = 10
+
         self.timeouts = {}
 
         self.initialize()
 
     def initialize(self):
-        skill_folder = self.settings.get("folder", "~/.kenzy/skills")
+        skill_folder = self.settings.get("skill_folder", "~/.kenzy/skills")
         temp_folder = self.settings.get("temp_folder", "/tmp/intent_cache")
         
         self.skill_manager = SkillManager(
             device=self, 
             skill_folder=skill_folder, 
             temp_folder=temp_folder, 
-            wakeup_list=self.wakeup_list, 
+            wake_words=self.wake_words, 
             activation_timeout=self.activation_timeout
         )
 
@@ -118,7 +126,7 @@ class SkillsDevice:
 
         timeout = kwargs.get("timeout")
         if timeout is None or float(timeout) <= 0:
-            timeout = self.settings.get("ask_timeout", 10)
+            timeout = self.ask_timeout
 
         self.timeouts[dev_url] = { "timeout": time.time() + float(timeout), "callback": callback }
         # use context = location (door), group (living room), all
