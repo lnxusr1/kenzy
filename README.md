@@ -23,6 +23,8 @@ __Python Module Overview__
 | kenzy.tts            | Text-to-speech models processing audio-output (previously "Speaker")  |
 | kenzy.stt            | Speech-to-text models processing audio-input (previously "Listener")  |
 
+-----
+
 ## Installation
 
 ### Using the Installation Script
