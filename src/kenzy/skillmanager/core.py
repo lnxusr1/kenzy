@@ -29,6 +29,17 @@ class SpeakCommand(GenericCommand):
         self.payload["text"] = value
 
 
+class PlayCommand(GenericCommand):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.action = "play"
+        self.pre(GenericCommand(action="mute", context=kwargs.get("context")))
+        self.post(GenericCommand(action="unmute", context=kwargs.get("context")))
+
+    def file_name(self, value):
+        self.payload["file_name"] = value
+
+
 class SkillManager:
     logger = logging.getLogger("SKILLMANAGER")
 
@@ -123,14 +134,14 @@ class SkillManager:
             if clean_text.lower().startswith(wk.lower()):
                 clean_text = clean_text[len(wk):].strip()
 
-        if clean_text == "":
-            return True
+        if clean_text is None or str(clean_text).strip() == "":
+            cmd = PlayCommand(context=context)
+            cmd.file_name("ready.wav")
+            self.service.send_request(payload=cmd)
+            return False
 
         def audio_fallback(in_text, context):
             self.logger.debug("fallback: " + in_text)
-            return False
-
-        if clean_text is None or str(clean_text).strip() == "":
             return False
 
         try:

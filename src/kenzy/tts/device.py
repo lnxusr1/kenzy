@@ -1,7 +1,7 @@
 import os
 import logging
 from kenzy.core import KenzySuccessResponse, KenzyErrorResponse
-from kenzy.tts.core import model_type, create_speech
+from kenzy.tts.core import model_type, create_speech, play_wav_file
 from kenzy.extras import number_to_words, numbers_in_string
 
 
@@ -34,11 +34,19 @@ class SpeakerDevice:
 
     @property
     def accepts(self):
-        return ["start", "stop", "restart", "status", "get_settings", "set_settings", "speak"]
+        return ["start", "stop", "restart", "status", "get_settings", "set_settings", "speak", "play"]
     
     def is_alive(self, **kwargs):
         return True
-    
+
+    def play(self, **kwargs):
+        print(kwargs)
+        if kwargs.get("data", {}).get("file_name") is not None:
+            file_name = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "data", kwargs.get("data", {}).get("file_name")))
+            if os.path.isfile(file_name):
+                play_wav_file(file_name)
+        return KenzySuccessResponse("Complete")
+
     def start(self, **kwargs):
         return KenzySuccessResponse("Speaker started")
     
