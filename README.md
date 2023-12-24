@@ -122,6 +122,7 @@ __NOTE:__ The installation of OpenCV is required when using the watcher device. 
 
 If you prefer not to wait then you can install the opencv package that comes with most distributions however this version does not support facial recognition.  To use the package instead then issue ```apt-get install python3-opencv``` and remove the ```opencv-contrib-python``` from the pip package list above.  (This will spead up the installation time significantly on the Raspberry Pi at the cost of functionality.)
 
+-----
 
 ## Troubleshooting: "Cannot find FANN libs"
 If you encounter an error trying to install the kenzy module on the Raspberry Pi then you may need to add a symlink to the library FANN library. This is due to a bug/miss in the "find_fann" function within the Python FANN2 library as it doesn't look for the ARM architecture out-of-the-box.  To fix it run the following:
@@ -136,13 +137,15 @@ sudo ln -s /usr/lib/arm-linux-gnueabihf/libdoublefann.so.2 /usr/local/lib/libdou
 sudo ln -s /usr/lib/x86_64-linux-gnu/libdoublefann.so.2 /usr/local/lib/libdoublefann.so
 ```
 
+-----
+
 ## Starting Up
 You can execute Kenzy directly as a module.  To do so try the following:
 
 ```
 python3 -m kenzy --config CONFIG_FILE
 ```
-Use the ```--help``` option for full listing of command line options including specifying a custom configuration file.
+Use the ```--help``` option for full listing of command line options including specifying a [custom configuration](https://docs.kenzy.ai/en/latest/kenzy.config/) file.
 
 ## Web Control Panel
 
@@ -150,14 +153,6 @@ If everything is working properly you should be able to point your device to the
 
 __&raquo; [http://localhost:9700/](http://localhost:9700/)__
 
-
-## Offline Mode
-
-Set the following environment variables before starting the program to use the models offline:
-
-```
-TRANSFORMERS_OFFLINE=1 HF_DATASETS_OFFLINE=1
-```
 
 -----
 
