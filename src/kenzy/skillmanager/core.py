@@ -380,6 +380,25 @@ class GenericSkill:
             self.logger.error("Device not referenced")
 
         return False
+    
+    def play(self, file_name, context=None):
+        """
+        Encapsulates the frequently used function of "play" in order to make it easier for new skill development.  Makes self.play() method available.
+        
+        Args:
+            file_name (str): The text to speak to start the question/answer phase.
+            context (KenzyContext): Context surrounding the request. (optional)
+            
+        Returns:
+            (bool): True on success and False on failure.
+        """
+        if self.device is not None:
+            ret = self.device.play(file_name=file_name, context=context)
+            return ret.is_success()
+        else:
+            self.logger.error("Device not referenced")
+
+        return False
 
     def get_setting(self, name):
         return self.device.settings.get(self._name, {}).get(name)

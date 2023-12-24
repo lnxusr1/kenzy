@@ -18,6 +18,8 @@ Running the script exactly as shown above will install Kenzy and all components.
 
 Installer script has been tested on Ubuntu 22.04+, Debian Buster, and Raspberry Pi OS (Buster).
 
+-----
+
 ## Manual Installation
 
 Kenzy is available through pip, but to use the built-in devices there are a few extra libraries you may require.
@@ -97,6 +99,8 @@ __NOTE:__ The installation of OpenCV is required when using the watcher device. 
 
 If you prefer not to wait then you can install the opencv package that comes with most distributions however this version does not support facial recognition.  To use the package instead then issue ```apt-get install python3-opencv``` and remove the ```opencv-contrib-python``` from the pip package list above.  (This will spead up the installation time significantly on the Raspberry Pi at the cost of functionality.)
 
+-----
+
 ## Troubleshooting: "Cannot find FANN libs"
 If you encounter an error trying to install the kenzy module on the Raspberry Pi then you may need to add a symlink to the library FANN library. This is due to a bug/miss in the "find_fann" function within the Python FANN2 library as it doesn't look for the ARM architecture out-of-the-box.  To fix it run the following:
 
@@ -109,14 +113,16 @@ sudo ln -s /usr/lib/arm-linux-gnueabihf/libdoublefann.so.2 /usr/local/lib/libdou
 ```
 sudo ln -s /usr/lib/x86_64-linux-gnu/libdoublefann.so.2 /usr/local/lib/libdoublefann.so
 ```
+-----
 
 ## Starting Up
-You can execute Kenzy directly as a module.  To do so try the following:
+You can execute Kenzy directly as a module or by calling the main kenzy program directly.  To do so try the following:
 
 ```
-python3 -m kenzy --config CONFIG_FILE
+kenzy --config CONFIG_FILE
 ```
-Use the ```--help``` option for full listing of command line options including specifying a custom configuration file.
+
+Use the ```--help``` option for full listing of command line options including specifying a [custom configuration](kenzy.config.md) file.
 
 ## Web Control Panel
 

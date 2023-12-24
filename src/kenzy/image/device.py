@@ -58,6 +58,7 @@ class VideoProcessor:
 
         self.motion_threshold = kwargs.get("motion.threshold", 20)
         self.motion_area = kwargs.get("motion.area", 0.0003)
+
         self.object_threshold = kwargs.get("object.threshold", 0.6)
         self.object_model_type = kwargs.get("object.model_type", "ssd")
         self.object_model_config = kwargs.get("object.model_config")
@@ -65,13 +66,13 @@ class VideoProcessor:
         self.object_label_file = kwargs.get("objects.label_file")
 
         self.face_tolerance = kwargs.get("face.tolerance", 0.5)
+        self.default_name = kwargs.get("face.default_name")
+        self.cache_folder = kwargs.get("face.cache_folder")
 
         self.video_format = kwargs.get("record.format", "XVID")
         self.video_folder = kwargs.get("record.folder")
         self.record_buffer = kwargs.get("record.buffer", 5)
-        self.default_name = kwargs.get("face.default_name")
-        self.cache_folder = kwargs.get("face.cache_folder")
-
+        
         self.initialize_settings()
 
     def initialize_settings(self):

@@ -17,6 +17,9 @@ The STT device also supports mute/unmute events which prevent it from capturing 
 | speech_buffer_size     | int     | 50                     | Buffer size for speech frames           |
 | speech_ratio           | float   | 0.75                   | Must be decimal between 0 and 1         |
 | speech_model           | str     | openai/whisper-tiny.en | Path or name of Whisper Model           |
+| offline                | bool    | false                  | Disables downloading the models         |
+
+Note:  You should consider only setting ```offline``` after you have executed the program at least once so that it fully downloads all model files.  Once they are downloaded you can switch the offline mode on so that it does not try to re-download the models (which enables the program to then run without an Internet connection).
 
 ## Example YAML File
 

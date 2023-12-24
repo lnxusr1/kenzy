@@ -14,21 +14,21 @@ nav:
     - Overview: 'index.md'
     - Setup:
       - Installation: 'installation.basic.md'
-      - Audio/Video Extras: 'installation.audio.md'
-      - Raspberry Pi Notes: 'installation.raspberrypi.md'
-      - Training your Watcher: 'kenzy.watcher.train.md'
-      - Startup Configuration: 'kenzy.config.md'
-    - Containers & Devices:
+      - Getting Started: 'kenzy.config.md'
+    - Services & Devices:
+      - Service Settings: 'kenzy.containers.md'
       - Skill Manager: 'kenzy.devices.skillmanager.md'
       - Speech-to-Text: 'kenzy.devices.listener.md'
       - Text-to-Speech: 'kenzy.devices.speaker.md'
       - Image/Video Processing: 'kenzy.devices.watcher.md'
-      - Service Settings: 'kenzy.containers.md'
     - Extending:
-      - Creating a Device: 'kenzy.devices.md'
+    #  - Creating a Device: 'kenzy.devices.md'
       - Creating a Skill: 'kenzy.skill.md'
-    - Communications:
-      - Calls to a Container/Device: 'kenzy.communication.md'
+    #  - Calls to a Container/Device: 'kenzy.communication.md'
+    - Extras:
+      - Audio/Video Extras: 'installation.audio.md'
+      - Raspberry Pi Notes: 'installation.raspberrypi.md'
+      #- Training your Watcher: 'kenzy.watcher.train.md'
     - Links:
       - '@ Code': 'https://kenzy.ai/code'
       - '@ Community': 'https://kenzy.ai/discussion'

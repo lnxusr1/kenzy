@@ -52,6 +52,51 @@ service:
 | ThankYouSkill      | "Thank you"             | Displays manners                       |
 | HomeAssistantSkill | "Turn on the lights"    | Interacts with home assistant devices. |
 
+Some skills allow for additional configuration.  These configurations can be specified under the ```type: kenzy.skillmanager``` device using the skill name as its parent.
+
+For example:
+```
+type: kenzy.skillmanager
+
+device:
+    group:                 My Group
+    location:              Family Room
+
+    HomeAssistantSkill:
+      url:                 http://homeassistant.local:8123
+      token:               <long-lived-access-token>
+```
+
+## Skills Settings
+
+### HomeAssistantSkill
+
+The HomeAssistantSkill allows for you to specify the following parameters:
+
+| Parameter       | Type | Description                                                                  |
+| :-------------- | :--- | :--------------------------------------------------------------------------- |
+| url             | str  | The complete URL to your HA server                                           |
+| token           | str  | A long-lived access token generated from HA                                  |
+| area_aliases    | dict | A dictionary of name/value pairs of Area IDs and friendly names to use       |
+| entity_aliases  | dict | A dictionary of name/list pairs of Entity IDs and friendly name alternatives |
+
+Example:
+```
+type: kenzy.skillmanager
+
+device:
+    HomeAssistantSkill:
+      url:                 http://homeassistant.local:8123
+      token:               <long-lived-access-token>
+      area_aliases:
+        ha_area_id_here:   My First Area
+        ha_area2_id_here:  My Second Area
+      entity_aliases:
+        light.my_switch_list:
+          - My Switch Light
+          - My Ceiling Light
+```
+
 -----
 
 ## Help &amp; Support

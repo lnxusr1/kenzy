@@ -1,7 +1,7 @@
 import logging
 import time
 from kenzy.core import KenzySuccessResponse, KenzyErrorResponse, KenzyContext
-from kenzy.skillmanager.core import SkillManager, SpeakCommand
+from kenzy.skillmanager.core import SkillManager, SpeakCommand, PlayCommand
 
 
 class SkillsDevice:
@@ -134,6 +134,15 @@ class SkillsDevice:
 
         return KenzySuccessResponse("Ask command complete")
     
+    def play(self, file_name, **kwargs):
+        # text, context=None
+        cmd = PlayCommand(context=kwargs.get("context"))
+        cmd.file_name(file_name)
+
+        self.service.send_request(payload=cmd)
+
+        return KenzySuccessResponse("Play command complete")
+
     def get_context_url(self, context):
         if isinstance(context, KenzyContext) and context.url is not None:
             dev_url = context.url
