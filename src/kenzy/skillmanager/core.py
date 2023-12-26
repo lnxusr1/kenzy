@@ -67,6 +67,11 @@ class SkillManager:
         self.logger.debug("Initalizing")
         
         # TODO: Download Skills (or unzip from included package)
+        if not os.path.isdir(self.skill_folder):
+            os.makedirs(self.skill_folder, exist_ok=True)
+
+        if not os.path.isdir(self.temp_folder):
+            os.makedirs(self.temp_folder, exist_ok=True)
 
         try:
             self.intent_parser = IntentContainer(self.temp_folder)
