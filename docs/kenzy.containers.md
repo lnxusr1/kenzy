@@ -24,7 +24,7 @@ An optional UPNP service is available that should be set to "server" only on the
 
 This configuraton section can be included for each device configuration.
 
-```
+```yaml
 service:
   id:             my-id-string-goes-here
   host:           0.0.0.0

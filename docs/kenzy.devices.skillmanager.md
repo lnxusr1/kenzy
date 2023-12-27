@@ -54,7 +54,7 @@ service:
 Some skills allow for additional configuration.  These configurations can be specified under the ```type: kenzy.skillmanager``` device using the skill name as its parent.
 
 For example:
-```
+```yaml
 type: kenzy.skillmanager
 
 device:
@@ -82,7 +82,7 @@ The HomeAssistantSkill allows for you to specify the following parameters:
 | entity_aliases  | dict | A dictionary of name/list pairs of Entity IDs and friendly name alternatives |
 
 Example:
-```
+```yaml
 type: kenzy.skillmanager
 
 device:

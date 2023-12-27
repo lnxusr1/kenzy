@@ -8,7 +8,7 @@ The "type: multi" at the root level allows you to specify multiple child devices
 
 Here is a simple example:
 
-```
+```yaml
 type: multi
 
 default:
@@ -37,7 +37,7 @@ speaker:
 
 Just save the configuration to a file ending in ".yml" and then start kenzy with:
 
-```
+```bash
 kenzy --config /path/to/your/file.yml
 ```
 
@@ -47,7 +47,7 @@ kenzy --config /path/to/your/file.yml
 
 Kenzy also enables individual calls so you can test out the various pieces while you work out exactly what you want your settings to be.  These additional options are installed as scripts and can be called as follows:
 
-```
+```bash
 kenzy-image
 kenzy-watch
 kenzy-stt
@@ -58,7 +58,7 @@ kenzy-speak
 
 If all else fails you can also call kenzy as a python model in any of the following ways:
 
-```
+```bash
 python -m kenzy
 python -m kenzy.image
 python -m kenzy.stt

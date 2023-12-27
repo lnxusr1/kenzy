@@ -24,7 +24,7 @@ Installer script has been tested on Ubuntu 22.04+, Debian Buster, and Raspberry 
 
 Kenzy is available through pip, but to use the built-in devices there are a few extra libraries you may require.
 
-```
+```bash
 # Install PIP (Python package manager) if not already installed
 sudo apt-get -y install python3-pip
 
@@ -105,12 +105,12 @@ If you prefer not to wait then you can install the opencv package that comes wit
 If you encounter an error trying to install the kenzy module on the Raspberry Pi then you may need to add a symlink to the library FANN library. This is due to a bug/miss in the "find_fann" function within the Python FANN2 library as it doesn't look for the ARM architecture out-of-the-box.  To fix it run the following:
 
 ### Raspberry Pi (ARM)
-```
+```bash
 sudo ln -s /usr/lib/arm-linux-gnueabihf/libdoublefann.so.2 /usr/local/lib/libdoublefann.so
 ```
 
 ### Ubuntu 22.04 LTS (x86_64)
-```
+```bash
 sudo ln -s /usr/lib/x86_64-linux-gnu/libdoublefann.so.2 /usr/local/lib/libdoublefann.so
 ```
 -----
@@ -118,7 +118,7 @@ sudo ln -s /usr/lib/x86_64-linux-gnu/libdoublefann.so.2 /usr/local/lib/libdouble
 ## Starting Up
 You can execute Kenzy directly as a module or by calling the main kenzy program directly.  To do so try the following:
 
-```
+```bash
 kenzy --config CONFIG_FILE
 ```
 

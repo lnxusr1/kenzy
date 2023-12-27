@@ -25,7 +25,7 @@ Note:  You should consider only setting ```offline``` after you have executed th
 
 See [Service Settings](kenzy.containers.md) for options in the *service* group.
 
-```
+```yaml
 type: kenzy.stt
 
 device: 

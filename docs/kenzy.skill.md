@@ -2,7 +2,7 @@
 
 The basic structure for a skill is laid out below:
 
-```
+```python
 from kenzy import GenericSkill
 
 class MyCustomSkill(GenericSkill):

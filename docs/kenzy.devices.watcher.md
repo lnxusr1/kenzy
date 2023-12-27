@@ -33,7 +33,7 @@
 ```face.entries``` provides a way to supply face image samples along with a name to associate with those samples.  At least one image per name must be supplied.
 
 Here's an example:
-```
+```yaml
   face.entries:
     lnxusr1:
       - ~/Pictures/faces/lnxusr1/user.1.8.jpg
@@ -48,7 +48,7 @@ Here's an example:
 
 ## Example YAML File
 
-```
+```yaml
 type: kenzy.image
 
 device: 
