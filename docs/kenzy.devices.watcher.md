@@ -23,6 +23,7 @@
 | face.default_name   | str     | Unknown | Default name for face if not recognized        |
 | face.cache_folder   | str     | None    | Cache folder for faces identified              |
 | face.entries        | dict    | None    | Dictionary of face names with examples         |
+| record.enabled      | bool    | True    | Enables/disables video recording               |
 | record.format       | str     | XVID    | Video output format for saved recordings       |
 | record.folder       | str     | None    | Folder for saved recordings                    |
 | record.buffer       | int     | 5       | Seconds to buffer pre/post detection           |
@@ -67,6 +68,7 @@ device:
   face.tolerance:           0.5
   face.cache_folder:        ~/.kenzy/image/faces/unknown
   face.default_name:        Unknown
+  record.enabled:           true
   record.format:            XVID
   record.buffer:            5
   record.folder:            ~/Videos/kenzy

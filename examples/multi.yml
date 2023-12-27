@@ -21,4 +21,4 @@ speaker:
   type: kenzy.tts
 
   device:
-    model_target: cpu
+    model.target: cpu

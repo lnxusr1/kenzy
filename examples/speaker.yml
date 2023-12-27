@@ -3,13 +3,12 @@ type: kenzy.tts
 device: 
   location:                 Living Room
   group:                    Primary
-  model_target:             cpu
+  model.target:             cpu
 
 service:
-  upnp:                     client
   host:                     0.0.0.0
   port:                     9702
-  ssl:
-    enable:               false
-    cert_file:            /etc/ssl/cert/snakeoil.crt
-    key_file:             /etc/ssl/private/snakeoil.key
+  upnp.type:                client
+  ssl.enable:               false
+  ssl.cert_file:            /etc/ssl/cert/snakeoil.crt
+  ssl.key_file:             /etc/ssl/private/snakeoil.key

@@ -6,16 +6,21 @@ device:
   video_device:             0
   orientation:              0       # 0, 90, 180, 270
   frames_per_second:        30      # From video device (exclude for FPS auto-detection)
+  motion.detection:         true
   motion.threshold:         20      # color change per pixel
   motion.area:              0.0003  # As a percentage of the entire image
+  object.detection:         true
   object.threshold:         0.6     # Probability as a percentage (higher is more restrictive)
   object.model_type:        ssd
   # object.model_config:
   # object.model_file:
   # object.label_file:
+  face.detection:           true
+  face.recognition:         true
   face.tolerance:           0.5     # Euclidean distance limit (lower is more restrictive)
   face.cache_folder:        ~/.kenzy/image/faces/unknown
   face.default_name:        Unknown
+  record.enabled:           true
   record.format:            XVID    # Format of saved videos (XVID, MPV4)
   record.buffer:            5       # Number of seconds to record before and after movement
   record.folder:            ~/Videos/kenzy
@@ -24,11 +29,10 @@ device:
       - ~/Pictures/faces/lnxusr1/user.1.9.jpg
 
 service:
-  upnp:                     client # standalone
   # service_url:              http://localhost:8080
   host:                     0.0.0.0
   port:                     8080
-  ssl:
-    enable:               false
-    cert_file:            /etc/ssl/cert/snakeoil.crt
-    key_file:             /etc/ssl/private/snakeoil.key
+  upnp.type:                client # standalone
+  ssl.enable:               false
+  ssl.cert_file:            /etc/ssl/cert/snakeoil.crt
+  ssl.key_file:             /etc/ssl/private/snakeoil.key
