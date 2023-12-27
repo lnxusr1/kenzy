@@ -58,5 +58,5 @@ if ARGS.set is not None:
     if isinstance(ARGS.set, list):
         apply_vars(cfg, ARGS.set)
 
-m = model_type(cfg.get("model_type", "speecht5"))
+m = model_type(cfg.get("model.type", "speecht5"), target=cfg.get("model.target", "cpu"))
 create_speech(m, ARGS.text, speaker=cfg.get("speaker", "slt"))

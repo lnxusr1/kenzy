@@ -312,7 +312,7 @@ class KenzyHTTPServer(HTTPServer):
             
         self.local_url = kwargs.get("service_url", "%s://%s:%s" % (proto, ip_addr, port))
 
-        self.upnp = str(kwargs.get("upnp", "client")).lower().strip() 
+        self.upnp = str(kwargs.get("upnp.type", "client")).lower().strip() 
         self.upnp_timeout = int(kwargs.get("upnp.timeout", 45))
 
         if self.upnp == "server":

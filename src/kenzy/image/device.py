@@ -56,19 +56,24 @@ class VideoProcessor:
 
         self.orientation = kwargs.get("orientation", 0)
 
+        self.motion_enabled = kwargs.get("motion.detection", True)
         self.motion_threshold = kwargs.get("motion.threshold", 20)
         self.motion_area = kwargs.get("motion.area", 0.0003)
 
+        self.object_detection = kwargs.get("object.detection", True)
         self.object_threshold = kwargs.get("object.threshold", 0.6)
         self.object_model_type = kwargs.get("object.model_type", "ssd")
         self.object_model_config = kwargs.get("object.model_config")
         self.object_model_file = kwargs.get("object.model_file")
         self.object_label_file = kwargs.get("objects.label_file")
 
+        self.face_detection = kwargs.get("face.detection", True)
+        self.face_recognition = kwargs.get("face.recognition", True)
         self.face_tolerance = kwargs.get("face.tolerance", 0.5)
         self.default_name = kwargs.get("face.default_name")
         self.cache_folder = kwargs.get("face.cache_folder")
 
+        self.record_enabled = kwargs.get("record.enabled", True)
         self.video_format = kwargs.get("record.format", "XVID")
         self.video_folder = kwargs.get("record.folder")
         self.record_buffer = kwargs.get("record.buffer", 5)
@@ -161,15 +166,20 @@ class VideoProcessor:
 
             start = time.time()
 
+            movements = None
+            objects = None
+
             # Motion
-            image = image_gray(data["frame"])
-            image = image_blur(image)
-            last_image_hold = copy.copy(image)
-            movements = motion_detection(image=image, last_image=last_image, threshold=self.motion_threshold, motion_area=self.motion_area)
-            last_image = last_image_hold
+            if self.motion_enabled:
+                image = image_gray(data["frame"])
+                image = image_blur(image)
+                last_image_hold = copy.copy(image)
+                movements = motion_detection(image=image, last_image=last_image, threshold=self.motion_threshold, motion_area=self.motion_area)
+                last_image = last_image_hold
 
             # Object
-            objects = object_detection(image=data["frame"], model=model, labels=model_labels, threshold=self.object_threshold)
+            if self.object_detection:
+                objects = object_detection(image=data["frame"], model=model, labels=model_labels, threshold=self.object_threshold)
 
             end = time.time()
             
@@ -189,7 +199,7 @@ class VideoProcessor:
             curr_time = data.get("timestamp")
 
             rec_stop_time = self.recording_stop_time  # attempt to avoid segfault (should be atomic call)
-            if "person" in [x.get("name") for x in objects]:
+            if objects is not None and "person" in [x.get("name") for x in objects]:
                 if not self.record_event.is_set():
                     self.record_event.set()
                 last_person_seen = curr_time
@@ -245,7 +255,7 @@ class VideoProcessor:
                         if new_calc < width_calc:
                             width_calc = new_calc
 
-            if hasFace:
+            if hasFace and self.face_recognition:
                 image = data["frame"]
 
                 if width_calc > 1000:
@@ -422,22 +432,25 @@ class VideoProcessor:
                     frame = image_rotate(frame, self.orientation)
 
                     try:
-                        self.obj_queue.put_nowait({ "frame": frame, "timestamp": time.time() })
+                        if self.motion_enabled or self.object_detection:
+                            self.obj_queue.put_nowait({ "frame": frame, "timestamp": time.time() })
                     except queue.Full:
                         # self.logger.debug("OBJECTS - Queue full.  Consider increasing frame_buffer_size.")
                         pass
 
                     try:
-                        self.face_queue.put_nowait({ "frame": frame, "timestamp": time.time() })
+                        if self.face_detection:
+                            self.face_queue.put_nowait({ "frame": frame, "timestamp": time.time() })
                     except queue.Full:
                         # self.logger.debug("FACES - Queue full.  Consider increasing frame_buffer_size.")
                         pass
 
                     try:
-                        if self.record_event.is_set():
-                            self.rec_queue.put_nowait({ "frame": frame, "timestamp": time.time() })
-                        else:
-                            self.frame_buffer.append(frame)
+                        if self.record_enabled:
+                            if self.record_event.is_set():
+                                self.rec_queue.put_nowait({ "frame": frame, "timestamp": time.time() })
+                            else:
+                                self.frame_buffer.append(frame)
                     except queue.Full:
                         # self.logger.debug("RECORD - Queue full.  Consider increasing frame_buffer_size.")
                         pass

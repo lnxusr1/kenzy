@@ -21,12 +21,12 @@ class SkillsDevice:
         self.wake_words = kwargs.get("wake_words", ["Kenzie", "Kenzi", "Kenzy", "Kinsay", "Kinsy", "Kinsie", "Kinsey"])
 
         try:
-            self.activation_timeout = abs(float(kwargs.get("timeout", {}).get("activation")))
+            self.activation_timeout = abs(float(kwargs.get("timeout.wake")))
         except TypeError:
             self.activation_timeout = 45
         
         try:
-            self.ask_timeout = abs(float(kwargs.get("timeout", {}).get("ask")))
+            self.ask_timeout = abs(float(kwargs.get("timeout.ask")))
         except TypeError:
             self.ask_timeout = 10
 
@@ -35,8 +35,8 @@ class SkillsDevice:
         self.initialize()
 
     def initialize(self):
-        skill_folder = self.settings.get("skill_folder", "~/.kenzy/skills")
-        temp_folder = self.settings.get("temp_folder", "/tmp/intent_cache")
+        skill_folder = self.settings.get("folder.skills", "~/.kenzy/skills")
+        temp_folder = self.settings.get("folder.temp", "/tmp/intent_cache")
         
         self.skill_manager = SkillManager(
             device=self, 

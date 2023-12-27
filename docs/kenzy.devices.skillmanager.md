@@ -7,11 +7,11 @@ The Skill Manager device acts as the Brain for all collecting, storing, processi
 | :------------------ | :------ | :---------------------------- | :-------------------------------- |
 | group               | str     | *None*                        | Device membership group           |
 | location            | str     | *None*                        | Location, e.g. "Living Room"      |
-| skill_folder        | str     | ~/.kenzy/skills               | Skills folder                     |
-| temp_folder         | str     | /tmp/intent_cache             | Trained intents storage           |
+| folder.skills       | str     | ~/.kenzy/skills               | Skills folder                     |
+| folder.temp         | str     | /tmp/intent_cache             | Trained intents storage           |
 | wake_words          | list    | ["Kenzie", "Kenzy", "Kinsey"] | Wake words                        |
-| timeout/activation  | float   | 45                            | Idle time between wake words      |
-| timeout/ask         | float   | 10                            | Wait time after "ask" commands    |
+| timeout.wake        | float   | 45                            | Idle time between wake words      |
+| timeout.ask         | float   | 10                            | Wait time after "ask" commands    |
 
 ## Example YAML file
 
@@ -22,18 +22,17 @@ type: kenzy.skillmanager
 device: 
   location:                 Living Room
   group:                    Primary
-  folder:                   ~/.kenzy/skills
-  temp_folder:              /tmp/intent_cache
+  folder.skills:            ~/.kenzy/skills
+  folder.temp:              /tmp/intent_cache
   wake_words:
     - Kenzy
     - Kenzie
     - Kensey
-  timeout:
-    activation:             45
-    ask:                    10
+  timeout.wake:             45
+  timeout.ask:              10
 
 service:
-  upnp:                     server
+  upnp.type:                server
   host:                     0.0.0.0
   port:                     9700
 ```
@@ -66,6 +65,8 @@ device:
       url:                 http://homeassistant.local:8123
       token:               <long-lived-access-token>
 ```
+
+-----
 
 ## Skills Settings
 

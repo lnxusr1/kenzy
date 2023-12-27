@@ -57,14 +57,20 @@ if ARGS.set is not None:
     if isinstance(ARGS.set, list):
         apply_vars(cfg, ARGS.set)
 
+cfg["motion.detection"] = cfg.get("motion.detection", True)
+cfg["object.detection"] = cfg.get("object.detection", True)
+cfg["face.detection"] = cfg.get("face.detection", True)
+cfg["face.recognition"] = cfg.get("face.recognition", True)
+
 video_device = cv2.VideoCapture(get_raw_value(ARGS.video_device))
 last_image = None
 
-model = object_model(model_type=cfg.get("object.model_type", "ssd"), 
-                     model_config=cfg.get("object.model_config"), 
-                     model_file=cfg.get("object.model_file"))
+if cfg.get("object.detection"):
+    model = object_model(model_type=cfg.get("object.model_type", "ssd"), 
+                         model_config=cfg.get("object.model_config"), 
+                         model_file=cfg.get("object.model_file"))
 
-labels = object_labels(label_file=cfg.get("object.label_file", None), model_type=cfg.get("object.model_type", None))
+    labels = object_labels(label_file=cfg.get("object.label_file", None), model_type=cfg.get("object.model_type", None))
 
 while True:
     ret, image = video_device.read()
@@ -74,26 +80,29 @@ while True:
 
     gray = image_blur(image_gray(image))
 
-    movements = motion_detection(image=gray, last_image=last_image, 
-                                 threshold=cfg.get("motion.threshold", 0.5), 
-                                 motion_area=cfg.get("motion.motion_area", 0.0003))
+    if cfg.get("motion.detection"):
+        movements = motion_detection(image=gray, last_image=last_image, 
+                                     threshold=cfg.get("motion.threshold", 0.5), 
+                                     motion_area=cfg.get("motion.motion_area", 0.0003))
+
+        image_markup(image, elements=movements, line_color=cfg.get("motion.line_color", (0, 255, 0)))
     
     last_image = copy.copy(gray)
-    
-    objects = object_detection(image=image, model=model, labels=labels, threshold=cfg.get("object.threshold", 0.5), 
-                               markup=cfg.get("object.markup", True), line_color=cfg.get("object.line_color", (255, 0, 0)), 
-                               font_color=cfg.get("object.font_color", (255, 255, 255)))
 
-    faces = face_detection(image=image, model=cfg.get("face.model", "hog"), 
-                           face_encodings=None, face_names=None, 
-                           tolerance=cfg.get("face.tolerance", 0.6), 
-                           default_name=cfg.get("face.default_name"), 
-                           markup=cfg.get("face.marketup", True), 
-                           line_color=cfg.get("face.line_color", (0, 0, 255)), 
-                           font_color=cfg.get("face.font_color", (255, 255, 255)), 
-                           cache_folder=None)
+    if cfg.get("object.detection"):
+        objects = object_detection(image=image, model=model, labels=labels, threshold=cfg.get("object.threshold", 0.5), 
+                                   markup=cfg.get("object.markup", True), line_color=cfg.get("object.line_color", (255, 0, 0)), 
+                                   font_color=cfg.get("object.font_color", (255, 255, 255)))
 
-    image_markup(image, elements=movements, line_color=cfg.get("motion.line_color", (0, 255, 0)))
+    if cfg.get("face.detection"):
+        faces = face_detection(image=image, model=cfg.get("face.model", "hog"), 
+                               face_encodings=None, face_names=None, 
+                               tolerance=cfg.get("face.tolerance", 0.6), 
+                               default_name=cfg.get("face.default_name"), 
+                               markup=cfg.get("face.markup", True), 
+                               line_color=cfg.get("face.line_color", (0, 0, 255)), 
+                               font_color=cfg.get("face.font_color", (255, 255, 255)), 
+                               cache_folder=None)
 
     cv2.imshow('KENZY_IMAGE', image)
 

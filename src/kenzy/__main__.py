@@ -118,7 +118,7 @@ if str(cfg.get("type", "")).lower() in ["multi", "multiple", "many"]:
 
         grp_type = get_raw_value(cfg[grp].get("type", "kenzy.skillmanager"))
         if grp_type == "kenzy.skillmanager":
-            cfg[grp]["service"]["upnp"] = cfg[grp].get("service", {}).get("upnp", "server")
+            cfg[grp]["service"]["upnp.type"] = cfg[grp].get("service", {}).get("upnp.type", "server")
             # print(cfg[grp]["service"]["upnp"])
 
         if port <= last_port:
@@ -166,7 +166,7 @@ else:
         if str(ARGS.upnp).lower() in ["server", "client", "standalone"]:
             if not isinstance(cfg.get("service"), dict):
                 cfg["service"] = {}
-            cfg["service"]["upnp"] = str(ARGS.upnp).lower()
+            cfg["service"]["upnp.type"] = str(ARGS.upnp).lower()
         else:
             logger.critical("Unable to start.  Invalid UPNP value specified.  Must be one of server, client, or standalone.")
             quit(1)

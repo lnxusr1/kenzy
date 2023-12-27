@@ -12,9 +12,9 @@ All devices run inside a "service" container.  This service is effectively a HTT
 | api_key       | str  | *None*   | Secret key interacting with service_url                  |
 | upnp.type     | str  | client   | Options are: client, server, or standalone               |
 | upnp.timeout  | int  | 45       | Timeout for upnp client operations                       |
-| ssl/enable    | bool | false    | Enable SSL for local service listener                    |
-| ssl/cert_file | str  | *None*   | Certificate file (CRT) for SSL                           |
-| ssl/key_file  | str  | *None*   | Private key file for SSL                                 |
+| ssl.enable    | bool | false    | Enable SSL for local service listener                    |
+| ssl.cert_file | str  | *None*   | Certificate file (CRT) for SSL                           |
+| ssl.key_file  | str  | *None*   | Private key file for SSL                                 |
 
 ## UPNP Configuration
 
@@ -31,13 +31,11 @@ service:
   port:           9700
   service_url:    https://127.0.0.1:9700
   api_key:        my-api-key-goes-here
-  upnp:
-    type:         server
-    timeout:      45
-  ssl:
-    enable:       true
-    cert_file:    /etc/ssl/cert/snakeoil.crt
-    key_file:     /etc/ssl/private/snakeoil.key
+  upnp.type:      server
+  upnp.timeout:   45
+  ssl.enable:     true
+  ssl.cert_file:  /etc/ssl/cert/snakeoil.crt
+  ssl.key_file:   /etc/ssl/private/snakeoil.key
 ```
 
 

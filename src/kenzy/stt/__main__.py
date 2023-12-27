@@ -62,7 +62,7 @@ if ARGS.set is not None:
 stop_event = threading.Event()
 
 if ARGS.audio_device is not None:
-    cfg["audio_device"] = ARGS.audio_device
+    cfg["audio.device"] = ARGS.audio_device
 
 try:
     for text in read_from_device(stop_event, **cfg):

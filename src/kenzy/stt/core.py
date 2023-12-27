@@ -28,15 +28,15 @@ def read_from_device(stop_event, muted_event=threading.Event(), **kwargs):
     stop_event.clear()
     muted_event.clear()
     
-    audio_device_index = kwargs.get("audio_device")
-    audio_channels = kwargs.get("audio_channels", 1)
-    audio_sample_rate = kwargs.get("audio_sample_rate", 16000)
-    vad_aggressiveness = kwargs.get("vad_aggressiveness", 0)
-    speech_buffer_padding = kwargs.get("speech_buffer_padding", 350)
-    speech_buffer_size = kwargs.get("speech_buffer_size", 50)
-    speech_ratio = kwargs.get("speech_ratio", 0.75)
+    audio_device_index = kwargs.get("audio.device")
+    audio_channels = kwargs.get("audio.channels", 1)
+    audio_sample_rate = kwargs.get("audio.sample_rate", 16000)
+    vad_aggressiveness = kwargs.get("speech.vad_aggressiveness", 0)
+    speech_buffer_padding = kwargs.get("speech.buffer_padding", 350)
+    speech_buffer_size = kwargs.get("speech.buffer_size", 50)
+    speech_ratio = kwargs.get("speech.ratio", 0.75)
 
-    processor, model = speech_model(kwargs.get("speech_model", "openai/whisper-tiny.en"))
+    processor, model = speech_model(kwargs.get("speech.model", "openai/whisper-tiny.en"))
 
     buffer_queue = queue.Queue()
 

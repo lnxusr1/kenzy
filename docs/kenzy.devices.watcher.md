@@ -8,13 +8,17 @@
 | scale               | float   | 1.0     | Image scaling coefficient (0.5 = 50% size)     |
 | frames_per_second   | float   | None    | Video FPS.  Auto-calculated if left blank      |
 | orientation         | int     | 0       | Device orientation. (0, 90, 180, or 270)       |
+| motion.detection    | bool    | True    | Enables/disables motion detection              |
 | motion.threshold    | int     | 20      | Threshold of pixel color change                |
 | motion.area         | float   | 0.0003  | Percentage of pixels changed to trigger motion |
+| object.detection    | bool    | True    | Enables/disables object detection              |
 | object.threshold    | float   | 0.6     | Confidence score for object detection          |
 | object.model_type   | str     | ssd     | Object detection type (ssd or yolo)            |
 | object.model_config | str     | None    | Model configuration file                       |
 | object.model_file   | str     | None    | Model file (.pb or .pt)                        |
 | objects.label_file  | str     | None    | Object labels list                             |
+| face.detection      | bool    | True    | Enables/disables face detection                |
+| face.recognition    | bool    | True    | Enables/disables face recognition              |
 | face.tolerance      | float   | 0.5     | Euclidean distance (smaller is more accurate)  |
 | face.default_name   | str     | Unknown | Default name for face if not recognized        |
 | face.cache_folder   | str     | None    | Cache folder for faces identified              |
@@ -52,10 +56,14 @@ device:
   video_device:             0
   orientation:              0
   frames_per_second:        30
+  motion.detection:         True
   motion.threshold:         20
   motion.area:              0.0003
+  object.detection:         True
   object.threshold:         0.6
   object.model_type:        ssd
+  face.detection:           True
+  face.recognition:         True
   face.tolerance:           0.5
   face.cache_folder:        ~/.kenzy/image/faces/unknown
   face.default_name:        Unknown
@@ -67,9 +75,8 @@ device:
       - ~/Pictures/faces/lnxusr1/user.1.9.jpg
 
 service:
-  upnp:                     client
   host:                     0.0.0.0
-  port:                     8080
+  port:                     9703
 ```
 
 -----

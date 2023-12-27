@@ -28,9 +28,9 @@ class SpeakerDevice:
             os.environ["TRANSFORMERS_OFFLINE"] = "1"
             os.environ["HF_DATASETS_OFFLINE"] = "1"
 
-        self.model = model_type(self.settings.get("model_type", "speecht5"), target=self.settings.get("model_target"))
+        self.model = model_type(self.settings.get("model.type", "speecht5"), target=self.settings.get("model.target"))
         self.speaker = self.settings.get("speaker", "slt")
-        self.cache_folder = self.settings.get("cache_folder", "~/.kenzy/cache/speech")
+        self.cache_folder = self.settings.get("cache.folder", "~/.kenzy/cache/speech")
 
     @property
     def accepts(self):
