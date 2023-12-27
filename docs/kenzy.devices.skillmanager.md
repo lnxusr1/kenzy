@@ -16,7 +16,7 @@ The Skill Manager device acts as the Brain for all collecting, storing, processi
 ## Example YAML file
 
 See [Service Settings](kenzy.containers.md) for options in the *service* group.
-```
+```yaml
 type: kenzy.skillmanager
 
 device: 
