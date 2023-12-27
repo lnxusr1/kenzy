@@ -94,34 +94,98 @@ footer { display: block; padding: 20px 0 60px 0; text-align: center; font-size: 
 footer a { color: #444; }
 footer a:hover { color: #000; }
 
+.shortnav { 
+    display: none;
+    position: fixed; 
+    top: 0; 
+    background-color: #ffffff; 
+    border-bottom: 1px solid #ccc; 
+    height: 53px; 
+    font-size: 1.2rem; 
+    z-index: 1000; 
+    width: 100%; 
+}
+.shortnav ul { margin: 0; padding: 0 36px 0 0; list-style: none; text-align: right; float: right; }
+.shortnav ul li { display: inline; }
+.shortnav ul li span { display: block; float: left; line-height: 52px; height: 100%; padding-left: 36px; position: absolute; left: 0; }
+.shortnav ul li a { color: #444444; text-decoration: none; display: block; float: left; line-height: 48px; height: 100%; }
+.shortnav ul li a .icon-bars { display: inline-block; height: 48px; width: 30px; background-image: url("bars-solid.svg"); background-repeat: no-repeat; background-position: center 16px; background-size: 20px 20px;  }
+
+@media screen and (max-width: 1024px) {
+    page > content > section { padding: 20px 0 20px 220px; }
+    sidebar { width: 200px; padding: 0; }
+    sidebar > content { height: 100%; max-height: 100%; border-radius: 0px; }
+}
+
+@media screen and (max-width: 992px) {
+    sidebar { display: none; width: 260px; z-index: 1001; }
+    sidebar.active { display: block; }
+    sidebar title { line-height: inherit; }
+    page > content > section { padding: 20px 0 20px 20px; }
+    .shortnav { display: block; }
+    page > content { margin-top: 48px; }
+}
+
+@media screen and (max-width: 768px) {
+    sidebar > content > title { text-align: left; padding-left: 30px; }
+    #main > group.col-4 > * { width: 50%; }
+    #main > group.col-2l > *,
+    #main > group.col-2l > *:first-child,
+    #main > group.col-2l > *:last-child { width: 100%; }
+}
+
 </style>
+<script type="text/javascript">
+$(document).ready(function() {
+    $('#nav-bars').click(function() {
+        if ($('sidebar').hasClass('active')) {
+            $('sidebar').removeClass('active');
+        } else {
+            $('sidebar').addClass('active');
+        }
+    });
+
+    $('.page-button').click(function() {
+        $('.page-button').removeClass('active');
+        $('.page-section').hide();
+        $($(this).attr('page-target')).show();
+        $(this).addClass('active');
+    });
+});
+</script>
 </head>
 <body>
 
 <page>
+    <div class="shortnav">
+        <ul>
+            <li><span>KENZY</span></li>
+            <li><a href="#" id="nav-bars"><i class="icon-bars"></i></a></li>
+        </ul>
+    </div>
     <sidebar>
         <content>
             <title>KENZY</title>
             <!-- start_section -->
             <section>
                 <content>
-                    <button class="active"><icon class="tachometer"></icon>Dashboard</button>
-                    <button><icon class="server"></icon>Devices</button>
-                    <button><icon class="camera"></icon>Cameras</button>
-                    <button><icon class="bolt"></icon>Skills</button>
-                    <button><icon class="hdd"></icon>Logs</button>
-                    <button><icon class="tools"></icon>Settings</button>
+                    <button class="page-button active" page-target="#dashboard"><icon class="tachometer"></icon>Dashboard</button>
+                    <button class="page-button" page-target="#devices"><icon class="server"></icon>Devices</button>
+                    <button class="page-button" page-target="#cameras"><icon class="camera"></icon>Cameras</button>
+                    <button class="page-button" page-target="#skills"><icon class="bolt"></icon>Skills</button>
+                    <button class="page-button" page-target="#logs"><icon class="hdd"></icon>Logs</button>
+                    <button class="page-button" page-target="#settings"><icon class="tools"></icon>Settings</button>
                 </content>
             </section>
             <section>
                 <content>
-                    <button><icon class="sign-out"></icon>Logout</button>
+                    <button class="page-button" page-target="#login"><icon class="sign-out"></icon>Logout</button>
                 </content>
             </section>
             <!-- end_section -->
         </content>
     </sidebar>
-    <content>
+    <content class="page-section" id="dashboard">
         <section>
             <header>
                 <title>System Overview</title>
