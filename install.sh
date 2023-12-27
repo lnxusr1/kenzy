@@ -96,7 +96,7 @@ if [ $watcher -eq 1 ]; then
     echo "Installing libraries for watcher module...";
     $pythonCmd -m pip install --upgrade \
         opencv-contrib-python \
-        yolov7detect==1.0.1 \
+        yolov7detect \
         face_recognition \
         numpy;
     echo "watcher module installed.";
@@ -115,15 +115,15 @@ if [ $speaker -eq 1 ] || [ $listener -eq 1 ]; then
         libatlas-base-dev;
 
     $pythonCmd -m pip install --upgrade \
-        PyAudio>=0.2.13 \
+        PyAudio \
         soundfile \
         wave \
         torch \
-        fsspec==2023.9.2 \
-        transformers==4.31.0 \
-        datasets==2.14.3 \
+        fsspec \
+        transformers \
+        datasets \
         webrtcvad \
-        sentencepiece==0.1.99;
+        sentencepiece;
 
     #$pythonCmd -m pip install --upgrade mycroft-mimic3-tts[all];
     echo "listener and speaker modules installed.";
