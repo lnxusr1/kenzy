@@ -43,16 +43,25 @@ page > content > section > header > subtitle { display: block; font-size: 0.9rem
 
 .main { padding-right: 20px; padding-top: 10px; }
 
-.main > group { display: block; clear: left; margin: 0 -10px; }
+.main > group,
+.secondary > content > group { display: block; clear: left; margin: 0 -10px; }
 .main > group > * { display: block; float: left; }
 .main > group.col-1 > * { width: 100%; }
 .main > group.col-3 > * { width: 33.33%; }
-.main > group.col-3 > *:nth-child(2) { width: 33.34%; }
-.main > group.col-2 > * { width: 50%; }
+.main > group.col-3 > *:nth-child(3n-1) { width: 33.34%; }
+.main > group.col-3 > *:nth-child(3n+1) { clear: left; }
+.main > group.col-2,
+.secondary > content > group.col-2 > * { width: 50%; }
+.main > group.col-2,
+.secondary > content > group.col-2 > *:nth-child(2n+1) { clear: left; }
 .main > group.col-4 > * { width: 25%; }
+.main > group.col-4 > *:nth-child(4n+1) { clear: left; }
 
 .main > group.col-2l > *:first-child { width: 75%; }
 .main > group.col-2l > *:last-child { width: 25%; }
+.main > group.col-2l > *:nth-child(2n+1) { clear: left; }
+
+group > item { float: left; display: block; }
 
 .main gauge { display: block; position: relative; }
 .main gauge > header { display: block; position: relative; height: 6px; width: 100%; }
@@ -132,6 +141,9 @@ footer a:hover { color: #000; }
 .page-section#devices .scroll-box { height: 250px; }
 .page-section#dashboard .scroll-box { max-height: 120px; }
 .page-section#dashboard table group { text-align: right; }
+
+.page-section .settings > group { margin: 0; }
+.page-section .settings { padding: 20px; background-color: #ebebeb; margin-right: 20px; border-radius: 6px; box-shadow: 3px 3px 12px rgba(0,0,0,.4); }
 
 @media screen and (max-width: 1024px) {
     page > content > section,
@@ -446,46 +458,48 @@ $(document).ready(function() {
         </section>
         <section class="secondary">
             <header>Device Details</header>
-            <content>
-                <div>
+            <content class="settings">
+                <group class="col-2">
+                <item>
                     <div>Type:</div>
                     <div>kenzy.skillmanager</div>
-                </div>
+                </item>
                 
-                <div>
+                <item>
                     <div>URL:</div>
                     <div>http://192.168.1.140:9700</div>
-                </div>
+                </item>
 
-                <div>
+                <item>
                     <div>Location:</div>
                     <div>Living Room</div>
-                </div>
+                </item>
 
-                <div>
+                <item>
                     <div>Group:</div>
                     <div>Group 1</div>
-                </div>
+                </item>
 
-                <div>
+                <item>
                     <div>Status:</div>
                     <div>Running</div>
-                </div>
+                </item>
                 
-                <div>
+                <item>
                     <div>Accepts:</div>
                     <div>start, stop, mute, unmute, collect</div>
-                </div>
+                </item>
 
-                <div>
+                <item>
                     <div>Settings</div>
                     <div>...</div>
-                </div>
-                <div>
+                </item>
+                <item>
                     <button>Start</button>
                     <button>Stop</button>
-                </div>
-                
+                </item>
+                </group>
+                <group></group>
             </content>
         </section>
     </content>
