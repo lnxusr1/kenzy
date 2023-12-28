@@ -7,7 +7,7 @@
     <link rel="icon" type="image/x-icon" href="favicon.svg">
 	<link rel="apple-touch-icon" href="kenzy_touch.png" />
 
-	<title>Control Panel &raquo; KENZY.Ai [__APP_VERSION__]</title>
+	<title>Control Panel &raquo; KENZY.Ai [{version}]</title>
 	<script src="jquery.js"></script>
 <style type="text/css">
 html, body { padding: 0; margin: 0; font-size: 12pt; color: #000000; background-color: #aaaaaa; min-height: 100%; font-family: Arial, Helvetica, Sans-Serif; }
@@ -64,7 +64,7 @@ page > content > section > header > subtitle { display: block; font-size: 0.9rem
 .main gauge > content { position: relative; display: block; background-color: #ffffff; margin: 10px; z-index: 99; box-shadow: 2px 2px 8px #c4c4c4; border-radius: 10px; background: linear-gradient(#ffffff, #fafafa, #f3f3f3);  }
 .main gauge > content > metric { display: block; padding: 20px 20px 0 20px; text-align: right; font-size: 2rem; font-weight: bold; border-radius: 10px; line-height: 36px; height: 36px; overflow: hidden; }
 .main gauge > content > divider { display: block; background: linear-gradient(90deg, transparent, #cccccc); height: 1px; margin-top: 8px;}
-.main gauge > content > title { display: block; color: #777777; padding-top: 8px; text-align: right; padding: 8px 20px 10px 20px; text-transform: uppercase; font-size: 0.7rem; }
+.main gauge > content > title { display: block; color: #777777; text-align: right; padding: 8px 20px 10px 8px; text-transform: uppercase; font-size: 0.7rem; overflow: hidden; max-width: 100%; white-space: nowrap; }
 
 .main list { display: block; position: relative; }
 .main list > content { display: block; margin: 10px; background-color: #fff; border-radius: 6px; background: linear-gradient(#ffffff, #fafafa, #f3f3f3); box-shadow: 2px 2px 8px #c4c4c4; }
@@ -117,6 +117,21 @@ footer a:hover { color: #000; }
 .shortnav ul li span { display: block; float: left; line-height: 52px; height: 100%; padding-left: 36px; position: absolute; left: 0; }
 .shortnav ul li a { color: #444444; text-decoration: none; display: block; float: left; line-height: 48px; height: 100%; }
 .shortnav ul li a .icon-bars { display: inline-block; height: 48px; width: 30px; background-image: url("bars-solid.svg"); background-repeat: no-repeat; background-position: center 16px; background-size: 20px 20px;  }
+
+.page-section .main table { table-layout: fixed; }
+.page-section .main table.header { width: calc(100% - 15px); }
+
+.page-section .main table th,
+.page-section .main table td { overflow-x: hidden; }
+.scroll-box { display: block;overflow-y: scroll; border-top: 1px solid rgba(0, 0, 0, .2);}
+
+.page-section#dashboard .main table th,
+.page-section#devices .main table th { border-bottom: none; }
+.page-section#devices .main table th,
+.page-section#devices .main table td { width: 33%; }
+.page-section#devices .scroll-box { height: 250px; }
+.page-section#dashboard .scroll-box { max-height: 120px; }
+.page-section#dashboard table group { text-align: right; }
 
 @media screen and (max-width: 1024px) {
     page > content > section,
@@ -238,7 +253,7 @@ $(document).ready(function() {
                 <group class="col-2l">
                     <list>
                         <content>
-                            <table>
+                            <table class="header">
                                 <thead>
                                     <tr>
                                         <th class="text-left">Name</th>
@@ -246,6 +261,9 @@ $(document).ready(function() {
                                         <th>Time</th>
                                     </tr>
                                 </thead>
+                            </table>
+                            <div class="scroll-box">
+                            <table>
                                 <tbody>
                                     <tr>
                                         <td><content>LNXUSR1</content></td>
@@ -264,16 +282,20 @@ $(document).ready(function() {
                                     </tr>
                                 </tbody>
                             </table>
+                            </div>
                         </content>
                     </list>
                     <list>
                         <content>
-                            <table>
+                            <table class="header">
                                 <thead>
                                     <tr>
                                         <th>Activity</th>
                                     </tr>
                                 </thead>
+                            </table>
+                            <div class="scroll-box">
+                            <table>
                                 <tbody>
                                     <tr>
                                         <td title="Front Yard">
@@ -313,6 +335,7 @@ $(document).ready(function() {
                                     </tr>
                                 </tbody>
                             </table>
+                            </div>
                         </content>
                     </list>
                 </group>
@@ -380,36 +403,89 @@ $(document).ready(function() {
                 <group class="col-1">
                     <list>
                         <content>
-                            <table>
+                            <table class="header">
                                 <thead>
                                     <tr>
-                                        <th class="text-left">Name</th>
+                                        <th class="text-left">Type</th>
+                                        <th class="text-left">URL</th>
                                         <th class="text-left">Location</th>
-                                        <th>Time</th>
                                     </tr>
                                 </thead>
+                            </table>
+                            <div class="scroll-box">
+                            <table>
                                 <tbody>
                                     <tr>
-                                        <td><content>LNXUSR1</content></td>
+                                        <td><content>kenzy.stt</content></td>
+                                        <td><content>http://192.168.1.140:9701</content></td>
                                         <td><content>Living Room</content></td>
-                                        <td><content>5:15pm</content></td>
                                     </tr>
                                     <tr>
-                                        <td><content>LNXUSR1</content></td>
+                                        <td><content>kenzy.tts</content></td>
+                                        <td><content>http://192.168.1.140:9702</content></td>
                                         <td><content>Living Room</content></td>
-                                        <td><content>5:15pm</content></td>
                                     </tr>
                                     <tr>
-                                        <td><content>LNXUSR1</content></td>
+                                        <td><content>kenzy.image</content></td>
+                                        <td><content>http://192.168.1.140:9703</content></td>
                                         <td><content>Living Room</content></td>
-                                        <td><content>5:15pm</content></td>
+                                    </tr>
+                                    <tr>
+                                        <td><content>kenzy.skillmanager</content></td>
+                                        <td><content>http://192.168.1.140:9700</content></td>
+                                        <td><content>Living Room</content></td>
                                     </tr>
                                 </tbody>
                             </table>
+                            </div>
                         </content>
                     </list>
                 </group>
                 <group></group>
+            </content>
+        </section>
+        <section class="secondary">
+            <header>Device Details</header>
+            <content>
+                <div>
+                    <div>Type:</div>
+                    <div>kenzy.skillmanager</div>
+                </div>
+                
+                <div>
+                    <div>URL:</div>
+                    <div>http://192.168.1.140:9700</div>
+                </div>
+
+                <div>
+                    <div>Location:</div>
+                    <div>Living Room</div>
+                </div>
+
+                <div>
+                    <div>Group:</div>
+                    <div>Group 1</div>
+                </div>
+
+                <div>
+                    <div>Status:</div>
+                    <div>Running</div>
+                </div>
+                
+                <div>
+                    <div>Accepts:</div>
+                    <div>start, stop, mute, unmute, collect</div>
+                </div>
+
+                <div>
+                    <div>Settings</div>
+                    <div>...</div>
+                </div>
+                <div>
+                    <button>Start</button>
+                    <button>Stop</button>
+                </div>
+                
             </content>
         </section>
     </content>
@@ -420,7 +496,57 @@ $(document).ready(function() {
                 <subtitle>Overview</subtitle>
             </header>
             <content class="main">
-            test
+                <group class="top-row col-4">
+                    <gauge>
+                        <header></header>
+                        <content>
+                            <metric>23</metric>
+                            <divider></divider>
+                            <title>Garage Front Camera</title>
+                        </content>
+                    </gauge>
+                    <gauge>
+                        <header></header>
+                        <content>
+                            <metric>406</metric>
+                            <divider></divider>
+                            <title>Front Porch Camera</title>
+                        </content>
+                    </gauge>
+                    <gauge>
+                        <header></header>
+                        <content>
+                            <metric>99</metric>
+                            <divider></divider>
+                            <title>Back Porch Camera</title>
+                        </content>
+                    </gauge>
+                    <gauge>
+                        <header></header>
+                        <content>
+                            <metric>192d 13h</metric>
+                            <divider></divider>
+                            <title>Garage Side Camera</title>
+                        </content>
+                    </gauge>
+                    <gauge>
+                        <header></header>
+                        <content>
+                            <metric>99</metric>
+                            <divider></divider>
+                            <title>Crawl Space Camera</title>
+                        </content>
+                    </gauge>
+                    <gauge>
+                        <header></header>
+                        <content>
+                            <metric>192d 13h</metric>
+                            <divider></divider>
+                            <title>Back Yard Camera</title>
+                        </content>
+                    </gauge>
+                </group>
+                <group></group>
             </content>
         </section>
     </content>
