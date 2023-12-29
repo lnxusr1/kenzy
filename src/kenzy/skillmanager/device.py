@@ -1,7 +1,7 @@
 import logging
 import time
 from kenzy.core import KenzySuccessResponse, KenzyErrorResponse, KenzyContext
-from kenzy.skillmanager.core import SkillManager, SpeakCommand, PlayCommand
+from kenzy.skillmanager.core import SkillManager, SpeakCommand, PlayCommand, GenericSkill
 
 
 class SkillsDevice:
@@ -93,13 +93,26 @@ class SkillsDevice:
         return KenzyErrorResponse("Not implemented")
     
     def status(self, **kwargs):
+
+        skill_list = {}
+        for item in self.skill_manager.skills:
+            obj = item.get("object")
+            if isinstance(obj, GenericSkill):
+                skill_list[obj.name] = {
+                    "description": obj.description,
+                    "settings": self.settings.get(obj.name)
+                }
+
         return KenzySuccessResponse({
             "active": self.is_alive(),
             "type": self.type,
             "accepts": self.accepts,
             "location": self.location,
             "group": self.group,
+            "version": self.service.version,
             "data": {
+                "skills": skill_list,
+                "devices": self.service.remote_devices
             }
         })
     

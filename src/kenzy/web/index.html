@@ -7,7 +7,7 @@
     <link rel="icon" type="image/x-icon" href="favicon.svg">
 	<link rel="apple-touch-icon" href="kenzy_touch.png" />
 
-	<title>Control Panel &raquo; KENZY.Ai [{version}]</title>
+	<title>Control Panel &raquo; KENZY.Ai</title>
 	<script src="jquery.js"></script>
 <style type="text/css">
 html, body { padding: 0; margin: 0; font-size: 12pt; color: #000000; background-color: #aaaaaa; min-height: 100%; font-family: Arial, Helvetica, Sans-Serif; }
@@ -26,6 +26,7 @@ icon.bolt { background-image: url(bolt-solid.svg); }
 icon.hdd { background-image: url(hdd-solid.svg); }
 icon.tools { background-image: url(tools-solid.svg); }
 icon.sign-out { background-image: url(sign-out-alt-solid.svg); }
+icon.info { background-image: url(circle-info-solid.svg); }
 icon.eye { background-image: url(eye-solid.svg); }
 icon.person { background-image: url(person-walking-solid.svg); }
 icon.dog { background-image: url(dog-solid.svg); }
@@ -161,6 +162,93 @@ footer a:hover { color: #000; }
 .page-section .settings > group { margin: -12px 0; }
 .page-section .settings { padding: 20px 0; background-color: #ebebeb; margin-right: 20px; border-radius: 6px; box-shadow: 3px 3px 12px rgba(0,0,0,.4); }
 
+.page-section#developers textarea {
+    width: 100%;
+    max-width: 700px; 
+    height: 300px;
+    resize: none;
+    border-top-left-radius: 6px;
+    overflow: scroll;
+    border: none;
+    box-shadow: 2px 2px 8px #c4c4c4;
+    padding: 5px 10px; 
+    margin-bottom: 16px; 
+}
+
+.options { margin-top: 10px; border-top: 1px solid #ccc; padding-top: 10px; }
+		
+.request { border: 1px solid #bbb; box-shadow: 2px 2px 4px #eee; margin-top: 20px; background-color: #ffffff; }
+.request h3 { 
+    border: 1px solid #fff; 
+    margin: 0; display: block; 
+    font-size: 15px; 
+    padding: 0 10px; 
+    height: 30px; 
+    line-height: 30px; 
+    background: #f0f0f0; 
+}
+.request pre {
+    margin: 0;
+    padding: 10px;
+    font-size: 14px;
+}
+
+.wrap .request pre {
+    white-space: pre-wrap;
+}
+
+.device_list .device-command,
+.device_list .device-button { width: auto; padding: 5px 10px; line-height: inherit; height: auto; }
+
+/*input[type="text"] { width: 100%; max-width: 600px; line-height: 44px; height: 44px; padding: 0 10px; box-sizing: border-box; font-size: 15px; margin-bottom: 10px; border-radius: 3px; border: 1px solid #bcbcbc; background-color: #eee; }*/
+select { width: 100%; max-width: 700px;  height: 32px; line-height: 32px; padding: 0 10px; font-size: 15px;  margin-bottom: 16px; border-radius: 3px; border: none; box-shadow: 2px 2px 8px #c4c4c4; border-radius: 6px; background-color: #ffffff; }
+button.send {
+    margin-bottom: 10px;
+}
+
+.page-section button { 
+    border: 1px solid #bbb8b5;
+    background-color: #555;
+    background: linear-gradient(#fbfafa, #fbfafa, #e8e9e9, #f2f1f0);
+    color: #333;
+    width: 175px;
+    height: 50px;
+    line-height: 48px;
+    border-radius: 4px;
+    font-size: 15px;
+}
+
+.page-section button:hover {
+    background: linear-gradient(#f7f6f6, #f7f6f6, #e4e5e5, #eeedec);
+    color: #111;
+    text-shadow: 1px 1px #ddd;
+    box-shadow: 2px 2px 4px #eee;
+}
+
+.page-section button:active {
+    background: linear-gradient(#e7e6e6, #d4d5d5, #dedddc, #dedddc);
+    color: #000;
+    text-shadow: -1px -1px #ddd;
+    box-shadow: -2px -2px 4px #eee;
+}
+
+.page-section#info .about {
+    display: block; 
+    background-color: #fff; 
+    border-radius: 6px; 
+    background: linear-gradient(#ffffff, #fafafa, #f3f3f3); 
+    box-shadow: 2px 2px 8px #c4c4c4;
+    padding: 20px;
+    font-size: 1rem;
+    line-height: 1.5rem;
+}
+
+.page-section#info .about a { color: #dc5c25; text-decoration: none; }
+.page-section#info .about a:hover { text-decoration: underline; }
+
+.page-section#info .about > *:first-child { margin-top: 0; }
+.page-section#info .about > *:last-child { margin-bottom: 0; }
+
 @media screen and (max-width: 1024px) {
     page > content > section,
     page > content.page-section > section { padding: 20px 0 20px 220px; }
@@ -195,6 +283,88 @@ footer a:hover { color: #000; }
 
 </style>
 <script type="text/javascript">
+function load_devices(devices) {
+    var i = 0;
+    $('#devices-list').empty();
+    try {
+        Object.entries(devices).forEach(([key, value]) => {
+            dev_type = $('<content></content>').text(value.type);
+            url_lnk = $('<content></content>').text(value.url);
+            loc = $('<content></content>').text(value.location);
+            stat = $('<content></content>').text("Stopped");
+            if (value.active == true) {
+                stat = $('<content></content>').text("Running");
+            }
+
+            td1 = $('<td></td>');
+            td1.append(dev_type);
+            td2 = $('<td></td>');
+            td2.append(url_lnk);
+            td3 = $('<td></td>');
+            td3.append(loc);
+            td4 = $('<td></td>');
+            td4.append(stat);
+            tr = $('<tr></tr>');
+            tr.append(td1);
+            tr.append(td2);
+            tr.append(td3);
+            tr.append(td4);
+            $('#devices-list').append(tr);
+
+            i++;
+        });
+    } catch(error) { console.log(error); };
+
+    $('#device-count').text(i)
+    if (i == 0) { 
+        $('#devices-list').append($('<tr><td><content>No records</content></td><td></td><td></td><td></td></tr>'));
+    }
+}
+
+function load_skills(skills) {
+    var i = 0;
+    $('#skills-list').empty();
+    try {
+        Object.entries(skills).forEach(([key, value]) => {
+            skill_name = $('<content></content>').text(key);
+            skill_description = $('<content></content>').text(value.description);
+
+            td1 = $('<td></td>');
+            td1.append(skill_name);
+            td2 = $('<td></td>');
+            td2.append(skill_description);
+            tr = $('<tr></tr>');
+            tr.append(td1);
+            tr.append(td2);
+            $('#skills-list').append(tr);
+
+            i++;
+        });
+    } catch(error) { console.log(error); };
+
+    $('#skill-count').text(i)
+    if (i == 0) { 
+        $('#skills-list').append($('<tr><td><content>No records</content></td><td></td></tr>'));
+    }
+}
+
+function refresh_data() {
+    $.ajax({
+        url: "/",
+        method: "POST",
+        contentType: "application/json",
+        data: JSON.stringify({ action: "status" }),
+        dataType: "JSON",
+        success: function(response) {
+
+            $('.version').text(response.data.version);
+
+            load_devices(response.data.data.devices);
+            load_skills(response.data.data.skills);
+        }
+    });
+}
+
 $(document).ready(function() {
     $('#nav-bars').click(function() {
         if ($('sidebar').hasClass('active')) {
@@ -210,6 +380,13 @@ $(document).ready(function() {
         $($(this).attr('page-target')).show();
         $(this).addClass('active');
     });
+
+    $('.page-button#btn-skills').click(function() {
+        return false;
+    });
+
+    refresh_data();
+
 });
 </script>
 </head>
@@ -228,17 +405,17 @@ $(document).ready(function() {
             <!-- start_section -->
             <section>
                 <content>
-                    <button class="page-button active" page-target="#dashboard"><icon class="tachometer"></icon>Dashboard</button>
-                    <button class="page-button" page-target="#devices"><icon class="server"></icon>Devices</button>
-                    <button class="page-button" page-target="#cameras"><icon class="camera"></icon>Cameras</button>
-                    <button class="page-button" page-target="#skills"><icon class="bolt"></icon>Skills</button>
-                    <button class="page-button" page-target="#logs"><icon class="hdd"></icon>Logs</button>
-                    <button class="page-button" page-target="#settings"><icon class="tools"></icon>Settings</button>
+                    <button class="page-button active" id="btn-dashboard" page-target="#dashboard"><icon class="tachometer"></icon>Dashboard</button>
+                    <button class="page-button" id="btn-devices" page-target="#devices"><icon class="server"></icon>Devices</button>
+                    <button class="page-button" id="btn-cameras" page-target="#cameras"><icon class="camera"></icon>Cameras</button>
+                    <button class="page-button" id="btn-skills" page-target="#skills"><icon class="bolt"></icon>Skills</button>
+                    <button class="page-button" id="btn-logs" page-target="#logs"><icon class="hdd"></icon>Logs</button>
+                    <button class="page-button" id="btn-developers" page-target="#developers"><icon class="tools"></icon>Developers</button>
                 </content>
             </section>
             <section>
                 <content>
-                    <button class="page-button" page-target="#login"><icon class="sign-out"></icon>Logout</button>
+                    <button class="page-button" id="btn-about" page-target="#info"><icon class="info"></icon>About</button>
                 </content>
             </section>
             <!-- end_section -->
@@ -255,7 +432,7 @@ $(document).ready(function() {
                     <gauge>
                         <header><icon class="server"></icon></header>
                         <content>
-                            <metric>23</metric>
+                            <metric id="device-count">0</metric>
                             <divider></divider>
                             <title>Devices</title>
                         </content>
@@ -263,7 +440,7 @@ $(document).ready(function() {
                     <gauge>
                         <header><icon class="bolt"></icon></header>
                         <content>
-                            <metric>406</metric>
+                            <metric id="skill-count">0</metric>
                             <divider></divider>
                             <title>Skills</title>
                         </content>
@@ -444,31 +621,18 @@ $(document).ready(function() {
                                         <th class="text-left">Type</th>
                                         <th class="text-left">URL</th>
                                         <th class="text-left">Location</th>
+                                        <th class="text-left">Status</th>
                                     </tr>
                                 </thead>
                             </table>
                             <div class="scroll-box">
                             <table>
-                                <tbody>
+                                <tbody id="devices-list">
                                     <tr>
-                                        <td><content>kenzy.stt</content></td>
-                                        <td><content>http://192.168.1.140:9701</content></td>
-                                        <td><content>Living Room</content></td>
-                                    </tr>
-                                    <tr>
-                                        <td><content>kenzy.tts</content></td>
-                                        <td><content>http://192.168.1.140:9702</content></td>
-                                        <td><content>Living Room</content></td>
-                                    </tr>
-                                    <tr>
-                                        <td><content>kenzy.image</content></td>
-                                        <td><content>http://192.168.1.140:9703</content></td>
-                                        <td><content>Living Room</content></td>
-                                    </tr>
-                                    <tr>
-                                        <td><content>kenzy.skillmanager</content></td>
-                                        <td><content>http://192.168.1.140:9700</content></td>
-                                        <td><content>Living Room</content></td>
+                                        <td><content>No records</content></td>
+                                        <td><content></content></td>
+                                        <td><content></content></td>
+                                        <td><content></content></td>
                                     </tr>
                                 </tbody>
                             </table>
@@ -479,7 +643,7 @@ $(document).ready(function() {
                 <group></group>
             </content>
         </section>
-        <section class="secondary">
+        <section class="secondary" id="device-info" style="display: none;">
             <header>Device Details</header>
             <content class="settings">
                 <group class="col-2">
@@ -599,34 +763,17 @@ $(document).ready(function() {
                             <table class="header">
                                 <thead>
                                     <tr>
-                                        <th class="text-left">Type</th>
-                                        <th class="text-left">URL</th>
-                                        <th class="text-left">Location</th>
+                                        <th class="text-left">Name</th>
+                                        <th class="text-left">Description</th>
                                     </tr>
                                 </thead>
                             </table>
                             <div class="scroll-box">
                             <table>
-                                <tbody>
+                                <tbody id="skills-list">
                                     <tr>
-                                        <td><content>kenzy.stt</content></td>
-                                        <td><content>http://192.168.1.140:9701</content></td>
-                                        <td><content>Living Room</content></td>
-                                    </tr>
-                                    <tr>
-                                        <td><content>kenzy.tts</content></td>
-                                        <td><content>http://192.168.1.140:9702</content></td>
-                                        <td><content>Living Room</content></td>
-                                    </tr>
-                                    <tr>
-                                        <td><content>kenzy.image</content></td>
-                                        <td><content>http://192.168.1.140:9703</content></td>
-                                        <td><content>Living Room</content></td>
-                                    </tr>
-                                    <tr>
-                                        <td><content>kenzy.skillmanager</content></td>
-                                        <td><content>http://192.168.1.140:9700</content></td>
-                                        <td><content>Living Room</content></td>
+                                        <td><content>No records</content></td>
+                                        <td><content></content></td>
                                     </tr>
                                 </tbody>
                             </table>
@@ -690,14 +837,85 @@ $(document).ready(function() {
             </content>
         </section>
     </content>
-    <content class="page-section" id="settings" style="display: none;">
+    <content class="page-section" id="developers" style="display: none;">
         <section>
             <header>
-                <title>List of Settings</title>
-                <subtitle>Overview</subtitle>
+                <title>Developer Actions</title>
+                <subtitle>Send Command</subtitle>
             </header>
             <content class="main">
-            test
+                <form id="form">
+                    <div>
+                        <select>
+                            <option>[device]</option>
+                        </select>
+                    </div>
+                    <div>
+                        <select>
+                            <option>[template]</option>
+                        </select>
+                    </div>
+                    <div>
+                    <textarea id="textarea" placeholder="Enter JSON data">{
+    "action": "collect",
+    "payload": {
+        "motion": true, 
+        "objects": ["person"], 
+        "faces": [
+            {
+                "name": "lnxusr1", 
+                "timestamp": 1689533206.6091325
+            }
+        ]
+    },
+    "context": {
+        "url": "http://192.168.37.84:8081", 
+        "type": "kenzy.image", 
+        "location": "Living Room", 
+        "group": "Primary"
+    }
+}</textarea></div>
+                    <button class="send" id="btnSendCmd">Send &raquo;</button>
+
+                    <div class="options">
+                        <input type="checkbox" class="toggle-target" value="#command-log" id="checkbox2" checked="checked"><label for="checkbox2"> Show Log</label>
+                        <input type="checkbox" class="toggle-wrap" value="#command-log" id="checkbox3" checked="checked"><label for="checkbox3"> Word Wrap</label>
+                    </div>
+                    
+                    <div class="log wrap" id="command-log">
+                        <div id="command-request" class="request">
+                            <h3>Request</h3>
+                            <pre></pre>
+                        </div>
+                        
+                        <div id="command-response" class="request">
+                            <h3>Output</h3>
+                            <pre></pre>
+                        </div>
+                    </div>                
+
+                </form>
+            </content>
+        </section>
+    </content>
+    <content class="page-section" id="info" style="display: none;">
+        <section>
+            <header>
+                <title>About KENZY</title>
+                <subtitle>Background</subtitle>
+            </header>
+            <content class="main">
+                <div class="about">
+                    <p><a href="http://kenzy.ai">KENZY</a> is a foundation of Python code that enables hardware interactions leveraging Machine Learning to create Artificial Intelligence. Wow, that's a mouthful. Let's try again, KENZY is a set of Python classes and functions that you can use to build your own personal assistant similar to Apple's Siri, Google's Assistant, or Amazon's Alexa. There are libraries for speech recognition, speech synthesis, face and object detection, and even face recognition. So basically KENZY can see you, hear you, and respond to you.</p>
+
+                    <p>KENZY is 100% customizable. Its modular design allows you to create your own skills or integrate new hardware to fit your specific needs. The code is open source and shared with a business-friendly license.</p>
+
+                    <h3>What Should You Expect?</h3>
+                    <p>KENZY's main goal is to share knowledge and grow organically based on feedback and support from people like you. On the project web site, the github project, and within each of KENZY's code modules you will find lots of documentation, examples, sample code, and other artifacts to help you grow in your own experience with Ai/ML and coding.</p>
+
+                    <h3>Who Built Me</h3>
+                    <p>KENZY was originally designed by <a href="http://twitter.com/lnxusr1">@lnxusr1</a> during the Covid-19 lockdown in 2020.</p>
+                </div>
             </content>
         </section>
     </content>
@@ -706,7 +924,7 @@ $(document).ready(function() {
             <content>
                 <divider></divider>
                 <footer>
-                    KENZY {version} | <a href="https://docs.kenzy.ai">Documentation</a> 
+                    KENZY <span class="version">{version}</span> | <a href="https://docs.kenzy.ai">Documentation</a> 
                     &nbsp;|&nbsp; 
                     <a href="https://kenzy.ai/blog">Blog</a> 
                     &nbsp;|&nbsp; 

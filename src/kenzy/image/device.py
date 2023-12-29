@@ -592,8 +592,8 @@ class VideoProcessor:
             "accepts": self.accepts,
             "location": self.location,
             "group": self.group,
+            "version": self.service.version,
             "data": {
-                
             }
         })
     

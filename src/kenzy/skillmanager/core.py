@@ -205,7 +205,8 @@ class GenericSkill:
         Skill Initialization
         """
         
-        self._name = "Learned Skill"
+        self.name = "Learned Skill"
+        self.description = ""
         self.device = None 
 
     @property
@@ -406,7 +407,7 @@ class GenericSkill:
         return False
 
     def get_setting(self, name):
-        return self.device.settings.get(self._name, {}).get(name)
+        return self.device.settings.get(self.name, {}).get(name)
 
     def stop(self):
         """
