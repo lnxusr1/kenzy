@@ -131,7 +131,7 @@ def read_from_device(stop_event, muted_event=threading.Event(), **kwargs):
                     if not stop_event.is_set():
                         if text.strip() != "":
 
-                            yield text
+                            yield text[:255] if len(text) > 255 else text
 
                         container = io.BytesIO()
                         wf = wave.open(container, "wb")

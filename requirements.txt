@@ -3,6 +3,7 @@ requests
 urllib3
 pyyaml
 scikit-build 
+psutils
 
 # SKILL
 fann2==1.1.2

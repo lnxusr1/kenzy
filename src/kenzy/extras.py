@@ -6,10 +6,11 @@ import mimetypes
 import threading
 import time
 import uuid
+import json
 import requests
 import xml.etree.ElementTree as ET
 from . import __app_title__, __version__
-import json
+import psutil
 
 SSDP_DEVICE_TYPE = "urn:schemas-upnp-org:device:Kenzy-Core:1"
 ones = {
@@ -448,3 +449,80 @@ def _divide(dividend, divisor, magnitude):
 
 def _join(*args):
     return ' '.join(filter(bool, args))
+
+
+def get_sys_info():
+    sys_info = { "cpu": {}, "memory": { "virtual": {}, "swap": {} }, "disk": { "partitions": []}, "network": {} }
+
+    sys_info["cpu"]["percent"] = psutil.cpu_percent(interval=1)
+    sys_info["cpu"]["count"] = psutil.cpu_count()
+    sys_info["cpu"]["count_physical"] = psutil.cpu_count(logical=False)
+    sys_info["cpu"]["frequency"] = psutil.cpu_freq().max
+    sys_info["cpu"]["load"] = psutil.getloadavg()
+
+    vm = psutil.virtual_memory()
+    sys_info["memory"]["virtual"]["total"] = vm.total
+    sys_info["memory"]["virtual"]["available"] = vm.available
+    sys_info["memory"]["virtual"]["used"] = vm.used
+    sys_info["memory"]["virtual"]["free"] = vm.free
+    sys_info["memory"]["virtual"]["percent"] = vm.percent
+
+    sm = psutil.swap_memory()
+    sys_info["memory"]["swap"]["total"] = sm.total
+    sys_info["memory"]["swap"]["used"] = sm.used
+    sys_info["memory"]["swap"]["free"] = sm.free
+    sys_info["memory"]["swap"]["percent"] = sm.percent
+
+    dp = psutil.disk_partitions(all=True)
+    for part in dp:
+        try:
+            if part.device.startswith("/dev/"):
+                du = psutil.disk_usage(part.mountpoint)
+                sys_info["disk"]["partitions"].append({
+                    "device": part.device,
+                    "mountpoint": part.mountpoint,
+                    "total": du.total,
+                    "free": du.free,
+                    "used": du.used,
+                    "percent": du.percent
+                })
+        except PermissionError:
+            pass
+
+    dio = psutil.disk_io_counters(perdisk=False)
+    sys_info["disk"]["io"] = {
+        "read_bytes": dio.read_bytes,
+        "read_count": dio.read_count,
+        "read_time": dio.read_time,
+        "write_bytes": dio.write_bytes,
+        "write_count": dio.write_count,
+        "write_time": dio.write_time
+    }
+
+    nio = psutil.net_io_counters(pernic=True)
+    for nic in nio:
+        sys_info["network"][nic] = {
+            "bytes_recv": nio[nic].bytes_recv,
+            "bytes_sent": nio[nic].bytes_sent,
+            "packets_recv": nio[nic].packets_recv,
+            "packets_sent": nio[nic].packets_sent,
+            "dropin": nio[nic].dropin,
+            "dropout": nio[nic].dropout,
+            "errin": nio[nic].errin,
+            "errout": nio[nic].errout
+        }
+
+    return sys_info
+
+
+def get_status(obj):
+    return {
+        "active": obj.is_alive(),
+        "type": obj.type,
+        "accepts": obj.accepts,
+        "location": obj.location,
+        "group": obj.group,
+        "version": obj.service.version,
+        "info": get_sys_info(),
+        "data": {}
+    }

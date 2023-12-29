@@ -283,11 +283,36 @@ button.send {
 
 </style>
 <script type="text/javascript">
-function load_devices(devices) {
+function load_devices(response) {
     var i = 0;
     $('#devices-list').empty();
     try {
-        Object.entries(devices).forEach(([key, value]) => {
+
+        dev_type = $('<content></content>').text(response.data.type);
+        url_lnk = $('<content></content>').text(response.data.url);
+        loc = $('<content></content>').text(response.data.location);
+        stat = $('<content></content>').text("Stopped");
+        if (response.data.active == true) {
+            stat = $('<content></content>').text("Running");
+        }
+
+        td1 = $('<td></td>');
+        td1.append(dev_type);
+        td2 = $('<td></td>');
+        td2.append(url_lnk);
+        td3 = $('<td></td>');
+        td3.append(loc);
+        td4 = $('<td></td>');
+        td4.append(stat);
+        tr = $('<tr></tr>');
+        tr.append(td1);
+        tr.append(td2);
+        tr.append(td3);
+        tr.append(td4);
+        $('#devices-list').append(tr);
+        i++
+        
+        Object.entries(response.data.data.devices).forEach(([key, value]) => {
             dev_type = $('<content></content>').text(value.type);
             url_lnk = $('<content></content>').text(value.url);
             loc = $('<content></content>').text(value.location);
@@ -359,7 +384,7 @@ function refresh_data() {
 
             $('.version').text(response.data.version);
 
-            load_devices(response.data.data.devices);
+            load_devices(response);
             load_skills(response.data.data.skills);
         }
     });

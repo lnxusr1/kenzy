@@ -68,7 +68,8 @@ $pythonCmd -m pip install --upgrade \
     scikit-build \
     urllib3 \
     requests \
-    pyyaml;
+    pyyaml \
+    psutil;
 
 if [ $brain -eq 1 ]; then
     echo "Installing libraries for brain module...";

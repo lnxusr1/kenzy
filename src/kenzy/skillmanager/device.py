@@ -2,6 +2,7 @@ import logging
 import time
 from kenzy.core import KenzySuccessResponse, KenzyErrorResponse, KenzyContext
 from kenzy.skillmanager.core import SkillManager, SpeakCommand, PlayCommand, GenericSkill
+from kenzy.extras import get_status
 
 
 class SkillsDevice:
@@ -98,23 +99,20 @@ class SkillsDevice:
         for item in self.skill_manager.skills:
             obj = item.get("object")
             if isinstance(obj, GenericSkill):
-                skill_list[obj.name] = {
-                    "description": obj.description,
-                    "settings": self.settings.get(obj.name)
-                }
+                try:
+                    skill_list[obj.name] = {
+                        "description": obj.description,
+                        "settings": self.settings.get(obj.name)
+                    }
+                except AttributeError:
+                    pass
 
-        return KenzySuccessResponse({
-            "active": self.is_alive(),
-            "type": self.type,
-            "accepts": self.accepts,
-            "location": self.location,
-            "group": self.group,
-            "version": self.service.version,
-            "data": {
-                "skills": skill_list,
-                "devices": self.service.remote_devices
-            }
-        })
+        st = get_status(self)
+        st["url"] = self.service.service_url
+        st["data"]["skills"] = skill_list
+        st["data"]["devices"] = self.service.remote_devices
+        
+        return KenzySuccessResponse(st)
     
     def set_service(self, service):
         self.service = service
