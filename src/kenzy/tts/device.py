@@ -2,7 +2,7 @@ import os
 import logging
 from kenzy.core import KenzySuccessResponse, KenzyErrorResponse
 from kenzy.tts.core import model_type, create_speech, play_wav_file
-from kenzy.extras import number_to_words, numbers_in_string
+from kenzy.extras import number_to_words, numbers_in_string, get_status
 
 
 class SpeakerDevice:
@@ -87,16 +87,7 @@ class SpeakerDevice:
         return KenzyErrorResponse("Not implemented")
     
     def status(self, **kwargs):
-        return KenzySuccessResponse({
-            "active": self.is_alive(),
-            "type": self.type,
-            "accepts": self.accepts,
-            "location": self.location,
-            "group": self.group,
-            "version": self.service.version,
-            "data": {
-            }
-        })
+        return KenzySuccessResponse(get_status(self))
     
     def set_service(self, service):
         self.service = service

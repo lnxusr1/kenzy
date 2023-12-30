@@ -1,8 +1,10 @@
+import sys
+import traceback
 import logging
 import time
 from kenzy.core import KenzySuccessResponse, KenzyErrorResponse, KenzyContext
 from kenzy.skillmanager.core import SkillManager, SpeakCommand, PlayCommand, GenericSkill
-from kenzy.extras import get_status
+from kenzy.extras import get_status, get_skills_package
 
 
 class SkillsDevice:
@@ -51,10 +53,25 @@ class SkillsDevice:
 
     @property
     def accepts(self):
-        return ["status", "get_settings", "set_settings", "collect"]
+        return ["status", "get_settings", "set_settings", "collect", "download_skill"]
     
     def is_alive(self, **kwargs):
         return True
+    
+    def download_skill(self, **kwargs):
+        try:
+            self.logger.info("Downloading skills")
+            if not get_skills_package(skill_name=None, skill_dir=self.settings.get("folder.skills", "~/.kenzy/skills")):
+                return KenzyErrorResponse("Download failed.")
+            
+            self.initialize()
+
+        except Exception:
+            self.logger.debug(str(sys.exc_info()[0]))
+            self.logger.debug(str(traceback.format_exc()))
+            return KenzyErrorResponse("Download failed.")
+        
+        return KenzySuccessResponse("Download successful.")
     
     def collect(self, **kwargs):
         data = kwargs.get("data", {})

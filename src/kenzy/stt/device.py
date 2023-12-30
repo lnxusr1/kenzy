@@ -6,6 +6,7 @@ import sys
 import traceback
 from kenzy.core import KenzySuccessResponse, KenzyErrorResponse
 from kenzy.stt.core import read_from_device
+from kenzy.extras import get_status
 
 
 class AudioProcessor:
@@ -147,13 +148,4 @@ class AudioProcessor:
         return KenzyErrorResponse("Not implemented")
     
     def status(self, **kwargs):
-        return KenzySuccessResponse({
-            "active": self.is_alive(),
-            "type": self.type,
-            "accepts": self.accepts,
-            "location": self.location,
-            "group": self.group,
-            "version": self.service.version,
-            "data": {
-            }
-        })
+        return KenzySuccessResponse(get_status(self))

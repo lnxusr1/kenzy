@@ -32,6 +32,8 @@ icon.map-pin { background-image: url(map-pin-solid.svg); }
 icon.eye { background-image: url(eye-solid.svg); }
 icon.person { background-image: url(person-walking-solid.svg); }
 icon.dog { background-image: url(dog-solid.svg); }
+icon.download { background-image: url(download-solid.svg); }
+icon.refresh { background-image: url(arrows-rotate-solid.svg); }
 
 sidebar button:hover { background-color: rgba(255, 255, 255, 0.1); }
 sidebar button.active { background: linear-gradient(195deg, #de6c3c 0%, #dc5c25 100%); }
@@ -71,10 +73,7 @@ group > item > data { margin: 0 20px; display: block; padding: 10px 10px 0 10px;
 .main gauge { display: block; position: relative; }
 .main gauge > header { display: block; position: relative; height: 6px; width: 100%; }
 .main gauge > header > icon { display: block; position: absolute; height: 32px; width: 32px; left: 24px; z-index: 100; background-color: #42424a; background-repeat: no-repeat; background-size: 16px 16px; background-position: center center; border-radius: 4px; box-shadow: 2px 2px 2px #ccc; }
-.main gauge > header > icon.server { background-image: url(server-solid.svg); }
-.main gauge > header > icon.bolt { background-image: url(bolt-solid.svg); }
-.main gauge > header > icon.expand { background-image: url(expand-solid.svg); }
-.main gauge > header > icon.stopwatch { background-image: url(stopwatch-solid.svg); }
+
 .main gauge > content { position: relative; display: block; background-color: #ffffff; margin: 10px; z-index: 99; box-shadow: 2px 2px 8px #c4c4c4; border-radius: 10px; background: linear-gradient(#ffffff, #fafafa, #f3f3f3);  }
 .main gauge > content > metric { display: block; padding: 20px 20px 0 20px; text-align: right; font-size: 2rem; font-weight: bold; border-radius: 10px; line-height: 36px; height: 36px; overflow: hidden; }
 .main gauge > content > image-tile { display: block; width: 100%; height: 150px; overflow: hidden; background-color: #676767; border-top-left-radius: 6px; border-top-right-radius: 6px; }
@@ -180,7 +179,7 @@ footer a:hover { color: #000; }
 
 .options { margin-top: 10px; border-top: 1px solid #ccc; padding-top: 10px; }
 		
-.request { border: 1px solid #bbb; box-shadow: 2px 2px 4px #eee; margin-top: 20px; background-color: #ffffff; }
+.request { border: 1px solid #777; margin-top: 20px; background-color: #ffffff; }
 .request h3 { 
     border: 1px solid #fff; 
     margin: 0; display: block; 
@@ -251,6 +250,34 @@ button.send {
 
 .page-section#info .about > *:first-child { margin-top: 0; }
 .page-section#info .about > *:last-child { margin-bottom: 0; }
+
+.page-buttons { float: right; padding-right: 20px; padding-top: 10px; }
+.page-buttons button { 
+    width: auto; 
+    height: auto; 
+    line-height: inherit;     
+    background: linear-gradient(165deg, #42424a 0%, #191919 100%);
+    border-radius: 6px;
+    cursor: pointer;
+}
+
+.page-buttons button icon {
+    display: inline-block;
+    height: 28px;
+    width: 28px;
+    background-repeat: no-repeat;
+    background-size: 16px 16px;
+    background-position: center center;
+}
+
+.page-buttons button:hover {
+    background: linear-gradient(195deg, #de6c3c 0%, #dc5c25 100%);
+}
+
+.page-buttons button:disabled {
+    background: none;
+    background-color: #888;
+}
 
 @media screen and (max-width: 1024px) {
     page > content > section,
@@ -325,6 +352,90 @@ spinner icon {
 
 </style>
 <script type="text/javascript">
+function get_skills() {
+
+    $.ajax({
+        url: "/",
+        method: "POST",
+        contentType: "application/json",
+        data: JSON.stringify({ action: "download_skill" }),
+        dataType: "JSON",
+        beforeSend: function() {
+            $('#btn-download-skills').prop('disabled', true);
+            $('spinner').show();
+        },
+        success: function(response) {
+            if (response.status == "success") {
+                setTimeout(() => { refresh_data(); }, 1000);
+                return;
+            }
+
+            alert(response.errors);
+        },
+        complete: function() {
+            $('spinner').hide();
+            $('#btn-download-skills').prop('disabled', false);
+        }
+    });
+
+}
+
+function extract_server_stats(o) {
+    total_space = 0;
+    used_space = 0;
+    for (let x=0; x < o.info.disk.partitions.length; x++) {
+        total_space += o.info.disk.partitions[x].total;
+        used_space += o.info.disk.partitions[x].used;
+    }
+
+    disk_space_percent = (total_space > 0) ? used_space / total_space : 0;
+    server = new URL(o.url);
+    return {
+        "server": server.hostname,
+        "cpu": o.info.cpu.percent.toString() + "%",
+        "mem": o.info.memory.virtual.percent.toString() + "%",
+        "disk": (disk_space_percent * 100).toFixed(1).toString() + "%"
+    };
+}
+
+function load_services(response) {
+    var servers = [];
+    var stats = [];
+    s_stats = extract_server_stats(response.data);
+    servers.push(s_stats.server.toLowerCase());
+    stats.push(s_stats);
+
+    Object.entries(response.data.data.devices).forEach(([key, value]) => {
+        s_stats = extract_server_stats(value);
+        if (servers.indexOf(s_stats.server.toLowerCase()) === -1) {
+            servers.push(s_stats.server.toLowerCase());
+            stats.push(s_stats);
+        }
+    });
+
+    $('#server-list').empty();
+    for (let x=0; x < stats.length; x++) {
+        td1 = $('<td style="width: 100px;"></td>');
+        td1.append(stats[x].server);
+        td2 = $('<td class="text-center"></td>');
+        td2.append(stats[x].cpu);
+        td3 = $('<td class="text-center"></td>');
+        td3.append(stats[x].mem);
+        td4 = $('<td class="text-center"></td>');
+        td4.append(stats[x].disk);
+        tr = $('<tr></tr>');
+        tr.append(td1);
+        tr.append(td2);
+        tr.append(td3);
+        tr.append(td4);
+        $('#server-list').append(tr);
+    }
+
+    if (stats.length == 0) {
+        $('#server-list').append($('<tr><td><content>No records</content></td><td></td><td></td><td></td></tr>'));
+    }
+}
+
 function load_devices(response) {
     var i = 0;
     var cams = 0;
@@ -439,6 +550,7 @@ function refresh_data() {
         data: JSON.stringify({ action: "status" }),
         dataType: "JSON",
         beforeSend: function() {
+            $('.btn-refresh').prop('disabled', true);
             $('spinner').show();
         },
         success: function(response) {
@@ -447,9 +559,11 @@ function refresh_data() {
 
             load_devices(response);
             load_skills(response.data.data.skills);
+            load_services(response);
         },
         complete: function() {
             $('spinner').hide();
+            $('.btn-refresh').prop('disabled', false);
         }
     });
 }
@@ -471,6 +585,16 @@ $(document).ready(function() {
     });
 
     $('.page-button#btn-skills').click(function() {
+        return false;
+    });
+
+    $('.btn-refresh').click(function() {
+        refresh_data();
+        return false;
+    });
+
+    $('#btn-download-skills').click(function() {
+        get_skills();
         return false;
     });
 
@@ -512,6 +636,9 @@ $(document).ready(function() {
     </sidebar>
     <content class="page-section" id="dashboard">
         <section>
+            <div class="page-buttons">
+                <button class="btn-refresh"><icon class="refresh"></icon></button>
+            </div>
             <header>
                 <title>System Overview</title>
                 <subtitle>Dashboard</subtitle>
@@ -566,7 +693,7 @@ $(document).ready(function() {
                             </table>
                             <div class="scroll-box">
                             <table>
-                                <tbody>
+                                <tbody id="server-list">
                                     <tr>
                                         <td style="width: 100px;"><content>192.168.1.140</content></td>
                                         <td class="text-center"><content>68.2%</content></td>
@@ -833,6 +960,10 @@ $(document).ready(function() {
     </content>
     <content class="page-section" id="skills" style="display: none;">
         <section>
+            <div class="page-buttons">
+                <button id="btn-download-skills"><icon class="download"></icon></button>
+                <button class="btn-refresh"><icon class="refresh"></icon></button>
+            </div>
             <header>
                 <title>List of Skills</title>
                 <subtitle>Overview</subtitle>
@@ -963,19 +1094,23 @@ $(document).ready(function() {
                         <input type="checkbox" class="toggle-wrap" value="#command-log" id="checkbox3" checked="checked"><label for="checkbox3"> Word Wrap</label>
                     </div>
                     
-                    <div class="log wrap" id="command-log">
-                        <div id="command-request" class="request">
-                            <h3>Request</h3>
-                            <pre></pre>
-                        </div>
-                        
-                        <div id="command-response" class="request">
-                            <h3>Output</h3>
-                            <pre></pre>
-                        </div>
-                    </div>                
-
                 </form>
+            </content>
+        </section>
+        <section class="secondary" style="display: none;">
+            <content>
+                <div class="log wrap" id="command-log">
+                    <div id="command-request" class="request">
+                        <h3>Request</h3>
+                        <pre></pre>
+                    </div>
+                    
+                    <div id="command-response" class="request">
+                        <h3>Output</h3>
+                        <pre></pre>
+                    </div>
+                </div>                
+
             </content>
         </section>
     </content>

@@ -17,6 +17,7 @@ from kenzy.image.core import image_blur, image_gray, image_rotate, image_resize,
     object_model, object_labels, get_face_encoding, \
     motion_detection, object_detection, face_detection
 import kenzy.settings
+from kenzy.extras import get_status
 # from kenzy.image import core
 
 
@@ -586,16 +587,7 @@ class VideoProcessor:
         return KenzyErrorResponse("Not implemented")
 
     def status(self, **kwargs):
-        return KenzySuccessResponse({
-            "active": self.is_alive(),
-            "type": self.type,
-            "accepts": self.accepts,
-            "location": self.location,
-            "group": self.group,
-            "version": self.service.version,
-            "data": {
-            }
-        })
+        return KenzySuccessResponse(get_status(self))
     
     def stream(self, **kwargs):
         return KenzyErrorResponse("Not implemented")

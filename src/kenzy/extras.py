@@ -7,11 +7,14 @@ import threading
 import time
 import uuid
 import json
+import tempfile
+import zipfile
 import requests
 import xml.etree.ElementTree as ET
 from . import __app_title__, __version__
 import psutil
 
+SKILLS_BASE_URL = "https://kenzy.ai/download/skills/"
 SSDP_DEVICE_TYPE = "urn:schemas-upnp-org:device:Kenzy-Core:1"
 ones = {
     0: '', 1: 'one', 2: 'two', 3: 'three', 4: 'four', 5: 'five', 6: 'six',
@@ -473,10 +476,14 @@ def get_sys_info():
     sys_info["memory"]["swap"]["free"] = sm.free
     sys_info["memory"]["swap"]["percent"] = sm.percent
 
-    dp = psutil.disk_partitions(all=True)
+    dp = psutil.disk_partitions(all=False)
     for part in dp:
         try:
-            if part.device.startswith("/dev/"):
+            if part.device.startswith("/dev/") \
+                    and not part.device.startswith("/dev/loop") \
+                    and not part.mountpoint.startswith("/var/snap/") \
+                    and not part.mountpoint.startswith("/boot/"):
+                
                 du = psutil.disk_usage(part.mountpoint)
                 sys_info["disk"]["partitions"].append({
                     "device": part.device,
@@ -526,3 +533,33 @@ def get_status(obj):
         "info": get_sys_info(),
         "data": {}
     }
+
+
+def get_skills_package(skill_name=None, skill_dir=None):
+    if skill_dir is None:
+        return False
+    
+    if skill_name is None:
+        skill_pack = "skill-package-" + __version__ + ".zip"
+    else:
+        skill_pack = skill_name.strip().lower()
+
+        if not skill_pack.endswith(".zip"):
+            skill_pack = skill_pack + ".zip"
+
+    skill_pack_url = SKILLS_BASE_URL + skill_pack
+    
+    resp = requests.get(skill_pack_url, allow_redirects=True)
+    if resp.ok:
+        file_name = os.path.join(tempfile.gettempdir(), skill_pack)
+        
+        with open(file_name, "wb") as sw:
+            sw.write(resp.content)
+
+        os.makedirs(skill_dir, exist_ok=True)
+        with zipfile.ZipFile(file_name) as zf:
+            zf.extractall(skill_dir)
+        
+        return True
+    
+    return False
