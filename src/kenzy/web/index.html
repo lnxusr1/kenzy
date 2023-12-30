@@ -382,13 +382,13 @@ function get_skills() {
 
 function extract_server_stats(o) {
     total_space = 0;
-    used_space = 0;
+    free_space = 0;
     for (let x=0; x < o.info.disk.partitions.length; x++) {
         total_space += o.info.disk.partitions[x].total;
-        used_space += o.info.disk.partitions[x].used;
+        free_space += o.info.disk.partitions[x].free;
     }
 
-    disk_space_percent = (total_space > 0) ? used_space / total_space : 0;
+    disk_space_percent = (total_space > 0) ? 1 - free_space / total_space : 0;
     server = new URL(o.url);
     return {
         "server": server.hostname,
