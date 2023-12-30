@@ -27,6 +27,8 @@ icon.hdd { background-image: url(hdd-solid.svg); }
 icon.tools { background-image: url(tools-solid.svg); }
 icon.sign-out { background-image: url(sign-out-alt-solid.svg); }
 icon.info { background-image: url(circle-info-solid.svg); }
+icon.spinner { background-image: url(spinner-solid.svg); }
+icon.map-pin { background-image: url(map-pin-solid.svg); }
 icon.eye { background-image: url(eye-solid.svg); }
 icon.person { background-image: url(person-walking-solid.svg); }
 icon.dog { background-image: url(dog-solid.svg); }
@@ -95,6 +97,7 @@ monospace { font-family: 'Courier New', Courier, monospace; }
 
 .text-left { text-align: left; }
 .text-right { text-align: right; }
+.text-center { text-align: center; }
 
 .secondary { background: linear-gradient(rgba(0,0,0,.2), transparent); background-size: 100% 30px; background-repeat: no-repeat; }
 .secondary > header { font-weight: bold; text-transform: uppercase; font-size: 0.9rem; text-shadow: 1px 1px 2px rgba(255,255,255, .6); }
@@ -281,10 +284,52 @@ button.send {
 
 }
 
+spinner {
+    display: block;
+    position: fixed;
+    top: 0;
+    left: calc(50% - 63px);
+    height: 36px;
+    line-height: 36px;
+    padding: 0 16px;
+    color: #ffffff;
+    background-color: #444;
+    border-bottom-left-radius: 6px;
+    border-bottom-right-radius: 6px;
+    box-shadow: 2px 2px 8px #424242;
+    z-index: 1003;
+}
+
+spinner icon { 
+    display: inline-block;
+    height: 16px;
+    width: 16px;
+    margin-right: 10px;
+}
+
+.spin {
+    animation-name: spin;
+    animation-duration: 4000ms;
+    animation-iteration-count: infinite;
+    animation-timing-function: linear; 
+}
+
+@keyframes spin {
+    from {
+        transform:rotate(0deg);
+    }
+    to {
+        transform:rotate(360deg);
+    }
+}
+
 </style>
 <script type="text/javascript">
 function load_devices(response) {
     var i = 0;
+    var cams = 0;
+    var locations = [];
+
     $('#devices-list').empty();
     try {
 
@@ -294,6 +339,10 @@ function load_devices(response) {
         stat = $('<content></content>').text("Stopped");
         if (response.data.active == true) {
             stat = $('<content></content>').text("Running");
+        }
+
+        if (loc) {
+            locations.push(loc.toString().toLowerCase());
         }
 
         td1 = $('<td></td>');
@@ -321,6 +370,10 @@ function load_devices(response) {
                 stat = $('<content></content>').text("Running");
             }
 
+            if (loc) {
+                locations.indexOf(loc.toString().toLowerCase()) === -1 ? locations.push(loc.toString().toLowerCase()) : null;
+            }
+
             td1 = $('<td></td>');
             td1.append(dev_type);
             td2 = $('<td></td>');
@@ -337,10 +390,15 @@ function load_devices(response) {
             $('#devices-list').append(tr);
 
             i++;
+            if (dev_type == "kenzy.image") {
+                cams++;
+            }
         });
     } catch(error) { console.log(error); };
 
     $('#device-count').text(i)
+    $('#camera-count').text(cams);
+    $('#location-count').text(locations.length);
     if (i == 0) { 
         $('#devices-list').append($('<tr><td><content>No records</content></td><td></td><td></td><td></td></tr>'));
     }
@@ -380,12 +438,18 @@ function refresh_data() {
         contentType: "application/json",
         data: JSON.stringify({ action: "status" }),
         dataType: "JSON",
+        beforeSend: function() {
+            $('spinner').show();
+        },
         success: function(response) {
 
             $('.version').text(response.data.version);
 
             load_devices(response);
             load_skills(response.data.data.skills);
+        },
+        complete: function() {
+            $('spinner').hide();
         }
     });
 }
@@ -416,7 +480,7 @@ $(document).ready(function() {
 </script>
 </head>
 <body>
-
+<spinner style="display: none;"><icon class="spin spinner"></icon>Loading</spinner>
 <page>
     <div class="shortnav">
         <ul></button-list>
@@ -457,7 +521,7 @@ $(document).ready(function() {
                     <gauge>
                         <header><icon class="server"></icon></header>
                         <content>
-                            <metric id="device-count">0</metric>
+                            <metric id="device-count">-</metric>
                             <divider></divider>
                             <title>Devices</title>
                         </content>
@@ -465,25 +529,25 @@ $(document).ready(function() {
                     <gauge>
                         <header><icon class="bolt"></icon></header>
                         <content>
-                            <metric id="skill-count">0</metric>
+                            <metric id="skill-count">-</metric>
                             <divider></divider>
                             <title>Skills</title>
                         </content>
                     </gauge>
                     <gauge>
-                        <header><icon class="expand"></icon></header>
+                        <header><icon class="camera"></icon></header>
                         <content>
-                            <metric>99</metric>
+                            <metric id="camera-count">-</metric>
                             <divider></divider>
-                            <title>Faces</title>
+                            <title>Cameras</title>
                         </content>
                     </gauge>
                     <gauge>
-                        <header><icon class="stopwatch"></icon></header>
+                        <header><icon class="map-pin"></icon></header>
                         <content>
-                            <metric>192d 13h</metric>
+                            <metric id="location-count">-</metric>
                             <divider></divider>
-                            <title>Uptime</title>
+                            <title>Locations</title>
                         </content>
                     </gauge>
                 </group>
@@ -493,9 +557,10 @@ $(document).ready(function() {
                             <table class="header">
                                 <thead>
                                     <tr>
-                                        <th class="text-left">Name</th>
-                                        <th class="text-left">Location</th>
-                                        <th>Time</th>
+                                        <th style="width: 100px;" class="text-left">Server</th>
+                                        <th class="text-center">CPU</th>
+                                        <th class="text-center">MEM</th>
+                                        <th class="text-center">DISK</th>
                                     </tr>
                                 </thead>
                             </table>
@@ -503,19 +568,10 @@ $(document).ready(function() {
                             <table>
                                 <tbody>
                                     <tr>
-                                        <td><content>LNXUSR1</content></td>
-                                        <td><content>Living Room</content></td>
-                                        <td><content>5:15pm</content></td>
-                                    </tr>
-                                    <tr>
-                                        <td><content>LNXUSR1</content></td>
-                                        <td><content>Living Room</content></td>
-                                        <td><content>5:15pm</content></td>
-                                    </tr>
-                                    <tr>
-                                        <td><content>LNXUSR1</content></td>
-                                        <td><content>Living Room</content></td>
-                                        <td><content>5:15pm</content></td>
+                                        <td style="width: 100px;"><content>192.168.1.140</content></td>
+                                        <td class="text-center"><content>68.2%</content></td>
+                                        <td class="text-center"><content>32.1%</content></td>
+                                        <td class="text-center"><content>10.0%</content></td>
                                     </tr>
                                 </tbody>
                             </table>
