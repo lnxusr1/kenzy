@@ -518,7 +518,7 @@ class KenzyHTTPServer(HTTPServer):
         token = uuid.uuid4()
 
         if isinstance(payload, dict):
-            payload["context"] = payload.get("context", self.get_local_context())
+            payload["context"] = payload.get("context", self.get_local_context().get())
         else:
             return False
             

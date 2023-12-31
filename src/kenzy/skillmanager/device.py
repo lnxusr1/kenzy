@@ -53,7 +53,7 @@ class SkillsDevice:
 
     @property
     def accepts(self):
-        return ["status", "get_settings", "set_settings", "collect", "download_skill"]
+        return ["status", "get_settings", "set_settings", "collect", "download_skill", "relay"]
     
     def is_alive(self, **kwargs):
         return True
@@ -178,3 +178,19 @@ class SkillsDevice:
             dev_url = "self"
 
         return dev_url
+    
+    def relay(self, data, **kwargs):
+        url = data.get("url", self.service.service_url)
+        request = data.get("command")
+        headers = data.get("headers")
+        
+        self.logger.debug("==============")
+        self.logger.debug(f"URL: {url}")
+        self.logger.debug(f"request: {request}")
+        self.logger.debug(f"headers: {headers}")
+
+        if request is not None:
+            self.service.send_request(payload=request, url=url, headers=headers, wait=False)
+            return KenzySuccessResponse("Command received successfully")
+        
+        return KenzyErrorResponse("No command received")

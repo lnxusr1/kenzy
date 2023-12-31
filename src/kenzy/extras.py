@@ -531,6 +531,7 @@ def get_status(obj):
         "group": obj.group,
         "version": obj.service.version,
         "info": get_sys_info(),
+        "settings": obj.settings,
         "data": {}
     }
 

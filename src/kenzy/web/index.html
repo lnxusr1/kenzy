@@ -175,6 +175,7 @@ footer a:hover { color: #000; }
     box-shadow: 2px 2px 8px #c4c4c4;
     padding: 5px 10px; 
     margin-bottom: 16px; 
+    box-sizing: border-box;
 }
 
 .options { margin-top: 10px; border-top: 1px solid #ccc; padding-top: 10px; }
@@ -207,6 +208,7 @@ select { width: 100%; max-width: 700px;  height: 32px; line-height: 32px; paddin
 button.send {
     margin-bottom: 10px;
 }
+.log { max-width: calc(100% - 20px); }
 
 .page-section button { 
     border: 1px solid #bbb8b5;
@@ -350,6 +352,8 @@ spinner icon {
     }
 }
 
+.hidden { display: none; }
+
 </style>
 <script type="text/javascript">
 function get_skills() {
@@ -442,6 +446,9 @@ function load_devices(response) {
     var locations = [];
 
     $('#devices-list').empty();
+    $('#select-device').empty();
+    $('<option>[device]</option>').appendTo($('#select-device'));
+
     try {
 
         dev_type = $('<content></content>').text(response.data.type);
@@ -455,6 +462,11 @@ function load_devices(response) {
         if (loc) {
             locations.push(loc.toString().toLowerCase());
         }
+
+        opt = $('<option></option>');
+        $(opt).attr('value', response.data.url);
+        $(opt).text("(" + response.data.type + ") " + response.data.url);
+        $(opt).appendTo($('#select-device'));
 
         td1 = $('<td></td>');
         td1.append(dev_type);
@@ -484,6 +496,11 @@ function load_devices(response) {
             if (loc) {
                 locations.indexOf(loc.toString().toLowerCase()) === -1 ? locations.push(loc.toString().toLowerCase()) : null;
             }
+
+            opt = $('<option></option>');
+            $(opt).attr('value', value.url);
+            $(opt).text("(" + value.type + ") " + value.url);
+            $(opt).appendTo($('#select-device'));
 
             td1 = $('<td></td>');
             td1.append(dev_type);
@@ -568,6 +585,36 @@ function refresh_data() {
     });
 }
 
+function developer_submit() {
+    command = {
+        action: "relay",
+        payload: {
+            url: $('#select-device').val(),
+            command: JSON.parse($('#command').val())
+        }
+    }
+
+    $('#command-request pre').text(JSON.stringify(JSON.parse($('#command').val()), null, 4));
+
+    $.ajax({
+        url: "/",
+        method: "POST",
+        contentType: "application/json",
+        data: JSON.stringify(command),
+        dataType: "JSON",
+        beforeSend: function() {
+            $('#btnSendCmd').prop('disabled', true);
+            $('#command-response pre').text("Loading...");
+        },
+        success: function(response) {
+            $('#command-response pre').text(JSON.stringify(response, null, 4));
+        },
+        complete: function() {
+            $('#btnSendCmd').prop('disabled', false);
+        }
+    });
+}
+
 $(document).ready(function() {
     $('#nav-bars').click(function() {
         if ($('sidebar').hasClass('active')) {
@@ -595,6 +642,34 @@ $(document).ready(function() {
 
     $('#btn-download-skills').click(function() {
         get_skills();
+        return false;
+    });
+
+    $('#show-log').click(function() {
+        if ($('#command-log-area').css('display') == "none") {
+            $('#command-log-area').show();
+        } else {
+            $('#command-log-area').hide();
+        }
+
+        return true;
+    });
+
+    $('#word-wrap').click(function() {
+        if ($('#command-log').hasClass('wrap')) {
+            $('#command-log').removeClass('wrap');
+        } else {
+            $('#command-log').addClass('wrap');
+        }
+        return true;
+    });
+
+    $('#select-template').click(function() {
+        $('#command').text($('#'+$(this).val()).text());
+    });
+
+    $('#form').submit(function(event) {
+        developer_submit();
         return false;
     });
 
@@ -1058,46 +1133,32 @@ $(document).ready(function() {
             <content class="main">
                 <form id="form">
                     <div>
-                        <select>
+                        <select id="select-device">
                             <option>[device]</option>
                         </select>
                     </div>
                     <div>
-                        <select>
-                            <option>[template]</option>
+                        <select id="select-template">
+                            <option value="command-blank">[template]</option>
+                            <option value="command-speak">speak</option>
+                            <option value="command-collect">collect</option>
+                            <option value="command-mute">mute</option>
                         </select>
                     </div>
                     <div>
-                    <textarea id="textarea" placeholder="Enter JSON data">{
-    "action": "collect",
-    "payload": {
-        "motion": true, 
-        "objects": ["person"], 
-        "faces": [
-            {
-                "name": "lnxusr1", 
-                "timestamp": 1689533206.6091325
-            }
-        ]
-    },
-    "context": {
-        "url": "http://192.168.37.84:8081", 
-        "type": "kenzy.image", 
-        "location": "Living Room", 
-        "group": "Primary"
-    }
-}</textarea></div>
+                        <textarea id="command" placeholder="Enter JSON data"></textarea>
+                    </div>
                     <button class="send" id="btnSendCmd">Send &raquo;</button>
 
                     <div class="options">
-                        <input type="checkbox" class="toggle-target" value="#command-log" id="checkbox2" checked="checked"><label for="checkbox2"> Show Log</label>
-                        <input type="checkbox" class="toggle-wrap" value="#command-log" id="checkbox3" checked="checked"><label for="checkbox3"> Word Wrap</label>
+                        <input type="checkbox" class="toggle-target" value="#command-log-area" id="show-log" checked="checked"><label for="show-log"> Show Log</label>
+                        <input type="checkbox" class="toggle-wrap" value="#command-log" id="word-wrap" checked="checked"><label for="word-wrap"> Word Wrap</label>
                     </div>
                     
                 </form>
             </content>
         </section>
-        <section class="secondary" style="display: none;">
+        <section class="secondary" id="command-log-area">
             <content>
                 <div class="log wrap" id="command-log">
                     <div id="command-request" class="request">
@@ -1150,6 +1211,32 @@ $(document).ready(function() {
         </section>
     </content>
 </page>
+
+<div class="hidden">
+<pre id="command-speak" class="template">{
+    "action": "speak",
+    "payload": {
+        "text": "Hello"
+    }
+}</pre>
+<pre id="command-mute" class="template">{
+    "action": "mute",
+    "payload": {}
+}</pre>
+<pre id="command-collect" class="template">{
+    "action": "collect",
+    "payload": {
+        "motion": true, 
+        "objects": ["person"], 
+        "faces": [
+            {
+                "name": "lnxusr1", 
+                "timestamp": 1689533206.6091325
+            }
+        ]
+    }
+}</pre>
+</div>
 
 </body>
 </html>
