@@ -103,6 +103,7 @@ class SkillManager:
         self.logger.debug("Skills load is complete.")
         
         try:
+            self.logger.debug("Training started.")
             self.intent_parser.train(False)  # False = be quiet and don't print messages to stdout
             self.logger.debug("Training completed.")
         except AttributeError:

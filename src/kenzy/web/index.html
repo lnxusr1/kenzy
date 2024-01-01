@@ -396,12 +396,14 @@ function extract_server_stats(o) {
     }
 
     disk_space_percent = (total_space > 0) ? 1 - free_space / total_space : 0;
+    load_percent = (o.info.cpu.count > 0) ? o.info.cpu.load[1] / o.info.cpu.count : 0;
     server = new URL(o.url);
     return {
         "server": server.hostname,
         "cpu": o.info.cpu.percent.toString() + "%",
         "mem": o.info.memory.virtual.percent.toString() + "%",
-        "disk": (disk_space_percent * 100).toFixed(1).toString() + "%"
+        "disk": (disk_space_percent * 100).toFixed(1).toString() + "%",
+        "load": (load_percent * 100).toFixed(1).toString() + "%"
     };
 }
 
@@ -430,11 +432,14 @@ function load_services(response) {
         td3.append(stats[x].mem);
         td4 = $('<td class="text-center"></td>');
         td4.append(stats[x].disk);
+        td5 = $('<td class="text-center"></td>');
+        td5.append(stats[x].load);
         tr = $('<tr></tr>');
         tr.append(td1);
         tr.append(td2);
         tr.append(td3);
         tr.append(td4);
+        tr.append(td5);
         $('#server-list').append(tr);
     }
 
@@ -752,7 +757,7 @@ $(document).ready(function() {
                 <content>
                     <button class="page-button active" id="btn-dashboard" page-target="#dashboard"><icon class="tachometer"></icon>Dashboard</button>
                     <button class="page-button" id="btn-devices" page-target="#devices"><icon class="server"></icon>Devices</button>
-                    <button class="page-button" id="btn-cameras" page-target="#cameras"><icon class="camera"></icon>Cameras</button>
+                    <button style="display:none;" class="page-button" id="btn-cameras" page-target="#cameras"><icon class="camera"></icon>Cameras</button>
                     <button class="page-button" id="btn-skills" page-target="#skills"><icon class="bolt"></icon>Skills</button>
                     <button class="page-button" id="btn-logs" page-target="#logs"><icon class="hdd"></icon>Logs</button>
                     <button class="page-button" id="btn-developers" page-target="#developers"><icon class="tools"></icon>Developers</button>
@@ -810,7 +815,7 @@ $(document).ready(function() {
                         </content>
                     </gauge>
                 </group>
-                <group class="col-2l">
+                <group class="col-1">
                     <list>
                         <content>
                             <table class="header">
@@ -820,6 +825,7 @@ $(document).ready(function() {
                                         <th class="text-center">CPU</th>
                                         <th class="text-center">MEM</th>
                                         <th class="text-center">DISK</th>
+                                        <th class="text-center">LOAD</th>
                                     </tr>
                                 </thead>
                             </table>
@@ -827,17 +833,18 @@ $(document).ready(function() {
                             <table>
                                 <tbody id="server-list">
                                     <tr>
-                                        <td style="width: 100px;"><content>192.168.1.140</content></td>
-                                        <td class="text-center"><content>68.2%</content></td>
-                                        <td class="text-center"><content>32.1%</content></td>
-                                        <td class="text-center"><content>10.0%</content></td>
+                                        <td style="width: 100px;"><content>HOST/IP</content></td>
+                                        <td class="text-center"><content>0.0%</content></td>
+                                        <td class="text-center"><content>0.0%</content></td>
+                                        <td class="text-center"><content>0.0%</content></td>
+                                        <td class="text-center"><content>0.0%</content></td>
                                     </tr>
                                 </tbody>
                             </table>
                             </div>
                         </content>
                     </list>
-                    <list>
+                    <list style="display:none;">
                         <content>
                             <table class="header">
                                 <thead>

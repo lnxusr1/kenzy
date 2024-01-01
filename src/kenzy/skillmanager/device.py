@@ -52,6 +52,7 @@ class SkillsDevice:
         )
 
         self.skill_manager.initialize()
+        self.skill_manager.service = self.service
 
     @property
     def accepts(self):
