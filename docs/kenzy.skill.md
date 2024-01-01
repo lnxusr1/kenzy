@@ -6,9 +6,9 @@ The basic structure for a skill is laid out below:
 from kenzy import GenericSkill
 
 class MyCustomSkill(GenericSkill):
- 	def __init__(self):
- 		self._name = "My Custom Skill"
- 		super().__init__()
+ 	def __init__(self, **kwargs):
+ 		self.name = "My Custom Skill"
+ 		super().__init__(**kwargs)
     
  	def initialize(self):
  		self.register_intent_file("customskill.intent", self.handle_custom_intent)
@@ -27,8 +27,8 @@ class MyCustomSkill(GenericSkill):
  	def stop(self):
  		return True
         
-def create_skill():
- 	return MyCustomSkill()
+def create_skill(**kwargs):
+ 	return MyCustomSkill(**kwargs)
 ```
 
 You then must also create folders as follows:
