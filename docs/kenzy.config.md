@@ -48,11 +48,12 @@ kenzy --config /path/to/your/file.yml
 Kenzy also enables individual calls so you can test out the various pieces while you work out exactly what you want your settings to be.  These additional options are installed as scripts and can be called as follows:
 
 ```bash
-kenzy-image
-kenzy-watch
-kenzy-stt
-kenzy-listen
-kenzy-tts
+kenzy_skill
+kenzy_image
+kenzy_stt
+kenzy_tts
+kenzy_watch
+kenzy_listen
 kenzy-speak
 ```
 
@@ -60,6 +61,7 @@ If all else fails you can also call kenzy as a python model in any of the follow
 
 ```bash
 python -m kenzy
+python -m kenzy.skillmanager
 python -m kenzy.image
 python -m kenzy.stt
 python -m kenzy.tts
