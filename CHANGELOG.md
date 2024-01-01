@@ -32,6 +32,7 @@ All notable changes to this project will be documented in this file.
 - Fixed the UPNP logic so that it honors the full UPNP spec for control interface lookups
 - Updated skills intent function signature to include ```**kwargs``` for additional values like raw text captured
 - Fixed the context inclusion and usage for action/response activities (uses "location" for relative responses)
+- Completely overhauled dashboard
 
 ### Removed
 
@@ -39,6 +40,7 @@ All notable changes to this project will be documented in this file.
 - Dropped direct support for Kasa smart switch/plug devices
 - Dropped unnecessary libraries (urllib3, netifaces)
 - Dropped support for MyCroft libraries "mimic3" (created forked version of padatious for future internal support)
+- Dropped direct support for Raspberry Pi due to hardware limitations
 
 ## [1.0.0]
 
