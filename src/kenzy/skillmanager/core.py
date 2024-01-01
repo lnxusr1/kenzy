@@ -6,6 +6,7 @@ import pathlib
 import traceback
 import importlib 
 import time
+from kenzy.core import KenzyContext
 from kenzy.extras import dayPart, GenericCommand, strip_punctuation
 
 
@@ -43,7 +44,10 @@ class PlayCommand(GenericCommand):
 class SkillManager:
     logger = logging.getLogger("SKILLMANAGER")
 
-    def __init__(self, device=None, skill_folder="~/.kenzy/skills", temp_folder="/tmp/intent_cache", wake_words=["Kenzy"], activation_timeout=45):
+    def __init__(self, device=None, skill_folder="~/.kenzy/skills", temp_folder="/tmp/intent_cache", wake_words=["Kenzy"], activation_timeout=45, logger=None):
+        if logger is not None:
+            self.logger = logger
+
         self.service = None
         self.skills = []
 
@@ -90,9 +94,9 @@ class SkillManager:
                 continue 
 
             mySkillName = os.path.basename(f)
-            self.logger.debug("Loading " + mySkillName) 
+            self.logger.debug(f"Loading {mySkillName}") 
             mySkillModule = importlib.import_module(mySkillName)
-            mySkillClass = mySkillModule.create_skill()
+            mySkillClass = mySkillModule.create_skill(logger=self.logger)
             mySkillClass.device = self.device
             mySkillClass.initialize()
             
@@ -146,11 +150,15 @@ class SkillManager:
             return False
 
         def audio_fallback(in_text, context):
-            self.logger.debug("fallback: " + in_text)
+            self.logger.debug(f"fallback: {in_text}")
             return False
 
         try:
-            self.logger.debug("CLEAN TEXT = %s", clean_text)
+            if context is not None and isinstance(context, KenzyContext):
+                self.logger.debug(f"HEARD: {clean_text} / {context.location}")
+            else:
+                self.logger.debug(f"HEARD: {clean_text}")
+
             # This one line explains it all... link incoming command into actionable intent using Padatious library
             intent = self.intent_parser.calc_intent(clean_text)
          
@@ -200,14 +208,15 @@ class GenericSkill:
     Class for inheriting to generate new skills.  Includes basic functionality for generic skills.
     """
         
-    def __init__(self):
+    def __init__(self, **kwargs):
         """
         Skill Initialization
         """
         
         self.name = "Learned Skill"
         self.description = ""
-        self.device = None 
+        self.device = None
+        self.logger = kwargs.get("logger", logging.getLogger("SKILL"))
 
     @property
     def service(self):
@@ -228,6 +237,11 @@ class GenericSkill:
         """
 
         if self.device is not None:
+            if context is not None and isinstance(context, KenzyContext):
+                self.logger.info(f"ASK: {text} / {context.location}")
+            else:
+                self.logger.info(f"ASK: {text}")
+
             ret = self.device.ask(text=text, callback=callback, timeout=timeout, context=context)
             return ret.is_success()
         else:
@@ -380,6 +394,11 @@ class GenericSkill:
             (bool): True on success and False on failure.
         """
         if self.device is not None:
+            if context is not None and isinstance(context, KenzyContext):
+                self.logger.info(f"SAY: {text} / {context.location}")
+            else:
+                self.logger.info(f"SAY: {text}")
+
             ret = self.device.say(text=text, context=context)
             return ret.is_success()
         else:

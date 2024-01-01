@@ -164,6 +164,9 @@ footer a:hover { color: #000; }
 .page-section .settings > group { margin: -12px 0; }
 .page-section .settings { padding: 20px 0; background-color: #ebebeb; margin-right: 20px; border-radius: 6px; box-shadow: 3px 3px 12px rgba(0,0,0,.4); }
 
+#recent-logs td { height: auto; line-height: 1rem; padding-top: 0; padding-bottom: 0; }
+#recent-logs tr:first-child td { padding-top: 10px; }
+
 .page-section#developers textarea {
     width: 100%;
     max-width: 700px; 
@@ -559,6 +562,58 @@ function load_skills(skills) {
     }
 }
 
+function load_logs(entries) {
+    var i = 0;
+    entry = $($('#recent-logs').children()[0]).clone();
+    lentry = $($('#log-entries').children()[0]).clone();
+
+    $('#recent-logs').empty();
+    $('#log-entries').empty();
+
+    try {
+        for (let x=0; x<entries.length;x++) {
+            log_entry = entries[x];
+
+            ts = new Date(parseFloat(log_entry.timestamp) * 1000)
+            timestamp = ts.toLocaleTimeString("en-US", { hour12: true });
+            r_message = log_entry.type.toString().toUpperCase() + " - " + log_entry.message.toString();
+
+            if (i < 10) {
+                my_entry = $(entry).clone();
+                $(my_entry).find(".timestamp").text(timestamp);
+                $(my_entry).find(".message").text(r_message);
+
+                $('#recent-logs').append($(my_entry));
+            }
+
+            my_lentry = $(lentry).clone();
+            $(my_lentry).find(".timestamp").text(timestamp);
+            $(my_lentry).find(".type").text(log_entry.type.toString().toUpperCase());
+            $(my_lentry).find(".message").text(log_entry.message.toString());
+
+            $('#log-entries').append($(my_lentry));
+
+            i++;
+        }
+    } catch(error) { console.log(error); };
+    
+    if (i == 0) { 
+        empty = $(entry).clone()
+        $(empty).find(".timestamp").text("No records");
+        $(empty).find(".message").text("");
+
+        $('#recent-logs').append($(empty));
+
+        lempty = $(lentry).clone();
+        $(lempty).find(".timestamp").text("No records");
+        $(lempty).find(".type").text("");
+        $(lempty).find(".message").text("");
+
+        $('#log-entries').append($(lempty));
+
+    }
+}
+
 function refresh_data() {
     $.ajax({
         url: "/",
@@ -577,6 +632,7 @@ function refresh_data() {
             load_devices(response);
             load_skills(response.data.data.skills);
             load_services(response);
+            load_logs(response.data.data.logs);
         },
         complete: function() {
             $('spinner').hide();
@@ -629,6 +685,7 @@ $(document).ready(function() {
         $('.page-section').hide();
         $($(this).attr('page-target')).show();
         $(this).addClass('active');
+        $('sidebar').removeClass('active');
     });
 
     $('.page-button#btn-skills').click(function() {
@@ -848,39 +905,17 @@ $(document).ready(function() {
                             <th class="text-left">Message</th>
                         </tr>
                     </thead>
-                    <tbody>
+                    <tbody id="recent-logs">
                         <tr>
                             <td valign="top">
                                 <content>
-                                    <monospace>
-                                        This is a long test long long test
+                                    <monospace class="timestamp">
+                                        No records
                                     </monospace>
                                 </content>
                             </td>
                             <td valign="top">
-                                <monospace>
-                                    This is a long test long long test
-                                    This is a long test long long test
-                                    This is a long test long long test
-                                    This is a long test long long test
-                                </monospace>:
-                            </td>
-                        </tr>
-                        <tr>
-                            <td valign="top">
-                                <content>
-                                    <monospace>
-                                        This is a long test long long test
-                                    </monospace>
-                                </content>
-                            </td>
-                            <td valign="top">
-                                <monospace>
-                                    This is a long test long long test
-                                    This is a long test long long test
-                                    This is a long test long long test
-                                    This is a long test long long test
-                                </monospace>
+                                <monospace class="message"></monospace>
                             </td>
                         </tr>
                     </tbody>
@@ -1074,8 +1109,11 @@ $(document).ready(function() {
     </content>
     <content class="page-section" id="logs" style="display: none;">
         <section>
+            <div class="page-buttons">
+                <button class="btn-refresh"><icon class="refresh"></icon></button>
+            </div>
             <header>
-                <title>List of Logs</title>
+                <title>Log Entries</title>
                 <subtitle>Overview</subtitle>
             </header>
             <content class="main">
@@ -1085,34 +1123,19 @@ $(document).ready(function() {
                             <table class="header">
                                 <thead>
                                     <tr>
-                                        <th class="text-left">Type</th>
-                                        <th class="text-left">URL</th>
-                                        <th class="text-left">Location</th>
+                                        <th style="width: 80px;" class="text-left">Time</th>
+                                        <th style="width: 74px;" class="text-left">Type</th>
+                                        <th style="width: auto;" class="text-left">Message</th>
                                     </tr>
                                 </thead>
                             </table>
                             <div class="scroll-box">
                             <table>
-                                <tbody>
+                                <tbody id="log-entries">
                                     <tr>
-                                        <td><content>kenzy.stt</content></td>
-                                        <td><content>http://192.168.1.140:9701</content></td>
-                                        <td><content>Living Room</content></td>
-                                    </tr>
-                                    <tr>
-                                        <td><content>kenzy.tts</content></td>
-                                        <td><content>http://192.168.1.140:9702</content></td>
-                                        <td><content>Living Room</content></td>
-                                    </tr>
-                                    <tr>
-                                        <td><content>kenzy.image</content></td>
-                                        <td><content>http://192.168.1.140:9703</content></td>
-                                        <td><content>Living Room</content></td>
-                                    </tr>
-                                    <tr>
-                                        <td><content>kenzy.skillmanager</content></td>
-                                        <td><content>http://192.168.1.140:9700</content></td>
-                                        <td><content>Living Room</content></td>
+                                        <td style="width: 80px;" ><content class="timestamp">No Records</content></td>
+                                        <td style="width: 74px;" ><content class="type"></content></td>
+                                        <td style="width: auto;" ><content class="message"></content></td>
                                     </tr>
                                 </tbody>
                             </table>

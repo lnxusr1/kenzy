@@ -1,17 +1,18 @@
 import sys
 import traceback
-import logging
 import time
 from kenzy.core import KenzySuccessResponse, KenzyErrorResponse, KenzyContext
 from kenzy.skillmanager.core import SkillManager, SpeakCommand, PlayCommand, GenericSkill
-from kenzy.extras import get_status, get_skills_package
+from kenzy.extras import get_status, get_skills_package, KenzyLogger
 
 
 class SkillsDevice:
     type = "kenzy.skillmanager"
-    logger = logging.getLogger("KNZY-SKM")
 
     def __init__(self, **kwargs):
+
+        self.logger = KenzyLogger("KNZY-SKM")
+
         if not isinstance(kwargs.get("timeout", {}), dict):
             kwargs["timeout"] = {}
 
@@ -46,7 +47,8 @@ class SkillsDevice:
             skill_folder=skill_folder, 
             temp_folder=temp_folder, 
             wake_words=self.wake_words, 
-            activation_timeout=self.activation_timeout
+            activation_timeout=self.activation_timeout,
+            logger=self.logger
         )
 
         self.skill_manager.initialize()
@@ -90,8 +92,9 @@ class SkillsDevice:
                     self.logger.error("Callback function expected but not found.")
 
             else:
-                self.logger.debug("Checking intent for associated skill")
                 self.skill_manager.parse(text=text, context=context)
+        else:
+            self.debug(f"COLLECT: {data}")
 
         return KenzySuccessResponse("Collect complete")
     
@@ -128,6 +131,8 @@ class SkillsDevice:
         st["url"] = self.service.service_url
         st["data"]["skills"] = skill_list
         st["data"]["devices"] = self.service.remote_devices
+        st["data"]["logs"] = list(self.logger.entries)
+        st["data"]["logs"].reverse()
         
         return KenzySuccessResponse(st)
     

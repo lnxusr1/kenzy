@@ -9,6 +9,7 @@ import uuid
 import json
 import tempfile
 import zipfile
+import collections
 import requests
 import xml.etree.ElementTree as ET
 from . import __app_title__, __version__
@@ -557,10 +558,56 @@ def get_skills_package(skill_name=None, skill_dir=None):
         with open(file_name, "wb") as sw:
             sw.write(resp.content)
 
-        os.makedirs(skill_dir, exist_ok=True)
+        os.makedirs(os.path.expanduser(skill_dir), exist_ok=True)
         with zipfile.ZipFile(file_name) as zf:
-            zf.extractall(skill_dir)
+            zf.extractall(os.path.expanduser(skill_dir))
         
         return True
     
     return False
+
+
+class KenzyLogger:
+    def __init__(self, name="root", maxlen=50):
+        self.name = name
+        self.entries = collections.deque(maxlen=maxlen)
+        if name == "root":
+            self.logger = logging.getLogger()
+        else:
+            self.logger = logging.getLogger(name)
+
+    def _log(self, log_type, msg, *args):
+
+        if len(args) > 0:
+            if "{" in msg and "}" in msg:
+                f_msg = msg.format(*args)
+            else:
+                return
+        else:
+            f_msg = msg
+
+        self.entries.append({
+            "timestamp": time.time(),
+            "type": log_type,
+            "message": f_msg
+        })
+
+    def debug(self, msg, *args):
+        self._log("debug", msg, *args)
+        self.logger.debug(msg, *args)
+
+    def info(self, msg, *args):
+        self._log("info", msg, *args)
+        self.logger.info(msg, *args)
+
+    def warning(self, msg, *args):
+        self._log("warning", msg, *args)
+        self.logger.info(msg, *args)
+
+    def error(self, msg, *args):
+        self._log("error", msg, *args)
+        self.logger.info(msg, *args)
+
+    def critical(self, msg, *args):
+        self._log("critical", msg, *args)
+        self.logger.info(msg, *args)
