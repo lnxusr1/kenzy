@@ -2,6 +2,46 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.0.1]
+
+### Added
+
+- Settings handler for consistency when customizing per device settings
+- GPUs can be leveraged for torch and cuda enabled models
+- Added options for saving video of detected people
+- Directly incorporated kenzy_image into kenzy.image.core.detector
+- Added reloadFaces logic to kenzy.image.detector (formerly of the kenzy-image package)
+- Added voice activation with configurable timeout
+- Added multi-model support for speak-to-text
+- Added configurable timeout for SSDP client requests
+- Added extras helpers to extract numbers from strings and convert numbers to english words.
+- Added clean text routine for supporting the rich output from OpenAi's Whisper model
+- Basic support for simultaneous actions (such as two listener+speakers in two rooms connected to same skillmanager)
+- Object recognition, Face detection, and Face recognition with optimizations to minimize processing time with support for multiple models
+- Configurable saving of videos based on object detection alerts
+
+### Modified
+
+- Settings/Configuration files can now be stored in JSON or YAML files
+- Moved watcher to ```kenzy.image.device.VideoReader```
+- Moved listener to ```kenzy.stt.device.AudioReader```
+- Moved speaker to ```kenzy.tts.device.AudioWriter```
+- Restructured devices to allow for direct calls for "main" in each of image, stt, and tts
+- Split out detector/creator processes for each of hte core functions into their own modules (e.g. kenzy.image.detector, kenzy.stt.detector, etc.)
+- Moved all devices to their own HTTP server module when run as clients
+- Fixed the UPNP logic so that it honors the full UPNP spec for control interface lookups
+- Updated skills intent function signature to include ```**kwargs``` for additional values like raw text captured
+- Fixed the context inclusion and usage for action/response activities (uses "location" for relative responses)
+- Completely overhauled dashboard
+
+### Removed
+
+- Dropped support for PyQt5 panels
+- Dropped direct support for Kasa smart switch/plug devices
+- Dropped unnecessary libraries (urllib3, netifaces)
+- Dropped support for MyCroft libraries "mimic3" (created forked version of padatious for future internal support)
+- Dropped direct support for Raspberry Pi due to hardware limitations
+
 ## [1.0.0]
 
 ### Modified

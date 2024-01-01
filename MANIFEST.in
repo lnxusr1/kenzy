@@ -3,14 +3,10 @@ include CHANGELOG.md
 include README.md
 include requirements.txt
 include src/kenzy/VERSION
-include src/kenzy/models/watcher/*.xml
 include src/kenzy/skills/HelloSkill/vocab/en_us/*.*
 include src/kenzy/skills/KnockKnockSkill/vocab/en_us/*.*
 include src/kenzy/skills/TellDateTimeSkill/vocab/en_us/*.*
-include src/kenzy/panels/panel_v1/resources/fonts/*.ttf
-include src/kenzy/panels/panel_v1/resources/images/*.svg
 include src/kenzy/web/*.*
-include src/kenzy/skills/*/*.py
-include src/kenzy/skills/*/vocab/*/*.*
-include src/kenzy/panels/resources/*/*.*
-include src/kenzy/data/models/watcher/*.*
+include src/kenzy/image/resources/mobilenet_v3/*.*
+include src/kenzy/image/resources/yolov7/*.*
+include src/kenzy/data/*.*

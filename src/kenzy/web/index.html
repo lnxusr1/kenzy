@@ -1,591 +1,1272 @@
 <!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
 <html lang="en-US">
 <head>
-	<title>Control Panel &raquo; KENZY.Ai [__APP_VERSION__]</title>
-	<meta name="viewport" content="width=device-width, initial-scale=1">
-	<style type="text/css">
-		html, body { font-family: Arial, Helvetica, Sans-Serif; font-size: 16px; padding: 0; margin: 0; min-height: 100%; width: 100%; }
-		body {  position: relative; }
-		textarea { resize: none; }
+	<meta name="apple-mobile-web-app-capable" content="yes" />
+	<meta charset="UTF-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="icon" type="image/x-icon" href="favicon.svg">
+	<link rel="apple-touch-icon" href="kenzy_touch.png" />
 
-		.page_header { 
-				position: fixed; top: 0; left: 0; right: 0; 
-				height: 42px; line-height: 42px; 
-				background-color: #333333; background: linear-gradient(#58564d, #41403c); 
-				padding: 0 15px; 
-				color: #fff; 
-				font-weight: bold; text-shadow: 2px 2px #404040;
-		}
-		
-		.page_header small { display: inline-block; padding-left: 10px; }
-				
-		.page_sidebar { 
-			width: 240px; position: fixed; left: 0; top: 42px; height: calc(100% - 42px); 
-			background-color: #fff; 
-			overflow: auto; 
-			
-			border-right: 1px solid #dfdddc;
-		}
-		
-		.page_sidebar .button { 
-			background-color: #fff;
-			width: 224px;
-			line-height: 48px;
-			height: 48px;
-			border-right: 1px solid #fbfbfb;
-			display: block;
-			padding-left: 15px;
-			font-size: 16px;
-			color: #000;
-			text-decoration: none;
-		}
-		
-		.page_sidebar .button:nth-child(odd) { 
-			background-color: #f7f7f7;
-		}
-		
-		.page_sidebar .button:last-child {
-			border-bottom: 1px solid #cac8c6;
-		}
-		
-		.page_sidebar .button:hover {
-			background-color: #ececec;
-		}
-		
-		.page_sidebar .button.active {
-			background-color: #f18458;
-			color: #fff;
-		}
-		
-		.content_container { margin-left: 241px; padding-top: 42px; padding-left: 20px; padding-bottom: 52px; padding-right: 20px; }
-		.page_footer { 
-			position: fixed; bottom: 0; left: 240px; right: 0; line-height: 32px; height: 32px; 
-			background-color: #f0f0f0; 
-			border-top: 1px solid #dcdcdc; 
-		}
-		.page_footer a { color: #666; font-size: 14px; text-decoration: none; display: block; padding: 0 15px; }
-		.page_footer a:hover { color: #333; text-shadow: 1px 1px #cac8c6; }
-		
-		.page_block { display:none; }
-		.page_block.active { display: block; }
-		
-		button { 
-			border: 1px solid #bbb8b5;
-			background-color: #555;
-			background: linear-gradient(#fbfafa, #fbfafa, #e8e9e9, #f2f1f0);
-			color: #333;
-			width: 175px;
-			height: 50px;
-			line-height: 48px;
-			border-radius: 4px;
-			font-size: 15px;
-		}
-		
-		button:hover {
-			background: linear-gradient(#f7f6f6, #f7f6f6, #e4e5e5, #eeedec);
-			color: #111;
-			text-shadow: 1px 1px #ddd;
-			box-shadow: 2px 2px 4px #eee;
-		}
-		
-		button:active {
-			background: linear-gradient(#e7e6e6, #d4d5d5, #dedddc, #dedddc);
-			color: #000;
-			text-shadow: -1px -1px #ddd;
-			box-shadow: -2px -2px 4px #eee;
-		}
-		
-		.box { max-width: 600px; }
-		.box button { 
-			margin: 6px 10px;
-		}
-		
-		.options { margin-top: 10px; border-top: 1px solid #ccc; padding-top: 10px; }
-		
-		.request { border: 1px solid #bbb; box-shadow: 2px 2px 4px #eee; margin-top: 20px; }
-		.request h3 { 
-			border: 1px solid #fff; 
-			margin: 0; display: block; 
-			font-size: 15px; 
-			padding: 0 10px; 
-			height: 30px; 
-			line-height: 30px; 
-			background: #f0f0f0; 
-		}
-		.request pre {
-			margin: 0;
-			padding: 10px;
-			font-size: 14px;
-		}
-		
-		.wrap .request pre {
-			white-space: pre-wrap;
-		}
-		
-		.device_list .device-command,
-		.device_list .device-button { width: auto; padding: 5px 10px; line-height: inherit; height: auto; }
-		
-		/*input[type="text"] { width: 100%; max-width: 600px; line-height: 44px; height: 44px; padding: 0 10px; box-sizing: border-box; font-size: 15px; margin-bottom: 10px; border-radius: 3px; border: 1px solid #bcbcbc; background-color: #eee; }*/
-		select { width: 100%; max-width: 600px;  height: 32px; line-height: 32px; padding: 0 10px; font-size: 15px;  margin-bottom: 10px; border-radius: 3px; border: 1px solid #bcbcbc; background-color: #eee; }
-		textarea { width: 100%; max-width: 600px; height: 70px; padding: 5px 10px; box-sizing: border-box; font-size: 14px; border-radius: 3px; border: 1px solid #bcbcbc; background-color: #eee; margin-bottom: 10px; }
-		button.send {
-			margin-bottom: 10px;
-		}
-		
-		#bars { position: absolute; right: 20px; height: 42px; padding: 6px 0; width: 20px; display: none; }
-		#bars svg { fill: #fff; }
-		#bars svg:hover { fill: #ccc; }
-		#bars svg:active { fill: #f18458; }
-		
-		h1 { font-size: 1.1rem; }
-		h3 { font-size: 1.1rem; }
-		p { font-size: 16px; line-height: 24px; margin-bottom: 16px; max-width: 600px; }
-		
-		table.device_list { border: 1px solid #ccc; }
-		table.device_list th { padding: 4px 8px; background: linear-gradient(#f2f2f2, #d0d0d0); text-align: left; }
-		table.device_list td { padding: 8px 8px; }
-		table.device_list td small { display: block; font-size: 0.7rem;}
-		table.device_list tbody tr td { border-bottom: 1px solid #ddd; }
-		table.device_list tbody tr td .started { color: green; }
-		table.device_list tbody tr td .stopped { color: red; }
-		table.device_list tbody tr:last-child td { border-bottom: none; }
-		
-		.modal { display: none; position: fixed; width: 100%; height: 100%; z-index: 1010; }
-		.modal-background { position: fixed; width: 100%; height: 100%; background-color: #aaa; opacity: 0.3; }
-		.modal-container { position: fixed; top: 15%; width: 600px; left: calc(50% - 300px); background-color: #fff; border-radius: 6px;  color: #000; box-shadow: 3px 3px 9px #999; }
-		.modal-title { font-size: 2rem; font-weight: bold; border-bottom: 1px solid #ddd; padding: 6px 18px; position: relative; height: 38px; }
-		.modal-footer { border-top: 1px solid #ddd; padding: 6px 18px; }
-		.modal-footer .button-area { text-align: right; }
-		.modal-footer .button-area button { padding: 10px 20px; line-height: inherit; height: auto; width: auto; }
-		.modal-close { display: block; font-size: 1rem; position: absolute; text-decoration: none; color: #999; font-weight: bold; top: 0; right: 0; padding: 16px; border-top-right-radius: 6px; }
-		.modal-close:hover { text-decoration: underline; color: #000; background-color: #f7f7f7; }
-		.modal-content { padding: 8px; }
-		.modal-content .image { width: 100%; border-bottom-left-radius: 6px; border-bottom-right-radius: 6px; }
-		
-		@media only screen and (max-width: 768px) {
-			.box button { width: 44%; }
-			.page_header { height: 60px; height: 60px; line-height: normal; }
-			.page_header .title { padding-top: 10px; font-size: 18px; }
-			.page_header small { display: block; padding: 5px 0 0 0; font-size: 12px; }
-			#bars { display: block; height: 60px; padding: 16px 0; width: 24px; }
-			.page_sidebar { top: 60px; width: 100%; height: calc(100% - 92px); border-right: none; }
-			.page_sidebar.inactive { display: none; }
-			.page_sidebar .button { width: calc(100% - 15px); border-right: none; }
-			.content_container { padding-top: 60px; margin: 0; }
-			.page_footer { left: 0; }
-			table.device_list { display: block; border: none; }
-			table.device_list thead { display: none; }
-			table.device_list tbody { display: block; }
-			table.device_list tbody tr { display: block; clear: left; }
-			table.device_list tbody tr td { display: block; float: left; width: 25%; box-sizing: border-box; border: none; }
-			table.device_list tbody tr td.break { clear: left; width: 75%; padding-bottom: 15px; }
-			table.device_list tbody tr { border-top: 1px solid #ddd; }
-			.options { clear: left; }
-			
-			.modal-container { width: 90%; left: 5%; }
-			.modal-title { font-size: 1.5rem; padding-top: 12px; }
-		}
-		
-	</style>
-	
-	<script type="text/javascript" src="/admin/jquery.js"></script>
-	<script type="text/javascript">
-	
-	myDevices = {};
-	
-	function showModal(content, title) {
-		$('.modal .modal-title span').html(title);
-		$('.modal .modal-content').html(content);
-		$('.modal').show();
-	}
-	
-	function hideModal() {
-		$('.modal .modal-content img').prop("src","#");
-		$('.modal').fadeOut('fast');
-		$('.modal .modal-content').html("");
-	}
-	
-	function refreshDevices(displayResponses) {
-		method = "GET";
-		url = "/brain/status";
-		
-		if (displayResponses != false) {
-			$('#devices-request pre').text(method + " " + url);
-		}
-		
-		$.ajax({
-			url: url,
-			type: method,
-			dataType: "json",
-			beforeSend: function() {
-				if (displayResponses != false) {
-					$('#devices-response pre').text('loading...');
-				}
-				
-				$('table.device_list tbody').children().remove();
-				$('table.device_list tbody').append($('<tr><td colspan="6">Refreshing...</td></tr>'));
-				
-			},
-			success: function(data) {
-				if (displayResponses != false) {
-					$('#devices-response pre').text(JSON.stringify(data, null, 2));
-				}
+	<title>Control Panel &raquo; KENZY.Ai</title>
+	<script src="jquery.js"></script>
+<style type="text/css">
+html, body { padding: 0; margin: 0; font-size: 12pt; color: #000000; background-color: #aaaaaa; min-height: 100%; font-family: Arial, Helvetica, Sans-Serif; }
+page, section, header, content { display: block; }
+page { display: block; }
+sidebar { display: block; position: fixed; top: 0; left: 0; width: 260px; height: 100%; padding: 20px; }
+sidebar > content { display: block; background-image: linear-gradient(165deg, #42424a 0%, #191919 100%); COLOR: #ffffff; border-radius: 6px; max-height: 90%; overflow-y: auto;  }
+sidebar section { padding: 15px; }
+sidebar button { background: transparent; border: 0; display: block; width: 100%; height: 48px; line-height: 48px; color: #ffffff; border-radius: 6px; font-size: 0.95rem; margin-bottom: 2px; cursor: pointer; text-align: left; padding: 0 15px; }
+sidebar button icon { display: inline-block; width: 24px; height: 24px; vertical-align: middle; margin-right:8px; background-repeat: no-repeat; background-position: center 0; background-size: 20px 20px; }
 
-				$('table.device_list tbody').children().remove();
-				$('#cmdTarget').children().remove()
-				$('#cmdType').children().remove();
-				op = $('<option value="">[device]</option>');
-				$('#cmdTarget').append(op)
+icon.tachometer { background-image: url(tachometer-alt.svg); }
+icon.camera { background-image: url(camera-solid.svg); }
+icon.server { background-image: url(server-solid.svg); }
+icon.bolt { background-image: url(bolt-solid.svg); }
+icon.hdd { background-image: url(hdd-solid.svg); }
+icon.tools { background-image: url(tools-solid.svg); }
+icon.sign-out { background-image: url(sign-out-alt-solid.svg); }
+icon.info { background-image: url(circle-info-solid.svg); }
+icon.spinner { background-image: url(spinner-solid.svg); }
+icon.map-pin { background-image: url(map-pin-solid.svg); }
+icon.eye { background-image: url(eye-solid.svg); }
+icon.person { background-image: url(person-walking-solid.svg); }
+icon.dog { background-image: url(dog-solid.svg); }
+icon.download { background-image: url(download-solid.svg); }
+icon.refresh { background-image: url(arrows-rotate-solid.svg); }
 
-				if ((data.length) == 0) {
-					$('table.device_list tbody').append($('<tr><td colspan="6">No devices found.</td></tr>'));
-					return;
-				}
-				
-				$(Object.keys(data)).each(function(i,container) {
-					$(Object.keys(data[container])).each(function(i,devId) {
-						item = data[container][devId];
-						item["url"] = container;
-						myDevices[devId] = item;
-	
-						bFound = false;					
-						$(item["accepts"]).each(function(i,o) {
-							if (!["start","stop","stream","snapshot"].includes(o)) {
-								bFound = true;
-							}
-						});
-						
-						if (bFound) {
-							itemDesc = item["type"]+' - '+item["id"];
-							if (item["type"] == "brain") { itemDesc = "brain"; }
-							op = $('<option value="'+item["id"]+'">'+itemDesc+'</option>');
-							$('#cmdTarget').append(op)
-						}
-						
-						hn = $('<td valign="top"></td>').html(container);
-						dv = $('<td valign="top" class="break"></td>').html(item["type"]+"<small>" + item["id"] + "<br />" + item["groupName"] + "</small>");
-						st = $('<td valign="top"></td>').html((item["active"]) ? "<span class='started'>Started</span>": "<span class='stopped'>Stopped</span>");
-						
-						devButtons = "";
-						if (item["accepts"].includes("start")) {
-							devButtons += ' <button class="device-command" device-type="'+item["type"]+'" device-url="'+ '/device/' + item["id"] + '/start">Start</button>';
-						}
-						
-						if (item["accepts"].includes("stop")) {
-							devButtons += ' <button class="device-command" device-type="'+item["type"]+'" device-url="'+ '/device/' + item["id"] + '/stop">Stop</button>';
-						}
-						
-						if (item["accepts"].includes("stream")) {
-							devButtons += ' <button class="device-button" device-type="'+item["type"]+'" device-url="'+ '/device/' + item["id"] + '/stream" url-type="image">Stream</button>';
-						}
-						
-						if (item["accepts"].includes("snapshot")) {
-							devButtons += ' <button class="device-button" device-type="'+item["type"]+'" device-url="'+ '/device/' + item["id"] + '/snapshot" url-type="image">Snap</button>';
-						}
-						
-						bn = $('<td valign="top" class="break"></td>').html(devButtons);
-								
-						row = $('<tr></tr>');
-						row.append(hn);
-						row.append(dv);
-						row.append(st);
-						row.append(bn);
-								
-						$('table.device_list tbody').append(row);
-						
-						row.find('button.device-command').click(function() {
-							tgt = $(this).attr('device-url');
-							
-							$('#devices-request pre').text("GET " + tgt);
-							
-							$.ajax({
-								url: tgt,
-								type: "GET",
-								dataType: "json",
-								beforeSend: function() {
-									$('#devices-response pre').text('processing...');
-								},
-								success: function(data) {
-									$('#devices-response pre').text(JSON.stringify(data, null, 2));
-									refreshDevices(false);
-								},
-								error: function(jqXHR, textStatus) {
-									$('#devices-response pre').text(textStatus);
-								}
-							});
-							
-							return false;		
-						});
-						
-						row.find('button.device-button').click(function() {
-							myUrl = $(this).attr('device-url');
-							urlType = $(this).attr('url-type');
-							devType = $(this).attr('device-type');
-							
-							if (urlType == "image") {
-								showModal('<img class="image" src="'+myUrl+'" />', devType);
-							}
-							
-							return false;		
-						});
-					});	
-				});
-				
-			},
-			error: function(jqXHR, textStatus) {
-				if (displayResponses != false) {
-					$('#devices-response pre').text(textStatus);
-				}
-				
-				$('table.device_list tbody').children().remove();
-				$('table.device_list tbody').append($('<tr><td colspan="6">Error loading devices.</td></tr>'));
-			}
-		});
-	}
-	
-	$(document).ready(function() { 
+sidebar button:hover { background-color: rgba(255, 255, 255, 0.1); }
+sidebar button.active { background: linear-gradient(195deg, #de6c3c 0%, #dc5c25 100%); }
+sidebar section header { font-size: 0.8rem; text-transform: uppercase; text-align: center; padding: 15px; }
+sidebar title { display: block; border-bottom: 1px solid rgba(255,255,255, .2); padding: 15px; text-align: center; font-size: 1.2rem; line-height: 36px; }
+
+page > content.page-section > section { display: block; padding: 20px calc(100% - 1280px) 20px 300px; }
+page > content.page-section > section:first-child { display: block; background-color: #f0f2f5; }
+page > content > section > header { display: block; font-size: 1rem; margin-bottom: 10px; margin-top: 10px; }
+page > content > section > header > title { display: block; font-weight: bold; line-height: 24px; }
+page > content > section > header > subtitle { display: block; font-size: 0.9rem; color: rgba(0, 0, 0, .5); }
+
+.main { padding-right: 20px; padding-top: 10px; }
+
+.main > group,
+.secondary > content > group { display: block; clear: left; margin: 0 -10px; }
+.main > group > * { display: block; float: left; }
+.main > group.col-1 > * { width: 100%; }
+.main > group.col-3 > * { width: 33.33%; }
+.main > group.col-3 > *:nth-child(3n-1) { width: 33.34%; }
+.main > group.col-3 > *:nth-child(3n+1) { clear: left; }
+.main > group.col-2,
+.secondary > content > group.col-2 > * { width: 50%; }
+.main > group.col-2,
+.secondary > content > group.col-2 > *:nth-child(2n+1) { clear: left; }
+.main > group.col-4 > * { width: 25%; }
+.main > group.col-4 > *:nth-child(4n+1) { clear: left; }
+
+.main > group.col-2l > *:first-child { width: 75%; }
+.main > group.col-2l > *:last-child { width: 25%; }
+.main > group.col-2l > *:nth-child(2n+1) { clear: left; }
+
+group > item { float: left; display: block; margin: 12px 0; }
+group > item > title { margin: 0 20px; display: block; padding: 0 10px; color: rgba(255,255,255,1); text-shadow: 1px 1px 3px rgba(0,0,0,.8); background: linear-gradient(177deg, rgba(0,0,0,.5), rgba(156, 47, 0, 0.5)); border-radius: 6px; text-transform: uppercase; font-size: 0.75rem; line-height: 28px; height: 28px; }
+group > item > data { margin: 0 20px; display: block; padding: 10px 10px 0 10px; font-size: 0.9rem; }
+
+.main gauge { display: block; position: relative; }
+.main gauge > header { display: block; position: relative; height: 6px; width: 100%; }
+.main gauge > header > icon { display: block; position: absolute; height: 32px; width: 32px; left: 24px; z-index: 100; background-color: #42424a; background-repeat: no-repeat; background-size: 16px 16px; background-position: center center; border-radius: 4px; box-shadow: 2px 2px 2px #ccc; }
+
+.main gauge > content { position: relative; display: block; background-color: #ffffff; margin: 10px; z-index: 99; box-shadow: 2px 2px 8px #c4c4c4; border-radius: 10px; background: linear-gradient(#ffffff, #fafafa, #f3f3f3);  }
+.main gauge > content > metric { display: block; padding: 20px 20px 0 20px; text-align: right; font-size: 2rem; font-weight: bold; border-radius: 10px; line-height: 36px; height: 36px; overflow: hidden; }
+.main gauge > content > image-tile { display: block; width: 100%; height: 150px; overflow: hidden; background-color: #676767; border-top-left-radius: 6px; border-top-right-radius: 6px; }
+.main gauge > content > divider { display: block; background: linear-gradient(90deg, transparent, #cccccc); height: 1px; margin-top: 8px;  }
+.main gauge > content > title { display: block; color: #777777; text-align: right; padding: 8px 20px 10px 8px; text-transform: uppercase; font-size: 0.7rem; overflow: hidden; max-width: 100%; white-space: nowrap; }
+
+.main list { display: block; position: relative; }
+.main list > content { display: block; margin: 10px; background-color: #fff; border-radius: 6px; background: linear-gradient(#ffffff, #fafafa, #f3f3f3); box-shadow: 2px 2px 8px #c4c4c4; }
+.main table { width: 100%; }
+th { text-transform: uppercase; padding: 0 10px; font-size: 0.8rem; color: rgba(0, 0, 0, .7); line-height: 32px; height: 32px; border-bottom: 1px solid rgba(0, 0, 0, .2); }
+td { height: 32px; line-height: 32px; padding: 0 10px 0 10px; font-size: 0.9rem; overflow: hidden; }
+td > content { display: inline-block; height: 32px; width: 100%; overflow: hidden; }
+td > content.short { width: calc(100% - 70px); }
+td icon { display: inline-block; width: 16px; height: 16px; background-repeat: no-repeat; background-size: 16px 16px; }
+td group { display: block; width: 66px; float: right; }
+td icon.disable { opacity: 0.3; }
+
+.main table tr:nth-child(even) td { background-color: rgba(0,0,0, .02); }
+monospace { font-family: 'Courier New', Courier, monospace; }
+
+.text-left { text-align: left; }
+.text-right { text-align: right; }
+.text-center { text-align: center; }
+
+.secondary { background: linear-gradient(rgba(0,0,0,.2), transparent); background-size: 100% 30px; background-repeat: no-repeat; }
+.secondary > header { font-weight: bold; text-transform: uppercase; font-size: 0.9rem; text-shadow: 1px 1px 2px rgba(255,255,255, .6); }
+.secondary > content > table { width: 100%; }
+.secondary > content > table td { line-height: 1.25rem; padding-top: 10px; padding-bottom: 10px; font-size: 1rem; }
+.secondary > content > table td > content { height: 1.25rem; }
+.time-col { width: 120px; }
+
+page > content > section > content > divider { 
+    display: block; 
+    /*background: linear-gradient(90deg, transparent, #cccccc, transparent); */
+    height: 1px; 
+    margin-top: 8px;
+}
+
+footer { display: block; padding: 20px 0 60px 0; text-align: center; font-size: 0.85rem; color: #444; }
+footer a { color: #444; }
+footer a:hover { color: #000; }
+
+.shortnav { 
+    display: none;
+    position: fixed; 
+    top: 0; 
+    background-color: #ffffff; 
+    border-bottom: 1px solid #ccc; 
+    height: 53px; 
+    font-size: 1.2rem; 
+    z-index: 1000; 
+    width: 100%; 
+}
+.shortnav ul { margin: 0; padding: 0 36px 0 0; list-style: none; text-align: right; float: right; }
+.shortnav ul li { display: inline; }
+.shortnav ul li span { display: block; float: left; line-height: 52px; height: 100%; padding-left: 36px; position: absolute; left: 0; }
+.shortnav ul li a { color: #444444; text-decoration: none; display: block; float: left; line-height: 48px; height: 100%; }
+.shortnav ul li a .icon-bars { display: inline-block; height: 48px; width: 30px; background-image: url("bars-solid.svg"); background-repeat: no-repeat; background-position: center 16px; background-size: 20px 20px;  }
+
+.page-section .main table { table-layout: fixed; }
+.page-section .main table.header { width: calc(100% - 15px); }
+
+.page-section .main table th,
+.page-section .main table td { overflow-x: hidden; }
+.scroll-box { display: block;overflow-y: scroll; border-top: 1px solid rgba(0, 0, 0, .2);}
+
+.page-section#dashboard .main table th,
+.page-section#devices .main table th,
+.page-section#skills .main table th,
+.page-section#logs .main table th { border-bottom: none; }
+
+.page-section#devices .main table th,
+.page-section#devices .main table td { width: 33%; }
+
+.page-section#skills .main table th,
+.page-section#skills .main table td { width: 33%; }
+
+.page-section#logs .main table th,
+.page-section#logs .main table td { width: 33%; }
+
+.page-section#devices .scroll-box,
+.page-section#skills .scroll-box,
+.page-section#logs .scroll-box { height: 250px; }
+
+.page-section#dashboard .scroll-box { max-height: 120px; }
+.page-section#dashboard table group { text-align: right; }
+
+.page-section .settings > group { margin: -12px 0; }
+.page-section .settings { padding: 20px 0; background-color: #ebebeb; margin-right: 20px; border-radius: 6px; box-shadow: 3px 3px 12px rgba(0,0,0,.4); }
+
+#recent-logs td { height: auto; line-height: 1rem; padding-top: 0; padding-bottom: 0; }
+#recent-logs tr:first-child td { padding-top: 10px; }
+
+.page-section#developers textarea {
+    width: 100%;
+    max-width: 700px; 
+    height: 300px;
+    resize: none;
+    border-top-left-radius: 6px;
+    overflow: scroll;
+    border: none;
+    box-shadow: 2px 2px 8px #c4c4c4;
+    padding: 5px 10px; 
+    margin-bottom: 16px; 
+    box-sizing: border-box;
+}
+
+.options { margin-top: 10px; border-top: 1px solid #ccc; padding-top: 10px; }
 		
-		refreshDevices(true);
-		
-		$('#devices-button').click(function() {
-			refreshDevices();
-			
-			return false;
-		});
-		
-		$('#cmdTarget').change(function() {
-			id = $(this).val();
-			if (id != "") {
-				$('#cmdType').children().remove();
-				$(myDevices[id]["accepts"]).each(function(i,o) {
-					if (!["start","stop","stream","snapshot"].includes(o)) {
-						op = $('<option value="'+o+'">'+o+'</option>');
-						$('#cmdType').append(op);
-					}
-				});
-			}
-		});
-		
-		$('#btnSendCmd').click(function() {
-			devId = $('#cmdTarget').val();
-			myType = $('#cmdType').val();
-			myData = $('#cmdValue').val();
-			
-			url = "/device/" + devId + "/" + myType
-			
-			if ("container" == myDevices[devId]["type"]) {
-				url = "/" + myDevices[devId]["type"] + "/" + devId + "/" + myType;
-			}
-			
-			if ("brain" == myDevices[devId]["type"]) {
-				url = "/" + myDevices[devId]["type"] + "/" + myType;
-			}
-			
-			my_cmd_text = myData
-			if (myData == "") {
-				$('#command-request pre').text("POST " + url);
-			} else {
-				my_cmd_text = JSON.stringify(JSON.parse(myData));
-				dataVal = JSON.stringify(JSON.parse(myData), null, 2);
-				$('#command-request pre').text("POST " + url + "\n\n" + dataVal);
-			}
-			
-			$.ajax({
-				url: url,
-				data: my_cmd_text,
-				type: "POST",
-				contentType: "application/json",
-				dataType: "json",
-				beforeSend: function() {
-					$('#command-response pre').text('processing...');
-				},
-				success: function(data) {
-					$('#command-response pre').text(JSON.stringify(data, null, 2));
-				},
-				error: function(jqXHR, textStatus) {
-					$('#command-response pre').text(textStatus);
-				}
-			});
-			
-			return false;
-		});
-		
-		/* Basic Page Functions */
-		
-		$(document).keyup(function(e) {
-			var code = e.keyCode || e.which;
-			if (code == 27) {
-				hideModal()
-			}
-		});
-		
-		$('.modal-close').click(function() {
-			hideModal();
-			return false;
-		});
-		
-		$('a.button').click(function() {
-			$('.page_block').slideUp('fast');
-			$($(this).prop('rel')).slideDown('fast');
-			$('a.button').removeClass('active');
-			$(this).addClass('active');
-			$('#sidebar').addClass('inactive');
-			return false;
-		});
-		
-		$('input.toggle-target').click(function() {
-			if ($(this).prop('checked') == true) {
-				$($(this).val()).slideDown('fast');
-			} else {
-				$($(this).val()).slideUp('fast');
-			}
-		});
-		
-		$('input.toggle-wrap').click(function() {
-			if ($($(this).val()).hasClass('wrap')) {
-				$($(this).val()).removeClass('wrap');
-			} else {
-				$($(this).val()).addClass('wrap');
-			}
-		});
-		
-		$('#bars').click(function() {
-			if ($('#sidebar').hasClass('inactive')) {
-				$('#sidebar').removeClass('inactive');
-			} else {
-				$('#sidebar').addClass('inactive');
-			}
-			return false;
-		});
-		
-	});
-	</script>
+.request { border: 1px solid #777; margin-top: 20px; background-color: #ffffff; }
+.request h3 { 
+    border: 1px solid #fff; 
+    margin: 0; display: block; 
+    font-size: 15px; 
+    padding: 0 10px; 
+    height: 30px; 
+    line-height: 30px; 
+    background: #f0f0f0; 
+}
+.request pre {
+    margin: 0;
+    padding: 10px;
+    font-size: 14px;
+}
+
+.wrap .request pre {
+    white-space: pre-wrap;
+}
+
+.device_list .device-command,
+.device_list .device-button { width: auto; padding: 5px 10px; line-height: inherit; height: auto; }
+
+/*input[type="text"] { width: 100%; max-width: 600px; line-height: 44px; height: 44px; padding: 0 10px; box-sizing: border-box; font-size: 15px; margin-bottom: 10px; border-radius: 3px; border: 1px solid #bcbcbc; background-color: #eee; }*/
+select { width: 100%; max-width: 700px;  height: 32px; line-height: 32px; padding: 0 10px; font-size: 15px;  margin-bottom: 16px; border-radius: 3px; border: none; box-shadow: 2px 2px 8px #c4c4c4; border-radius: 6px; background-color: #ffffff; }
+button.send {
+    margin-bottom: 10px;
+}
+.log { max-width: calc(100% - 20px); }
+
+.page-section button { 
+    border: 1px solid #bbb8b5;
+    background-color: #555;
+    background: linear-gradient(#fbfafa, #fbfafa, #e8e9e9, #f2f1f0);
+    color: #333;
+    width: 175px;
+    height: 50px;
+    line-height: 48px;
+    border-radius: 4px;
+    font-size: 15px;
+}
+
+.page-section button:hover {
+    background: linear-gradient(#f7f6f6, #f7f6f6, #e4e5e5, #eeedec);
+    color: #111;
+    text-shadow: 1px 1px #ddd;
+    box-shadow: 2px 2px 4px #eee;
+}
+
+.page-section button:active {
+    background: linear-gradient(#e7e6e6, #d4d5d5, #dedddc, #dedddc);
+    color: #000;
+    text-shadow: -1px -1px #ddd;
+    box-shadow: -2px -2px 4px #eee;
+}
+
+.page-section#info .about {
+    display: block; 
+    background-color: #fff; 
+    border-radius: 6px; 
+    background: linear-gradient(#ffffff, #fafafa, #f3f3f3); 
+    box-shadow: 2px 2px 8px #c4c4c4;
+    padding: 20px;
+    font-size: 1rem;
+    line-height: 1.5rem;
+}
+
+.page-section#info .about a { color: #dc5c25; text-decoration: none; }
+.page-section#info .about a:hover { text-decoration: underline; }
+
+.page-section#info .about > *:first-child { margin-top: 0; }
+.page-section#info .about > *:last-child { margin-bottom: 0; }
+
+.page-buttons { float: right; padding-right: 20px; padding-top: 10px; }
+.page-buttons button { 
+    width: auto; 
+    height: auto; 
+    line-height: inherit;     
+    background: linear-gradient(165deg, #42424a 0%, #191919 100%);
+    border-radius: 6px;
+    cursor: pointer;
+}
+
+.page-buttons button icon {
+    display: inline-block;
+    height: 28px;
+    width: 28px;
+    background-repeat: no-repeat;
+    background-size: 16px 16px;
+    background-position: center center;
+}
+
+.page-buttons button:hover {
+    background: linear-gradient(195deg, #de6c3c 0%, #dc5c25 100%);
+}
+
+.page-buttons button:disabled {
+    background: none;
+    background-color: #888;
+}
+
+@media screen and (max-width: 1024px) {
+    page > content > section,
+    page > content.page-section > section { padding: 20px 0 20px 220px; }
+    sidebar { width: 200px; padding: 0; }
+    sidebar > content { height: 100%; max-height: 100%; border-radius: 0px; }
+}
+
+@media screen and (max-width: 992px) {
+    sidebar { display: none; width: 260px; z-index: 1001; }
+    sidebar.active { display: block; }
+    sidebar title { line-height: inherit; }
+    page > content > section,
+    page > content.page-section > section { padding: 20px 0 20px 20px; }
+    .shortnav { display: block; }
+    page > content.page-section { margin-top: 48px; }
+}
+
+@media screen and (max-width: 768px) {
+    sidebar > content > title { text-align: left; padding-left: 30px; }
+    .main > group.col-4 > * { width: 50%; }
+    .main > group.col-2l > *,
+    .main > group.col-2l > *:first-child,
+    .main > group.col-2l > *:last-child { width: 100%; }
+    .main > group.col-2 > *,
+    .secondary content > group.col-2 > * { width: 100%; clear: left; }
+    .main > group.col-3 > * { width: 50%; }
+    .main > group.col-3 > *:nth-child(3n-1) { width: 50%; }
+    .main > group.col-3 > *:nth-child(3n+1) { clear: none; }
+    .main > group.col-3 > *:nth-child(2n+1) { clear: left; }
+
+}
+
+spinner {
+    display: block;
+    position: fixed;
+    top: 0;
+    left: calc(50% - 63px);
+    height: 36px;
+    line-height: 36px;
+    padding: 0 16px;
+    color: #ffffff;
+    background-color: #444;
+    border-bottom-left-radius: 6px;
+    border-bottom-right-radius: 6px;
+    box-shadow: 2px 2px 8px #424242;
+    z-index: 1003;
+}
+
+spinner icon { 
+    display: inline-block;
+    height: 16px;
+    width: 16px;
+    margin-right: 10px;
+}
+
+.spin {
+    animation-name: spin;
+    animation-duration: 4000ms;
+    animation-iteration-count: infinite;
+    animation-timing-function: linear; 
+}
+
+@keyframes spin {
+    from {
+        transform:rotate(0deg);
+    }
+    to {
+        transform:rotate(360deg);
+    }
+}
+
+.hidden { display: none; }
+
+</style>
+<script type="text/javascript">
+function get_skills() {
+
+    $.ajax({
+        url: "/",
+        method: "POST",
+        contentType: "application/json",
+        data: JSON.stringify({ action: "download_skill" }),
+        dataType: "JSON",
+        beforeSend: function() {
+            $('#btn-download-skills').prop('disabled', true);
+            $('spinner').show();
+        },
+        success: function(response) {
+            if (response.status == "success") {
+                setTimeout(() => { refresh_data(); }, 1000);
+                return;
+            }
+
+            alert(response.errors);
+        },
+        complete: function() {
+            $('spinner').hide();
+            $('#btn-download-skills').prop('disabled', false);
+        }
+    });
+
+}
+
+function extract_server_stats(o) {
+    total_space = 0;
+    free_space = 0;
+    for (let x=0; x < o.info.disk.partitions.length; x++) {
+        total_space += o.info.disk.partitions[x].total;
+        free_space += o.info.disk.partitions[x].free;
+    }
+
+    disk_space_percent = (total_space > 0) ? 1 - free_space / total_space : 0;
+    load_percent = (o.info.cpu.count > 0) ? o.info.cpu.load[1] / o.info.cpu.count : 0;
+    server = new URL(o.url);
+    return {
+        "server": server.hostname,
+        "cpu": o.info.cpu.percent.toString() + "%",
+        "mem": o.info.memory.virtual.percent.toString() + "%",
+        "disk": (disk_space_percent * 100).toFixed(1).toString() + "%",
+        "load": (load_percent * 100).toFixed(1).toString() + "%"
+    };
+}
+
+function load_services(response) {
+    var servers = [];
+    var stats = [];
+    s_stats = extract_server_stats(response.data);
+    servers.push(s_stats.server.toLowerCase());
+    stats.push(s_stats);
+
+    Object.entries(response.data.data.devices).forEach(([key, value]) => {
+        s_stats = extract_server_stats(value);
+        if (servers.indexOf(s_stats.server.toLowerCase()) === -1) {
+            servers.push(s_stats.server.toLowerCase());
+            stats.push(s_stats);
+        }
+    });
+
+    $('#server-list').empty();
+    for (let x=0; x < stats.length; x++) {
+        td1 = $('<td style="width: 100px;"></td>');
+        td1.append(stats[x].server);
+        td2 = $('<td class="text-center"></td>');
+        td2.append(stats[x].cpu);
+        td3 = $('<td class="text-center"></td>');
+        td3.append(stats[x].mem);
+        td4 = $('<td class="text-center"></td>');
+        td4.append(stats[x].disk);
+        td5 = $('<td class="text-center"></td>');
+        td5.append(stats[x].load);
+        tr = $('<tr></tr>');
+        tr.append(td1);
+        tr.append(td2);
+        tr.append(td3);
+        tr.append(td4);
+        tr.append(td5);
+        $('#server-list').append(tr);
+    }
+
+    if (stats.length == 0) {
+        $('#server-list').append($('<tr><td><content>No records</content></td><td></td><td></td><td></td></tr>'));
+    }
+}
+
+function load_devices(response) {
+    var i = 0;
+    var cams = 0;
+    var locations = [];
+
+    $('#devices-list').empty();
+    $('#select-device').empty();
+    $('<option>[device]</option>').appendTo($('#select-device'));
+
+    try {
+
+        dev_type = $('<content></content>').text(response.data.type);
+        url_lnk = $('<content></content>').text(response.data.url);
+        loc = $('<content></content>').text(response.data.location);
+        stat = $('<content></content>').text("Stopped");
+        if (response.data.active == true) {
+            stat = $('<content></content>').text("Running");
+        }
+
+        if (loc) {
+            locations.push(loc.toString().toLowerCase());
+        }
+
+        opt = $('<option></option>');
+        $(opt).attr('value', response.data.url);
+        $(opt).text("(" + response.data.type + ") " + response.data.url);
+        $(opt).appendTo($('#select-device'));
+
+        td1 = $('<td></td>');
+        td1.append(dev_type);
+        td2 = $('<td></td>');
+        td2.append(url_lnk);
+        td3 = $('<td></td>');
+        td3.append(loc);
+        td4 = $('<td></td>');
+        td4.append(stat);
+        tr = $('<tr></tr>');
+        tr.append(td1);
+        tr.append(td2);
+        tr.append(td3);
+        tr.append(td4);
+        $('#devices-list').append(tr);
+        i++
+        
+        Object.entries(response.data.data.devices).forEach(([key, value]) => {
+            dev_type = $('<content></content>').text(value.type);
+            url_lnk = $('<content></content>').text(value.url);
+            loc = $('<content></content>').text(value.location);
+            stat = $('<content></content>').text("Stopped");
+            if (value.active == true) {
+                stat = $('<content></content>').text("Running");
+            }
+
+            if (loc) {
+                locations.indexOf(loc.toString().toLowerCase()) === -1 ? locations.push(loc.toString().toLowerCase()) : null;
+            }
+
+            opt = $('<option></option>');
+            $(opt).attr('value', value.url);
+            $(opt).text("(" + value.type + ") " + value.url);
+            $(opt).appendTo($('#select-device'));
+
+            td1 = $('<td></td>');
+            td1.append(dev_type);
+            td2 = $('<td></td>');
+            td2.append(url_lnk);
+            td3 = $('<td></td>');
+            td3.append(loc);
+            td4 = $('<td></td>');
+            td4.append(stat);
+            tr = $('<tr></tr>');
+            tr.append(td1);
+            tr.append(td2);
+            tr.append(td3);
+            tr.append(td4);
+            $('#devices-list').append(tr);
+
+            i++;
+            if (dev_type == "kenzy.image") {
+                cams++;
+            }
+        });
+    } catch(error) { console.log(error); };
+
+    $('#device-count').text(i)
+    $('#camera-count').text(cams);
+    $('#location-count').text(locations.length);
+    if (i == 0) { 
+        $('#devices-list').append($('<tr><td><content>No records</content></td><td></td><td></td><td></td></tr>'));
+    }
+}
+
+function load_skills(skills) {
+    var i = 0;
+    $('#skills-list').empty();
+    try {
+        Object.entries(skills).forEach(([key, value]) => {
+            skill_name = $('<content></content>').text(key);
+            skill_description = $('<content></content>').text(value.description);
+
+            td1 = $('<td></td>');
+            td1.append(skill_name);
+            td2 = $('<td></td>');
+            td2.append(skill_description);
+            tr = $('<tr></tr>');
+            tr.append(td1);
+            tr.append(td2);
+            $('#skills-list').append(tr);
+
+            i++;
+        });
+    } catch(error) { console.log(error); };
+
+    $('#skill-count').text(i)
+    if (i == 0) { 
+        $('#skills-list').append($('<tr><td><content>No records</content></td><td></td></tr>'));
+    }
+}
+
+function load_logs(entries) {
+    var i = 0;
+    entry = $($('#recent-logs').children()[0]).clone();
+    lentry = $($('#log-entries').children()[0]).clone();
+
+    $('#recent-logs').empty();
+    $('#log-entries').empty();
+
+    try {
+        for (let x=0; x<entries.length;x++) {
+            log_entry = entries[x];
+
+            ts = new Date(parseFloat(log_entry.timestamp) * 1000)
+            timestamp = ts.toLocaleTimeString("en-US", { hour12: true });
+            r_message = log_entry.type.toString().toUpperCase() + " - " + log_entry.message.toString();
+
+            if (i < 10) {
+                my_entry = $(entry).clone();
+                $(my_entry).find(".timestamp").text(timestamp);
+                $(my_entry).find(".message").text(r_message);
+
+                $('#recent-logs').append($(my_entry));
+            }
+
+            my_lentry = $(lentry).clone();
+            $(my_lentry).find(".timestamp").text(timestamp);
+            $(my_lentry).find(".type").text(log_entry.type.toString().toUpperCase());
+            $(my_lentry).find(".message").text(log_entry.message.toString());
+
+            $('#log-entries').append($(my_lentry));
+
+            i++;
+        }
+    } catch(error) { console.log(error); };
+    
+    if (i == 0) { 
+        empty = $(entry).clone()
+        $(empty).find(".timestamp").text("No records");
+        $(empty).find(".message").text("");
+
+        $('#recent-logs').append($(empty));
+
+        lempty = $(lentry).clone();
+        $(lempty).find(".timestamp").text("No records");
+        $(lempty).find(".type").text("");
+        $(lempty).find(".message").text("");
+
+        $('#log-entries').append($(lempty));
+
+    }
+}
+
+function refresh_data() {
+    $.ajax({
+        url: "/",
+        method: "POST",
+        contentType: "application/json",
+        data: JSON.stringify({ action: "status" }),
+        dataType: "JSON",
+        beforeSend: function() {
+            $('.btn-refresh').prop('disabled', true);
+            $('spinner').show();
+        },
+        success: function(response) {
+
+            $('.version').text(response.data.version);
+
+            load_devices(response);
+            load_skills(response.data.data.skills);
+            load_services(response);
+            load_logs(response.data.data.logs);
+        },
+        complete: function() {
+            $('spinner').hide();
+            $('.btn-refresh').prop('disabled', false);
+        }
+    });
+}
+
+function developer_submit() {
+    command = {
+        action: "relay",
+        payload: {
+            url: $('#select-device').val(),
+            command: JSON.parse($('#command').val())
+        }
+    }
+
+    $('#command-request pre').text(JSON.stringify(JSON.parse($('#command').val()), null, 4));
+
+    $.ajax({
+        url: "/",
+        method: "POST",
+        contentType: "application/json",
+        data: JSON.stringify(command),
+        dataType: "JSON",
+        beforeSend: function() {
+            $('#btnSendCmd').prop('disabled', true);
+            $('#command-response pre').text("Loading...");
+        },
+        success: function(response) {
+            $('#command-response pre').text(JSON.stringify(response, null, 4));
+        },
+        complete: function() {
+            $('#btnSendCmd').prop('disabled', false);
+        }
+    });
+}
+
+$(document).ready(function() {
+    $('#nav-bars').click(function() {
+        if ($('sidebar').hasClass('active')) {
+            $('sidebar').removeClass('active');
+        } else {
+            $('sidebar').addClass('active');
+        }
+    });
+
+    $('.page-button').click(function() {
+        $('.page-button').removeClass('active');
+        $('.page-section').hide();
+        $($(this).attr('page-target')).show();
+        $(this).addClass('active');
+        $('sidebar').removeClass('active');
+    });
+
+    $('.page-button#btn-skills').click(function() {
+        return false;
+    });
+
+    $('.btn-refresh').click(function() {
+        refresh_data();
+        return false;
+    });
+
+    $('#btn-download-skills').click(function() {
+        get_skills();
+        return false;
+    });
+
+    $('#show-log').click(function() {
+        if ($('#command-log-area').css('display') == "none") {
+            $('#command-log-area').show();
+        } else {
+            $('#command-log-area').hide();
+        }
+
+        return true;
+    });
+
+    $('#word-wrap').click(function() {
+        if ($('#command-log').hasClass('wrap')) {
+            $('#command-log').removeClass('wrap');
+        } else {
+            $('#command-log').addClass('wrap');
+        }
+        return true;
+    });
+
+    $('#select-template').click(function() {
+        $('#command').text($('#'+$(this).val()).text());
+    });
+
+    $('#form').submit(function(event) {
+        developer_submit();
+        return false;
+    });
+
+    refresh_data();
+
+});
+</script>
 </head>
 <body>
-<div class="modal" tabindex="-1" role="dialog">
-	<div class="modal-background"></div>
-	<div class="modal-container">
-		<div class="modal-title">
-			<a href="#" title="Close" class="modal-close">X</a>
-			<span>My Title</span>
-		</div>
-		<div class="modal-content">
-			CONTENT HERE
-		</div>
-	</div>
+<spinner style="display: none;"><icon class="spin spinner"></icon>Loading</spinner>
+<page>
+    <div class="shortnav">
+        <ul></button-list>
+            <li><span>KENZY</span></li>
+            <li><a href="#" id="nav-bars"><i class="icon-bars"></i></a></li>
+        </ul>
+    </div>
+    <sidebar>
+        <content>
+            <title>KENZY</title>
+            <!-- start_section -->
+            <section>
+                <content>
+                    <button class="page-button active" id="btn-dashboard" page-target="#dashboard"><icon class="tachometer"></icon>Dashboard</button>
+                    <button class="page-button" id="btn-devices" page-target="#devices"><icon class="server"></icon>Devices</button>
+                    <button style="display:none;" class="page-button" id="btn-cameras" page-target="#cameras"><icon class="camera"></icon>Cameras</button>
+                    <button class="page-button" id="btn-skills" page-target="#skills"><icon class="bolt"></icon>Skills</button>
+                    <button class="page-button" id="btn-logs" page-target="#logs"><icon class="hdd"></icon>Logs</button>
+                    <button class="page-button" id="btn-developers" page-target="#developers"><icon class="tools"></icon>Developers</button>
+                </content>
+            </section>
+            <section>
+                <content>
+                    <button class="page-button" id="btn-about" page-target="#info"><icon class="info"></icon>About</button>
+                </content>
+            </section>
+            <!-- end_section -->
+        </content>
+    </sidebar>
+    <content class="page-section" id="dashboard">
+        <section>
+            <div class="page-buttons">
+                <button class="btn-refresh"><icon class="refresh"></icon></button>
+            </div>
+            <header>
+                <title>System Overview</title>
+                <subtitle>Dashboard</subtitle>
+            </header>
+            <content class="main">
+                <group class="top-row col-4">
+                    <gauge>
+                        <header><icon class="server"></icon></header>
+                        <content>
+                            <metric id="device-count">-</metric>
+                            <divider></divider>
+                            <title>Devices</title>
+                        </content>
+                    </gauge>
+                    <gauge>
+                        <header><icon class="bolt"></icon></header>
+                        <content>
+                            <metric id="skill-count">-</metric>
+                            <divider></divider>
+                            <title>Skills</title>
+                        </content>
+                    </gauge>
+                    <gauge>
+                        <header><icon class="camera"></icon></header>
+                        <content>
+                            <metric id="camera-count">-</metric>
+                            <divider></divider>
+                            <title>Cameras</title>
+                        </content>
+                    </gauge>
+                    <gauge>
+                        <header><icon class="map-pin"></icon></header>
+                        <content>
+                            <metric id="location-count">-</metric>
+                            <divider></divider>
+                            <title>Locations</title>
+                        </content>
+                    </gauge>
+                </group>
+                <group class="col-1">
+                    <list>
+                        <content>
+                            <table class="header">
+                                <thead>
+                                    <tr>
+                                        <th style="width: 100px;" class="text-left">Server</th>
+                                        <th class="text-center">CPU</th>
+                                        <th class="text-center">MEM</th>
+                                        <th class="text-center">DISK</th>
+                                        <th class="text-center">LOAD</th>
+                                    </tr>
+                                </thead>
+                            </table>
+                            <div class="scroll-box">
+                            <table>
+                                <tbody id="server-list">
+                                    <tr>
+                                        <td style="width: 100px;"><content>HOST/IP</content></td>
+                                        <td class="text-center"><content>0.0%</content></td>
+                                        <td class="text-center"><content>0.0%</content></td>
+                                        <td class="text-center"><content>0.0%</content></td>
+                                        <td class="text-center"><content>0.0%</content></td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                            </div>
+                        </content>
+                    </list>
+                    <list style="display:none;">
+                        <content>
+                            <table class="header">
+                                <thead>
+                                    <tr>
+                                        <th>Activity</th>
+                                    </tr>
+                                </thead>
+                            </table>
+                            <div class="scroll-box">
+                            <table>
+                                <tbody>
+                                    <tr>
+                                        <td title="Front Yard">
+                                            <group>
+                                                <icon class="eye"></icon>
+                                                <icon class="person disable"></icon>
+                                                <icon class="dog disable"></icon>
+                                            </group>
+                                            <content class="short">
+                                                Front Yard
+                                            </content>
+                                        </td>
+                                    </tr>
+                                    <tr>
+                                        <td title="Master Bedroom">
+                                            <group>
+                                                <icon class="eye"></icon>
+                                                <icon class="person"></icon>
+                                                <icon class="dog disable"></icon>
+                                            </group>
+                                            <content class="short">
+                                                Master Bedroom
+                                            </content>
+                                        </td>
+                                    </tr>
+                                    <tr>
+                                        <td title="Living Room">
+                                            <group>
+                                                <icon class="eye"></icon>
+                                                <icon class="person"></icon>
+                                                <icon class="dog"></icon>
+                                            </group>
+                                            <content class="short">
+                                                Living Room
+                                            </content>
+                                        </td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                            </div>
+                        </content>
+                    </list>
+                </group>
+                <group></group>
+
+            </content>
+        </section>
+        <section class="secondary">
+            <header>Recent Logs</header>
+            <content>
+                <table>
+                    <thead>
+                        <tr>
+                            <th class="time-col">Time</th>
+                            <th class="text-left">Message</th>
+                        </tr>
+                    </thead>
+                    <tbody id="recent-logs">
+                        <tr>
+                            <td valign="top">
+                                <content>
+                                    <monospace class="timestamp">
+                                        No records
+                                    </monospace>
+                                </content>
+                            </td>
+                            <td valign="top">
+                                <monospace class="message"></monospace>
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </content>
+        </section>
+    </content>
+    <content class="page-section" id="devices" style="display: none;">
+        <section>
+            <header>
+                <title>List of Devices</title>
+                <subtitle>Overview</subtitle>
+            </header>
+            <content class="main">
+                <group class="col-1">
+                    <list>
+                        <content>
+                            <table class="header">
+                                <thead>
+                                    <tr>
+                                        <th class="text-left">Type</th>
+                                        <th class="text-left">URL</th>
+                                        <th class="text-left">Location</th>
+                                        <th class="text-left">Status</th>
+                                    </tr>
+                                </thead>
+                            </table>
+                            <div class="scroll-box">
+                            <table>
+                                <tbody id="devices-list">
+                                    <tr>
+                                        <td><content>No records</content></td>
+                                        <td><content></content></td>
+                                        <td><content></content></td>
+                                        <td><content></content></td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                            </div>
+                        </content>
+                    </list>
+                </group>
+                <group></group>
+            </content>
+        </section>
+        <section class="secondary" id="device-info" style="display: none;">
+            <header>Device Details</header>
+            <content class="settings">
+                <group class="col-2">
+                <item>
+                    <title>Type</title>
+                    <data>kenzy.skillmanager</data>
+                </item>
+                
+                <item>
+                    <title>URL</title>
+                    <data>http://192.168.1.140:9700</data>
+                </item>
+
+                <item>
+                    <title>Location</title>
+                    <data>Living Room</data>
+                </item>
+
+                <item>
+                    <title>Group</title>
+                    <data>Group 1</data>
+                </item>
+
+                <item>
+                    <title>Status</title>
+                    <data>Running</data>
+                </item>
+                
+                <item>
+                    <title>Accepts</title>
+                    <data>start, stop, mute, unmute, collect</data>
+                </item>
+
+                <item>
+                    <title>Settings</title>
+                    <data>...</data>
+                </item>
+                <item>
+                    <title>Actions</title>
+                    <data>
+                    <button-list>
+                        <button>Start</button>
+                        <button>Stop</button>
+                    </button-list>
+                    </data>
+                </item>
+                </group>
+                <group></group>
+            </content>
+        </section>
+    </content>
+    <content class="page-section" id="cameras" style="display: none;">
+        <section>
+            <header>
+                <title>List of Cameras</title>
+                <subtitle>Overview</subtitle>
+            </header>
+            <content class="main">
+                <group class="top-row col-3">
+                    <gauge>
+                        <header></header>
+                        <content>
+                            <image-tile></image-tile>
+                            <title>Garage Front Camera</title>
+                        </content>
+                    </gauge>
+                    <gauge>
+                        <header></header>
+                        <content>
+                            <image-tile></image-tile>
+                            <title>Front Porch Camera</title>
+                        </content>
+                    </gauge>
+                    <gauge>
+                        <header></header>
+                        <content>
+                            <image-tile></image-tile>
+                            <title>Back Porch Camera</title>
+                        </content>
+                    </gauge>
+                    <gauge>
+                        <header></header>
+                        <content>
+                            <image-tile></image-tile>
+                            <title>Garage Side Camera</title>
+                        </content>
+                    </gauge>
+                    <gauge>
+                        <header></header>
+                        <content>
+                            <image-tile></image-tile>
+                            <title>Crawl Space Camera</title>
+                        </content>
+                    </gauge>
+                    <gauge>
+                        <header></header>
+                        <content>
+                            <image-tile></image-tile>
+                            <title>Back Yard Camera</title>
+                        </content>
+                    </gauge>
+                </group>
+                <group></group>
+            </content>
+        </section>
+    </content>
+    <content class="page-section" id="skills" style="display: none;">
+        <section>
+            <div class="page-buttons">
+                <button id="btn-download-skills"><icon class="download"></icon></button>
+                <button class="btn-refresh"><icon class="refresh"></icon></button>
+            </div>
+            <header>
+                <title>List of Skills</title>
+                <subtitle>Overview</subtitle>
+            </header>
+            <content class="main">
+                <group class="col-1">
+                    <list>
+                        <content>
+                            <table class="header">
+                                <thead>
+                                    <tr>
+                                        <th class="text-left">Name</th>
+                                        <th class="text-left">Description</th>
+                                    </tr>
+                                </thead>
+                            </table>
+                            <div class="scroll-box">
+                            <table>
+                                <tbody id="skills-list">
+                                    <tr>
+                                        <td><content>No records</content></td>
+                                        <td><content></content></td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                            </div>
+                        </content>
+                    </list>
+                </group>
+                <group></group>
+            </content>
+        </section>
+    </content>
+    <content class="page-section" id="logs" style="display: none;">
+        <section>
+            <div class="page-buttons">
+                <button class="btn-refresh"><icon class="refresh"></icon></button>
+            </div>
+            <header>
+                <title>Log Entries</title>
+                <subtitle>Overview</subtitle>
+            </header>
+            <content class="main">
+                <group class="col-1">
+                    <list>
+                        <content>
+                            <table class="header">
+                                <thead>
+                                    <tr>
+                                        <th style="width: 80px;" class="text-left">Time</th>
+                                        <th style="width: 74px;" class="text-left">Type</th>
+                                        <th style="width: auto;" class="text-left">Message</th>
+                                    </tr>
+                                </thead>
+                            </table>
+                            <div class="scroll-box">
+                            <table>
+                                <tbody id="log-entries">
+                                    <tr>
+                                        <td style="width: 80px;" ><content class="timestamp">No Records</content></td>
+                                        <td style="width: 74px;" ><content class="type"></content></td>
+                                        <td style="width: auto;" ><content class="message"></content></td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                            </div>
+                        </content>
+                    </list>
+                </group>
+                <group></group>
+            </content>
+        </section>
+    </content>
+    <content class="page-section" id="developers" style="display: none;">
+        <section>
+            <header>
+                <title>Developer Actions</title>
+                <subtitle>Send Command</subtitle>
+            </header>
+            <content class="main">
+                <form id="form">
+                    <div>
+                        <select id="select-device">
+                            <option>[device]</option>
+                        </select>
+                    </div>
+                    <div>
+                        <select id="select-template">
+                            <option value="command-blank">[template]</option>
+                            <option value="command-speak">speak</option>
+                            <option value="command-collect">collect</option>
+                            <option value="command-mute">mute</option>
+                        </select>
+                    </div>
+                    <div>
+                        <textarea id="command" placeholder="Enter JSON data"></textarea>
+                    </div>
+                    <button class="send" id="btnSendCmd">Send &raquo;</button>
+
+                    <div class="options">
+                        <input type="checkbox" class="toggle-target" value="#command-log-area" id="show-log" checked="checked"><label for="show-log"> Show Log</label>
+                        <input type="checkbox" class="toggle-wrap" value="#command-log" id="word-wrap" checked="checked"><label for="word-wrap"> Word Wrap</label>
+                    </div>
+                    
+                </form>
+            </content>
+        </section>
+        <section class="secondary" id="command-log-area">
+            <content>
+                <div class="log wrap" id="command-log">
+                    <div id="command-request" class="request">
+                        <h3>Request</h3>
+                        <pre></pre>
+                    </div>
+                    
+                    <div id="command-response" class="request">
+                        <h3>Output</h3>
+                        <pre></pre>
+                    </div>
+                </div>                
+
+            </content>
+        </section>
+    </content>
+    <content class="page-section" id="info" style="display: none;">
+        <section>
+            <header>
+                <title>About KENZY</title>
+                <subtitle>Background</subtitle>
+            </header>
+            <content class="main">
+                <div class="about">
+                    <p><a href="http://kenzy.ai">KENZY</a> is a foundation of Python code that enables hardware interactions leveraging Machine Learning to create Artificial Intelligence. Wow, that's a mouthful. Let's try again, KENZY is a set of Python classes and functions that you can use to build your own personal assistant similar to Apple's Siri, Google's Assistant, or Amazon's Alexa. There are libraries for speech recognition, speech synthesis, face and object detection, and even face recognition. So basically KENZY can see you, hear you, and respond to you.</p>
+
+                    <p>KENZY is 100% customizable. Its modular design allows you to create your own skills or integrate new hardware to fit your specific needs. The code is open source and shared with a business-friendly license.</p>
+
+                    <h3>What Should You Expect?</h3>
+                    <p>KENZY's main goal is to share knowledge and grow organically based on feedback and support from people like you. On the project web site, the github project, and within each of KENZY's code modules you will find lots of documentation, examples, sample code, and other artifacts to help you grow in your own experience with Ai/ML and coding.</p>
+
+                    <h3>Who Built Me</h3>
+                    <p>KENZY was originally designed by <a href="http://twitter.com/lnxusr1">@lnxusr1</a> during the Covid-19 lockdown in 2020.</p>
+                </div>
+            </content>
+        </section>
+    </content>
+    <content>
+        <section>
+            <content>
+                <divider></divider>
+                <footer>
+                    KENZY <span class="version">{version}</span> | <a href="https://docs.kenzy.ai">Documentation</a> 
+                    &nbsp;|&nbsp; 
+                    <a href="https://kenzy.ai/blog">Blog</a> 
+                    &nbsp;|&nbsp; 
+                    <a href="https://github.com/lnxusr1/kenzy/issues">Issues</a>
+                </footer>
+            </content>
+        </section>
+    </content>
+</page>
+
+<div class="hidden">
+<pre id="command-speak" class="template">{
+    "action": "speak",
+    "payload": {
+        "text": "Hello"
+    }
+}</pre>
+<pre id="command-mute" class="template">{
+    "action": "mute",
+    "payload": {}
+}</pre>
+<pre id="command-collect" class="template">{
+    "action": "collect",
+    "payload": {
+        "motion": true, 
+        "objects": ["person"], 
+        "faces": [
+            {
+                "name": "lnxusr1", 
+                "timestamp": 1689533206.6091325
+            }
+        ]
+    }
+}</pre>
 </div>
-<div class="page_header">
-	<a href="#" id="bars"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><path d="M16 132h416c8.837 0 16-7.163 16-16V76c0-8.837-7.163-16-16-16H16C7.163 60 0 67.163 0 76v40c0 8.837 7.163 16 16 16zm0 160h416c8.837 0 16-7.163 16-16v-40c0-8.837-7.163-16-16-16H16c-8.837 0-16 7.163-16 16v40c0 8.837 7.163 16 16 16zm0 160h416c8.837 0 16-7.163 16-16v-40c0-8.837-7.163-16-16-16H16c-8.837 0-16 7.163-16 16v40c0 8.837 7.163 16 16 16z"/></svg></a>
-	<div class="title"><img src="favicon.svg" width="18" height="18" valign="middle" /> KENZY.Ai<small>[__APP_VERSION__]</small></div>
-</div>
-<div id="sidebar" class="page_sidebar inactive">
-	<a href="#" class="button active" rel="#devices" id="devices-button">
-		Devices
-	</a>
-	<a href="#" class="button" rel="#commands">
-		Commands
-	</a>
-	<a href="#" class="button" rel="#about">
-		About
-	</a>
-</div>
-<div class="content_container">
-	
-	<form id="devices" class="page_block active">
-		<div class="">
-			<h2>Devices</h2>
-			
-			<table class="device_list" cellspacing="1" cellpadding="0">
-			<thead>
-			<tr>
-				<th>Container</th>
-				<th>Device</th>
-				<th>Status</th>
-				<th>Action</th>
-			</tr>
-			</thead>
-			<tbody>
-			<tr>
-				<td colspan="6">No devices found.</td>
-			</tr>
-			</tbody>
-			</table>
-			
-			<div class="options">
-				<input type="checkbox" class="toggle-target" value="#devices-log" id="checkbox6" checked="checked"><label for="checkbox6"> Show Log</label>
-				<input type="checkbox" class="toggle-wrap" value="#devices-log" id="checkbox5" checked="checked"><label for="checkbox5"> Word Wrap</label>
-			</div>
-			
-			<div class="log wrap" id="devices-log">
-				<div id="devices-request" class="request">
-					<h3>Request</h3>
-					<pre></pre>
-				</div>
-				
-				<div id="devices-response" class="request">
-					<h3>Output</h3>
-					<pre></pre>
-				</div>
-			</div>
-			
-		</div>
-	</form>
 
-	<form id="commands" class="page_block">
-		<div class="">
-			<h2>Commands</h2>
-			
-			<select id="cmdTarget">
-				<option value="">[device]</option>
-			</select>
-			<br />
-			<select id="cmdType">
-				<option value="">[command]</option>
-			</select>
-			
-			<br />
-			<textarea id="cmdValue" placeholder="Enter JSON Data"></textarea>
-			<br />
-			<button class="send" id="btnSendCmd">Send &raquo;</button>
-			
-			<div class="options">
-				<input type="checkbox" class="toggle-target" value="#command-log" id="checkbox2" checked="checked"><label for="checkbox2"> Show Log</label>
-				<input type="checkbox" class="toggle-wrap" value="#command-log" id="checkbox3" checked="checked"><label for="checkbox3"> Word Wrap</label>
-			</div>
-			
-			<div class="log wrap" id="command-log">
-				<div id="command-request" class="request">
-					<h3>Request</h3>
-					<pre></pre>
-				</div>
-				
-				<div id="command-response" class="request">
-					<h3>Output</h3>
-					<pre></pre>
-				</div>
-			</div>
-		</div>
-	</form>
-
-	<form id="about" class="page_block">
-		<div class="">
-			<h2>About</h2>
-			
-			<p><a href="http://kenzy.ai">Kenzy</a> is a foundation of Python code that enables hardware interactions leveraging Machine Learning to create Artificial Intelligence. Wow, that's a mouthful. Let's try again, Kenzy is a set of Python classes and functions that you can use to build your own personal assistant similar to Apple's Siri, Google's Assistant, or Amazon's Alexa. There are libraries for speech recognition, speech synthesis, face and object detection, and even face recognition. So basically Kenzy can see you, hear you, and respond to you.</p>
-
-			<p>Kenzy is 100% customizable. Its modular design allows you to create your own skills or integrate new hardware to fit your specific needs. The code is open source and shared with a business-friendly license.</p>
-
-			<h3>What Should You Expect?</h3>
-			<p><a href="http://kenzy.ai">Kenzy</a>'s main goal is to share knowledge and grow organically based on feedback and support from people like you. On the project web site, the github project, and within each of Kenzy's code modules you will find lots of documentation, examples, sample code, and other artifacts to help you grow in your own experience with Ai/ML and coding.</p>
-
-			<h3>Who Built Me</h3>
-			<p>Kenzy was originally designed by <a href="http://twitter.com/lnxusr1">@lnxusr1</a> during the Covid-19 lockdown in 2020.</p>
-		</div>
-	</form>
-
-</div>
-<div class="page_footer">
-	<div class="copyright"><a href="http://kenzy.ai">kenzy.ai</a></div>
-</div>
 </body>
 </html>

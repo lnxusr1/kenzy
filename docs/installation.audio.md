@@ -6,15 +6,18 @@ NOTICE: The information on this page is primarily focused at folks using __Pulse
 
 ## Listing Audio Devices by Device ID
 Inevitably you are going to need to know your device IDs for your input and output devices.  The good news is that it is relatively simple _once Pulse Audio is installed_.  Here are the commands.
-```
+
+```bash
 ## List Microphones/Inputs
 pacmd list-sources | grep -e "index:" -e device.string -e "name:" 
 
 ## List Outputs
 pacmd list-sinks | grep -e "index:" -e device.string -e "name:"
 ```
+
 Once you have what you think to be the correct device IDs you can test it out with one or more of the following commands.
-```
+
+```bash
 ## Testing audio output
 paplay -d 1 /usr/share/sounds/alsa/Front_Center.wav
 
@@ -22,9 +25,10 @@ paplay -d 1 /usr/share/sounds/alsa/Front_Center.wav
 parecord -d 1 test.wav
 ```
 
-## Picking a voice for Text-to-Speech
+## Picking a voice for Text-to-Speech (Festival)
 Next we need to configure output to Festival.  Festival will reference a file in the user's home directory just like the .bashrc above.  You can also set this in /etc, but we'll keep it simple with the following:
-```
+
+```bash
 echo "(Parameter.set 'Audio_Required_Format 'aiff)" > ~/.festivalrc
 echo "(Parameter.set 'Audio_Command \"paplay $FILE --client-name=Festival --stream-name=Speech -d 1\")" >> ~/.festivalrc
 echo "(Parameter.set 'Audio_Method 'Audio_Command)" >> ~/.festivalrc
@@ -33,7 +37,8 @@ echo "(set! voice_default 'voice_cmu_us_slt_arctic_hts)" >> ~/.festivalrc
 BE ADVISED that you must know the device index to use the above.  Change the "-d 1" to the index number of the device you're using for output from pulse audio.  You can omit this setting if you set the default devices inside the control panels, but if you are using multiple devices that can be a little cumbersome so I've opted to use the device IDs to be sure I'm pointing to the desired output/input device.  
 
 You can convert any text you want into voice using festival's --tts switch.  It works as follows:
-```
+
+```bash
 echo "Testing speech" | festival --tts
 ```
 
@@ -48,7 +53,8 @@ sudo apt-get install libfftw3-dev libncursesw5-dev cmake libpulse-dev xterm
 ```
 
 ### Compile/Install the Visualizer
-```
+
+```bash
 cd /tmp
 wget https://github.com/dpayne/cli-visualizer/archive/master.zip
 unzip master.zip
@@ -59,7 +65,8 @@ export ENABLE_PULSE=1
 ```
 
 You may need to set it to the specific audio device.  You can add the device's ID in the "~/.config/vis/config" file.  (Make sure to use the correct ID.  Here I'm referencing ID by the index 1.)
-```
+
+```bash
 echo "audio.pulse.source=1" >> ~/.config/vis/config
 ```
 

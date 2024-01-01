@@ -1,0 +1,24 @@
+type: multi
+
+default:
+  device:
+    location: Family Room
+    group: Listener
+
+  service:
+    port: 9700
+
+skillsmanager:
+  type: kenzy.skillmanager
+
+#watcher:
+#  type: kenzy.image
+  
+listener:
+  type: kenzy.stt
+
+speaker:
+  type: kenzy.tts
+
+  device:
+    model.target: cpu

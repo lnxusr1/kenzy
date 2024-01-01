@@ -1,6 +1,6 @@
-# Calls to a Container/Device
+# Calls to a Service/Device
 
-Kenzy's architecture allows for a few ways to send commands between containers to devices.  Most commands are sent via JSON, although it is not a requirement per se.
+Kenzy's architecture allows for a few ways to send commands between devices.  Most commands are sent via JSON objects.
 
 # Referencing Devices &amp; Containers
 

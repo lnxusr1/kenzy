@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en-US">
+<head>
+	<meta name="apple-mobile-web-app-capable" content="yes" />
+	<meta charset="UTF-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="icon" type="image/x-icon" href="favicon.svg">
+	<link rel="apple-touch-icon" href="kenzy_touch.png" />
+
+	<title>Control Panel &raquo; KENZY.Ai [__APP_VERSION__]</title>
+	<script src="jquery.js"></script>
+    <script type="text/javascript">
+        $(document).ready(function() {
+            $('#submit').click(function() {
+                req = JSON.parse($('#textarea').val());
+                req = JSON.stringify(req);
+
+                $.ajax({
+                    url: "/api/",
+                    method: "POST",
+                    dataType: "json",
+                    contentType: "application/json",
+                    data: req,
+                    success: function(data) {
+                        $('#message').html(JSON.stringify(data, null, 4));
+                    }
+                })
+                return false;
+            });
+        });
+    </script>
+</head>
+<body>
+<form id="form">
+    <textarea id="textarea" style="width: 500px; height: 400px;resize: none;">{
+    "action": "collect",
+    "payload": {
+        "motion": true, 
+        "objects": ["person"], 
+        "faces": [
+            {
+                "name": "lnxusr1", 
+                "timestamp": 1689533206.6091325
+            }
+        ]
+    },
+    "context": {
+        "url": "http://192.168.37.84:8081", 
+        "type": "kenzy.image", 
+        "location": "Living Room", 
+        "group": "Primary"
+    }
+}
+</textarea><br/>
+    <input type="button" id="submit" value="Submit" />
+
+<div>
+    <pre id="message">
+
+    </pre>
+</div>
+
+</form>
+</body>
+</html>

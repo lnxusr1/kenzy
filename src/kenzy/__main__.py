@@ -1,72 +1,56 @@
-"""
-Kenzy: __main__
-"""
-
 import logging
-import sys
-import os
 import argparse
-import json
-import traceback
-from . import __app_name__, __version__
+import os
+import threading
+import time
+import kenzy.core
+from kenzy.extras import clean_string, apply_vars, get_raw_value
+from . import __app_title__, __version__
+from . import settings
+
+global service
+services = []
 
 
-def _getImport(libs, val):
-    """
-    Dynamically imports a library into memory for referencing during configuration file parsing.
+def startup(cfg):
+    app_type = str(clean_string(cfg.get("type"))).replace("..", ".").replace("/", "").replace("\\", "").replace("-", "_")
 
-    Args:
-        libs (list):  The list of libraries already imported.
-        val (str):  The name of the new library to import.
+    if app_type not in ["kenzy.core"]:
+        exec(f"import {app_type}")
 
-    Returns:
-        (str): The name of the newly imported library.  If library is already imported then returns None.
-    """
+    device = eval(f"{app_type}.device(**cfg.get('device', dict()))")
+    service = kenzy.core.KenzyHTTPServer(**cfg.get('service', dict()))
 
-    if val is not None and isinstance(val, str) and val.strip() != "":
-        if "." in val:
-            parts = val.split(".")
-            parts.pop()
-            ret = ".".join(parts)
-            if ret in libs:
-                return None
+    # Interlinking objects
+    device.set_service(service)      # Tell device about service wrapper
 
-            libs.append(ret)
-            return ret
+    service.set_device(device)       # Add device to service
+    services.insert(0, service)
 
-    return None
+    device.start()
+
+    try:
+        service.serve_forever()
+    except KeyboardInterrupt:
+        service.shutdown()
 
 
 parser = argparse.ArgumentParser(
-    description=__app_name__ + " v" + __version__,
+    description=__app_title__ + " " + __version__,
     formatter_class=argparse.RawTextHelpFormatter,
-    epilog='''To start the services try:\npython3 -m kenzy\n\nMore information available at:\nhttp://kenzy.ai''')
-# parser.add_argument('--locale', default="en_us", help="Language Locale")
+    epilog='''For more information visit:\nhttp://kenzy.ai''')
 
 parser.add_argument('-c', '--config', default=None, help="Configuration file")
 parser.add_argument('-v', '--version', action="store_true", help="Print Version")
+parser.add_argument('-d', '--set-device', action="append", help="Override settings as: name=value")
+parser.add_argument('-s', '--set-service', action="append", help="Override settings as: name=value")
+parser.add_argument('--offline', action="store_true", help="Run in offline mode.")
 
-startup_group = parser.add_argument_group('Startup Options')
+device_options = parser.add_argument_group('Device Options')
+device_options.add_argument('-t', '--type', default=None, help="Specify instance type (override config value if set)")
 
-startup_group.add_argument('--disable-builtin-speaker', action="store_true", help="Disable the built-in Speaker device")
-startup_group.add_argument('--disable-builtin-listener', action="store_true", help="Disable the built-in Listener device")
-startup_group.add_argument('--disable-builtin-watcher', action="store_true", help="Disable the built-in Watcher device")
-startup_group.add_argument('--disable-builtin-panels', action="store_true", help="Disable the built-in Panel devices")
-startup_group.add_argument('--disable-builtin-brain', action="store_true", help="Disable the built-in Brain container")
-startup_group.add_argument('--disable-builtin-container', action="store_true", help="Disable the built-in Device container")
-
-watcher_group = parser.add_argument_group('Watcher Options')
-
-watcher_group.add_argument('--training-source-folder', default=None, help="Specify the path to the image input directory structure")
-watcher_group.add_argument('--force-train', action="store_true", help="Force the recognition profile to be retrained")
-
-listener_group = parser.add_argument_group('STT Options')
-
-listener_group.add_argument('--download-models', action="store_true", help="Download listener models")
-listener_group.add_argument('--model-version', default=None, help="Coqui STT Model Version")
-listener_group.add_argument('--model-type', default="tflite", help="Coqui STT Model Type as pbmm or tflite")
-listener_group.add_argument('--include-scorer', action="store_true", help="Include scorer model")
-listener_group.add_argument('--overwrite', action="store_true", help="Overwrite models")
+service_options = parser.add_argument_group('Service Options')
+service_options.add_argument('--upnp', default=None, help="Enable UPNP as server, client, or leave blank to disable")
 
 logging_group = parser.add_argument_group('Logging Options')
 
@@ -74,6 +58,13 @@ logging_group.add_argument('--log-level', default="info", help="Options are full
 logging_group.add_argument('--log-file', default=None, help="Redirects all logging messages to the specified file")
 
 ARGS = parser.parse_args()
+
+# VERSION 
+if ARGS.version:
+    print(__app_title__, __version__)
+    quit()
+
+# LOG LEVEL
 
 logLevel = logging.INFO
 if ARGS.log_level is not None and ARGS.log_level.strip().lower() in ["debug", "info", "warning", "error", "critical"]:
@@ -90,254 +81,112 @@ logging.basicConfig(
     format='%(asctime)s %(name)-12s - %(levelname)-9s - %(message)s',
     level=logLevel)
 
+# OFFLINE MODE
+if ARGS.offline:
+    os.environ["TRANSFORMERS_OFFLINE"] = "1"
+    os.environ["HF_DATASETS_OFFLINE"] = "1"
+
+# INSTANCE START
+
 logger = logging.getLogger("STARTUP")
+cfg = settings.load(ARGS.config)
 
-# Hide some debug level logging to cut down on noise
-if ARGS.log_level is not None and ARGS.log_level.strip().lower() == "debug":
-    logging.getLogger("UPNP-SRV").setLevel(logging.INFO)
-    logging.getLogger("urllib3").setLevel(logging.INFO)
+if str(cfg.get("type", "")).lower() in ["multi", "multiple", "many"]:
+    # Multiple
+    thread_pool = []
 
-if ARGS.version:
-    print(__app_name__, "v" + __version__)
-    quit()
+    last_port = 0
 
-if ARGS.download_models:
-    try:
-        from .extras import download_models
-        if download_models(version=ARGS.model_version, model_type=ARGS.model_type, include_scorer=ARGS.include_scorer, overwrite=ARGS.overwrite):
-            print("Models downloaded successfully.")
-            quit()
-    except Exception:
-        print("Error downloading models.")
-        raise
+    defaults = cfg.get("default", {})
+    defaults["device"] = defaults.get("device", {})
+    defaults["service"] = defaults.get("server", {})
 
-# Overly simplified default configuration
-cfg = {
-    "appVersion": __version__,
-    "settings": {
-        "modulesFolder": None
-    },
-    "containers": [
-        {
-            'module': 'kenzy.containers.Brain',
-            'autoStart': True,
-            'settings': {
-                'tcpPort': 8080
-            }
-        },
-        {
-            "module": 'kenzy.containers.DeviceContainer',
-            'autoStart': True,
-            'settings': {
-                'tcpPort': 8081
-            },
-            'devices': [
-                {
-                    'autoStart': True,
-                    'module': 'kenzy.devices.Listener'
-                },
-                {
-                    'autoStart': True,
-                    'module': 'kenzy.devices.Speaker'
-                },
-                {
-                    'autoStart': True,
-                    'module': 'kenzy.devices.Watcher'
-                },
-                {
-                    'autoStart': True,
-                    'module': 'kenzy.devices.KasaPlug'
-                },
-                {
-                    'autoStart': False,
-                    'isPanel': True,
-                    'panelType': 'PyQt5',
-                    'module': 'kenzy.panels.RaspiPanel'
-                }
-            ]
-        }
-    ]
-}
-
-configFile = ARGS.config
-if configFile is None:
-    configFile = os.path.join(os.path.expanduser("~/.kenzy"), 'config.json')
-    if not os.path.isfile(configFile):
-        try:
-            # If the config doesn't exist then try to create it.
-            os.makedirs(os.path.dirname(configFile), exist_ok=True)
-            with open(configFile, "w") as fp:
-                json.dump(cfg, fp, indent=4)
-        except Exception:
-            pass
-
-else:
-    configFile = os.path.abspath(ARGS.config)
-    if not os.path.isfile(configFile):
-        raise Exception("Configuration file does not exist.")
-        quit(1)
-
-with open(configFile, "r") as fp:
-    cfg = json.load(fp)
-
-hasPanel = False
-try:
-    for c_idx, container in enumerate(cfg["containers"]):
-        if (ARGS.disable_builtin_brain and container["module"] == "kenzy.containers.Brain") \
-                or (ARGS.disable_builtin_container and container["module"] == "kenzy.containers.DeviceContainer"):
-            
-            cfg["containers"][c_idx] = None
+    for grp in cfg:
+        if str(grp).lower() in ["type", "default"]:
             continue
 
-        if "devices" in container:
-            for d_idx, device in enumerate(container["devices"]):
-                if (ARGS.disable_builtin_speaker and device["module"] == "kenzy.devices.Speaker") \
-                        or (ARGS.disable_builtin_watcher and device["module"] == "kenzy.devices.Watcher") \
-                        or (ARGS.disable_builtin_listener and device["module"] == "kenzy.devices.Listener") \
-                        or (ARGS.disable_builtin_panels and device["module"].startswith("kenzy.panels")):
+        cfg[grp]["device"] = cfg[grp].get("device", {})
+        cfg[grp]["service"] = cfg[grp].get("service", {})
 
-                    cfg["containers"][c_idx]["devices"][d_idx] = None
-                    continue 
+        port = get_raw_value(cfg[grp].get("service", {}).get("port", defaults["service"].get("port", "9700")))
 
-                if device["module"] == "kenzy.devices.Watcher":
-                    if ARGS.training_source_folder is not None:
-                        cfg["containers"][c_idx]["devices"][d_idx]["trainingSourceFolder"] = ARGS.training_source_folder
+        for item in defaults.get("device", {}):
+            cfg[grp]["device"][item] = cfg[grp].get("device", {}).get(item, defaults.get("device", {}).get(item))
+        
+        for item in defaults.get("service", {}):
+            cfg[grp]["service"][item] = cfg[grp].get("service", {}).get(item, defaults.get("service", {}).get(item))
 
-                    if ARGS.force_train:
-                        recognizerFile = None
-                        namesFile = None
-                        hPath = os.path.join(os.path.expanduser("~/.kenzy"), "data", "models", "watcher")
+        grp_type = get_raw_value(cfg[grp].get("type", "kenzy.skillmanager"))
+        if grp_type == "kenzy.skillmanager":
+            cfg[grp]["service"]["upnp.type"] = cfg[grp].get("service", {}).get("upnp.type", "server")
+            # print(cfg[grp]["service"]["upnp"])
 
-                        if "parameters" in device and "recognizerFile" in device["parameters"]:
-                            recognizerFile = device["parameters"]["recognizerFile"] 
+        if port <= last_port:
+            port = last_port + 1
 
-                        if recognizerFile is None:
-                            recognizerFile = os.path.abspath(os.path.join(hPath, "recognizer.yml"))
+        last_port = port
+        if "service" not in cfg[grp]:
+            cfg[grp]["service"] = {}
 
-                        if "parameters" in device and "namesFile" in device["parameters"]:
-                            namesFile = device["parameters"]["namesFile"]
+        cfg[grp]["service"]["port"] = port
 
-                        if namesFile is None:
-                            namesFile = os.path.abspath(os.path.join(hPath, "names.json"))
+        t = threading.Thread(target=startup, args=[cfg.get(grp)], daemon=True)
+        t.start()
+        thread_pool.append(t)
 
-                        if os.path.exists(recognizerFile):
-                            os.unlink(recognizerFile)
+        if grp_type == "kenzy.skillmanager":
+            # Let the main server get fully online first
+            time.sleep(1)
 
-                        if os.path.exists(namesFile):
-                            os.unlink(namesFile)
+    while True:
+        alive = False
+        try:
+            for item in thread_pool:
+                item.join()
+        except KeyboardInterrupt:
+            for item in services:
+                item.shutdown()
 
-                if "isPanel" in device and bool(device["isPanel"]):
-                    hasPanel = True
+        for item in thread_pool:
+            if item.is_alive():
+                alive = True
 
-except Exception:
-    print("Invalid configuration provided.")
-    raise
+        if not alive:
+            break
 
-appQt5 = None
-if hasPanel:
-    try:
-        from PyQt5.QtWidgets import QApplication
-        appQt5 = QApplication(sys.argv)
-    except ModuleNotFoundError:
-        pass
+        time.sleep(.5)
 
-try:
-    modulesFolder = cfg["settings"]["modulesFolder"]
-    if modulesFolder is not None:
-        if os.path.exists(str(modulesFolder).strip()):
-            sys.path.insert(0, str(modulesFolder).strip())
-except KeyError:
-    pass
+else:
 
-libs = []
-objs = []
-for container in cfg["containers"]:
-    if container is None:
-        continue 
+    # Single
+    if ARGS.type is not None:
+        cfg["type"] = ARGS.type
 
-    if "module" not in container or container["module"] is None:
-        raise Exception("Value for module not defined for container.")
+    if ARGS.upnp is not None:
+        if str(ARGS.upnp).lower() in ["server", "client", "standalone"]:
+            if not isinstance(cfg.get("service"), dict):
+                cfg["service"] = {}
+            cfg["service"]["upnp.type"] = str(ARGS.upnp).lower()
+        else:
+            logger.critical("Unable to start.  Invalid UPNP value specified.  Must be one of server, client, or standalone.")
+            quit(1)
 
-    try:
-        m = _getImport(libs, str(container["module"]).strip())
-        if m is not None:
-            exec("import " + m.strip())
+    if cfg.get("type") is None:
+        logger.critical("Unable to identify instance type. (Use --type to dynamically specify)")
+        quit(1)
 
-        setting_args = container["settings"] if "settings" in container and isinstance(container["settings"], dict) else {}
-        obj = eval(str(container["module"]).strip() + "(**setting_args)")
-        obj.appQt5 = appQt5
+    if ARGS.set_device is not None:
+        if "device" not in cfg:
+            cfg["device"] = {}
+        
+        if isinstance(ARGS.set_device, list):
+            apply_vars(cfg["device"], ARGS.set_device)
 
-        init_args = container["initialize"] if "initialize" in container and isinstance(container["initialize"], dict) else {}
-        exec("obj.initialize(**init_args)")
+    if ARGS.set_service is not None:
+        if "service" not in cfg:
+            cfg["service"] = {}
+        
+        if isinstance(ARGS.set_service, list):
+            apply_vars(cfg["service"], ARGS.set_device)
 
-        if "autoStart" not in container or not isinstance(container["autoStart"], bool) or bool(container["autoStart"]):
-            obj.start()
-
-        objs.append(obj)
-
-        # Load up devices
-        if "devices" in container and isinstance(container["devices"], list):
-            for device_config in container["devices"]:
-                try:
-                    if device_config is None or "module" not in device_config: 
-                        continue
-
-                    isPanel = bool(device_config["isPanel"]) if "isPanel" in device_config and device_config["isPanel"] is not None else False
-                    if isPanel and appQt5 is None:
-                        raise Exception("QtApplication unavailable.  Unable to start panel.")
-
-                    m = _getImport(libs, str(device_config["module"]).strip())
-                    if m is not None:
-                        exec("import " + m.strip())
-                
-                    setting_args = device_config["parameters"] if "parameters" in device_config and isinstance(device_config["parameters"], dict) else {}
-                    autoStart = bool(device_config["autoStart"]) if "autoStart" in device_config and device_config["autoStart"] is not None else True
-                    groupName = str(device_config["groupName"]) if "groupName" in device_config and device_config["groupName"] is not None else None
-                    
-                    devId = str(device_config["uuid"]) if "uuid" in device_config and device_config["uuid"] is not None else None
-
-                    dev = eval(str(device_config["module"]).strip() + "(callback=obj.callbackHandler, **setting_args)")
-                    obj.addDevice(device_config["module"], dev, id=devId, autoStart=autoStart, isPanel=isPanel, groupName=groupName)
-                except Exception:
-                    logging.debug(str(sys.exc_info()[0]))
-                    logging.debug(str(traceback.format_exc()))
-                    logger.error("Unable to start device: " + str(device_config["module"]).strip())
-                    
-    except Exception:
-        logging.debug(str(sys.exc_info()[0]))
-        logging.debug(str(traceback.format_exc()))
-        logger.error("Unable to start container: " + str(container["module"]).strip())
-        raise
-
-doRestart = False
-for obj in reversed(objs):
-    obj.wait()
-    if obj._doRestart:
-        doRestart = True
-
-if doRestart:
-    if sys.argv[0].endswith("kenzy/__main__.py"):
-        cmd = sys.executable + " -m kenzy " + " ".join(sys.argv[1:])
-    else:
-        cmd = sys.executable + " " + " ".join(sys.argv)
-
-    logger = logging.getLogger("RESTART")
-
-    import time
-    logger.info("Waiting for processes to close")
-    time.sleep(5)
-    logger.info("Restarting")
-
-    myEnv = dict(os.environ)
-
-    if "QT_QPA_PLATFORM_PLUGIN_PATH" in myEnv:
-        del myEnv["QT_QPA_PLATFORM_PLUGIN_PATH"]
-
-    import subprocess
-    subprocess.Popen(
-        cmd,
-        shell=True,
-        stdout=sys.stdout,
-        stderr=sys.stderr,
-        stdin=sys.stdin,
-        env=myEnv)
+    startup(cfg)

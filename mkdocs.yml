@@ -14,22 +14,21 @@ nav:
     - Overview: 'index.md'
     - Setup:
       - Installation: 'installation.basic.md'
+      - Getting Started: 'kenzy.config.md'
+    - Services & Devices:
+      - Service Settings: 'kenzy.containers.md'
+      - Skill Manager: 'kenzy.devices.skillmanager.md'
+      - Speech-to-Text: 'kenzy.devices.listener.md'
+      - Text-to-Speech: 'kenzy.devices.speaker.md'
+      - Image/Video Processing: 'kenzy.devices.watcher.md'
+    - Extending:
+    #  - Creating a Device: 'kenzy.devices.md'
+      - Creating a Skill: 'kenzy.skill.md'
+    #  - Calls to a Container/Device: 'kenzy.communication.md'
+    - Extras:
       - Audio/Video Extras: 'installation.audio.md'
       - Raspberry Pi Notes: 'installation.raspberrypi.md'
-      - Training your Watcher: 'kenzy.watcher.train.md'
-    - Containers:
-      - Creating a Container: 'kenzy.containers.md'
-      - Setting a Startup Configuration: 'kenzy.config.md'
-    - Devices:
-      - Creating a Device: 'kenzy.devices.md'
-      - kenzy.devices.KasaPlug: 'kenzy.devices.kasaplug.md'
-      - kenzy.devices.Listener: 'kenzy.devices.listener.md'
-      - kenzy.devices.Speaker: 'kenzy.devices.speaker.md'
-      - kenzy.devices.Watcher: 'kenzy.devices.watcher.md'
-    - Skills:
-      - Creating a Skill: 'kenzy.skill.md'
-    - Communications:
-      - Calls to a Container/Device: 'kenzy.communication.md'
+      #- Training your Watcher: 'kenzy.watcher.train.md'
     - Links:
       - '@ Code': 'https://kenzy.ai/code'
       - '@ Community': 'https://kenzy.ai/discussion'

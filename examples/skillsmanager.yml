@@ -1,0 +1,13 @@
+type: kenzy.skillmanager
+
+device: 
+  location:                 Living Room
+  group:                    Primary
+
+service:
+  host:                     0.0.0.0
+  port:                     9700
+  upnp.type:                server
+  ssl.enable:               false
+  ssl.cert_file:            /etc/ssl/cert/snakeoil.crt
+  ssl.key_file:             /etc/ssl/private/snakeoil.key

@@ -1,0 +1,21 @@
+type: kenzy.stt
+
+device: 
+  location:                 Living Room
+  group:                    Primary
+  # audio.device:            0
+  audio.channels:           1
+  audio.sample_rate:        16000
+  speech.vad_aggressiveness:       0
+  speech.buffer_padding:    350
+  speech.buffer_size:       50
+  speech.ratio:             0.75
+  speech.model:             openai/whisper-tiny.en
+
+service:
+  host:                     0.0.0.0
+  port:                     9701
+  upnp.type:                client
+  ssl.enable:               false
+  ssl.cert_file:            /etc/ssl/cert/snakeoil.crt
+  ssl.key_file:             /etc/ssl/private/snakeoil.key

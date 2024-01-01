@@ -1,15 +1,13 @@
 KENZY.Ai · |GitHub license| |Python Versions| |Read the Docs| |GitHub release (latest by date)|
 ===============================================================================================
 
-This project is dedicated to building a “Synthetic Human” which is
-called Kenzy for which we have assigned the female gender pronoun of
-“she”. She has visual face recognition
-(`opencv/opencv <https://github.com/opencv/opencv>`__), speech
-transcription (`coqui <https://github.com/coqui-ai>`__), and speech
-synthesis (`festival <http://www.cstr.ed.ac.uk/projects/festival/>`__ or
-`mimic3 <https://github.com/MycroftAI/mimic3>`__). Kenzy is written in
-Python and is targeted primarily at the single board computer (SBC)
-platforms like the `Raspberry Pi <https://www.raspberrypi.org/>`__.
+This project is dedicated to building a "Synthetic Human" which is 
+called Kenzy for which we have assigned the female gender pronoun of 
+"she". She has intent determination (`padatious <https://github.com/MycroftAI/padatious>`__) 
+visual face recognition (`opencv/opencv <https://github.com/opencv/opencv>`__), 
+speech transcription (`whisper <https://openai.com/research/whisper>`__), 
+and speech synthesis (`speecht5 <https://github.com/microsoft/SpeechT5>`__)/(`festival <http://www.cstr.ed.ac.uk/projects/festival/>`__).  
+Kenzy is written in Python and is targeted primarily at locally hosted home devices.
 
 Visit our main site: https://kenzy.ai/
 
