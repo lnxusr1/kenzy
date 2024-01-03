@@ -95,7 +95,7 @@ class SkillsDevice:
             else:
                 self.skill_manager.parse(text=text, context=context)
         else:
-            self.debug(f"COLLECT: {data}")
+            self.logger.debug(f"COLLECT: {data}")
 
         return KenzySuccessResponse("Collect complete")
     

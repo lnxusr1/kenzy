@@ -526,7 +526,7 @@ function load_devices(response) {
             $('#devices-list').append(tr);
 
             i++;
-            if (dev_type == "kenzy.image") {
+            if (value.type.toString().toLowerCase() == "kenzy.image") {
                 cams++;
             }
         });
