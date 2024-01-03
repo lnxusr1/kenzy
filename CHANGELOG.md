@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.0.3]
+
+### Modified
+
+- Changed startup to use Multiprocessing instead of Threads for each device main runtime
+
 ## [2.0.2]
 
 ### Modified

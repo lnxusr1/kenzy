@@ -1,7 +1,8 @@
 import logging
 import argparse
 import os
-import threading
+# import threading
+import multiprocessing as mp
 import time
 import kenzy.core
 from kenzy.extras import clean_string, apply_vars, get_raw_value
@@ -94,7 +95,7 @@ cfg = settings.load(ARGS.config)
 if str(cfg.get("type", "")).lower() in ["multi", "multiple", "many"]:
     # Multiple
     thread_pool = []
-
+    
     last_port = 0
 
     defaults = cfg.get("default", {})
@@ -130,9 +131,13 @@ if str(cfg.get("type", "")).lower() in ["multi", "multiple", "many"]:
 
         cfg[grp]["service"]["port"] = port
 
-        t = threading.Thread(target=startup, args=[cfg.get(grp)], daemon=True)
-        t.start()
-        thread_pool.append(t)
+        p = mp.Process(target=startup, args=[cfg.get(grp)])
+        p.start()
+        thread_pool.append(p)
+
+        # t = threading.Thread(target=startup, args=[cfg.get(grp)], daemon=True)
+        # t.start()
+        # thread_pool.append(t)
 
         if grp_type == "kenzy.skillmanager":
             # Let the main server get fully online first
