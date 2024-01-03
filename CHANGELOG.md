@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.0.2]
+
+### Modified
+
+- Fixed bug in skillmanager.device.collect
+- Fixed bug in core.KenzyRequestHandler.log_message
+- Fixed bug in *Cameras* count on dashboard
+
 ## [2.0.1]
 
 ### Added

@@ -103,7 +103,13 @@ class KenzyRequestHandler(BaseHTTPRequestHandler):
 
     def log_message(self, format, *args):
         # if self.path.lower() != "/upnp.xml":
-        self.logger.debug(str(str(self.client_address[0]) + " - " + str(format % args)) + " - " + str(self.headers.get("User-Agent")))
+        try:
+            if hasattr(self, "headers"):
+                self.logger.debug(str(str(self.client_address[0]) + " - " + str(format % args)) + " - " + str(self.headers.get("User-Agent")))
+            else:
+                self.logger.debug(str(str(self.client_address[0]) + " - " + str(format % args)))
+        except AttributeError:
+            pass
 
     def set_vars(self, content):
         return content.replace(
