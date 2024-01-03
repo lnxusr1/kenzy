@@ -40,7 +40,7 @@ class SpeakerDevice:
         return True
 
     def play(self, **kwargs):
-        print(kwargs)
+        # print(kwargs)
         if kwargs.get("data", {}).get("file_name") is not None:
             file_name = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "data", kwargs.get("data", {}).get("file_name")))
             if os.path.isfile(file_name):
