@@ -47,8 +47,8 @@ class VideoProcessor:
         self.rec_queue = None
         self.callback_queue = None
 
-        self.location = kwargs.get("location")
-        self.group = kwargs.get("group")
+        self.location = kwargs.get("location", "Kenzy's Room")
+        self.group = kwargs.get("group", "Kenzy's Group")
         self.service = None
 
         self.video_device = kwargs.get("video_device", 0)
@@ -493,7 +493,8 @@ class VideoProcessor:
                 or (self.rec_thread is not None and self.rec_thread.is_alive()) \
                 or (self.callback_thread is not None and self.callback_thread.is_alive()):
 
-            self.stop()
+            self.stop()self.location = kwargs.get("location")
+        self.group = kwargs.get("group")
         
         self.frame_buffer.clear()
         

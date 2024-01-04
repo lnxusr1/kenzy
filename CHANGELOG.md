@@ -8,11 +8,13 @@ All notable changes to this project will be documented in this file.
 
 - Added a default configuration for the base kenzy startup (saved to .kenzy/config.yml).
 - Core support for versioning skills. (use `self._version` to set version number).
+- Added `--skip` and `--only` options to skip or include device configs in provided file.
 
 ### Modified
 
 - Changed startup to use Multiprocessing instead of Threads for each device main runtime
 - Added ThreadingMixIn to HTTPServer (oops!)
+- Set default of "Kenzy's Room" and "Kenzy's Group" for location and group respectively
 
 ## [2.0.2]
 

@@ -18,8 +18,8 @@ class SpeakerDevice:
         self.speaker = None
         self.cache_folder = None 
 
-        self.location = kwargs.get("location")
-        self.group = kwargs.get("group")
+        self.location = kwargs.get("location", "Kenzy's Room")
+        self.group = kwargs.get("group", "Kenzy's Group")
 
         self.initialize()
 

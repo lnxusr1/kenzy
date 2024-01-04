@@ -50,6 +50,8 @@ parser.add_argument('--offline', action="store_true", help="Run in offline mode.
 
 device_options = parser.add_argument_group('Device Options')
 device_options.add_argument('-t', '--type', default=None, help="Specify instance type (override config value if set)")
+device_options.add_argument('--skip', action="append", help="Skips the named device from the config for loading")
+device_options.add_argument('--only', action="append", help="Includes only the named device from the config for loading")
 
 service_options = parser.add_argument_group('Service Options')
 service_options.add_argument('--upnp', default=None, help="Enable UPNP as server, client, or leave blank to disable")
@@ -152,6 +154,14 @@ if str(cfg.get("type", "")).lower() in ["multi", "multiple", "many"]:
         if grp_type == "kenzy.skillmanager":
             cfg[grp]["service"]["upnp.type"] = cfg[grp].get("service", {}).get("upnp.type", "server")
             # print(cfg[grp]["service"]["upnp"])
+
+        if isinstance(ARGS.only, list) and len(ARGS.only) > 0:
+            if grp_type not in ARGS.only:
+                continue
+
+        if isinstance(ARGS.skip, list) and len(ARGS.skip) > 0:
+            if grp_type in ARGS.skip:
+                continue
 
         if port <= last_port:
             port = last_port + 1
