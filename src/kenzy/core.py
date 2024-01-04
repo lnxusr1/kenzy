@@ -6,6 +6,7 @@ import sys
 import traceback
 import copy
 from http.server import HTTPServer, BaseHTTPRequestHandler
+from socketserver import ThreadingMixIn
 import ssl
 from urllib.parse import parse_qs
 import requests
@@ -284,7 +285,7 @@ class KenzyRequestHandler(BaseHTTPRequestHandler):
             self.logger.debug(str(traceback.format_exc()))
 
 
-class KenzyHTTPServer(HTTPServer):
+class KenzyHTTPServer(ThreadingMixIn, HTTPServer):
     logger = logging.getLogger("HTTP-SRV")
 
     def __init__(self, **kwargs) -> None:
