@@ -123,7 +123,8 @@ class SkillsDevice:
                 try:
                     skill_list[obj.name] = {
                         "description": obj.description,
-                        "settings": self.settings.get(obj.name)
+                        "settings": self.settings.get(obj.name),
+                        "version": obj.version
                     }
                 except AttributeError:
                     pass
