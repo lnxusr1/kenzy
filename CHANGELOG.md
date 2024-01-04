@@ -7,6 +7,7 @@ All notable changes to this project will be documented in this file.
 ### Modified
 
 - Changed startup to use Multiprocessing instead of Threads for each device main runtime
+- Added ThreadingMixIn to HTTPServer (oops!)
 
 ## [2.0.2]
 
