@@ -484,8 +484,10 @@ class KenzyHTTPServer(ThreadingMixIn, HTTPServer):
                                 ret = self._send_command(copy.copy(payload))
                     
                     return ret
+                
             if timeout is not None:
                 payload.timeout = timeout
+
             return self._send_command(payload, wait=wait)
 
     def _send_command(self, payload, wait=True):

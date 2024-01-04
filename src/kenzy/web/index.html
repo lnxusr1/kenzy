@@ -455,7 +455,7 @@ function load_devices(response) {
 
     $('#devices-list').empty();
     $('#select-device').empty();
-    $('<option>[device]</option>').appendTo($('#select-device'));
+    $('<option value="">[device]</option>').appendTo($('#select-device'));
 
     try {
 
@@ -647,6 +647,18 @@ function refresh_data() {
 }
 
 function developer_submit() {
+    if ($('#select-device').val().toString() == "") {
+        alert('You must select a device.')
+        $('#select-device').focus();
+        return;
+    }
+
+    if ($('#command').val().toString() == "") {
+        alert('You must enter a JSON payload.')
+        $('#command').focus();
+        return;
+    }
+
     command = {
         action: "relay",
         payload: {
@@ -1164,7 +1176,7 @@ $(document).ready(function() {
                 <form id="form">
                     <div>
                         <select id="select-device">
-                            <option>[device]</option>
+                            <option value="">[device]</option>
                         </select>
                     </div>
                     <div>
@@ -1224,7 +1236,14 @@ $(document).ready(function() {
                     <p>KENZY was originally designed by <a href="http://twitter.com/lnxusr1">@lnxusr1</a> during the Covid-19 lockdown in 2020.</p>
                 </div>
             </content>
-        </section>
+        </section>"motion": true, 
+        "objects": ["person"], 
+        "faces": [
+            {
+                "name": "lnxusr1", 
+                "timestamp": 1689533206.6091325
+            }
+        ]
     </content>
     <content>
         <section>
@@ -1243,27 +1262,21 @@ $(document).ready(function() {
 </page>
 
 <div class="hidden">
-<pre id="command-speak" class="template">{
+<pre id="command-speak" class="kenzy-tts template">{
     "action": "speak",
     "payload": {
         "text": "Hello"
     }
 }</pre>
-<pre id="command-mute" class="template">{
+<pre id="command-mute" class="kenzy-stt template">{
     "action": "mute",
     "payload": {}
 }</pre>
-<pre id="command-collect" class="template">{
+<pre id="command-collect" class="kenzy-skillmanager template">{
     "action": "collect",
     "payload": {
-        "motion": true, 
-        "objects": ["person"], 
-        "faces": [
-            {
-                "name": "lnxusr1", 
-                "timestamp": 1689533206.6091325
-            }
-        ]
+        "type": "kenzy.stt",
+        "text": "Kenzy, Hello."
     }
 }</pre>
 </div>

@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 ## [2.0.3]
 
+### Added
+
+- Added a default configuration for the base kenzy startup (saved to .kenzy/config.yml).
+- Core support for versioning skills. (use `self._version` to set version number).
+
 ### Modified
 
 - Changed startup to use Multiprocessing instead of Threads for each device main runtime

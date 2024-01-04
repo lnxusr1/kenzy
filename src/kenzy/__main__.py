@@ -4,6 +4,7 @@ import os
 # import threading
 import multiprocessing as mp
 import time
+import yaml
 import kenzy.core
 from kenzy.extras import clean_string, apply_vars, get_raw_value
 from . import __app_title__, __version__
@@ -87,10 +88,40 @@ if ARGS.offline:
     os.environ["TRANSFORMERS_OFFLINE"] = "1"
     os.environ["HF_DATASETS_OFFLINE"] = "1"
 
+# Check for default config
+config_file = ARGS.config
+if config_file is None:
+    config_file = os.path.expanduser("~/.kenzy/config.yml")
+    if not os.path.isfile(config_file):
+        default_settings = {
+            "type": "multi",
+            "default": {
+                "device": {
+                    "group": "My Group",
+                    "location": "My Room"
+                }
+            },
+            "virtual_device_1": {
+                "type": "kenzy.skillmanager"
+            },
+            "virtual_device_2": {
+                "type": "kenzy.stt"
+            },
+            "virtual_device_3": {
+                "type": "kenzy.tts"
+            },
+            "virtual_device_4": {
+                "type": "kenzy.image"
+            }
+        }
+
+        with open(config_file, "w", encoding="UTF-8") as sw:
+            yaml.safe_dump(default_settings, sw)
+
 # INSTANCE START
 
 logger = logging.getLogger("STARTUP")
-cfg = settings.load(ARGS.config)
+cfg = settings.load(config_file)
 
 if str(cfg.get("type", "")).lower() in ["multi", "multiple", "many"]:
     # Multiple
