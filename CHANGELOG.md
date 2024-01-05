@@ -9,6 +9,8 @@ All notable changes to this project will be documented in this file.
 - Added a default configuration for the base kenzy startup (saved to .kenzy/config.yml).
 - Core support for versioning skills. (use `self._version` to set version number).
 - Added `--skip` and `--only` options to skip or include device configs in provided file.
+- New skill option for WeatherSkill (requires API key from [openweathermap.org](http://openweathermap.org))
+- Added option to set default value when getting settings in skills
 
 ### Modified
 
