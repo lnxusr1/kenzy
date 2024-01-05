@@ -7,8 +7,10 @@ from kenzy import GenericSkill
 
 class MyCustomSkill(GenericSkill):
  	def __init__(self, **kwargs):
- 		self.name = "My Custom Skill"
  		super().__init__(**kwargs)
+
+ 		self.name = "My Custom Skill"
+		self._version = [1, 0, 0]
     
  	def initialize(self):
  		self.register_intent_file("customskill.intent", self.handle_custom_intent)

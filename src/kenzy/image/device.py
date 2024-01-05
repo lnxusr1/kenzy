@@ -493,8 +493,7 @@ class VideoProcessor:
                 or (self.rec_thread is not None and self.rec_thread.is_alive()) \
                 or (self.callback_thread is not None and self.callback_thread.is_alive()):
 
-            self.stop()self.location = kwargs.get("location")
-        self.group = kwargs.get("group")
+            self.stop()
         
         self.frame_buffer.clear()
         
