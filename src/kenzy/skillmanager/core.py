@@ -434,8 +434,8 @@ class GenericSkill:
 
         return False
 
-    def get_setting(self, name):
-        return self.device.settings.get(self.name, {}).get(name)
+    def get_setting(self, var_name, default=None):
+        return self.device.settings.get(self.name, {}).get(var_name, default)
 
     def stop(self):
         """
