@@ -223,7 +223,7 @@ class GenericSkill:
     @property
     def version(self):
         if isinstance(self._version, list):
-            return ".".join(self._version)
+            return ".".join([str(x) for x in self._version])
         else:
             return str(self._version)
     
