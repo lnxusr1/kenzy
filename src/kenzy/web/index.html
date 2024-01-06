@@ -455,7 +455,7 @@ function load_devices(response) {
 
     $('#devices-list').empty();
     $('#select-device').empty();
-    $('<option>[device]</option>').appendTo($('#select-device'));
+    $('<option value="">[device]</option>').appendTo($('#select-device'));
 
     try {
 
@@ -547,14 +547,23 @@ function load_skills(skills) {
         Object.entries(skills).forEach(([key, value]) => {
             skill_name = $('<content></content>').text(key);
             skill_description = $('<content></content>').text(value.description);
+            skill_version = $('<content></content>');
+            if (value.version.toString() == "None") {
+                skill_version.text("");
+            } else {
+                skill_version.text(value.version);
+            }
 
             td1 = $('<td></td>');
             td1.append(skill_name);
             td2 = $('<td></td>');
             td2.append(skill_description);
+            td3 = $('<td></td>')
+            td3.append(skill_version);
             tr = $('<tr></tr>');
             tr.append(td1);
             tr.append(td2);
+            tr.append(td3);
             $('#skills-list').append(tr);
 
             i++;
@@ -563,7 +572,7 @@ function load_skills(skills) {
 
     $('#skill-count').text(i)
     if (i == 0) { 
-        $('#skills-list').append($('<tr><td><content>No records</content></td><td></td></tr>'));
+        $('#skills-list').append($('<tr><td><content>No records</content></td><td></td><td></td></tr>'));
     }
 }
 
@@ -647,6 +656,18 @@ function refresh_data() {
 }
 
 function developer_submit() {
+    if ($('#select-device').val().toString() == "") {
+        alert('You must select a device.')
+        $('#select-device').focus();
+        return;
+    }
+
+    if ($('#command').val().toString() == "") {
+        alert('You must enter a JSON payload.')
+        $('#command').focus();
+        return;
+    }
+
     command = {
         action: "relay",
         payload: {
@@ -1094,6 +1115,7 @@ $(document).ready(function() {
                                     <tr>
                                         <th class="text-left">Name</th>
                                         <th class="text-left">Description</th>
+                                        <th class="text-left">Version</th>
                                     </tr>
                                 </thead>
                             </table>
@@ -1102,6 +1124,7 @@ $(document).ready(function() {
                                 <tbody id="skills-list">
                                     <tr>
                                         <td><content>No records</content></td>
+                                        <td><content></content></td>
                                         <td><content></content></td>
                                     </tr>
                                 </tbody>
@@ -1164,7 +1187,7 @@ $(document).ready(function() {
                 <form id="form">
                     <div>
                         <select id="select-device">
-                            <option>[device]</option>
+                            <option value="">[device]</option>
                         </select>
                     </div>
                     <div>
@@ -1224,7 +1247,14 @@ $(document).ready(function() {
                     <p>KENZY was originally designed by <a href="http://twitter.com/lnxusr1">@lnxusr1</a> during the Covid-19 lockdown in 2020.</p>
                 </div>
             </content>
-        </section>
+        </section>"motion": true, 
+        "objects": ["person"], 
+        "faces": [
+            {
+                "name": "lnxusr1", 
+                "timestamp": 1689533206.6091325
+            }
+        ]
     </content>
     <content>
         <section>
@@ -1243,27 +1273,21 @@ $(document).ready(function() {
 </page>
 
 <div class="hidden">
-<pre id="command-speak" class="template">{
+<pre id="command-speak" class="kenzy-tts template">{
     "action": "speak",
     "payload": {
         "text": "Hello"
     }
 }</pre>
-<pre id="command-mute" class="template">{
+<pre id="command-mute" class="kenzy-stt template">{
     "action": "mute",
     "payload": {}
 }</pre>
-<pre id="command-collect" class="template">{
+<pre id="command-collect" class="kenzy-skillmanager template">{
     "action": "collect",
     "payload": {
-        "motion": true, 
-        "objects": ["person"], 
-        "faces": [
-            {
-                "name": "lnxusr1", 
-                "timestamp": 1689533206.6091325
-            }
-        ]
+        "type": "kenzy.stt",
+        "text": "Kenzy, Hello."
     }
 }</pre>
 </div>

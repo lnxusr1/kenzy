@@ -1,8 +1,10 @@
 import logging
 import argparse
 import os
-import threading
+# import threading
+import multiprocessing as mp
 import time
+import yaml
 import kenzy.core
 from kenzy.extras import clean_string, apply_vars, get_raw_value
 from . import __app_title__, __version__
@@ -48,6 +50,8 @@ parser.add_argument('--offline', action="store_true", help="Run in offline mode.
 
 device_options = parser.add_argument_group('Device Options')
 device_options.add_argument('-t', '--type', default=None, help="Specify instance type (override config value if set)")
+device_options.add_argument('--skip', action="append", help="Skips the named device from the config for loading")
+device_options.add_argument('--only', action="append", help="Includes only the named device from the config for loading")
 
 service_options = parser.add_argument_group('Service Options')
 service_options.add_argument('--upnp', default=None, help="Enable UPNP as server, client, or leave blank to disable")
@@ -86,15 +90,45 @@ if ARGS.offline:
     os.environ["TRANSFORMERS_OFFLINE"] = "1"
     os.environ["HF_DATASETS_OFFLINE"] = "1"
 
+# Check for default config
+config_file = ARGS.config
+if config_file is None:
+    config_file = os.path.expanduser("~/.kenzy/config.yml")
+    if not os.path.isfile(config_file):
+        default_settings = {
+            "type": "multi",
+            "default": {
+                "device": {
+                    "group": "My Group",
+                    "location": "My Room"
+                }
+            },
+            "virtual_device_1": {
+                "type": "kenzy.skillmanager"
+            },
+            "virtual_device_2": {
+                "type": "kenzy.stt"
+            },
+            "virtual_device_3": {
+                "type": "kenzy.tts"
+            },
+            "virtual_device_4": {
+                "type": "kenzy.image"
+            }
+        }
+
+        with open(config_file, "w", encoding="UTF-8") as sw:
+            yaml.safe_dump(default_settings, sw)
+
 # INSTANCE START
 
 logger = logging.getLogger("STARTUP")
-cfg = settings.load(ARGS.config)
+cfg = settings.load(config_file)
 
 if str(cfg.get("type", "")).lower() in ["multi", "multiple", "many"]:
     # Multiple
     thread_pool = []
-
+    
     last_port = 0
 
     defaults = cfg.get("default", {})
@@ -121,6 +155,14 @@ if str(cfg.get("type", "")).lower() in ["multi", "multiple", "many"]:
             cfg[grp]["service"]["upnp.type"] = cfg[grp].get("service", {}).get("upnp.type", "server")
             # print(cfg[grp]["service"]["upnp"])
 
+        if isinstance(ARGS.only, list) and len(ARGS.only) > 0:
+            if grp_type not in ARGS.only:
+                continue
+
+        if isinstance(ARGS.skip, list) and len(ARGS.skip) > 0:
+            if grp_type in ARGS.skip:
+                continue
+
         if port <= last_port:
             port = last_port + 1
 
@@ -130,9 +172,13 @@ if str(cfg.get("type", "")).lower() in ["multi", "multiple", "many"]:
 
         cfg[grp]["service"]["port"] = port
 
-        t = threading.Thread(target=startup, args=[cfg.get(grp)], daemon=True)
-        t.start()
-        thread_pool.append(t)
+        p = mp.Process(target=startup, args=[cfg.get(grp)])
+        p.start()
+        thread_pool.append(p)
+
+        # t = threading.Thread(target=startup, args=[cfg.get(grp)], daemon=True)
+        # t.start()
+        # thread_pool.append(t)
 
         if grp_type == "kenzy.skillmanager":
             # Let the main server get fully online first

@@ -6,9 +6,11 @@ import sys
 import traceback
 import copy
 from http.server import HTTPServer, BaseHTTPRequestHandler
+from socketserver import ThreadingMixIn
 import ssl
 from urllib.parse import parse_qs
 import requests
+# from requests.adapters import HTTPAdapter
 import urllib3
 import threading
 import time
@@ -283,7 +285,7 @@ class KenzyRequestHandler(BaseHTTPRequestHandler):
             self.logger.debug(str(traceback.format_exc()))
 
 
-class KenzyHTTPServer(HTTPServer):
+class KenzyHTTPServer(ThreadingMixIn, HTTPServer):
     logger = logging.getLogger("HTTP-SRV")
 
     def __init__(self, **kwargs) -> None:
@@ -482,8 +484,10 @@ class KenzyHTTPServer(HTTPServer):
                                 ret = self._send_command(copy.copy(payload))
                     
                     return ret
+                
             if timeout is not None:
                 payload.timeout = timeout
+
             return self._send_command(payload, wait=wait)
 
     def _send_command(self, payload, wait=True):
@@ -542,22 +546,24 @@ class KenzyHTTPServer(HTTPServer):
             if timeout is not None:
                 kwargs["timeout"] = timeout
 
+            # s = requests.Session()
+            # s.mount(url.split(":", 1)[0] + "://", HTTPAdapter(max_retries=1, pool_block=False))
             response = requests.post(url, json=payload, headers=headers, **kwargs)
-
             response_data = response.json()
-            self.logger.debug(f"{response_data}")
+            self.logger.debug(f"Response: {response_data}")
+
         except (requests.exceptions.ConnectTimeout, requests.exceptions.ReadTimeout, TimeoutError, urllib3.exceptions.ReadTimeoutError):
-            logging.error("Request timed out")
-            logging.debug("Timeout: url=%s action=%s", url, payload.get("action"))
+            self.logger.error("Request timed out")
+            self.logger.debug(f"Timeout error: url={url} action={payload.get('action')}")
             return False
         except (requests.exceptions.ConnectionError, ConnectionRefusedError, urllib3.exceptions.NewConnectionError, urllib3.exceptions.MaxRetryError):
-            logging.error("Request timed out")
-            logging.debug("Connection error: url=%s action=%s", url, payload.get("action"))
+            self.logger.error("Request connection error")
+            self.logger.debug(f"Connection error: url={url} action={payload.get('action')}")
             return False
         except requests.exceptions.RequestException:
-            logging.debug(str(sys.exc_info()[0]))
-            logging.debug(str(traceback.format_exc()))
-            logging.error("An error occurred")
+            self.logger.debug(str(sys.exc_info()[0]))
+            self.logger.debug(str(traceback.format_exc()))
+            self.logger.error("An error occurred")
             return False
 
         return True

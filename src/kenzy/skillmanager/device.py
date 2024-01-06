@@ -20,8 +20,8 @@ class SkillsDevice:
         self.service = None
         self.skill_manager = None
 
-        self.location = kwargs.get("location")
-        self.group = kwargs.get("group")
+        self.location = kwargs.get("location", "Kenzy's Room")
+        self.group = kwargs.get("group", "Kenzy's Group")
         self.wake_words = kwargs.get("wake_words", ["Kenzie", "Kenzi", "Kenzy", "Kinsay", "Kinsy", "Kinsie", "Kinsey"])
 
         try:
@@ -123,7 +123,8 @@ class SkillsDevice:
                 try:
                     skill_list[obj.name] = {
                         "description": obj.description,
-                        "settings": self.settings.get(obj.name)
+                        "settings": self.settings.get(obj.name),
+                        "version": obj.version
                     }
                 except AttributeError:
                     pass

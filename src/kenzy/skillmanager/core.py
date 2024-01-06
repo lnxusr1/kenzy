@@ -218,7 +218,15 @@ class GenericSkill:
         self.description = ""
         self.device = None
         self.logger = kwargs.get("logger", logging.getLogger("SKILL"))
+        self._version = None
 
+    @property
+    def version(self):
+        if isinstance(self._version, list):
+            return ".".join([str(x) for x in self._version])
+        else:
+            return str(self._version)
+    
     @property
     def service(self):
         return self.device.service if self.device is not None else None
@@ -426,8 +434,8 @@ class GenericSkill:
 
         return False
 
-    def get_setting(self, name):
-        return self.device.settings.get(self.name, {}).get(name)
+    def get_setting(self, var_name, default=None):
+        return self.device.settings.get(self.name, {}).get(var_name, default)
 
     def stop(self):
         """

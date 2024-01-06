@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.0.3]
+
+### Added
+
+- Added a default configuration for the base kenzy startup (saved to .kenzy/config.yml).
+- Core support for versioning skills. (use `self._version` to set version number).
+- Added `--skip` and `--only` options to skip or include device configs in provided file.
+- New skill option for WeatherSkill (requires API key from [openweathermap.org](http://openweathermap.org))
+- Added option to set default value when getting settings in skills
+
+### Modified
+
+- Changed startup to use Multiprocessing instead of Threads for each device main runtime
+- Added ThreadingMixIn to HTTPServer (oops!)
+- Set default of "Kenzy's Room" and "Kenzy's Group" for location and group respectively
+- Improved responses to the "How are you" question.
+
 ## [2.0.2]
 
 ### Modified

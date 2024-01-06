@@ -25,8 +25,8 @@ class AudioProcessor:
         self.restart_enabled = False
         self.muted_event = threading.Event()
 
-        self.location = kwargs.get("location")
-        self.group = kwargs.get("group")
+        self.location = kwargs.get("location", "Kenzy's Room")
+        self.group = kwargs.get("group", "Kenzy's Group")
 
     @property
     def accepts(self):
