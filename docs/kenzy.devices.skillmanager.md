@@ -98,6 +98,29 @@ device:
           - My Ceiling Light
 ```
 
+### WeatherSkill
+
+The WeatherSkill allows for you to specify the following parameters:
+
+| Parameter       | Type  | Description                                                                  |
+| :-------------- | :---- | :--------------------------------------------------------------------------- |
+| api_key         | str   | Current Weather API Key from openweathermap.org                              |
+| lat             | float | Lattitude of location to provide weather update                              |
+| lon             | float | Longitude of location to provide weather update                              |
+| units           | str   | Default: imperial; Options:  metric, imperial, standard (a.k.a. kelvin)      |
+
+Example:
+```yaml
+type: kenzy.skillmanager
+
+device:
+    WeatherSkill:
+      api_key:            <api_key_here>
+      lat:                43.878708
+      lon:                -103.458935
+      units:              imperial
+```
+
 -----
 
 ## Help &amp; Support
