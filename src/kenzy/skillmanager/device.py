@@ -27,7 +27,7 @@ class SkillsDevice:
         try:
             self.activation_timeout = abs(float(kwargs.get("timeout.wake")))
         except TypeError:
-            self.activation_timeout = 45
+            self.activation_timeout = 10
         
         try:
             self.ask_timeout = abs(float(kwargs.get("timeout.ask")))
