@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.0.4]
+
+### Modified
+
+- Locks, Covers, and Lights can be disabled/enabled as a group in the HomeAssistantSkill
+- Using the keyword "all" or plural form of lights, lamps, or fans in HomeAssistantSkill will toggle all lights/fans/lamps in the specified area
+
 ## [2.0.3]
 
 ### Added
@@ -17,7 +24,7 @@ All notable changes to this project will be documented in this file.
 - Changed startup to use Multiprocessing instead of Threads for each device main runtime
 - Added ThreadingMixIn to HTTPServer (oops!)
 - Set default of "Kenzy's Room" and "Kenzy's Group" for location and group respectively
-- Improved responses to the "How are you" question.
+- Improved responses to the "How are you?" prompt.
 
 ## [2.0.2]
 

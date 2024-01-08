@@ -10,7 +10,7 @@ The Skill Manager device acts as the Brain for all collecting, storing, processi
 | folder.skills       | str     | ~/.kenzy/skills               | Skills folder                     |
 | folder.temp         | str     | /tmp/intent_cache             | Trained intents storage           |
 | wake_words          | list    | ["Kenzie", "Kenzy", "Kinsey"] | Wake words                        |
-| timeout.wake        | float   | 10                            | Idle time between wake words      |
+| timeout.wake        | float   | 15                            | Idle time between wake words      |
 | timeout.ask         | float   | 10                            | Wait time after "ask" commands    |
 
 ## Example YAML file
