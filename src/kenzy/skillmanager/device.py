@@ -1,6 +1,7 @@
 import sys
 import traceback
 import time
+import collections
 from kenzy.core import KenzySuccessResponse, KenzyErrorResponse, KenzyContext
 from kenzy.skillmanager.core import SkillManager, SpeakCommand, PlayCommand, GenericSkill
 from kenzy.extras import get_status, get_skills_package, KenzyLogger
@@ -19,6 +20,8 @@ class SkillsDevice:
         self.settings = kwargs
         self.service = None
         self.skill_manager = None
+        self.history = collections.deque(maxlen=100)
+        self.data = { "kenzy.stt": {}, "kenzy.image": {}, "kenzy.tts": {} }
 
         self.location = kwargs.get("location", "Kenzy's Room")
         self.group = kwargs.get("group", "Kenzy's Group")
@@ -80,8 +83,14 @@ class SkillsDevice:
         data = kwargs.get("data", {})
         context = kwargs.get("context")
 
+        self.history.append(kwargs)
+
         if data.get("type", "") == "kenzy.stt":
             text = data.get("text")
+            
+            self.data["kenzy.stt"]["prev"] = self.data["kenzy.stt"].get("last", "")
+            self.data["kenzy.stt"]["last"] = text
+
             dev_url = self.get_context_url(context)
             if time.time() < self.timeouts.get(dev_url, {}).get("timeout", 0):
                 func = self.timeouts.get(dev_url, {}).get("callback")
@@ -94,6 +103,16 @@ class SkillsDevice:
 
             else:
                 self.skill_manager.parse(text=text, context=context)
+
+        elif data.get("type", "") == "kenzy.image":
+            url = context.url if isinstance(context, KenzyContext) and context.url is not None else self.service.local_url
+            if url not in self.data.get("kenzy.image", {}):
+                self.data["kenzy.image"][url] = {}
+
+            self.data["kenzy.image"][url] = data
+            
+            self.skill_manager.process_data(message=data, context=context)
+
         else:
             self.logger.debug(f"COLLECT: {data}")
 
@@ -147,6 +166,9 @@ class SkillsDevice:
         cmd = SpeakCommand(context=kwargs.get("context"))
         cmd.text(text)
 
+        self.data["kenzy.tts"]["prev"] = self.data["kenzy.tts"].get("last", {})
+        self.data["kenzy.tts"]["last"] = { "type": "say", "text": text }
+
         self.service.send_request(payload=cmd)
 
         return KenzySuccessResponse("Say command complete")
@@ -155,7 +177,10 @@ class SkillsDevice:
         # text, in_callback, timeout=0, context=None
         cmd = SpeakCommand(context=kwargs.get("context"))
         cmd.text(text)
-        
+
+        self.data["kenzy.tts"]["prev"] = self.data["kenzy.tts"].get("last", {})
+        self.data["kenzy.tts"]["last"] = { "type": "ask", "text": text }
+
         context = kwargs.get("context")
         dev_url = self.get_context_url(context)
 

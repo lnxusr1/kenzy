@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 ## [2.0.4]
 
+### Added
+
+- Data capture to kenzy.skillmanager.device -> history for all in/out of skill manager
+- Data capture to kenzy.skillmanager.device -> data for all current data (for reference in skills)
+- CameraSkill for articulating what is captured on one or more kenzy.image devices
+- Callback Triggers for skills for non-speech activity (like kenzy.image)
+
 ### Modified
 
 - Locks, Covers, and Lights can be disabled/enabled as a group in the HomeAssistantSkill
