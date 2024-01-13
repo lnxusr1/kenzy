@@ -524,7 +524,7 @@ def get_sys_info():
 
 
 def get_status(obj):
-    return {
+    d = {
         "active": obj.is_alive(),
         "type": obj.type,
         "accepts": obj.accepts,
@@ -535,6 +535,11 @@ def get_status(obj):
         "settings": obj.settings,
         "data": {}
     }
+
+    if "name" in obj.settings:
+        d["name"] = obj.settings.get("name")
+
+    return d
 
 
 def get_skills_package(skill_name=None, skill_dir=None):

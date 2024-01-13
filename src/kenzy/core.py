@@ -300,6 +300,8 @@ class KenzyHTTPServer(ThreadingMixIn, HTTPServer):
         self.upnp_timeout = 45
         self.timers = {}
 
+        self._is_registered = False
+
         self.thread_pool = concurrent.futures.ThreadPoolExecutor(max_workers=20)
         self.active = False
 
@@ -397,6 +399,10 @@ class KenzyHTTPServer(ThreadingMixIn, HTTPServer):
         )
 
     def collect(self, data=None, context=None, wait=True, timeout=None):
+
+        if not self._is_registered:
+            return False
+
         if not isinstance(context, KenzyContext):
             context = self.get_local_context()
     
@@ -445,8 +451,21 @@ class KenzyHTTPServer(ThreadingMixIn, HTTPServer):
                 else:
                     self.logger.debug(f"Registered remote device {url}")
 
+                cnt = 1
+                my_type = data.get("type", "unknown")
+                for item in self.remote_devices:
+                    if self.remote_devices.get(item).get("type", "unknown") == my_type:
+                        cnt += 1
+
+                if url not in self.remote_devices:
+                    data["name"] = data.get("name", my_type + str(cnt))
+                else:
+                    data["name"] = self.remote_devices.get(url).get("name")
+                    
+                self.logger.debug(f"Name: {data.get('name')}")
                 self.remote_devices[url] = data
 
+            self._is_registered = True
             return KenzySuccessResponse("Register completed successfully.")
         else:
             if self.device is not None:
@@ -459,10 +478,13 @@ class KenzyHTTPServer(ThreadingMixIn, HTTPServer):
                         cmd.set(item, st.get(item))
 
                 # Send to service_url
-                if not self.send_request(cmd):
+                if self.send_request(cmd):
+                    self._is_registered = True
+                else:
                     self._set_service_url()
 
     def send_request(self, payload, headers=None, url=None, wait=True, timeout=None):
+
         if isinstance(payload, dict):
             if wait:
                 return self._send_request(payload=payload, headers=headers, url=url, timeout=timeout)
