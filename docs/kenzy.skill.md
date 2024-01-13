@@ -223,5 +223,26 @@ Complete MyCroft Padatious documentation available on [their site](https://mycro
 
 -----
 
+## Triggers
+
+As of version 2.0.4 you can add triggers to call your skill when events happen in the core skill manager.  For example, you can add a trigger for a "kenzy.image" to send a copy the content of any image collection to your skill for any processing you may want to do.
+
+To add a trigger you call the `register_type_trigger` as follows:
+
+```
+class MySkill(GenericSkill):
+    def initialize(self):
+        self.register_type_trigger("kenzy.image", self.handle_myskill_trigger)
+
+    def handle_myskill_trigger(self, message, context=None, **kwargs):
+	    # The variable "message" contains the event data.
+		# The variable "context" contains the information from where that data was received.
+
+		# DO SOMETHING HERE
+		return True
+```
+
+-----
+
 ## Help &amp; Support
 Help and additional details is available at [https://kenzy.ai](https://kenzy.ai)
