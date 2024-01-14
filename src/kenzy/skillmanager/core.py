@@ -98,6 +98,7 @@ class SkillManager:
             mySkillName = os.path.basename(f)
             self.logger.debug(f"Loading {mySkillName}") 
             mySkillModule = importlib.import_module(mySkillName)
+            importlib.reload(mySkillModule)
             mySkillClass = mySkillModule.create_skill(logger=self.logger)
             mySkillClass.device = self.device
             mySkillClass.initialize()

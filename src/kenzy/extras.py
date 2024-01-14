@@ -15,7 +15,7 @@ import xml.etree.ElementTree as ET
 from . import __app_title__, __version__
 import psutil
 
-SKILLS_BASE_URL = "https://kenzy.ai/download/skills/"
+SKILLS_BASE_URL = "https://raw.githubusercontent.com/lnxusr1/kenzy-skills/main/api/"
 SSDP_DEVICE_TYPE = "urn:schemas-upnp-org:device:Kenzy-Core:1"
 ones = {
     0: '', 1: 'one', 2: 'two', 3: 'three', 4: 'four', 5: 'five', 6: 'six',
@@ -542,34 +542,50 @@ def get_status(obj):
     return d
 
 
-def get_skills_package(skill_name=None, skill_dir=None):
+def get_skills_package(skill_name=None, skill_dir=None, logger=None):
     if skill_dir is None:
         return False
     
-    if skill_name is None:
-        skill_pack = "skill-package-" + __version__ + ".zip"
-    else:
-        skill_pack = skill_name.strip().lower()
-
-        if not skill_pack.endswith(".zip"):
-            skill_pack = skill_pack + ".zip"
-
-    skill_pack_url = SKILLS_BASE_URL + skill_pack
-    
-    resp = requests.get(skill_pack_url, allow_redirects=True)
+    resp = requests.get(SKILLS_BASE_URL + "inventory.json", allow_redirects=True)
     if resp.ok:
-        file_name = os.path.join(tempfile.gettempdir(), skill_pack)
-        
-        with open(file_name, "wb") as sw:
-            sw.write(resp.content)
+        inventory = json.loads(resp.content)
+    else:
+        return False
 
-        os.makedirs(os.path.expanduser(skill_dir), exist_ok=True)
-        with zipfile.ZipFile(file_name) as zf:
-            zf.extractall(os.path.expanduser(skill_dir))
-        
-        return True
+    skills_to_load = []
+    if skill_name is not None:
+        if skill_name in inventory:
+            skills_to_load.append(skill_name)
+    else:
+        for item in inventory:
+            skills_to_load.append(item)
+
+    os.makedirs(os.path.expanduser(skill_dir), exist_ok=True)
+    if not os.path.isfile(os.path.join(os.path.expanduser(skill_dir), "__init__.py")):
+        with open(os.path.join(os.path.expanduser(skill_dir), "__init__.py"), "w", encoding="UTF-8") as sw:
+            sw.write("")
+
+    ret = True
+    for skill in skills_to_load:
+        version = inventory.get(skill).get("version")
+        skill_pack_url = f"{SKILLS_BASE_URL}pkg/{skill}/{version}.zip"
+
+        if logger is not None:
+            logger.info(f"Downloading {skill} v{version}")
+
+        resp = requests.get(skill_pack_url, allow_redirects=True)
+        if resp.ok:
+            file_name = os.path.join(tempfile.gettempdir(), f"{skill}-{version}.zip")
+            
+            with open(file_name, "wb") as sw:
+                sw.write(resp.content)
+
+            with zipfile.ZipFile(file_name) as zf:
+                zf.extractall(os.path.expanduser(skill_dir))
+        else:
+            ret = False
     
-    return False
+    return ret
 
 
 class KenzyLogger:

@@ -24,6 +24,7 @@ nav:
     - Extending:
     #  - Creating a Device: 'kenzy.devices.md'
       - Creating a Skill: 'kenzy.skill.md'
+      - Skill List: 'kenzy.skills.md'
     #  - Calls to a Container/Device: 'kenzy.communication.md'
     - Extras:
       - Audio/Video Extras: 'installation.audio.md'
