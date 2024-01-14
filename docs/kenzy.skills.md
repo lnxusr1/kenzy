@@ -2,18 +2,18 @@
 
 Skills for kenzy.skillmanager
 
-* [CheckVersionSkill](https://docs.kenzy.ai/en/latest/kenzy.skills.CheckVersionSkill.md) - 1.0.0
-* [PowerDownSkill](https://docs.kenzy.ai/en/latest/kenzy.skills.PowerDownSkill.md) - 1.0.0
-* [TellDateTimeSkill](https://docs.kenzy.ai/en/latest/kenzy.skills.TellDateTimeSkill.md) - 1.0.1
-* [HelloSkill](https://docs.kenzy.ai/en/latest/kenzy.skills.HelloSkill.md) - 1.0.0
-* [WatcherSkill](https://docs.kenzy.ai/en/latest/kenzy.skills.WatcherSkill.md) - 1.0.0
-* [TellJokeSkill](https://docs.kenzy.ai/en/latest/kenzy.skills.TellJokeSkill.md) - 1.0.0
-* [KnockKnockSkill](https://docs.kenzy.ai/en/latest/kenzy.skills.KnockKnockSkill.md) - 1.0.0
-* [FlipACoinSkill](https://docs.kenzy.ai/en/latest/kenzy.skills.FlipACoinSkill.md) - 1.0.0
-* [ThankYouSkill](https://docs.kenzy.ai/en/latest/kenzy.skills.ThankYouSkill.md) - 1.0.1
-* [WeatherSkill](https://docs.kenzy.ai/en/latest/kenzy.skills.WeatherSkill.md) - 1.0.1
-* [AboutSkill](https://docs.kenzy.ai/en/latest/kenzy.skills.AboutSkill.md) - 1.0.0
-* [HomeAssistantSkill](https://docs.kenzy.ai/en/latest/kenzy.skills.HomeAssistantSkill.md) - 1.1.0
+* [CheckVersionSkill](https://docs.kenzy.ai/en/latest/kenzy.skills.CheckVersionSkill/) - 1.0.0
+* [PowerDownSkill](https://docs.kenzy.ai/en/latest/kenzy.skills.PowerDownSkill/) - 1.0.0
+* [TellDateTimeSkill](https://docs.kenzy.ai/en/latest/kenzy.skills.TellDateTimeSkill/) - 1.0.1
+* [HelloSkill](https://docs.kenzy.ai/en/latest/kenzy.skills.HelloSkill/) - 1.0.0
+* [WatcherSkill](https://docs.kenzy.ai/en/latest/kenzy.skills.WatcherSkill/) - 1.0.0
+* [TellJokeSkill](https://docs.kenzy.ai/en/latest/kenzy.skills.TellJokeSkill/) - 1.0.0
+* [KnockKnockSkill](https://docs.kenzy.ai/en/latest/kenzy.skills.KnockKnockSkill/) - 1.0.0
+* [FlipACoinSkill](https://docs.kenzy.ai/en/latest/kenzy.skills.FlipACoinSkill/) - 1.0.0
+* [ThankYouSkill](https://docs.kenzy.ai/en/latest/kenzy.skills.ThankYouSkill/) - 1.0.1
+* [WeatherSkill](https://docs.kenzy.ai/en/latest/kenzy.skills.WeatherSkill/) - 1.0.1
+* [AboutSkill](https://docs.kenzy.ai/en/latest/kenzy.skills.AboutSkill/) - 1.0.0
+* [HomeAssistantSkill](https://docs.kenzy.ai/en/latest/kenzy.skills.HomeAssistantSkill/) - 1.1.0
 
 -----
 
