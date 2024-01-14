@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.1.0]
+
+### Added
+
+- Data capture to kenzy.skillmanager.device -> history for all in/out of skill manager
+- Data capture to kenzy.skillmanager.device -> data for all current data (for reference in skills)
+- WatcherSkill for articulating what is captured on one or more kenzy.image devices
+- Callback Triggers for skills for non-speech activity (like kenzy.image)
+- Ability to set a custom name for built-in devices
+
+### Modified
+
+- Locks, Covers, and Lights can be disabled/enabled as a group in the HomeAssistantSkill
+- Using the keyword "all" or plural form of lights, lamps, or fans in HomeAssistantSkill will toggle all lights/fans/lamps in the specified area
+- Stopped `collect()` from sending data until service registration is complete
+- Integrated kenzy-skills library on github for skills inventory and download
+- Updated docs for individual skills
+
 ## [2.0.3]
 
 ### Added
@@ -17,7 +35,7 @@ All notable changes to this project will be documented in this file.
 - Changed startup to use Multiprocessing instead of Threads for each device main runtime
 - Added ThreadingMixIn to HTTPServer (oops!)
 - Set default of "Kenzy's Room" and "Kenzy's Group" for location and group respectively
-- Improved responses to the "How are you" question.
+- Improved responses to the "How are you?" prompt.
 
 ## [2.0.2]
 

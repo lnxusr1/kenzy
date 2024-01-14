@@ -6,6 +6,7 @@ import pathlib
 import traceback
 import importlib 
 import time
+import concurrent.futures
 from kenzy.core import KenzyContext
 from kenzy.extras import dayPart, GenericCommand, strip_punctuation
 
@@ -50,6 +51,7 @@ class SkillManager:
 
         self.service = None
         self.skills = []
+        self.registered_processes = {}
 
         self.skill_folder = os.path.expanduser(skill_folder)
         self.device = device
@@ -96,6 +98,7 @@ class SkillManager:
             mySkillName = os.path.basename(f)
             self.logger.debug(f"Loading {mySkillName}") 
             mySkillModule = importlib.import_module(mySkillName)
+            importlib.reload(mySkillModule)
             mySkillClass = mySkillModule.create_skill(logger=self.logger)
             mySkillClass.device = self.device
             mySkillClass.initialize()
@@ -111,6 +114,30 @@ class SkillManager:
             pass
 
         self.logger.info("Initialization completed.")
+
+    def process_data(self, message=None, context=None):
+        self.logger.debug(f"COLLECT: {message}")
+
+        if isinstance(context, KenzyContext):
+            self.logger.debug(f"CONTEXT: {context.url}")
+
+        if isinstance(message, dict):
+            ret = True
+            type_id = message.get("type", "")
+            procs = self.registered_processes.get(type_id)
+            if isinstance(procs, list) and len(procs) > 0:
+                with concurrent.futures.ThreadPoolExecutor() as executor:
+                    futures = []
+                    for item in procs:
+                        futures.append(executor.submit(item, message, context=context))
+                    for future in concurrent.futures.as_completed(futures):
+                        ret = future.result()
+                        if not ret:
+                            ret = False
+
+            return ret
+
+        return False
 
     def parse(self, text=None, context=None):
         """
@@ -315,7 +342,21 @@ class GenericSkill:
             (bool):  True on success or False on failure.
         """
         return True
+    
+    def register_type_trigger(self, type_name, callback):
+        if not isinstance(self.device.skill_manager.registered_processes, dict):
+            self.device.skill_manager.registered_processes = {}
+
+        if isinstance(type_name, str) and len(type_name.strip()) == 0:
+            raise TypeError("Invalid type name specified.")
+
+        if type_name.strip() not in self.device.skill_manager.registered_processes:
+            self.device.skill_manager.registered_processes[type_name.strip()] = []
         
+        self.device.skill_manager.registered_processes[type_name.strip()].append(callback)
+
+        return True
+
     def register_intent_file(self, filename, callback):
         """
         Registers an intent file with the Padatious neural network engine.
