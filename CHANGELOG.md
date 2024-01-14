@@ -18,6 +18,7 @@ All notable changes to this project will be documented in this file.
 - Using the keyword "all" or plural form of lights, lamps, or fans in HomeAssistantSkill will toggle all lights/fans/lamps in the specified area
 - Stopped `collect()` from sending data until service registration is complete
 - Integrated kenzy-skills library on github for skills inventory and download
+- Updated docs for individual skills
 
 ## [2.0.3]
 
