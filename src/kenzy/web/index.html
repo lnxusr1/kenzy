@@ -471,8 +471,8 @@ function load_devices(response) {
             stat = $('<content></content>').text("Running");
         }
 
-        if (loc) {
-            locations.push(loc.toString().toLowerCase());
+        if (response.data.location) {
+            locations.push(response.data.location.toString().toLowerCase());
         }
 
         opt = $('<option></option>');
@@ -505,8 +505,10 @@ function load_devices(response) {
                 stat = $('<content></content>').text("Running");
             }
 
-            if (loc) {
-                locations.indexOf(loc.toString().toLowerCase()) === -1 ? locations.push(loc.toString().toLowerCase()) : null;
+            if (value.location) {
+                if (!locations.includes(value.location.toString().toLowerCase())) {
+                    locations.push(value.location.toString().toLowerCase())
+                }
             }
 
             opt = $('<option></option>');
@@ -538,6 +540,7 @@ function load_devices(response) {
 
     $('#device-count').text(i)
     $('#camera-count').text(cams);
+    
     $('#location-count').text(locations.length);
     if (i == 0) { 
         $('#devices-list').append($('<tr><td><content>No records</content></td><td></td><td></td><td></td></tr>'));
@@ -632,6 +635,104 @@ function load_logs(entries) {
     }
 }
 
+function load_activity(devs, collect) {
+    c = {}
+
+    Object.entries(devs).forEach(([dev, value]) => {
+        if (dev in collect["kenzy.image"]) {
+
+            people = false;
+            animals = false;
+
+            var animal_list = [
+                'bird',
+                'cat',
+                'dog',
+                'horse',
+                'sheep',
+                'cow',
+                'elephant',
+                'bear',
+                'zebra',
+                'giraffe'
+            ];
+            for (let i=0; i<collect["kenzy.image"][dev]["objects"].length; i++) {
+                if (collect["kenzy.image"][dev]["objects"][i]["name"] == "person") {
+                    people = true
+                }
+
+                if (collect["kenzy.image"][dev]["objects"][i]["name"] in animal_list) {
+                    animals = true
+                }
+            }
+
+            if (!(devs[dev]["location"] in c)) {
+                c[devs[dev]["location"]] = { "motion": false, "people": false, "animals": false }
+            }
+            
+            if (collect["kenzy.image"][dev]["motion"]) {
+                c[devs[dev]["location"]]["motion"] = true;
+            }
+
+            if (people) {
+                c[devs[dev]["location"]]["people"] = true;
+            }
+
+            if (animals) {
+                c[devs[dev]["location"]]["animals"] = true;
+            }
+
+            //console.log(dev);
+            //console.log(devs[dev]["location"]);
+            //console.log(collect["kenzy.image"][dev]["motion"]);
+            //console.log(people);
+            //console.log(animals);
+            //console.log(c);
+
+        }
+    });
+
+    obj_raw = $($('#activity').children()[0]).clone();
+    $('#activity').empty();
+
+    if (Object.keys(c).length > 0) {
+        Object.entries(c).forEach(([key, value]) => {
+            obj = $(obj_raw).clone();
+
+            $(obj).find('td').prop('title', '');
+            $(obj).find('content').html(key);
+            
+            if (value["motion"]) {
+                $(obj).find('.eye').removeClass("disable");
+            } else {
+                $(obj).find('.eye').addClass("disable");
+            }
+
+            if (value["people"]) {
+                $(obj).find('.person').removeClass("disable");
+            } else {
+                $(obj).find('.person').addClass("disable");
+            }
+
+            if (value["animals"]) {
+                $(obj).find('.dog').removeClass("disable");
+            } else {
+                $(obj).find('.dog').addClass("disable");
+            }
+
+            $('#activity').append(obj);
+        });
+    } else {
+        obj = $(obj_raw).clone();
+        $(obj).find('td').prop('title', '');
+        $(obj).find('content').html("<i>None</i>");
+        $(obj).find('.eye').addClass("disable");
+        $(obj).find('.person').addClass("disable");
+        $(obj).find('.dog').addClass("disable");
+        $('#activity').append(obj);
+    }
+}
+
 function refresh_data() {
     $.ajax({
         url: "/",
@@ -651,6 +752,7 @@ function refresh_data() {
             load_skills(response.data.data.skills);
             load_services(response);
             load_logs(response.data.data.logs);
+            load_activity(response.data.data.devices, response.data.data.collect);
         },
         complete: function() {
             $('spinner').hide();
@@ -840,7 +942,7 @@ $(document).ready(function() {
                         </content>
                     </gauge>
                 </group>
-                <group class="col-1">
+                <group class="col-2l">
                     <list>
                         <content>
                             <table class="header">
@@ -869,7 +971,7 @@ $(document).ready(function() {
                             </div>
                         </content>
                     </list>
-                    <list style="display:none;">
+                    <list>
                         <content>
                             <table class="header">
                                 <thead>
@@ -880,40 +982,16 @@ $(document).ready(function() {
                             </table>
                             <div class="scroll-box">
                             <table>
-                                <tbody>
+                                <tbody id="activity">
                                     <tr>
-                                        <td title="Front Yard">
+                                        <td title="">
                                             <group>
-                                                <icon class="eye"></icon>
+                                                <icon class="eye disable"></icon>
                                                 <icon class="person disable"></icon>
                                                 <icon class="dog disable"></icon>
                                             </group>
                                             <content class="short">
-                                                Front Yard
-                                            </content>
-                                        </td>
-                                    </tr>
-                                    <tr>
-                                        <td title="Master Bedroom">
-                                            <group>
-                                                <icon class="eye"></icon>
-                                                <icon class="person"></icon>
-                                                <icon class="dog disable"></icon>
-                                            </group>
-                                            <content class="short">
-                                                Master Bedroom
-                                            </content>
-                                        </td>
-                                    </tr>
-                                    <tr>
-                                        <td title="Living Room">
-                                            <group>
-                                                <icon class="eye"></icon>
-                                                <icon class="person"></icon>
-                                                <icon class="dog"></icon>
-                                            </group>
-                                            <content class="short">
-                                                Living Room
+                                                <i>None</i>
                                             </content>
                                         </td>
                                     </tr>
@@ -957,6 +1035,9 @@ $(document).ready(function() {
     </content>
     <content class="page-section" id="devices" style="display: none;">
         <section>
+            <div class="page-buttons">
+                <button class="btn-refresh"><icon class="refresh"></icon></button>
+            </div>
             <header>
                 <title>List of Devices</title>
                 <subtitle>Overview</subtitle>

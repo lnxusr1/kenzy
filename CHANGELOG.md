@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.1.1]
+
+### Added
+
+- Activity section on dashboard for info from cameras
+
+### Modified
+
+- Fixed bug in locations count on dashboard
+- Fixed errant text in dashboard about page
+
 ## [2.1.0]
 
 ### Added

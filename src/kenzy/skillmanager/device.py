@@ -88,8 +88,8 @@ class SkillsDevice:
         if data.get("type", "") == "kenzy.stt":
             text = data.get("text")
             
-            self.data["kenzy.stt"]["prev"] = self.data["kenzy.stt"].get("last", "")
-            self.data["kenzy.stt"]["last"] = text
+            self.data["kenzy.stt"]["prev"] = self.data["kenzy.stt"].get("curr", "")
+            self.data["kenzy.stt"]["curr"] = text
 
             dev_url = self.get_context_url(context)
             if time.time() < self.timeouts.get(dev_url, {}).get("timeout", 0):
@@ -154,6 +154,7 @@ class SkillsDevice:
         st["data"]["devices"] = self.service.remote_devices
         st["data"]["logs"] = list(self.logger.entries)
         st["data"]["logs"].reverse()
+        st["data"]["collect"] = self.data
         
         return KenzySuccessResponse(st)
     
@@ -166,8 +167,8 @@ class SkillsDevice:
         cmd = SpeakCommand(context=kwargs.get("context"))
         cmd.text(text)
 
-        self.data["kenzy.tts"]["prev"] = self.data["kenzy.tts"].get("last", {})
-        self.data["kenzy.tts"]["last"] = { "type": "say", "text": text }
+        self.data["kenzy.tts"]["prev"] = self.data["kenzy.tts"].get("curr", {})
+        self.data["kenzy.tts"]["curr"] = { "type": "say", "text": text }
 
         self.service.send_request(payload=cmd)
 
@@ -178,8 +179,8 @@ class SkillsDevice:
         cmd = SpeakCommand(context=kwargs.get("context"))
         cmd.text(text)
 
-        self.data["kenzy.tts"]["prev"] = self.data["kenzy.tts"].get("last", {})
-        self.data["kenzy.tts"]["last"] = { "type": "ask", "text": text }
+        self.data["kenzy.tts"]["prev"] = self.data["kenzy.tts"].get("curr", {})
+        self.data["kenzy.tts"]["curr"] = { "type": "ask", "text": text }
 
         context = kwargs.get("context")
         dev_url = self.get_context_url(context)
