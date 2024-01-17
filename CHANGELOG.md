@@ -7,6 +7,7 @@ All notable changes to this project will be documented in this file.
 ### Added
 
 - Activity section on dashboard for info from cameras
+- Added external player call for playing wave and speech files
 
 ### Modified
 

@@ -8,12 +8,15 @@
 | model.type    | str     | speecht5               | Options are: festival, speecht5                    |
 | model.target  | str     | gpu                    | __SpeechT5__ options: gpu, cpu                     |
 | speaker       | str     | slt                    | __SpeechT5__ options: [slt, clb, bdl, ksp, rms, jmk](https://huggingface.co/spaces/Matthijs/speecht5-tts-demo) |
+| external_player | str   | *None*                 | External player command                            |
 | cache.folder  | str     | ~/.kenzy/cache/speech  | Folder for caching spoken phrases                  |
 | offline       | bool    | false                  | Will disable downloading the models |
 
 The model type of ```speecht5``` uses the [microsoft/speecht5_tts](https://huggingface.co/microsoft/speecht5_tts) model from [Huggingface.co](https://huggingface.co/).  The festival option calls the external [festival](https://www.cstr.ed.ac.uk/projects/festival/) program.
 
 Note:  You should consider only setting ```offline``` after you have executed the program at least once so that it fully downloads all model files.  Once they are downloaded you can switch the offline mode on so that it does not try to re-download the models (which enables the program to then run without an Internet connection).
+
+The `external_player` option allows you to specify a program like `paplay` that can play wave files rather than using the built-in pythonic player.
 
 ## Example YAML file
 
