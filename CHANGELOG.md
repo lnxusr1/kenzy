@@ -14,6 +14,7 @@ All notable changes to this project will be documented in this file.
 - Fixed bug in multi-location setup where all nodes activated when any node received command
 - Fixed bug in locations count on dashboard
 - Fixed errant text in dashboard about page
+- Fixed compatibility in setuptools deprecation notices
 
 ## [2.1.0]
 
