@@ -363,6 +363,9 @@ spinner icon {
 
 </style>
 <script type="text/javascript">
+
+var resp_data = {};
+
 function get_skills() {
 
     $.ajax({
@@ -494,7 +497,7 @@ function load_devices(response) {
         tr.append(td3);
         tr.append(td4);
         $('#devices-list').append(tr);
-        i++
+        i++;
         
         Object.entries(response.data.data.devices).forEach(([key, value]) => {
             dev_type = $('<content></content>').text(value.type);
@@ -551,7 +554,13 @@ function load_skills(skills) {
     var i = 0;
     $('#skills-list').empty();
     try {
+        var entries = [];
         Object.entries(skills).forEach(([key, value]) => {
+            entries.push(key);
+        });
+        entries.sort();
+        Object.entries(entries).forEach(([idx, key]) => {
+            value = skills[key];
             skill_name = $('<content></content>').text(key);
             skill_description = $('<content></content>').text(value.description);
             skill_version = $('<content></content>');
@@ -746,6 +755,7 @@ function refresh_data() {
         },
         success: function(response) {
 
+            resp_data = response.data;
             $('.version').text(response.data.version);
 
             load_devices(response);
@@ -1074,48 +1084,48 @@ $(document).ready(function() {
                 <group></group>
             </content>
         </section>
-        <section class="secondary" id="device-info" style="display: none;">
+        <section class="secondary" id="device-info" style="display:none;">
             <header>Device Details</header>
             <content class="settings">
                 <group class="col-2">
                 <item>
                     <title>Type</title>
-                    <data>kenzy.skillmanager</data>
+                    <data id="dev-type-id">kenzy.skillmanager</data>
                 </item>
                 
                 <item>
                     <title>URL</title>
-                    <data>http://192.168.1.140:9700</data>
+                    <data id="dev-url">http://192.168.1.140:9700</data>
                 </item>
 
                 <item>
                     <title>Location</title>
-                    <data>Living Room</data>
+                    <data id="dev-location">Living Room</data>
                 </item>
 
                 <item>
                     <title>Group</title>
-                    <data>Group 1</data>
+                    <data id="dev-group">Group 1</data>
                 </item>
 
                 <item>
                     <title>Status</title>
-                    <data>Running</data>
+                    <data id="dev-status">Running</data>
                 </item>
                 
                 <item>
                     <title>Accepts</title>
-                    <data>start, stop, mute, unmute, collect</data>
+                    <data id="dev-accepts">start, stop, mute, unmute, collect</data>
                 </item>
 
-                <item>
+                <item style="width: 100%;">
                     <title>Settings</title>
-                    <data>...</data>
+                    <data id="dev-settings">...</data>
                 </item>
-                <item>
+                <item id="dev-actions" style="display:none;">
                     <title>Actions</title>
                     <data>
-                    <button-list>
+                    <button-list id="dev-buttons">
                         <button>Start</button>
                         <button>Stop</button>
                     </button-list>
