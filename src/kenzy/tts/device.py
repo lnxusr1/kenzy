@@ -31,6 +31,7 @@ class SpeakerDevice:
         self.model = model_type(self.settings.get("model.type", "speecht5"), target=self.settings.get("model.target"))
         self.speaker = self.settings.get("speaker", "slt")
         self.cache_folder = self.settings.get("cache.folder", "~/.kenzy/cache/speech")
+        self.ext_prg = self.settings.get("external_player")
 
     @property
     def accepts(self):
@@ -44,7 +45,7 @@ class SpeakerDevice:
         if kwargs.get("data", {}).get("file_name") is not None:
             file_name = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "data", kwargs.get("data", {}).get("file_name")))
             if os.path.isfile(file_name):
-                play_wav_file(file_name)
+                play_wav_file(file_name, ext_prg=self.ext_prg)
         return KenzySuccessResponse("Complete")
 
     def start(self, **kwargs):
@@ -77,7 +78,7 @@ class SpeakerDevice:
 
             text = text.replace(num, words.replace("  ", " "), 1)
         self.logger.debug(f"SPEAK: {text.replace(':', '-')}")
-        create_speech(self.model, text, speaker=self.speaker, cache_folder=self.cache_folder)
+        create_speech(self.model, text, speaker=self.speaker, cache_folder=self.cache_folder, ext_prg=self.ext_prg)
         return KenzySuccessResponse("Complete")
 
     def get_settings(self, **kwargs):

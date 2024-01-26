@@ -5,6 +5,7 @@ import hashlib
 import pyaudio
 import wave
 import os
+import subprocess
 import sys
 import traceback
 from kenzy.extras import py_error_handler
@@ -53,7 +54,7 @@ def model_type(type="speecht5", target=None):
     return model
 
 
-def create_speech(model, text, speaker="slt", cache_folder="~/.kenzy/cache/speech"):
+def create_speech(model, text, speaker="slt", cache_folder="~/.kenzy/cache/speech", ext_prg=None):
 
     if cache_folder is not None:
         os.makedirs(os.path.expanduser(cache_folder), exist_ok=True)
@@ -102,36 +103,50 @@ def create_speech(model, text, speaker="slt", cache_folder="~/.kenzy/cache/speec
                 logging.debug(str(traceback.format_exc()))
                 logging.error("Unable to start speech output due to an internal error")
 
-        play_wav_file(full_file_path)
+        play_wav_file(full_file_path, ext_prg=ext_prg)
 
 
-def play_wav_file(file_path):
+def play_wav_file(file_path, ext_prg=None):
     CHUNK = 1024
 
-    # Open the WAV file
-    wf = wave.open(file_path, 'rb')
+    if ext_prg is None:
 
-    ERROR_HANDLER_FUNC = CFUNCTYPE(None, c_char_p, c_int, c_char_p, c_int, c_char_p)
-    c_error_handler = ERROR_HANDLER_FUNC(py_error_handler)
-    asound = cdll.LoadLibrary('libasound.so')
-    asound.snd_lib_error_set_handler(c_error_handler)
+        # Open the WAV fileprocess python
+        wf = wave.open(file_path, 'rb')
 
-    # Initialize PyAudio
-    p = pyaudio.PyAudio()
+        ERROR_HANDLER_FUNC = CFUNCTYPE(None, c_char_p, c_int, c_char_p, c_int, c_char_p)
+        c_error_handler = ERROR_HANDLER_FUNC(py_error_handler)
+        asound = cdll.LoadLibrary('libasound.so')
+        asound.snd_lib_error_set_handler(c_error_handler)
 
-    # Open a stream to play the audio
-    stream = p.open(format=p.get_format_from_width(wf.getsampwidth()),
-                    channels=wf.getnchannels(),
-                    rate=wf.getframerate(),
-                    output=True)
+        # Initialize PyAudio
+        p = pyaudio.PyAudio()
 
-    # Play the audio in chunks
-    data = wf.readframes(CHUNK)
-    while data:
-        stream.write(data)
+        # Open a stream to play the audio
+        stream = p.open(format=p.get_format_from_width(wf.getsampwidth()),
+                        channels=wf.getnchannels(),
+                        rate=wf.getframerate(),
+                        output=True)
+
+        # Play the audio in chunks
         data = wf.readframes(CHUNK)
+        while data:
+            stream.write(data)
+            data = wf.readframes(CHUNK)
 
-    # Stop and close the stream and PyAudio
-    stream.stop_stream()
-    stream.close()
-    p.terminate()
+        # Stop and close the stream and PyAudio
+        stream.stop_stream()
+        stream.close()
+        p.terminate()
+
+    else:
+
+        cmd = str(ext_prg)
+        if "{FILENAME}" in cmd:
+            cmd = cmd.replace("{FILENAME}", file_path)
+        else:
+            cmd = f"{cmd} {file_path}"
+
+        ret_val = subprocess.call(cmd, shell=True)
+        if ret_val:
+            logging.debug("Play completed.")

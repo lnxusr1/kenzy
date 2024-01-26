@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.1.1]
+
+### Added
+
+- Activity section on dashboard for info from cameras
+- Added external player call for playing wave and speech files
+
+### Modified
+
+- Fixed bug in multi-location setup where all nodes activated when any node received command
+- Fixed bug in locations count on dashboard
+- Fixed errant text in dashboard about page
+- Fixed compatibility in setuptools deprecation notices
+- Fixed bug in ASK that forced timeout to occur before moving to next command
+
 ## [2.1.0]
 
 ### Added

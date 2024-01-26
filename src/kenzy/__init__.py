@@ -1,15 +1,12 @@
-import os
 import logging
 import sys
 import traceback
 
+VERSION = (2, 1, 1)
+
 __app_name__ = "kenzy"
 __app_title__ = "KENZY"
-
-with open(os.path.join(os.path.dirname(__file__), "VERSION"), "r", encoding="UTF-8") as fp:
-    __version__ = fp.readline().strip()
-
-VERSION = [(int(x) if x.isnumeric() else x) for x in __version__.split(".")]
+__version__ = ".".join([str(x) for x in VERSION])
 
 try:
     from kenzy.skillmanager.core import GenericSkill

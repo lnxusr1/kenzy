@@ -63,7 +63,7 @@ class SkillManager:
             self.wake_words = wake_words if isinstance(wake_words, list) else [wake_words]
 
         self.activation_timeout = float(activation_timeout)
-        self.activated = 0
+        self.activated = {}
 
     def initialize(self):
         """
@@ -153,13 +153,17 @@ class SkillManager:
         
         clean_text = strip_punctuation(text).replace("'", "")
 
-        if self.activated < time.time() - self.activation_timeout:
+        c_loc = "none"
+        if isinstance(context, KenzyContext):
+            c_loc = str(context.location).lower()
+
+        if self.activated.get(c_loc, 0) < time.time() - self.activation_timeout:
             words = clean_text.lower().replace("'", "").replace(".", " ").strip()
             b_found = False
             for wk in self.wake_words:
                 if words.startswith(wk.lower()):
                     words = words[len(wk):].strip()
-                    self.activated = time.time()
+                    self.activated[c_loc] = time.time()
                     b_found = True
                     break
 
@@ -195,7 +199,7 @@ class SkillManager:
                 for s in self.skills:
                     if intent.name == s["intent_file"]:
                         ret_val = s["callback"](intent, context=context, raw=text)
-                        self.activated = time.time()
+                        self.activated[c_loc] = time.time()
 
                         if isinstance(ret_val, bool):
                             return ret_val
