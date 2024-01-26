@@ -15,6 +15,7 @@ All notable changes to this project will be documented in this file.
 - Fixed bug in locations count on dashboard
 - Fixed errant text in dashboard about page
 - Fixed compatibility in setuptools deprecation notices
+- Fixed bug in ASK that forced timeout to occur before moving to next command
 
 ## [2.1.0]
 

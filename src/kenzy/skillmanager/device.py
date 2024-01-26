@@ -96,8 +96,16 @@ class SkillsDevice:
                 func = self.timeouts.get(dev_url, {}).get("callback")
                 if func is not None:
                     self.logger.debug("Initiating callback function")
+                    del self.timeouts[dev_url]
                     func(text, context=context)
-                    self.skill_manager.activated = time.time()
+
+                    c_loc = "none"
+                    if isinstance(context, KenzyContext):
+                        c_loc = str(context.location).lower()
+                    elif isinstance(context, dict):
+                        c_loc = str(context.get("location")).lower()
+
+                    self.skill_manager.activated[c_loc] = time.time()
                 else:
                     self.logger.error("Callback function expected but not found.")
 
