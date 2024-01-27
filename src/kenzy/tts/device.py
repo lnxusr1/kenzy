@@ -17,6 +17,7 @@ class SpeakerDevice:
         self.model_type = None
         self.speaker = None
         self.cache_folder = None 
+        self._is_running = False
 
         self.location = kwargs.get("location", "Kenzy's Room")
         self.group = kwargs.get("group", "Kenzy's Group")
@@ -38,7 +39,7 @@ class SpeakerDevice:
         return ["start", "stop", "restart", "status", "get_settings", "set_settings", "speak", "play"]
     
     def is_alive(self, **kwargs):
-        return True
+        return self._is_running
 
     def play(self, **kwargs):
         # print(kwargs)
@@ -49,15 +50,21 @@ class SpeakerDevice:
         return KenzySuccessResponse("Complete")
 
     def start(self, **kwargs):
+        self._is_running = True
         return KenzySuccessResponse("Speaker started")
     
     def stop(self, **kwargs):
+        self._is_running = False
         return KenzySuccessResponse("Speaker stopped")
 
     def restart(self, **kwargs):
+        self._is_running = True
         return KenzySuccessResponse("Speaker restarted")
 
     def speak(self, **kwargs):
+        if not self._is_running:
+            return KenzyErrorResponse("Device is stopped.")
+        
         text = kwargs.get("data", {}).get("text")
         numbers = numbers_in_string(text)
         for num in numbers:

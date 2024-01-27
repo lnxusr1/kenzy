@@ -487,7 +487,8 @@ function load_devices(response) {
 
         opt = $('<option></option>');
         $(opt).attr('value', response.data.url);
-        $(opt).text("(" + response.data.type + ") " + response.data.url);
+        $(opt).attr('device-type', response.data.type);
+        $(opt).text("(" + response.data.location + ": " + response.data.type + ") " + response.data.url);
         $(opt).appendTo($('#select-device'));
 
         td1 = $('<td></td>');
@@ -523,7 +524,8 @@ function load_devices(response) {
 
             opt = $('<option></option>');
             $(opt).attr('value', value.url);
-            $(opt).text("(" + value.type + ") " + value.url);
+            $(opt).attr('device-type', value.type);
+            $(opt).text("(" + value.location + ": " + value.type + ") " + value.url);
             $(opt).appendTo($('#select-device'));
 
             td1 = $('<td></td>');
@@ -1353,6 +1355,8 @@ $(document).ready(function() {
                             <option value="command-speak">speak</option>
                             <option value="command-collect">collect</option>
                             <option value="command-mute">mute</option>
+                            <option value="command-start">start</option>
+                            <option value="command-stop">stop</option>
                         </select>
                     </div>
                     <div>
@@ -1439,6 +1443,14 @@ $(document).ready(function() {
         "type": "kenzy.stt",
         "text": "Kenzy, Hello."
     }
+}</pre>
+<pre id="command-start" class="template">{
+    "action": "start",
+    "payload": {}
+}</pre>
+<pre id="command-stop" class="template">{
+    "action": "stop",
+    "payload": {}
 }</pre>
 </div>
 

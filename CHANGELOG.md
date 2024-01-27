@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.1.2]
+
+### Added
+
+- Dashboard updates for sorting lists, viewing device details, and developers section
+- `log_level` device option for skillmanager for log visibility in dashboard
+- Added info section on dashboard for devices list
+
+### Modified
+
+- Fixed start/stop calls to TTS library
+
 ## [2.1.1]
 
 ### Added
