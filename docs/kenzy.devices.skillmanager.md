@@ -12,6 +12,7 @@ The Skill Manager device acts as the Brain for all collecting, storing, processi
 | wake_words          | list    | ["Kenzie", "Kenzy", "Kinsey"] | Wake words                        |
 | timeout.wake        | float   | 15                            | Idle time between wake words      |
 | timeout.ask         | float   | 10                            | Wait time after "ask" commands    |
+| log_level           | str     | info                          | Log level to include in logs      |
 
 ## Example YAML file
 
@@ -20,6 +21,7 @@ See [Service Settings](kenzy.containers.md) for options in the *service* group.
 type: kenzy.skillmanager
 
 device: 
+  log_level:                debug
   location:                 Living Room
   group:                    Primary
   folder.skills:            ~/.kenzy/skills

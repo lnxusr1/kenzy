@@ -26,6 +26,7 @@ class SkillsDevice:
         self.location = kwargs.get("location", "Kenzy's Room")
         self.group = kwargs.get("group", "Kenzy's Group")
         self.wake_words = kwargs.get("wake_words", ["Kenzie", "Kenzi", "Kenzy", "Kinsay", "Kinsy", "Kinsie", "Kinsey"])
+        self.log_level = kwargs.get("log_level")
 
         try:
             self.activation_timeout = abs(float(kwargs.get("timeout.wake")))
@@ -160,7 +161,7 @@ class SkillsDevice:
         st["url"] = self.service.service_url
         st["data"]["skills"] = skill_list
         st["data"]["devices"] = self.service.remote_devices
-        st["data"]["logs"] = list(self.logger.entries)
+        st["data"]["logs"] = list(self.logger.get_entries(self.log_level))
         st["data"]["logs"].reverse()
         st["data"]["collect"] = self.data
         

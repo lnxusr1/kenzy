@@ -562,7 +562,7 @@ function load_devices(response) {
         $('#dev-location').text(dev["location"]);
         $('#dev-status').text((dev["active"]) ? "Running" : "Stopped");
         $('#dev-group').text(dev["group"]);
-        $('#dev-accepts').text(dev["accepts"]);
+        $('#dev-accepts').text(dev["accepts"].join(", "));
         $('#dev-settings').html(JSON.stringify(dev["settings"], null, 5));
     });
 
