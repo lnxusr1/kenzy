@@ -1,6 +1,7 @@
 from ctypes import CFUNCTYPE, cdll, c_char_p, c_int
 import logging
 import queue
+import os
 import collections
 import webrtcvad
 import pyaudio
@@ -13,11 +14,23 @@ import threading
 from kenzy.extras import py_error_handler
 
 
-def speech_model(model_name="openai/whisper-tiny.en"):
+def speech_model(model_name="openai/whisper-tiny.en", offline=False):
     from transformers import AutoProcessor, AutoModelForSpeechSeq2Seq
     
-    processor = AutoProcessor.from_pretrained(model_name)
-    model = AutoModelForSpeechSeq2Seq.from_pretrained(model_name)
+    offline_base = os.path.expanduser("~/.kenzy/cache/models")
+    if os.path.exists(offline_base):
+        os.makedirs(os.path.expanduser("~/.kenzy/cache/models"), exist_ok=True)
+        
+    if not offline or not os.path.exists(os.path.join(offline_base, model_name)):
+        processor = AutoProcessor.from_pretrained(model_name)
+        model = AutoModelForSpeechSeq2Seq.from_pretrained(model_name)
+
+        processor.save_pretrained(os.path.join(offline_base, model_name))
+        model.save_pretrained(os.path.join(offline_base, model_name))
+    else:
+        processor = AutoProcessor.from_pretrained(os.path.join(offline_base, model_name), local_files_only=True)
+        model = AutoModelForSpeechSeq2Seq.from_pretrained(os.path.join(offline_base, model_name), local_files_only=True)
+
     model.config.forced_decoder_ids = None
 
     return processor, model
@@ -36,7 +49,7 @@ def read_from_device(stop_event, muted_event=threading.Event(), **kwargs):
     speech_buffer_size = kwargs.get("speech.buffer_size", 50)
     speech_ratio = kwargs.get("speech.ratio", 0.75)
 
-    processor, model = speech_model(kwargs.get("speech.model", "openai/whisper-tiny.en"))
+    processor, model = speech_model(kwargs.get("speech.model", "openai/whisper-tiny.en"), offline=kwargs.get("offline", False))
 
     buffer_queue = queue.Queue()
 

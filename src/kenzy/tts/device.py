@@ -25,11 +25,16 @@ class SpeakerDevice:
         self.initialize()
 
     def initialize(self):
-        if self.settings.get("offline"):
+        if self.settings.get("offline", False):
             os.environ["TRANSFORMERS_OFFLINE"] = "1"
             os.environ["HF_DATASETS_OFFLINE"] = "1"
 
-        self.model = model_type(self.settings.get("model.type", "speecht5"), target=self.settings.get("model.target"))
+        self.model = model_type(
+            self.settings.get("model.type", "speecht5"), 
+            target=self.settings.get("model.target"), 
+            offline=self.settings.get("offline", False)
+        )
+        
         self.speaker = self.settings.get("speaker", "slt")
         self.cache_folder = self.settings.get("cache.folder", "~/.kenzy/cache/speech")
         self.ext_prg = self.settings.get("external_player")

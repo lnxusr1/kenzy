@@ -14,7 +14,7 @@ import tempfile
 import threading
 
 
-def model_type(type="speecht5", target=None):
+def model_type(type="speecht5", target=None, offline=False):
     model = { "type": type }
 
     if str(type).lower().strip() == "speecht5":
@@ -27,11 +27,34 @@ def model_type(type="speecht5", target=None):
 
         logger = logging.getLogger("KNZY-TTS")
         logger.info(f"Using device={device} for speech generation.")
-        processor = SpeechT5Processor.from_pretrained("microsoft/speecht5_tts")
-        tts_model = SpeechT5ForTextToSpeech.from_pretrained("microsoft/speecht5_tts").to(device)
-        vocoder = SpeechT5HifiGan.from_pretrained("microsoft/speecht5_hifigan").to(device)
-        embeddings_dataset = load_dataset("Matthijs/cmu-arctic-xvectors", split="validation")
+        
+        offline_base = os.path.expanduser("~/.kenzy/cache/models")
+        model_name = "microsoft/speecht5_tts"
+        vocoder_name = "microsoft/speecht5_hifigan"
 
+        if os.path.exists(offline_base):
+            os.makedirs(os.path.expanduser("~/.kenzy/cache/models"), exist_ok=True)
+            
+        if not offline or not os.path.exists(os.path.join(offline_base, model_name)):
+            processor = SpeechT5Processor.from_pretrained("microsoft/speecht5_tts")
+            tts_model = SpeechT5ForTextToSpeech.from_pretrained("microsoft/speecht5_tts").to(device)
+            
+            processor.save_pretrained(os.path.join(offline_base, model_name))
+            tts_model.save_pretrained(os.path.join(offline_base, model_name))
+            
+        else:
+            processor = SpeechT5Processor.from_pretrained(os.path.join(offline_base, model_name), local_files_only=True)
+            tts_model = SpeechT5ForTextToSpeech.from_pretrained(os.path.join(offline_base, model_name), local_files_only=True).to(device)
+            
+        if not offline or not os.path.exists(os.path.join(offline_base, vocoder_name)):
+            vocoder = SpeechT5HifiGan.from_pretrained(vocoder_name).to(device)
+            vocoder.save_pretrained(os.path.join(offline_base, vocoder_name))
+
+        else:
+            vocoder = SpeechT5HifiGan.from_pretrained(os.path.join(offline_base, vocoder_name), local_files_only=True).to(device)
+        
+        embeddings_dataset = load_dataset("Matthijs/cmu-arctic-xvectors", split="validation")
+        
         speakers = {
             'awb': 0,     # Scottish male
             'bdl': 1138,  # US male
@@ -79,7 +102,6 @@ def create_speech(model, text, speaker="slt", cache_folder="~/.kenzy/cache/speec
 
         if not os.path.isfile(full_file_path):
 
-            play_file_name = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "data", "ready.wav"))
             t = threading.Thread(target=play_wav_file, kwargs={ "file_path": "complete.wav", "ext_prg": ext_prg }, daemon=True)
             t.start()
 
