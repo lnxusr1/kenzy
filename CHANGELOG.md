@@ -9,10 +9,12 @@ All notable changes to this project will be documented in this file.
 - Dashboard updates for sorting lists, viewing device details, and developers section
 - `log_level` device option for skillmanager for log visibility in dashboard
 - Added info section on dashboard for devices list
+- Added acknowledgement sound when text-to-audio does not exist in cache.
 
 ### Modified
 
 - Fixed start/stop calls to TTS library
+- Fixed `play_wav_file` to allow for files outside of program path
 
 ## [2.1.1]
 

@@ -44,9 +44,8 @@ class SpeakerDevice:
     def play(self, **kwargs):
         # print(kwargs)
         if kwargs.get("data", {}).get("file_name") is not None:
-            file_name = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "data", kwargs.get("data", {}).get("file_name")))
-            if os.path.isfile(file_name):
-                play_wav_file(file_name, ext_prg=self.ext_prg)
+            file_name = kwargs.get("data", {}).get("file_name")
+            play_wav_file(file_name, ext_prg=self.ext_prg)
         return KenzySuccessResponse("Complete")
 
     def start(self, **kwargs):

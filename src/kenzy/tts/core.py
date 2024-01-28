@@ -11,6 +11,7 @@ import traceback
 from kenzy.extras import py_error_handler
 import logging
 import tempfile
+import threading
 
 
 def model_type(type="speecht5", target=None):
@@ -78,6 +79,10 @@ def create_speech(model, text, speaker="slt", cache_folder="~/.kenzy/cache/speec
 
         if not os.path.isfile(full_file_path):
 
+            play_file_name = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "data", "ready.wav"))
+            t = threading.Thread(target=play_wav_file, kwargs={ "file_path": "complete.wav", "ext_prg": ext_prg }, daemon=True)
+            t.start()
+
             logging.getLogger("KNZY-TTS").debug(f"Caching speach segment to {full_file_path}")
             try:
                 processor = model.get("processor")
@@ -103,11 +108,22 @@ def create_speech(model, text, speaker="slt", cache_folder="~/.kenzy/cache/speec
                 logging.debug(str(traceback.format_exc()))
                 logging.error("Unable to start speech output due to an internal error")
 
+            t.join()
+
         play_wav_file(full_file_path, ext_prg=ext_prg)
 
 
 def play_wav_file(file_path, ext_prg=None):
     CHUNK = 1024
+
+    if not os.path.isfile(file_path):
+        file_path2 = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "data", file_path))
+
+        if not os.path.isfile(file_path2):
+            logging.error(f"File not found ({file_path}).")
+            return
+        
+        file_path = file_path2
 
     if ext_prg is None:
 
