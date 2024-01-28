@@ -34,6 +34,8 @@ icon.person { background-image: url(person-walking-solid.svg); }
 icon.dog { background-image: url(dog-solid.svg); }
 icon.download { background-image: url(download-solid.svg); }
 icon.refresh { background-image: url(arrows-rotate-solid.svg); }
+icon.play { background-image: url(play-solid.svg); }
+icon.stop { background-image: url(stop-solid.svg); }
 
 sidebar button:hover { background-color: rgba(255, 255, 255, 0.1); }
 sidebar button.active { background: linear-gradient(195deg, #de6c3c 0%, #dc5c25 100%); }
@@ -287,6 +289,15 @@ button.send {
     background: none;
     background-color: #888;
 }
+
+#dev-actions { margin-right: 10px; }
+#dev-actions button { width: auto; height: 30px; line-height: 28px; vertical-align: middle; }
+#dev-actions icon { display: inline-block; width: 16px; height: 16px; background-repeat: no-repeat; background-size: 16px 16px; }
+
+#dev-actions button:hover { background: linear-gradient(195deg, #de6c3c 0%, #dc5c25 100%); }
+
+#dev-actions button:disabled { background: none; background-color: #acacac; }
+#dev-actions button:disabled icon { opacity: 0.5; }
 
 @media screen and (max-width: 1024px) {
     page > content > section,
@@ -547,6 +558,10 @@ function load_devices(response) {
             if (value.type.toString().toLowerCase() == "kenzy.image") {
                 cams++;
             }
+
+            if ($('#dev-url').text() == value.url) {
+                $('#dev-status').text((value.active) ? "Running" : "Stopped");
+            }
         });
     } catch(error) { console.log(error); };
 
@@ -559,6 +574,28 @@ function load_devices(response) {
             dev = resp_data["data"]["devices"][dev_url];
         }
         console.log(dev);
+        $('#dev-actions').hide();
+        $('#btnStart').hide();
+        $('#btnStop').hide();
+        
+        if (dev["active"]) {
+            $('#btnStop').prop('disabled', false);
+            $('#btnStart').prop('disabled', true);
+        } else {
+            $('#btnStop').prop('disabled', true);
+            $('#btnStart').prop('disabled', false);
+        }
+
+        if (dev["accepts"].includes("start")) {
+            $('#btnStart').show();
+            $('#dev-actions').show();
+        }
+
+        if (dev["accepts"].includes("stop")) {
+            $('#btnStop').show();
+            $('#dev-actions').show();
+        }
+
         $('#dev-type-id').text(dev["type"]);
         $('#dev-url').text(dev["url"]);
         $('#dev-location').text(dev["location"]);
@@ -936,6 +973,62 @@ $(document).ready(function() {
         sort_table($(this));
     });
 
+    $('#btnStart').click(function() {
+        command = {
+            action: "relay",
+            payload: {
+                url: $('#dev-url').text(),
+                command: {
+                    action: "start",
+                    payload: {}
+                }
+            }
+        }
+
+        $.ajax({
+            url: "/",
+            method: "POST",
+            contentType: "application/json",
+            data: JSON.stringify(command),
+            dataType: "JSON",
+            beforeSend: function() {
+                $('#btnStart').prop('disabled', true);
+            },
+            success: function(response) {
+                $('#btnStop').prop('disabled', false);
+                $('#dev-status').text("Starting");
+            }
+        });
+    });
+
+    $('#btnStop').click(function() {
+        command = {
+            action: "relay",
+            payload: {
+                url: $('#dev-url').text(),
+                command: {
+                    action: "stop",
+                    payload: {}
+                }
+            }
+        }
+
+        $.ajax({
+            url: "/",
+            method: "POST",
+            contentType: "application/json",
+            data: JSON.stringify(command),
+            dataType: "JSON",
+            beforeSend: function() {
+                $('#btnStop').prop('disabled', true);
+            },
+            success: function(response) {
+                $('#btnStart').prop('disabled', false);
+                $('#dev-status').text("Stopping");
+            }
+        });
+    });
+
     refresh_data();
 
 });
@@ -1174,7 +1267,11 @@ $(document).ready(function() {
 
                 <item>
                     <title>Status</title>
-                    <data id="dev-status">Running</data>
+                    <data><buttons id="dev-actions">
+                        <button id="btnStart" title="Start Device"><icon class="play"></icon></button>
+                        <button id="btnStop" title="Stop Device" disabled="disabled"><icon class="stop"></icon></button>
+                    </buttons>
+                    <span id="dev-status">Running</span></data>
                 </item>
                 
                 <item>
@@ -1185,15 +1282,6 @@ $(document).ready(function() {
                 <item style="width: 100%;">
                     <title>Settings</title>
                     <data id="dev-settings">...</data>
-                </item>
-                <item id="dev-actions" style="display:none;">
-                    <title>Actions</title>
-                    <data>
-                    <button-list id="dev-buttons">
-                        <button>Start</button>
-                        <button>Stop</button>
-                    </button-list>
-                    </data>
                 </item>
                 </group>
                 <group></group>
