@@ -17,6 +17,7 @@ All notable changes to this project will be documented in this file.
 - Fixed start/stop calls to TTS library
 - Fixed `play_wav_file` to allow for files outside of program path
 - Fixed offline setting for transformers up through v4.11
+- Fixed bug in skillmanager skill download to stop running skills before replacing
 
 ## [2.1.1]
 
