@@ -34,6 +34,8 @@ icon.person { background-image: url(person-walking-solid.svg); }
 icon.dog { background-image: url(dog-solid.svg); }
 icon.download { background-image: url(download-solid.svg); }
 icon.refresh { background-image: url(arrows-rotate-solid.svg); }
+icon.play { background-image: url(play-solid.svg); }
+icon.stop { background-image: url(stop-solid.svg); }
 
 sidebar button:hover { background-color: rgba(255, 255, 255, 0.1); }
 sidebar button.active { background: linear-gradient(195deg, #de6c3c 0%, #dc5c25 100%); }
@@ -288,6 +290,15 @@ button.send {
     background-color: #888;
 }
 
+#dev-actions { margin-right: 10px; }
+#dev-actions button { width: auto; height: 30px; line-height: 28px; vertical-align: middle; }
+#dev-actions icon { display: inline-block; width: 16px; height: 16px; background-repeat: no-repeat; background-size: 16px 16px; }
+
+#dev-actions button:hover { background: linear-gradient(195deg, #de6c3c 0%, #dc5c25 100%); }
+
+#dev-actions button:disabled { background: none; background-color: #acacac; }
+#dev-actions button:disabled icon { opacity: 0.5; }
+
 @media screen and (max-width: 1024px) {
     page > content > section,
     page > content.page-section > section { padding: 20px 0 20px 220px; }
@@ -360,9 +371,19 @@ spinner icon {
 }
 
 .hidden { display: none; }
+.table-sort thead th { cursor: pointer; }
+table thead { user-select: none; }
+header { user-select: none; }
+sidebar { user-select: none; }
+footer { user-select: none; }
+#devices-list { cursor: default; }
+#dev-settings { white-space: pre; width: calc(100% - 60px); overflow-x: auto; padding-bottom: 10px; }
 
 </style>
 <script type="text/javascript">
+
+var resp_data = {};
+
 function get_skills() {
 
     $.ajax({
@@ -477,7 +498,8 @@ function load_devices(response) {
 
         opt = $('<option></option>');
         $(opt).attr('value', response.data.url);
-        $(opt).text("(" + response.data.type + ") " + response.data.url);
+        $(opt).attr('device-type', response.data.type);
+        $(opt).text("(" + response.data.location + ": " + response.data.type + ") " + response.data.url);
         $(opt).appendTo($('#select-device'));
 
         td1 = $('<td></td>');
@@ -494,7 +516,7 @@ function load_devices(response) {
         tr.append(td3);
         tr.append(td4);
         $('#devices-list').append(tr);
-        i++
+        i++;
         
         Object.entries(response.data.data.devices).forEach(([key, value]) => {
             dev_type = $('<content></content>').text(value.type);
@@ -513,7 +535,8 @@ function load_devices(response) {
 
             opt = $('<option></option>');
             $(opt).attr('value', value.url);
-            $(opt).text("(" + value.type + ") " + value.url);
+            $(opt).attr('device-type', value.type);
+            $(opt).text("(" + value.location + ": " + value.type + ") " + value.url);
             $(opt).appendTo($('#select-device'));
 
             td1 = $('<td></td>');
@@ -535,8 +558,52 @@ function load_devices(response) {
             if (value.type.toString().toLowerCase() == "kenzy.image") {
                 cams++;
             }
+
+            if ($('#dev-url').text() == value.url) {
+                $('#dev-status').text((value.active) ? "Running" : "Stopped");
+            }
         });
     } catch(error) { console.log(error); };
+
+    $('#devices-list tr td').click(function() {
+        dev_url = $(this).parent().children()[1].innerText;
+        $('#device-info').show();
+        if (dev_url == resp_data["url"]) {
+            dev = resp_data;
+        } else {
+            dev = resp_data["data"]["devices"][dev_url];
+        }
+        console.log(dev);
+        $('#dev-actions').hide();
+        $('#btnStart').hide();
+        $('#btnStop').hide();
+        
+        if (dev["active"]) {
+            $('#btnStop').prop('disabled', false);
+            $('#btnStart').prop('disabled', true);
+        } else {
+            $('#btnStop').prop('disabled', true);
+            $('#btnStart').prop('disabled', false);
+        }
+
+        if (dev["accepts"].includes("start")) {
+            $('#btnStart').show();
+            $('#dev-actions').show();
+        }
+
+        if (dev["accepts"].includes("stop")) {
+            $('#btnStop').show();
+            $('#dev-actions').show();
+        }
+
+        $('#dev-type-id').text(dev["type"]);
+        $('#dev-url').text(dev["url"]);
+        $('#dev-location').text(dev["location"]);
+        $('#dev-status').text((dev["active"]) ? "Running" : "Stopped");
+        $('#dev-group').text(dev["group"]);
+        $('#dev-accepts').text(dev["accepts"].join(", "));
+        $('#dev-settings').html(JSON.stringify(dev["settings"], null, 5));
+    });
 
     $('#device-count').text(i)
     $('#camera-count').text(cams);
@@ -551,7 +618,13 @@ function load_skills(skills) {
     var i = 0;
     $('#skills-list').empty();
     try {
+        var entries = [];
         Object.entries(skills).forEach(([key, value]) => {
+            entries.push(key);
+        });
+        entries.sort();
+        Object.entries(entries).forEach(([idx, key]) => {
+            value = skills[key];
             skill_name = $('<content></content>').text(key);
             skill_description = $('<content></content>').text(value.description);
             skill_version = $('<content></content>');
@@ -746,6 +819,7 @@ function refresh_data() {
         },
         success: function(response) {
 
+            resp_data = response.data;
             $('.version').text(response.data.version);
 
             load_devices(response);
@@ -801,6 +875,39 @@ function developer_submit() {
             $('#btnSendCmd').prop('disabled', false);
         }
     });
+}
+
+function sort_table(obj) {
+
+    if ($(obj).attr('sort-direction') === undefined) {
+        $(obj).attr('sort-direction', 'asc');
+    } else {
+        if ($(obj).attr('sort-direction') == "asc") {
+            $(obj).attr('sort-direction', 'desc');
+        } else {
+            $(obj).attr('sort-direction', 'asc');
+        }
+    }
+
+    tgt = $(obj).attr('sort-target');
+    idx = $(obj).attr('sort-index');
+    direction = $(obj).attr('sort-direction');
+
+    if (direction == "desc") {
+        direction = "desc";
+    } else {
+        direction = "asc";
+    }
+
+    $(tgt + ' tr').sort((a, b) => {
+        if ($(a).children()[idx].innerText < $(b).children()[idx].innerText) {
+            return (direction == "asc") ? -1 : 1;
+        } else if ($(a).children()[idx].innerText > $(b).children()[idx].innerText) {
+            return (direction == "asc") ? 1 : -1;
+        } 
+
+        return 0;
+    }).appendTo($(tgt));
 }
 
 $(document).ready(function() {
@@ -862,6 +969,66 @@ $(document).ready(function() {
         return false;
     });
 
+    $('.table-sort thead th').click(function() {
+        sort_table($(this));
+    });
+
+    $('#btnStart').click(function() {
+        command = {
+            action: "relay",
+            payload: {
+                url: $('#dev-url').text(),
+                command: {
+                    action: "start",
+                    payload: {}
+                }
+            }
+        }
+
+        $.ajax({
+            url: "/",
+            method: "POST",
+            contentType: "application/json",
+            data: JSON.stringify(command),
+            dataType: "JSON",
+            beforeSend: function() {
+                $('#btnStart').prop('disabled', true);
+            },
+            success: function(response) {
+                $('#btnStop').prop('disabled', false);
+                $('#dev-status').text("Starting");
+            }
+        });
+    });
+
+    $('#btnStop').click(function() {
+        command = {
+            action: "relay",
+            payload: {
+                url: $('#dev-url').text(),
+                command: {
+                    action: "stop",
+                    payload: {}
+                }
+            }
+        }
+
+        $.ajax({
+            url: "/",
+            method: "POST",
+            contentType: "application/json",
+            data: JSON.stringify(command),
+            dataType: "JSON",
+            beforeSend: function() {
+                $('#btnStop').prop('disabled', true);
+            },
+            success: function(response) {
+                $('#btnStart').prop('disabled', false);
+                $('#dev-status').text("Stopping");
+            }
+        });
+    });
+
     refresh_data();
 
 });
@@ -901,7 +1068,7 @@ $(document).ready(function() {
     <content class="page-section" id="dashboard">
         <section>
             <div class="page-buttons">
-                <button class="btn-refresh"><icon class="refresh"></icon></button>
+                <button class="btn-refresh" title="Refresh"><icon class="refresh"></icon></button>
             </div>
             <header>
                 <title>System Overview</title>
@@ -945,14 +1112,14 @@ $(document).ready(function() {
                 <group class="col-2l">
                     <list>
                         <content>
-                            <table class="header">
+                            <table class="header table-sort">
                                 <thead>
                                     <tr>
-                                        <th style="width: 100px;" class="text-left">Server</th>
-                                        <th class="text-center">CPU</th>
-                                        <th class="text-center">MEM</th>
-                                        <th class="text-center">DISK</th>
-                                        <th class="text-center">LOAD</th>
+                                        <th style="width: 100px;" class="text-left" sort-target="#server-list" sort-index="0">Server</th>
+                                        <th class="text-center" sort-target="#server-list" sort-index="1">CPU</th>
+                                        <th class="text-center" sort-target="#server-list" sort-index="2">MEM</th>
+                                        <th class="text-center" sort-target="#server-list" sort-index="3">DISK</th>
+                                        <th class="text-center" sort-target="#server-list" sort-index="4">LOAD</th>
                                     </tr>
                                 </thead>
                             </table>
@@ -1036,7 +1203,7 @@ $(document).ready(function() {
     <content class="page-section" id="devices" style="display: none;">
         <section>
             <div class="page-buttons">
-                <button class="btn-refresh"><icon class="refresh"></icon></button>
+                <button class="btn-refresh" title="Refresh"><icon class="refresh"></icon></button>
             </div>
             <header>
                 <title>List of Devices</title>
@@ -1046,13 +1213,13 @@ $(document).ready(function() {
                 <group class="col-1">
                     <list>
                         <content>
-                            <table class="header">
+                            <table class="header table-sort">
                                 <thead>
                                     <tr>
-                                        <th class="text-left">Type</th>
-                                        <th class="text-left">URL</th>
-                                        <th class="text-left">Location</th>
-                                        <th class="text-left">Status</th>
+                                        <th class="text-left" sort-target="#devices-list" sort-index="0">Type</th>
+                                        <th class="text-left" sort-target="#devices-list" sort-index="1">URL</th>
+                                        <th class="text-left" sort-target="#devices-list" sort-index="2">Location</th>
+                                        <th class="text-left" sort-target="#devices-list" sort-index="3">Status</th>
                                     </tr>
                                 </thead>
                             </table>
@@ -1074,52 +1241,47 @@ $(document).ready(function() {
                 <group></group>
             </content>
         </section>
-        <section class="secondary" id="device-info" style="display: none;">
+        <section class="secondary" id="device-info" style="display:none;">
             <header>Device Details</header>
             <content class="settings">
                 <group class="col-2">
                 <item>
                     <title>Type</title>
-                    <data>kenzy.skillmanager</data>
+                    <data id="dev-type-id">kenzy.skillmanager</data>
                 </item>
                 
                 <item>
                     <title>URL</title>
-                    <data>http://192.168.1.140:9700</data>
+                    <data id="dev-url">http://192.168.1.140:9700</data>
                 </item>
 
                 <item>
                     <title>Location</title>
-                    <data>Living Room</data>
+                    <data id="dev-location">Living Room</data>
                 </item>
 
                 <item>
                     <title>Group</title>
-                    <data>Group 1</data>
+                    <data id="dev-group">Group 1</data>
                 </item>
 
                 <item>
                     <title>Status</title>
-                    <data>Running</data>
+                    <data><buttons id="dev-actions">
+                        <button id="btnStart" title="Start Device"><icon class="play"></icon></button>
+                        <button id="btnStop" title="Stop Device" disabled="disabled"><icon class="stop"></icon></button>
+                    </buttons>
+                    <span id="dev-status">Running</span></data>
                 </item>
                 
                 <item>
                     <title>Accepts</title>
-                    <data>start, stop, mute, unmute, collect</data>
+                    <data id="dev-accepts">start, stop, mute, unmute, collect</data>
                 </item>
 
-                <item>
+                <item style="width: 100%;">
                     <title>Settings</title>
-                    <data>...</data>
-                </item>
-                <item>
-                    <title>Actions</title>
-                    <data>
-                    <button-list>
-                        <button>Start</button>
-                        <button>Stop</button>
-                    </button-list>
-                    </data>
+                    <data id="dev-settings">...</data>
                 </item>
                 </group>
                 <group></group>
@@ -1184,8 +1346,8 @@ $(document).ready(function() {
     <content class="page-section" id="skills" style="display: none;">
         <section>
             <div class="page-buttons">
-                <button id="btn-download-skills"><icon class="download"></icon></button>
-                <button class="btn-refresh"><icon class="refresh"></icon></button>
+                <button id="btn-download-skills" title="Download Skills"><icon class="download"></icon></button>
+                <button class="btn-refresh" title="Refresh"><icon class="refresh"></icon></button>
             </div>
             <header>
                 <title>List of Skills</title>
@@ -1195,12 +1357,12 @@ $(document).ready(function() {
                 <group class="col-1">
                     <list>
                         <content>
-                            <table class="header">
+                            <table class="header table-sort">
                                 <thead>
                                     <tr>
-                                        <th class="text-left">Name</th>
-                                        <th class="text-left">Description</th>
-                                        <th class="text-left">Version</th>
+                                        <th class="text-left" sort-target="#skills-list" sort-index="0">Name</th>
+                                        <th class="text-left" sort-target="#skills-list" sort-index="1">Description</th>
+                                        <th class="text-left" sort-target="#skills-list" sort-index="2">Version</th>
                                     </tr>
                                 </thead>
                             </table>
@@ -1225,7 +1387,7 @@ $(document).ready(function() {
     <content class="page-section" id="logs" style="display: none;">
         <section>
             <div class="page-buttons">
-                <button class="btn-refresh"><icon class="refresh"></icon></button>
+                <button class="btn-refresh" title="Refresh"><icon class="refresh"></icon></button>
             </div>
             <header>
                 <title>Log Entries</title>
@@ -1281,6 +1443,8 @@ $(document).ready(function() {
                             <option value="command-speak">speak</option>
                             <option value="command-collect">collect</option>
                             <option value="command-mute">mute</option>
+                            <option value="command-start">start</option>
+                            <option value="command-stop">stop</option>
                         </select>
                     </div>
                     <div>
@@ -1367,6 +1531,14 @@ $(document).ready(function() {
         "type": "kenzy.stt",
         "text": "Kenzy, Hello."
     }
+}</pre>
+<pre id="command-start" class="template">{
+    "action": "start",
+    "payload": {}
+}</pre>
+<pre id="command-stop" class="template">{
+    "action": "stop",
+    "payload": {}
 }</pre>
 </div>
 

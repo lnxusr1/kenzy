@@ -632,3 +632,27 @@ class KenzyLogger:
     def critical(self, msg, *args):
         self._log("critical", msg, *args)
         self.logger.info(msg, *args)
+
+    def get_entries(self, level=None):
+        if level is None:
+            level = logging.getLevelName(logging.getLogger().getEffectiveLevel())
+
+        def get_level_number(level):
+            if str(level).upper() == "DEBUG":
+                return 5
+            if str(level).upper() == "INFO":
+                return 4
+            if str(level).upper() == "WARNING":
+                return 3
+            if str(level).upper() == "ERROR":
+                return 2
+            if str(level).upper() == "CRITICAL":
+                return 1
+            return 0
+
+        arr = []
+        for entry in self.entries:
+            if get_level_number(entry.get("type")) <= get_level_number(level):
+                arr.append(entry)
+
+        return arr
