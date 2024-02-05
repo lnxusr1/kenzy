@@ -228,6 +228,7 @@ class SkillManager:
         if (self.skills is not None and len(self.skills) > 0):
             for s in self.skills:
                 try:
+                    self.logger.debug(f"Stopping skill {str(s['object'].name)}")
                     s["object"].stop()
                 except Exception:
                     pass
