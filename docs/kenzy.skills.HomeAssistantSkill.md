@@ -17,6 +17,7 @@ The HomeAssistantSkill enables Kenzy to interact with your installation of HomeA
 * Trigger input_boolean entities via image analysis (using kenzy.image).  (e.g. Turn on an input_boolean if Kenzy sees a person walk in front of a camera.)
 
 ## Configuration
+
 ```
 device:
   HomeAssistantSkill:
