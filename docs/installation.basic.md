@@ -55,9 +55,11 @@ source ./.venv/bin/activate
 python3 -m pip install scikit-build 
 
 # Install core required runtime libraries
-python3 -m pip install urllib3 \
-  requests \
-  padatious
+python3 -m pip install numpy \
+    urllib3 \
+    requests \
+    pyyaml \
+    psutil;
 
 # Install optional libraries for WatcherDevice
 python3 -m pip install --upgrade \

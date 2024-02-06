@@ -67,8 +67,8 @@ class SkillsDevice:
     
     def download_skill(self, **kwargs):
         try:
-            self.skill_manager.stop()
             self.logger.info("Downloading skills")
+            self.skill_manager.stop()
             if not get_skills_package(skill_name=None, skill_dir=self.settings.get("folder.skills", "~/.kenzy/skills"), logger=self.logger):
                 return KenzyErrorResponse("Download failed.")
             
