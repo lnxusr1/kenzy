@@ -82,12 +82,14 @@ python3 -m pip install scikit-build
 # Install core required runtime libraries
 python3 -m pip install urllib3 \
   requests \
-  padatious
+  padatious \
+  pyyaml \
+  psutil;
 
 # Install optional libraries for WatcherDevice
 python3 -m pip install --upgrade \
   opencv-contrib-python \
-  yolov7detect==1.0.1 \
+  yolov7detect \
   face_recognition \
   numpy;
 
@@ -104,15 +106,15 @@ sudo apt-get -y install \
   libatlas-base-dev;
 
 python3 -m pip install --upgrade \
-  PyAudio>=0.2.13 \
+  PyAudio \
   soundfile \
   wave \
   torch \
-  fsspec==2023.9.2 \
-  transformers==4.31.0 \
-  datasets==2.14.3 \
+  fsspec \
+  transformers \
+  datasets \
   webrtcvad \
-  sentencepiece==0.1.99;
+  sentencepiece;
 
 # If you have trouble with pyaudio then you should insure it is upgraded with:
 python3 -m pip install --upgrade pyaudio

@@ -89,7 +89,12 @@ class SkillManager:
         
         skillModules = [os.path.join(self.skill_folder, o) for o in os.listdir(self.skill_folder) 
                         if os.path.isdir(os.path.join(self.skill_folder, o))]
-        
+
+        # Reset skills and actions
+        self.skills = []
+        self.activated = {}
+        self.registered_processes = {}
+
         for f in skillModules:
             s = os.path.basename(f)
             if str(s).lower() == "__pycache__" or str(s).endswith(".py"):
