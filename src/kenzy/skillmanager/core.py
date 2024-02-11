@@ -257,7 +257,8 @@ class GenericSkill:
         self.device = None
         self.logger = kwargs.get("logger", logging.getLogger("SKILL"))
         self._version = None
-        self.min_version = "0.0.0"
+        self._app_min_version = None
+        self._app_max_version = None
 
     @property
     def version(self):
@@ -266,6 +267,30 @@ class GenericSkill:
         else:
             return str(self._version)
     
+    @property
+    def app_min_version(self):
+        if self._app_min_version is None:
+            return None
+        if isinstance(self._app_min_version, list):
+            if self._app_min_version == [0, 0, 0]:
+                return None
+            
+            return ".".join([str(x) for x in self._app_min_version])
+        else:
+            if self._app_min_version == "0.0.0":
+                return None
+            
+            return str(self._app_min_version)
+    
+    @property
+    def app_max_version(self):
+        if self._app_max_version is None:
+            return None
+        elif isinstance(self._app_max_version, list):
+            return ".".join([str(x) for x in self._app_max_version])
+        else:
+            return str(self._app_max_version)
+        
     def check_version(self):
         file_name = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "VERSION"))
         with open(file_name, "r", encoding="UTF-8") as fp:
@@ -273,13 +298,22 @@ class GenericSkill:
 
         ver_parts = ver.split(".")
         
-        if isinstance(self.min_version, list):
-            chk_parts = self.min_version
+        if self._app_min_version is None:
+            chk_min_parts = [0, 0, 0]
+        elif isinstance(self._app_min_version, list):
+            chk_min_parts = self._app_min_version
         else:
-            chk_parts = str(self.min_version).strip().split(".")
+            chk_min_parts = str(self._app_min_version).strip().split(".")
+
+        if self._app_max_version is None:
+            chk_max_parts = [9999, 9999, 999999]
+        elif isinstance(self._app_max_version, list):
+            chk_max_parts = self._app_max_version
+        else:
+            chk_max_parts = str(self._app_max_version).strip().split(".")
 
         try:
-            for idx, item in enumerate(chk_parts):
+            for idx, item in enumerate(chk_min_parts):
                 if int(item) > int(ver_parts[idx]):
                     self.logger.info(f"{self.name} does not meet minimum version requirements.")
                     return False
@@ -289,6 +323,17 @@ class GenericSkill:
             self.logger.info("check_version failed due to incompatible version specifications.")
             return False
         
+        try:
+            for idx, item in enumerate(chk_max_parts):
+                if int(item) < int(ver_parts[idx]):
+                    self.logger.info(f"{self.name} does not meet maximum version requirements.")
+                    return False
+        except Exception:
+            self.logger.debug(str(sys.exc_info()[0]))
+            self.logger.debug(str(traceback.format_exc()))
+            self.logger.info("check_version failed due to incompatible version specifications.")
+            return False
+
         return True
 
     @property

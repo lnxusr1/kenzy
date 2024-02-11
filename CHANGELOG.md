@@ -6,7 +6,7 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
-- Skills min_version and check_version settings to control which skill manager version the skill is compatible with
+- Added skills min & max app versions and check function to control which skill manager versions the skill is compatible with
 - Ability to control when kenzy is activated (or deactivated) via skills
 - New skill updates:  
   - HomeAssistant version increment
