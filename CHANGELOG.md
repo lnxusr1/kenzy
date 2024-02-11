@@ -2,6 +2,26 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.1.4]
+
+### Added
+
+- Added skills min & max app versions and check function to control which skill manager versions the skill is compatible with
+- Ability to control when kenzy is activated (or deactivated) via skills
+- New skill updates:  
+  - HomeAssistant version increment
+  - MuteSkill added
+
+## [2.1.3]
+
+Bugfix-only version
+
+### Modified
+
+- Fix for HA triggering
+- Fix for managing skill versions
+- Fix for skill reload
+
 ## [2.1.2]
 
 ### Added
