@@ -182,6 +182,7 @@ class SkillsDevice:
 
         self.service.send_request(payload=cmd)
 
+        self.set_activation(kwargs.get("context"), time.time())
         return KenzySuccessResponse("Say command complete")
     
     def ask(self, text, callback=None, **kwargs):
@@ -203,6 +204,7 @@ class SkillsDevice:
         # use context = location (door), group (living room), all
         self.service.send_request(payload=cmd)
 
+        self.set_activation(kwargs.get("context"), time.time())
         return KenzySuccessResponse("Ask command complete")
     
     def play(self, file_name, **kwargs):
@@ -211,7 +213,8 @@ class SkillsDevice:
         cmd.file_name(file_name)
 
         self.service.send_request(payload=cmd)
-
+        
+        self.set_activation(kwargs.get("context"), time.time())
         return KenzySuccessResponse("Play command complete")
 
     def get_context_url(self, context):
@@ -221,7 +224,21 @@ class SkillsDevice:
             dev_url = "self"
 
         return dev_url
-    
+
+    def get_context_location(self, context):
+        c_loc = "none"
+        if isinstance(context, KenzyContext):
+            c_loc = str(context.location).lower()
+        if isinstance(context, dict):
+            c_loc = context.get("location")
+
+        return c_loc
+
+    def set_activation(self, context, timestamp=0):
+        c_loc = self.get_context_location(context)
+        self.skill_manager.activated[c_loc] = timestamp
+        return True
+
     def relay(self, data, **kwargs):
         url = data.get("url", self.service.service_url)
         request = data.get("command")
