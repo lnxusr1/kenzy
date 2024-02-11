@@ -145,6 +145,31 @@ class SkillManager:
             return ret
 
         return False
+    
+    def audio_fallback(self, in_text, context, raw=None):
+        if isinstance(self.service.remote_devices, dict):
+            for dev_url in self.service.remote_devices:
+                if "fallback" in self.service.remote_devices[dev_url].get("accepts", []):
+                    # Send fallback to this device and return
+                    
+                    data = {
+                        "command": {
+                            "action": "fallback",
+                            "payload": {
+                                "text": in_text,
+                                "raw": raw,
+                                "context": context.get()
+                            }
+                        },
+                        "url": dev_url
+                    }
+
+                    ret = self.device.relay(data=data)
+                    self.logger.debug(f"FALLBACK returned {ret.status}")
+                    return False
+
+        self.logger.debug(f"fallback: {in_text}")
+        return False
 
     def parse(self, text=None, context=None):
         """
@@ -188,10 +213,6 @@ class SkillManager:
             self.service.send_request(payload=cmd)
             return False
 
-        def audio_fallback(in_text, context):
-            self.logger.debug(f"fallback: {in_text}")
-            return False
-
         try:
             if context is not None and isinstance(context, KenzyContext):
                 self.logger.debug(f"HEARD: {clean_text} / {context.location}")
@@ -213,7 +234,7 @@ class SkillManager:
                             return True  # Default return is True in case the returned value isn't boolean
             else:
                 self.logger.debug(str(intent))
-                return audio_fallback(text, context)  # Old code for hardcoded responses
+                return self.audio_fallback(clean_text, context, raw=text)
         except Exception:
             self.logger.debug(str(sys.exc_info()[0]))
             self.logger.debug(str(traceback.format_exc()))
