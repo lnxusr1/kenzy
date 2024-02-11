@@ -106,7 +106,9 @@ class SkillManager:
             importlib.reload(mySkillModule)
             mySkillClass = mySkillModule.create_skill(logger=self.logger)
             mySkillClass.device = self.device
-            mySkillClass.initialize()
+
+            if mySkillClass.check_version():
+                mySkillClass.initialize()
             
         self.logger.debug("Skills load is complete.")
         
@@ -255,6 +257,7 @@ class GenericSkill:
         self.device = None
         self.logger = kwargs.get("logger", logging.getLogger("SKILL"))
         self._version = None
+        self.min_version = "0.0.0"
 
     @property
     def version(self):
@@ -263,6 +266,31 @@ class GenericSkill:
         else:
             return str(self._version)
     
+    def check_version(self):
+        file_name = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "VERSION"))
+        with open(file_name, "r", encoding="UTF-8") as fp:
+            ver = fp.readline().strip()
+
+        ver_parts = ver.split(".")
+        
+        if isinstance(self.min_version, list):
+            chk_parts = self.min_version
+        else:
+            chk_parts = str(self.min_version).strip().split(".")
+
+        try:
+            for idx, item in enumerate(chk_parts):
+                if int(item) > int(ver_parts[idx]):
+                    self.logger.info(f"{self.name} does not meet minimum version requirements.")
+                    return False
+        except Exception:
+            self.logger.debug(str(sys.exc_info()[0]))
+            self.logger.debug(str(traceback.format_exc()))
+            self.logger.info("check_version failed due to incompatible version specifications.")
+            return False
+        
+        return True
+
     @property
     def service(self):
         return self.device.service if self.device is not None else None
