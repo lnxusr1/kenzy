@@ -204,7 +204,6 @@ class SkillManager:
                 for s in self.skills:
                     if intent.name == s["intent_file"]:
                         ret_val = s["callback"](intent, context=context, raw=text)
-                        self.activated[c_loc] = time.time()
 
                         if isinstance(ret_val, bool):
                             return ret_val
