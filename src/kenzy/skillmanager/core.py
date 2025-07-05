@@ -226,7 +226,7 @@ class SkillManager:
             if intent.conf >= 0.6:
                 for s in self.skills:
                     if intent.name == s["intent_file"]:
-                        ret_val = s["callback"](intent, context=context, raw=text)
+                        ret_val = s["callback"](intent, context=context, raw=text, clean=clean_text)
 
                         if isinstance(ret_val, bool):
                             return ret_val

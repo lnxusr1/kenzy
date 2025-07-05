@@ -13,8 +13,8 @@ Skills for kenzy.skillmanager
 * [PowerDownSkill](https://docs.kenzy.ai/en/latest/kenzy.skills.PowerDownSkill/) - 1.0.1
 * [TellDateTimeSkill](https://docs.kenzy.ai/en/latest/kenzy.skills.TellDateTimeSkill/) - 1.0.1
 * [TellJokeSkill](https://docs.kenzy.ai/en/latest/kenzy.skills.TellJokeSkill/) - 1.0.0
-* [ThankYouSkill](https://docs.kenzy.ai/en/latest/kenzy.skills.ThankYouSkill/) - 1.0.1
-* [WatcherSkill](https://docs.kenzy.ai/en/latest/kenzy.skills.WatcherSkill/) - 1.0.2
+* [ThankYouSkill](https://docs.kenzy.ai/en/latest/kenzy.skills.ThankYouSkill/) - 1.0.2
+* [WatcherSkill](https://docs.kenzy.ai/en/latest/kenzy.skills.WatcherSkill/) - 1.1.0
 * [WeatherSkill](https://docs.kenzy.ai/en/latest/kenzy.skills.WeatherSkill/) - 1.0.1
 
 -----
