@@ -43,6 +43,12 @@ class KenzyContext:
             "location": self.location,
             "group": self.group
         }
+    
+    def load(self, data):
+        self.url = data.get("url")
+        self.type = data.get("type")
+        self.location = data.get("location")
+        self.group = data.get("group")
 
 
 class KenzyRequest:

@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 ## [2.1.5]
 
+### Added
+
+- Added clean_text (text used during intent processing) to skills intent calls.
+- Updated WatcherSkill and ThankYouSkill for basic improvements
+
 ### Modified
 
 - Updated all links from Kenzy.Ai to Kenzy.DEV due to domain name change
