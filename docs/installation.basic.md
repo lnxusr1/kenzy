@@ -5,7 +5,7 @@
 The quickest and easiest way to install Kenzy is to use our installation script:
 
 ```
-wget -q -O install.sh https://kenzy.ai/installer && sh install.sh
+wget -q -O install.sh https://kenzy.dev/installer && sh install.sh
 ```
 
 Running the script exactly as shown above will install Kenzy and all components.  If you want to be more selective you can add options as follows:
@@ -135,4 +135,4 @@ __[http://localhost:9700/](http://localhost:9700/)__
 -----
 
 ## Help &amp; Support
-Help and additional details is available at [https://kenzy.ai](https://kenzy.ai)
+Help and additional details is available at [https://kenzy.dev](https://kenzy.dev)
