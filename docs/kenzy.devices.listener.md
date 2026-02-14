@@ -16,10 +16,14 @@ The STT device also supports mute/unmute events which prevent it from capturing 
 | speech.buffer_padding     | int     | 350                    | Speech gap time in milliseconds      |
 | speech.buffer_size        | int     | 50                     | Buffer size for speech frames        |
 | speech.ratio              | float   | 0.75                   | Must be decimal between 0 and 1      |
-| speech.model              | str     | openai/whisper-tiny.en | Path or name of Whisper Model        |
+| speech.model              | str     | tiny                   | Path or name of Faster-Whisper Model |
 | offline                   | bool    | false                  | Disables downloading the models      |
+| speech.model_target       | str     | cpu                    | Can be cpu, cuda, or gpu             |
+| speech.compute_type       | str     | int8                   | Use int8 for cpu or float16 for cuda |
 
-Note:  You should consider only setting ```offline``` after you have executed the program at least once so that it fully downloads all model files.  Once they are downloaded you can switch the offline mode on so that it does not try to re-download the models (which enables the program to then run without an Internet connection).
+**BREAKING CHANGE**:  v2.1.5+ requires a change to faster-whisper model names (from the transformers style "openai/whisper-tiny.en" names).
+
+Note:  You should consider only setting ```offline``` after you have executed the program at least once so that it fully downloads all model files.  Once they are downloaded you can switch the offline mode on so that it does not try to re-download the models (which enables the program to then run without an Internet connection).  You can optionally download the models yourself and use the speech.model to point to the path where those models are located.
 
 ## Example YAML File
 
@@ -38,8 +42,11 @@ device:
   speech.buffer_padding:     350
   speech.buffer_size:        50
   speech.ratio:              0.75
-  speech.model:              openai/whisper-tiny.en
+  speech.model:              tiny
   offline:                   false
+  speech.model_target:       cpu
+  speech.compute_type:       int8
+
 
 service:
   host:                      0.0.0.0

@@ -16,6 +16,9 @@ skillsmanager:
   
 listener:
   type: kenzy.stt
+  device:
+    speech.model: tiny.en
+    #offline: true
 
 speaker:
   type: kenzy.tts

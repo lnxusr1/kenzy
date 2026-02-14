@@ -119,11 +119,12 @@ if [ $speaker -eq 1 ] || [ $listener -eq 1 ]; then
         PyAudio \
         soundfile \
         wave \
+        faster-whisper \
+        webrtcvad \
         torch \
         fsspec \
         transformers \
         datasets \
-        webrtcvad \
         sentencepiece;
 
     #$pythonCmd -m pip install --upgrade mycroft-mimic3-tts[all];

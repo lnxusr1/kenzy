@@ -85,6 +85,9 @@ logging.basicConfig(
     format='%(asctime)s %(name)-12s - %(levelname)-9s - %(message)s',
     level=logLevel)
 
+if logLevel != logging.DEBUG:
+    logging.getLogger("faster_whisper").setLevel(logging.WARNING)
+
 # OFFLINE MODE
 if ARGS.offline:
     os.environ["TRANSFORMERS_OFFLINE"] = "1"

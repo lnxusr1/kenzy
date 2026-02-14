@@ -7,6 +7,11 @@ All notable changes to this project will be documented in this file.
 ### Added
 
 - Added clean_text (text used during intent processing) to skills intent calls.
+- Enabled optional push to GPU for STT model for performance improvements
+
+### Modified
+
+- Updated STT to use faster-whisper model which has a breaking change in speech.model naming convention.
 - Updated WatcherSkill and ThankYouSkill for basic improvements
 
 ## [2.1.4]

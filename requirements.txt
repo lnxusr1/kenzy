@@ -9,16 +9,23 @@ psutils
 fann2==1.1.2
 padatious
 
-# TTS and STT
+# STT
 PyAudio>=0.2.13
 soundfile
 wave
+webrtcvad
+faster-whisper
+
+# TTS
+#PyAudio>=0.2.13
+#soundfile
+#wave
 torch
 fsspec==2023.9.2
 transformers==4.31.0
 datasets==2.14.3
-webrtcvad
 sentencepiece==0.1.99
+
 
 # IMAGE
 yolov7detect==1.0.1

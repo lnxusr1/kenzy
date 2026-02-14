@@ -378,7 +378,7 @@ def discover_ssdp_services(search_text=SSDP_DEVICE_TYPE, timeout=45):
 
     client_socket.sendto(search_message.encode("utf-8"), (ssdp_ip, ssdp_port))
 
-    logger.debug("Waiting for SSDP responses...")
+    logger.info("Waiting for SSDP responses...")
 
     url = None
     while True:

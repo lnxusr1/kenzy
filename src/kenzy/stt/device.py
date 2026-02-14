@@ -1,7 +1,6 @@
 import os
 import threading
 import logging
-import queue
 import sys
 import traceback
 from kenzy.core import KenzySuccessResponse, KenzyErrorResponse
@@ -20,13 +19,15 @@ class AudioProcessor:
 
         self.stop_event = threading.Event()
         self.main_thread = None
-        self.callback_thread = None
         self.callback_queue = None
         self.restart_enabled = False
         self.muted_event = threading.Event()
 
         self.location = kwargs.get("location", "Kenzy's Room")
         self.group = kwargs.get("group", "Kenzy's Group")
+
+        self.audio_consumers = []
+        self.stream = None
 
     @property
     def accepts(self):
@@ -42,27 +43,35 @@ class AudioProcessor:
         self.logger.debug("Device is unmuted.")
         return KenzySuccessResponse("Unmute command successful")
 
-    def _process_callback(self):
-        while True:
-            text = self.callback_queue.get()
-            if text is None or not isinstance(text, str):
-                break
+    def _process_callback(self, text):
+        if text is None or not isinstance(text, str):
+            return
+        
+        self.logger.info(f"HEARD: {text}")
 
-            self.service.collect(data={
-                "type": "kenzy.stt",
-                "text": text
-            }, wait=False, timeout=2)
+        self.service.collect(data={
+            "type": "kenzy.stt",
+            "text": text
+        }, wait=False, timeout=2)
 
     def _read_from_device(self):
 
         if self.settings.get("offline"):
+            os.environ["HF_HUB_OFFLINE"] = "1"
             os.environ["TRANSFORMERS_OFFLINE"] = "1"
             os.environ["HF_DATASETS_OFFLINE"] = "1"
 
+        audio_consumers=[]
+        
+        from kenzy.stt.consumers import SpeechModel
+        sm = SpeechModel(**self.settings)
+        sm.initialize(stop_event=self.stop_event, muted_event=self.muted_event, callback=self._process_callback, **self.settings)
+        sm.start()
+        audio_consumers.append(sm)
+
         try:
-            for text in read_from_device(self.stop_event, muted_event=self.muted_event, **self.settings):
-                self.logger.debug(f"HEARD: {text}")
-                self.callback_queue.put(text)
+            self.logger.debug("Attempting to start stream...")
+            self.stream = read_from_device(self.stop_event, muted_event=self.muted_event, audio_consumers=audio_consumers, **self.settings)
         except KeyboardInterrupt:
             self.stop()
         except Exception:
@@ -71,6 +80,16 @@ class AudioProcessor:
             self.logger.error("Unable to read from listener device.")
             self.stop_event.set()
             self.restart_enabled = True
+
+        if self.stream is not None:
+            self.logger.debug("STT is listening...")
+        else:
+            self.logger.error("Failed to start stream")
+
+
+        import time
+        while not self.stop_event.is_set():
+            time.sleep(0.1)
 
     def is_alive(self, **kwargs):
         if self.main_thread is not None and self.main_thread.is_alive():
@@ -86,14 +105,9 @@ class AudioProcessor:
             self.logger.error("Audio Processor already running")
             return KenzyErrorResponse("Audio Processor already running")
         
-        if (self.main_thread is not None and self.main_thread.is_alive()) \
-                or (self.callback_thread is not None and self.callback_thread.is_alive()):
+        if (self.main_thread is not None and self.main_thread.is_alive()):
 
             self.stop()
-
-        self.callback_queue = queue.Queue()
-        self.callback_thread = threading.Thread(target=self._process_callback, daemon=True)
-        self.callback_thread.start()
 
         self.main_thread = threading.Thread(target=self._read_from_device, daemon=True)
         self.main_thread.start()
@@ -106,20 +120,16 @@ class AudioProcessor:
             return KenzyErrorResponse("Unable to start Audio Processor")
         
     def stop(self, **kwargs):
-        if (self.main_thread is None or not self.main_thread.is_alive()) \
-                and (self.callback_thread is None or self.callback_thread.is_alive()):
+        if (self.main_thread is None or not self.main_thread.is_alive()):
 
             self.logger.error("Audio Processor is not running")
             return KenzyErrorResponse("Audio Processor is not running")
         
         self.stop_event.set()
+        self.stream.close()
 
         if self.main_thread.is_alive():
             self.main_thread.join()
-
-        if self.callback_thread.is_alive():
-            self.callback_queue.put(None)
-            self.callback_thread.join()
 
         if not self.is_alive():
             self.logger.info("Stopped Audio Processor")
@@ -129,8 +139,7 @@ class AudioProcessor:
             return KenzyErrorResponse("Unable to stop Audio Processor")
     
     def restart(self, **kwargs):
-        if (self.main_thread is not None and self.main_thread.is_alive()) \
-                or (self.callback_thread is not None and self.callback_thread.is_alive()):
+        if (self.main_thread is not None and self.main_thread.is_alive()):
             
             ret = self.stop()
             if not ret.is_success():
