@@ -2,7 +2,7 @@ import logging
 import sys
 import traceback
 
-VERSION = (2, 1, 4)
+VERSION = (2, 1, 5)
 
 __app_name__ = "kenzy"
 __app_title__ = "KENZY"
