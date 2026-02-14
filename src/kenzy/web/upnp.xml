@@ -8,11 +8,11 @@
     <deviceType>urn:schemas-upnp-org:device:Kenzy-Core:1</deviceType>
     <friendlyName>Kenzy Core</friendlyName>
     <manufacturer>Kenzy.Ai</manufacturer>
-    <manufacturerURL>https://kenzy.ai</manufacturerURL>
+    <manufacturerURL>https://kenzy.dev</manufacturerURL>
     <modelDescription>Kenzy Ai Core Services</modelDescription>
     <modelName>Core</modelName>
     <modelNumber>2.0</modelNumber>
-    <modelURL>https://kenzy.ai/core</modelURL>
+    <modelURL>https://kenzy.dev/core</modelURL>
     <serialNumber>1000000001</serialNumber>
     <UDN>uuid:{server_uuid}</UDN>
     <presentationURL>{service_url}</presentationURL>

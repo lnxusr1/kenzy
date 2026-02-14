@@ -245,4 +245,4 @@ class MySkill(GenericSkill):
 -----
 
 ## Help &amp; Support
-Help and additional details is available at [https://kenzy.ai](https://kenzy.ai)
+Help and additional details is available at [https://kenzy.dev](https://kenzy.dev)

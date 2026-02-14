@@ -2,7 +2,7 @@
 
 This project is dedicated to building a "Synthetic Human" which is called Kenzy for which we have assigned the female gender pronoun of "she". She has intent determination ([padatious](https://github.com/MycroftAI/padatious)) visual face recognition ([opencv/opencv](https://github.com/opencv/opencv)), speech transcription ([whisper](https://openai.com/research/whisper)), and speech synthesis ([speecht5](https://github.com/microsoft/SpeechT5)/[festival](http://www.cstr.ed.ac.uk/projects/festival/)).
 
-Visit our main site: [https://kenzy.ai/](https://kenzy.ai/)
+Visit our main site: [https://kenzy.dev](https://kenzy.dev)
 
 ## Kenzy's Architecture
 
@@ -26,7 +26,7 @@ __Python Module Overview__
 The quickest and easiest way to install Kenzy is to use our installation script:
 
 ```
-wget -q -O install.sh https://kenzy.ai/installer && sh install.sh
+wget -q -O install.sh https://kenzy.dev/installer && sh install.sh
 ```
 
 Running the script exactly as shown above will install Kenzy and all components.  If you want to be more selective you can add options as follows:
@@ -39,9 +39,9 @@ Running the script exactly as shown above will install Kenzy and all components.
 
 Installer script has been tested on Ubuntu 22.04+ and Debian Buster.
 
-Kenzy is available through pip, but to use the built-in devices there are a few extra libraries you may require.  Please visit the [Basic Install](https://docs.kenzy.ai/en/latest/installation.basic/) page for more details.  
+Kenzy is available through pip, but to use the built-in devices there are a few extra libraries you may require.  Please visit the [Basic Install](https://docs.kenzy.dev/en/latest/installation.basic/) page for more details.  
 
-__&raquo; [HOWTO: Install](https://docs.kenzy.ai/en/latest/installation.basic/)__
+__&raquo; [HOWTO: Install](https://docs.kenzy.dev/en/latest/installation.basic/)__
 
 ## Web Control Panel
 
@@ -52,4 +52,4 @@ __&raquo; [http://localhost:9700/](http://localhost:9700/)__
 -----
 
 ## Help &amp; Support
-Help and additional details is available at [https://kenzy.ai](https://kenzy.ai)
+Help and additional details is available at [https://kenzy.dev](https://kenzy.dev)

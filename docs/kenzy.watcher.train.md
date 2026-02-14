@@ -29,4 +29,4 @@ This will create a ```recognizer.yml``` file and a ```names.json``` file.  These
 -----
 
 ## Help &amp; Support
-Help and additional details is available at [https://kenzy.ai](https://kenzy.ai)
+Help and additional details is available at [https://kenzy.dev](https://kenzy.dev)

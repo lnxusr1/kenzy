@@ -9,13 +9,13 @@ speech transcription (`whisper <https://openai.com/research/whisper>`__),
 and speech synthesis (`speecht5 <https://github.com/microsoft/SpeechT5>`__)/(`festival <http://www.cstr.ed.ac.uk/projects/festival/>`__).  
 Kenzy is written in Python and is targeted primarily at locally hosted home devices.
 
-Visit our main site: https://kenzy.ai/
+Visit our main site: https://kenzy.dev/
 
 --------------
 
 Help & Documentation
 
-Help and additional details are available at https://docs.kenzy.ai/
+Help and additional details are available at https://docs.kenzy.dev/
 
 .. |GitHub license| image:: https://img.shields.io/github/license/lnxusr1/kenzy
    :target: https://github.com/lnxusr1/kenzy/blob/master/LICENSE

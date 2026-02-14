@@ -1,5 +1,5 @@
 site_name: KENZY.Ai Docs
-site_url: https://kenzy.ai/
+site_url: https://kenzy.dev/
 repo_url: https://github.com/lnxusr1/kenzy/
 
 theme: 
@@ -8,7 +8,7 @@ theme:
     prev_next_buttons_location: none
     titles_only: true
     collapse_navigation: false
-    logo: https://kenzy.ai/wp-content/uploads/2022/11/kenzy_logo_text_light.png
+    logo: https://kenzy.dev/wp-content/uploads/2022/11/kenzy_logo_text_light.png
 
 nav:
     - Overview: 'index.md'
@@ -31,10 +31,10 @@ nav:
       - Raspberry Pi Notes: 'installation.raspberrypi.md'
       #- Training your Watcher: 'kenzy.watcher.train.md'
     - Links:
-      - '@ Code': 'https://kenzy.ai/code'
-      - '@ Community': 'https://kenzy.ai/discussion'
-      - '@ Bugs & Issues': 'https://kenzy.ai/issues'
-      - '@ kenzy.ai': 'https://kenzy.ai'
+      - '@ Code': 'https://kenzy.dev/code'
+      - '@ Community': 'https://kenzy.dev/discussion'
+      - '@ Bugs & Issues': 'https://kenzy.dev/issues'
+      - '@ kenzy.ai': 'https://kenzy.dev'
 
 plugins:
   - search
