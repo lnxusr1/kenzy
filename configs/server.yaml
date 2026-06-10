@@ -1,0 +1,34 @@
+# Kenzy server configuration
+
+# Logging level for the kenzy logger (debug, info, warning, error)
+log_level: "info"
+
+# Network interface to bind (0.0.0.0 = all interfaces)
+host: "0.0.0.0"
+
+# WebSocket port
+port: 8765
+
+# kenzy-speaker service — omit or set url to null to disable
+speaker:
+  url: "http://127.0.0.1:8768/identify"
+  timeout: 10.0
+  unknown_speaker: "unknown"
+
+# kenzy-llm service — omit or set url to null to disable
+llm:
+  url: "http://127.0.0.1:8766/process"
+  timeout: 30.0
+
+# kenzy-tts service — omit or set url to null to disable
+tts:
+  url: "http://127.0.0.1:8769/speak"
+  timeout: 60.0
+  # Bytes per streaming chunk delivered to the node.
+  # At 24 kHz int16 mono, 4096 bytes ≈ 85 ms of audio.
+  chunk_size: 4096
+
+# kenzy-stt service — omit or set url to null to disable
+stt:
+  url: "http://127.0.0.1:8767/transcribe"
+  timeout: 60.0

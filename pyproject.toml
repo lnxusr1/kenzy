@@ -1,0 +1,122 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kenzy"
+version = "3.0.0"
+description = "Distributed home voice-assistant: kenzy-node, kenzy-server, kenzy-stt, kenzy-tts, kenzy-llm, kenzy-speaker"
+requires-python = ">=3.11"
+
+# Core dependencies shared by both node and server
+dependencies = [
+    "websockets>=12.0",
+    "PyYAML>=6.0",
+    "numpy>=1.26,<2.0",
+]
+
+[project.optional-dependencies]
+# Install on the room node (Pi Zero 2 W or similar)
+node = [
+    "sounddevice>=0.4.6",
+    "openwakeword>=0.6.0",
+]
+
+# Install on the server host
+server = [
+    "httpx>=0.27.0",
+    "python-dotenv>=1.0.0",
+]
+
+# Install on the STT service host
+stt = [
+    "fastapi>=0.100.0",
+    "uvicorn>=0.23.0",
+    "faster-whisper>=1.0.0",
+]
+
+# Install on the TTS service host
+tts = [
+    "fastapi>=0.100.0",
+    "uvicorn>=0.23.0",
+    "openai>=1.0.0",
+    "python-dotenv>=1.0.0",
+]
+
+# Install on the speaker identification host
+speaker = [
+    "fastapi>=0.100.0",
+    "uvicorn>=0.23.0",
+    "speechbrain>=1.0.0",
+    "torch>=2.0.0",
+    "torchaudio>=2.0.0",
+    "sounddevice>=0.4.6",
+    "httpx>=0.27.0",
+]
+
+# Install on the LLM service host
+llm = [
+    "fastapi>=0.100.0",
+    "uvicorn>=0.23.0",
+    "litellm>=1.0.0",
+    "httpx>=0.27.0",
+    "python-dotenv>=1.0.0",
+    "yfinance>=0.2.0",
+    "feedparser>=6.0.0",
+    "trafilatura>=1.6.0",
+]
+
+# Local TTS using Kokoro (PyTorch) — also requires: sudo apt-get install espeak-ng
+kokoro = [
+    "kokoro>=0.9.0",
+    "torch>=2.0.0",
+]
+
+# Dev / test tooling
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "ruff>=0.4",
+    "mypy>=1.10",
+]
+
+[project.scripts]
+kenzy-deploy  = "kenzy.deploy.deploy:main"
+kenzy-node    = "kenzy.node.client:main"
+kenzy-devices = "kenzy.node.devices:main"
+kenzy-server  = "kenzy.server.server:main"
+kenzy-stt     = "kenzy.stt.stt:main"
+kenzy-tts     = "kenzy.tts.tts:main"
+kenzy-llm     = "kenzy.llm.llm:main"
+kenzy-speaker = "kenzy.speaker.speaker:main"
+kenzy-enroll  = "kenzy.speaker.enroll:main"
+kenzy-setup   = "kenzy.setup:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"kenzy.node" = [
+    "models/*.tflite",
+    "sounds/*.wav",
+]
+
+# ---------------------------------------------------------------------------
+# Tool configuration
+# ---------------------------------------------------------------------------
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths   = ["tests"]
+
+[tool.ruff]
+line-length = 100
+src = ["src"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
+
+[tool.mypy]
+python_version = "3.11"
+strict         = true
+mypy_path      = "src"

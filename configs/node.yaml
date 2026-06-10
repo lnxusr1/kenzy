@@ -1,0 +1,71 @@
+# Kenzy room node configuration
+
+# Logging
+# log_level controls the kenzy logger (debug, info, warning, error).
+# verbose: true also enables debug output from websockets/asyncio/sounddevice.
+log_level: "info"
+verbose: false
+
+# WebSocket URL of the Kenzy Speak service
+server_url: "ws://127.0.0.1:8765"
+
+# Unique identifier for this room/node
+room_id: "living_room"
+
+# Audio device for both capture and playback.
+# Use a substring of the device name as shown by sounddevice (PortAudio names,
+# not ALSA hw: tags).  A device index integer also works.  null = system default.
+# Example: "Anker PowerConf S330"
+audio_device: null
+
+# Sample rate used to open the microphone input stream.
+# Set to match the device's native rate if it doesn't support 16000 Hz.
+# Captured audio is automatically resampled to 16000 Hz before processing.
+# Common values: 16000 (default), 44100, 48000
+capture_sample_rate: 16000
+
+# Sample rate used to open the speaker output stream.
+# Set to match the device's native rate if it doesn't support 24000 Hz.
+# TTS audio from the server (24000 Hz) is automatically resampled for playback.
+# Common values: 24000 (default), 44100, 48000
+playback_sample_rate: 24000
+
+# WAV file to play on activation.
+# Absolute/relative path to a custom file, or null to use the bundled ready.wav.
+sound_ready: null
+
+# WAV file to play while waiting for the server response (after the user speaks).
+# Plays once and stops naturally, or is cut off when TTS begins or the wake word fires.
+# Set to null to disable (pure silence while waiting).
+sound_waiting: null
+
+# openwakeword model files to load.
+# Provide a list of absolute paths to override the bundled models.
+# Leave empty (or omit) to use the two bundled .tflite models:
+#   hey_kenzie.tflite  /  ken_zee.tflite
+wakeword_models: []
+
+# Confidence threshold [0.0–1.0] above which a wake-word fires
+wakeword_threshold: 0.5
+
+# Set to false to disable VAD entirely. The node will stream continuously after
+# activation until the server sends a STOP command (hard_cap_ms does not apply).
+vad_enabled: true
+
+# RMS amplitude below which a sample is considered silence.
+# 16-bit PCM range is 0–32767; 50 is very quiet, 200 is conversational noise floor.
+silence_rms_threshold: 50
+
+# Milliseconds of consecutive silence that ends an active session (post-speech).
+silence_ms: 400
+
+# Minimum milliseconds of speech that must be heard before silence detection
+# is enabled. Prevents the session ending during the pause after the wake word.
+speech_min_ms: 400
+
+# Milliseconds to wait for speech before giving up (no_speech timeout).
+# Applies only when speech_min_ms worth of speech has not yet been heard.
+no_speech_timeout_ms: 15000
+
+# Hard upper limit on session length in milliseconds.
+hard_cap_ms: 30000

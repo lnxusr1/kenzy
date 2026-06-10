@@ -1,0 +1,96 @@
+# Kenzy LLM service configuration
+
+host: "127.0.0.1"
+port: 8766
+log_level: "info"
+
+# ---------------------------------------------------------------------------
+# LLM backend
+# ---------------------------------------------------------------------------
+# LiteLLM model string — provider is encoded in the prefix:
+#   ollama/hermes3          → local Ollama
+#   gpt-4o                  → OpenAI     (needs OPENAI_API_KEY in .env)
+#   claude-opus-4-8         → Anthropic  (needs ANTHROPIC_API_KEY in .env)
+#   together_ai/...         → Together.ai
+#
+# API keys are read automatically from environment variables (.env).
+model: "gpt-5.1"
+
+# base_url is only needed for local providers (Ollama, LM Studio, etc.)
+# base_url: "http://localhost:11434"
+
+# Maximum tool-call iterations before returning whatever the LLM has.
+max_tool_iterations: 5
+
+# ---------------------------------------------------------------------------
+# Prompts
+# ---------------------------------------------------------------------------
+system_prompt: |
+  You are Kenzy, a helpful synthetic human. Be concise and conversational —
+  one or two sentences is usually enough. If you cannot help, say so briefly.
+
+  Tool usage: always call the appropriate tool when one is available for the
+  user's request — this includes controlling devices, fetching current
+  information (weather, news, stocks), and any other action a tool can perform.
+  Never describe an action as if you performed it without actually calling the
+  tool first.
+
+  Never assume the current state of any device (lights, fans, locks, covers,
+  thermostats, etc.).  Physical state can change at any time without your
+  knowledge — a light manually switched off, a door unlocked by hand.  When
+  the user asks you to turn something on or off, simply execute the action
+  without referencing or assuming what the current state is.  Only call
+  get_device_states when the user explicitly asks what the current state is.
+
+# Instruction passed to kenzy-tts with every response.
+voice_prompt: "Respond in a friendly, conversational tone at a moderate pace."
+
+# Location context — injected into every LLM call and used by skills
+# (e.g. weather default location) when not otherwise specified.
+location:
+  city: "Burlington"
+  state: "NC"
+  country: "US"
+  timezone: "America/New_York"   # IANA timezone e.g. "America/Chicago"
+  latitude: 36.099177
+  longitude: -79.433217
+
+# ---------------------------------------------------------------------------
+# Skills
+# ---------------------------------------------------------------------------
+# All skills in the skills/ directory are enabled automatically.
+# List skill names here only to disable them temporarily.
+skills:
+  # Path to the skills directory (absolute, or relative to the project root).
+  # All .py files found here are loaded automatically.
+  dir: skills
+
+  disabled: []
+
+  # Per-skill configuration
+  weather:
+    default_location: "New York, NY"
+    units: imperial        # imperial | metric | standard
+
+  news:
+    # Maximum headlines returned per request (keep low — output goes to TTS).
+    max_headlines: 5
+    # Model used for article summarisation sub-call (defaults to gpt-4o).
+    # model: "gpt-4o"
+    # base_url: null   # set for local providers (Ollama, LM Studio, etc.)
+    # RSS feed URLs keyed by category name.  The "latest" key is the default.
+    feeds:
+      local:    "https://myfox8.com/feed/"
+      latest:   "https://moxie.foxnews.com/google-publisher/latest.xml"
+      world:    "https://moxie.foxnews.com/google-publisher/world.xml"
+      politics: "https://moxie.foxnews.com/google-publisher/politics.xml"
+
+  home_assistant:
+    url: "http://homeassistant.local:8123"
+    # Long-lived access token: HA_API_KEY in .env
+    # Model used for the device-resolution sub-call (defaults to gpt-4o).
+    # model: "gpt-4o"
+    # base_url: null   # set for local providers (Ollama, LM Studio, etc.)
+    device_ids_yaml: "data/home_assistant/device_ids.yaml"
+    device_ids_json: "data/home_assistant/device_ids.json"
+    default_room: "living_room"

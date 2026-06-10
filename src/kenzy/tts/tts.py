@@ -1,0 +1,261 @@
+"""
+Kenzy TTS service.
+
+Accepts POST /speak with text and an optional voice instruction prompt,
+synthesises speech, and returns raw int16 PCM audio at 24 kHz mono as
+application/octet-stream.
+
+Supported providers (set via 'provider' in tts.yaml):
+  openai  — OpenAI TTS API (default); requires OPENAI_API_KEY
+  kokoro  — Local Kokoro TTS (PyTorch); requires pip install -e ".[kokoro]"
+            and the espeak-ng system package
+
+The sample rate and channel count are echoed in response headers
+(X-Sample-Rate, X-Channels) so callers can configure playback without
+hardcoding the format.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import re
+import sys
+from typing import Any
+
+from fastapi import FastAPI
+from fastapi.responses import Response
+from pydantic import BaseModel
+
+log = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Request model
+# ---------------------------------------------------------------------------
+
+
+class SpeakRequest(BaseModel):
+    text: str
+    voice_prompt: str | None = None
+    room_id: str | None = None
+
+
+# ---------------------------------------------------------------------------
+# App + module-level state
+# ---------------------------------------------------------------------------
+
+app = FastAPI(title="Kenzy TTS Service", version="0.1.0")
+
+_provider: str = "openai"
+
+# OpenAI
+_client: Any = None
+_model: str = "gpt-4o-mini-tts"
+_voice: str = "sage"
+_speed: float = 1.0
+
+# Kokoro
+_kokoro_pipeline: Any = None
+_kokoro_voice: str = "af_heart"
+_kokoro_speed: float = 1.0
+
+
+# ---------------------------------------------------------------------------
+# Endpoints
+# ---------------------------------------------------------------------------
+
+
+@app.get("/health")
+async def health() -> dict[str, str]:
+    return {"status": "ok"}
+
+
+@app.post("/speak")
+async def speak(req: SpeakRequest) -> Response:
+    loop = asyncio.get_running_loop()
+    log.info("[%s] speak: %s", req.room_id or "?", req.text[:80])
+    pcm = await loop.run_in_executor(None, _synthesise, req.text, req.voice_prompt or "")
+    return Response(
+        content=pcm,
+        media_type="application/octet-stream",
+        headers={"X-Sample-Rate": "24000", "X-Channels": "1"},
+    )
+
+
+# ---------------------------------------------------------------------------
+# Synthesis — OpenAI path
+# ---------------------------------------------------------------------------
+
+# OpenAI TTS accepts at most 4096 characters per request.
+_MAX_CHUNK_CHARS = 4096
+
+
+def _split_text(text: str) -> list[str]:
+    """Split text at sentence boundaries into chunks under _MAX_CHUNK_CHARS."""
+    if len(text) <= _MAX_CHUNK_CHARS:
+        return [text]
+
+    sentences = re.split(r"(?<=[.!?])\s+", text)
+    chunks: list[str] = []
+    current = ""
+
+    for sentence in sentences:
+        if not sentence:
+            continue
+        if len(sentence) > _MAX_CHUNK_CHARS:
+            for word in sentence.split():
+                if len(current) + len(word) + 1 > _MAX_CHUNK_CHARS:
+                    if current:
+                        chunks.append(current)
+                    current = word
+                else:
+                    current = (current + " " + word).strip()
+        elif current and len(current) + 1 + len(sentence) > _MAX_CHUNK_CHARS:
+            chunks.append(current)
+            current = sentence
+        else:
+            current = (current + " " + sentence).strip()
+
+    if current:
+        chunks.append(current)
+
+    return chunks
+
+
+def _synthesise_openai(text: str, voice_prompt: str) -> bytes:
+    kwargs: dict[str, Any] = {
+        "model": _model,
+        "voice": _voice,
+        "input": text,
+        "response_format": "pcm",
+        "speed": _speed,
+    }
+    if voice_prompt:
+        kwargs["instructions"] = voice_prompt
+    return _client.audio.speech.create(**kwargs).content  # type: ignore[no-any-return]
+
+
+# ---------------------------------------------------------------------------
+# Synthesis — Kokoro path
+# ---------------------------------------------------------------------------
+
+
+def _resolve_device(device: str) -> str:
+    """Resolve 'auto' to the best available PyTorch device."""
+    if device != "auto":
+        return device
+    import torch  # type: ignore[import-untyped]
+    if torch.cuda.is_available():
+        return "cuda"
+    if torch.backends.mps.is_available():
+        return "mps"
+    return "cpu"
+
+
+def _synthesise_kokoro(text: str) -> bytes:
+    import numpy as np  # type: ignore[import-untyped]
+
+    segments: list[Any] = []
+    for _, _, audio in _kokoro_pipeline(text, voice=_kokoro_voice, speed=_kokoro_speed):
+        if audio is not None and len(audio) > 0:
+            segments.append(audio)
+
+    if not segments:
+        return b""
+
+    combined = np.concatenate(segments)
+    return (np.clip(combined, -1.0, 1.0) * 32767).astype(np.int16).tobytes()
+
+
+# ---------------------------------------------------------------------------
+# Synthesis — dispatcher
+# ---------------------------------------------------------------------------
+
+
+def _synthesise(text: str, voice_prompt: str) -> bytes:
+    if _provider == "kokoro":
+        if voice_prompt:
+            log.debug("voice_prompt ignored — not supported by the Kokoro provider")
+        return _synthesise_kokoro(text)
+
+    # OpenAI path: split at sentence boundaries to respect the 4096-char limit.
+    chunks = _split_text(text)
+    if len(chunks) == 1:
+        return _synthesise_openai(chunks[0], voice_prompt)
+    log.debug("TTS: splitting %d chars into %d chunks", len(text), len(chunks))
+    return b"".join(_synthesise_openai(chunk, voice_prompt) for chunk in chunks)
+
+
+# ---------------------------------------------------------------------------
+# CLI entry point
+# ---------------------------------------------------------------------------
+
+
+def main() -> None:
+    global _provider
+    global _client, _model, _voice, _speed
+    global _kokoro_pipeline, _kokoro_voice, _kokoro_speed
+
+    import uvicorn  # type: ignore[import-untyped]
+    import yaml  # type: ignore[import-untyped]
+    from dotenv import load_dotenv  # type: ignore[import-untyped]
+
+    load_dotenv()
+
+    config_path = sys.argv[1] if len(sys.argv) > 1 else "configs/tts.yaml"
+    with open(config_path) as fh:
+        cfg: dict[str, Any] = yaml.safe_load(fh)
+
+    log_level: int = getattr(logging, str(cfg.get("log_level", "info")).upper(), logging.INFO)
+    fmt = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+    logging.basicConfig(level=logging.WARNING, format=fmt)
+    logging.getLogger("kenzy").setLevel(log_level)
+
+    _provider = str(cfg.get("provider", "openai")).lower()
+
+    if _provider == "kokoro":
+        try:
+            from kokoro import KPipeline  # type: ignore[import-untyped]
+        except ImportError as exc:
+            raise RuntimeError(
+                "kokoro is not installed — run: pip install -e '.[kokoro]'\n"
+                "Also ensure espeak-ng is installed: sudo apt-get install espeak-ng"
+            ) from exc
+
+        kcfg: dict[str, Any] = cfg.get("kokoro", {})
+        _kokoro_voice = str(kcfg.get("voice", "af_heart"))
+        _kokoro_speed = float(kcfg.get("speed", 1.0))
+        device        = _resolve_device(str(kcfg.get("device", "auto")))
+        lang_code     = str(kcfg.get("lang_code") or _kokoro_voice[0])
+
+        log.info(
+            "TTS provider: kokoro  voice=%s speed=%.2f device=%s lang=%s",
+            _kokoro_voice, _kokoro_speed, device, lang_code,
+        )
+        _kokoro_pipeline = KPipeline(lang_code=lang_code, device=device)
+
+    else:
+        try:
+            from openai import OpenAI  # type: ignore[import-untyped]
+        except ImportError as exc:
+            raise RuntimeError(
+                "openai is not installed — run: pip install openai"
+            ) from exc
+
+        ocfg    = cfg.get("openai", {})
+        _model  = str(ocfg.get("model", "gpt-4o-mini-tts"))
+        _voice  = str(ocfg.get("voice", "sage"))
+        _speed  = float(ocfg.get("speed", 1.0))
+        _client = OpenAI()
+        log.info("TTS provider: openai  model=%s voice=%s speed=%.2f", _model, _voice, _speed)
+
+    uvicorn.run(
+        app,
+        host=cfg.get("host", "127.0.0.1"),
+        port=int(cfg.get("port", 8769)),
+        log_level=str(cfg.get("log_level", "info")).lower(),
+    )
+
+
+if __name__ == "__main__":
+    main()

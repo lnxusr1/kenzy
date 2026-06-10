@@ -1,164 +1,169 @@
-# KENZY.Ai &middot; [![GitHub license](https://img.shields.io/github/license/lnxusr1/kenzy)](https://github.com/lnxusr1/kenzy/blob/master/LICENSE) ![Python Versions](https://img.shields.io/pypi/pyversions/yt2mp3.svg) ![Read the Docs](https://img.shields.io/readthedocs/kenzy) ![GitHub release (latest by date)](https://img.shields.io/github/v/release/lnxusr1/kenzy)
+# KENZY &middot; [![GitHub license](https://img.shields.io/github/license/lnxusr1/kenzy)](https://github.com/lnxusr1/kenzy/blob/main/LICENSE) ![Python Versions](https://img.shields.io/pypi/pyversions/yt2mp3.svg) ![Read the Docs](https://img.shields.io/readthedocs/kenzy) ![GitHub release (latest by date)](https://img.shields.io/github/v/release/lnxusr1/kenzy)
 
-This project is dedicated to building a "Synthetic Human" which is called Kenzy for which we have assigned the female gender pronoun of "she". She has intent determination ([padatious](https://github.com/MycroftAI/padatious)) visual face recognition ([opencv/opencv](https://github.com/opencv/opencv)), speech transcription ([whisper](https://openai.com/research/whisper)), and speech synthesis ([speecht5](https://github.com/microsoft/SpeechT5)/[festival](http://www.cstr.ed.ac.uk/projects/festival/).  Kenzy is written in Python and is targeted primarily at locally hosted home devices.
 
-Visit our main site: [https://kenzy.dev/](https://kenzy.dev/)
+A distributed home voice assistant built as six independently deployable microservices. Kenzy runs wake-word detection locally on room nodes (Raspberry Pi Zero 2 W or similar), streams audio to a central server for transcription, runs it through an LLM with tool-calling skills, and streams synthesized speech back to the room.
 
-Read the docs: [https://docs.kenzy.dev/](https://docs.kenzy.dev/)
+## Architecture
 
-## Kenzy's Architecture
-
-Kenzy's architecture is divided into compartments.  These compartments come with two main components:  Servers and Devices.  The servers focus on communication between other compartments and devices are designed to control input and output operations.  Devices are always run within a server and a server can execute only one device.  Servers talk to other servers using HTTP/HTTPS like standard web requests making customizing the communication fairly straightforward.  The most important device is the ```kenzy.skillmanager``` which is a special type of device that collects data and provides the skill engine for reacting to inputs.
-
-All options, configurations, and startup parameters are driven configuration files.  There are a few examples available in the repository under the examples folder.
-
-__Python Module Overview__
-
-| Class/Object         | Description                                                           |
-| :------------------- | :-------------------------------------------------------------------- |
-| kenzy.core           | Core logic with inheritable objects for each device.                  |
-| kenzy.extras         | Extra functions for UPNP/SSDP and other features.                     |
-| kenzy.skillmanager   | Core skill manager (a.k.a. "The Brain")                               |
-| kenzy.image          | Object/Face detection processing video capture (previously "Watcher") |
-| kenzy.tts            | Text-to-speech models processing audio-output (previously "Speaker")  |
-| kenzy.stt            | Speech-to-text models processing audio-input (previously "Listener")  |
-
------
-
-## Installation
-
-### Using the Installation Script
-
-The quickest and easiest way to install Kenzy is to use our installation script:
-
-```bash
-wget -q -O install.sh https://kenzy.dev/installer && sh install.sh
+```
+Node (mic) ──PCM over WebSocket──► Server
+                                      │
+                    ┌─────────────────┘ on session end
+                    ▼
+            STT  ──┐  (parallel)
+            Speaker ID ──┘
+                    │
+                    ▼
+                   LLM  ◄──► Skills (weather, news, home control, …)
+                    │
+                    ▼
+                   TTS
+                    │
+             PCM over WebSocket ──► Node (speaker)
 ```
 
-Running the script exactly as shown above will install Kenzy and all components.  If you want to be more selective you can add options as follows:
+| Service | Command | Default port | Role |
+|---|---|---|---|
+| **node** | `kenzy-node` | — | Wake word + audio capture, TTS playback |
+| **server** | `kenzy-server` | 8765 | WebSocket hub, pipeline orchestrator |
+| **stt** | `kenzy-stt` | 8767 | Speech-to-text via faster-whisper |
+| **tts** | `kenzy-tts` | 8769 | Text-to-speech via OpenAI TTS |
+| **llm** | `kenzy-llm` | 8766 | LLM + skill tool-calling via LiteLLM |
+| **speaker** | `kenzy-speaker` | 8768 | Speaker identification via SpeechBrain |
 
-* ```-b``` = Install skill manager dependencies (formerly the "Brain")
-* ```-l``` = Install stt dependencies (formerly the "Listener")
-* ```-s``` = Install tts dependencies (formerly the "Speaker")
-* ```-w``` = Install image dependencies (formerly the "Watcher")
-* ```-v [PATH]``` = Python virtual environment path (will create new if does not already exist)
+## Requirements
 
-Installer script has been tested on Ubuntu 22.04+, Debian Buster, and Raspberry Pi OS (Buster).
+- Python 3.11+
+- On Raspberry Pi OS / Debian: `sudo apt-get install libportaudio2 portaudio19-dev`
+- API keys: OpenAI (TTS + LLM), Home Assistant (home control skill). The weather skill uses the National Weather Service API — no key required.
 
-### Manual Installation
-
-Kenzy is available through pip, but to use the built-in devices there are a few extra libraries you may require.  Please visit the [Basic Install](https://docs.kenzy.dev/en/latest/installation.basic/) page for more details.  
-
-```bash
-# Install PIP (Python package manager) if not already installed
-sudo apt-get -y install python3-pip
-
-# Install the required system packages
-sudo apt-get -y install \
-  python3-fann2 \
-  python3-pyaudio \
-  python3-pyqt5 \
-  python3-dev \
-  libespeak-ng1 \
-  festival \
-  festvox-us-slt-hts  \
-  libportaudio2 \
-  portaudio19-dev \
-  libasound2-dev \
-  libatlas-base-dev \
-  cmake \
-  swig
-
-# Create your local environment and then activate it
-sudo apt-get -y install python3-venv
-mkdir -p ~/kenzy
-cd ~/kenzy
-python3 -m venv ./.venv --system-site-packages
-source ./.venv/bin/activate
-
-# Install the required build libraries
-python3 -m pip install scikit-build 
-
-# Install core required runtime libraries
-python3 -m pip install urllib3 \
-  requests \
-  padatious \
-  pyyaml \
-  psutil;
-
-# Install optional libraries for WatcherDevice
-python3 -m pip install --upgrade \
-  opencv-contrib-python \
-  yolov7detect \
-  face_recognition \
-  numpy;
-
-# Install optional libraries for ListenerDevice and SpeakerDevice
-
-sudo apt-get -y install \
-  libespeak-ng1 \
-  festival \
-  festvox-us-slt-hts \
-  python3-pyaudio \
-  libportaudio2 \
-  portaudio19-dev \
-  libasound2-dev \
-  libatlas-base-dev;
-
-python3 -m pip install --upgrade \
-  PyAudio \
-  soundfile \
-  wave \
-  torch \
-  fsspec \
-  transformers \
-  datasets \
-  webrtcvad \
-  sentencepiece;
-
-# If you have trouble with pyaudio then you should insure it is upgraded with:
-python3 -m pip install --upgrade pyaudio
-
-# Install the kenzy module
-python3 -m pip install kenzy
-```
-__NOTE:__ The installation of OpenCV is required when using the watcher device.  This may take a while on the Raspberry Pi OS as it has to recompile some of the libraries.  Patience is required here as the spinner icon appeared to get stuck several times in our tests... so just let it run until it completes.  If it encounters a problem then it will print out the error for additional troubleshooting.  
-
-If you prefer not to wait then you can install the opencv package that comes with most distributions however this version does not support facial recognition.  To use the package instead then issue ```apt-get install python3-opencv``` and remove the ```opencv-contrib-python``` from the pip package list above.  (This will spead up the installation time significantly on the Raspberry Pi at the cost of functionality.)
-
------
-
-## Troubleshooting: "Cannot find FANN libs"
-If you encounter an error trying to install the kenzy module on the Raspberry Pi then you may need to add a symlink to the library FANN library. This is due to a bug/miss in the "find_fann" function within the Python FANN2 library as it doesn't look for the ARM architecture out-of-the-box.  To fix it run the following:
-
-### Raspberry Pi (ARM)
-```bash
-sudo ln -s /usr/lib/arm-linux-gnueabihf/libdoublefann.so.2 /usr/local/lib/libdoublefann.so
-```
-
-### Ubuntu 22.04 LTS (x86_64)
-```bash
-sudo ln -s /usr/lib/x86_64-linux-gnu/libdoublefann.so.2 /usr/local/lib/libdoublefann.so
-```
-
------
-
-## Starting Up
-You can execute Kenzy directly as a module.  To do so try the following:
+## Setup
 
 ```bash
-python3 -m kenzy --config CONFIG_FILE
+# Create and activate a virtualenv
+python3 -m venv .venv
+source .venv/bin/activate
+
+# Install the services you need
+pip install -e ".[node]"                          # room node only
+pip install -e ".[server,stt,tts,llm,speaker]"   # full server stack
+pip install -e ".[node,server,stt,tts,llm,speaker,dev]"  # everything
+
+# Download wake-word and speaker-ID models (run once after install)
+kenzy-setup
+
+# Configure API keys
+cp .env.example .env
+# Edit .env and fill in OPENAI_API_KEY, WEATHER_API_KEY, HA_API_KEY
 ```
-Use the ```--help``` option for full listing of command line options including specifying a [custom configuration](https://docs.kenzy.dev/en/latest/kenzy.config/) file.
 
-## Web Control Panel
+## Running
 
-If everything is working properly you should be able to point your device to the web control panel running on the __Brain__ engine to test it out.  The default URL is:
+Each service reads its config from `configs/<service>.yaml`. Start them in any order:
 
-__&raquo; [http://localhost:9700/](http://localhost:9700/)__
+```bash
+kenzy-server  [configs/server.yaml]
+kenzy-stt     [configs/stt.yaml]
+kenzy-tts     [configs/tts.yaml]
+kenzy-llm     [configs/llm.yaml]
+kenzy-speaker [configs/speaker.yaml]
+kenzy-node    [configs/node.yaml]     # on each room device
+```
 
+### Speaker enrollment
 
------
+To enable speaker identification, enroll each person once:
 
-## Help &amp; Support
-Help and additional details is available at [https://kenzy.dev](https://kenzy.dev)
+```bash
+kenzy-enroll [configs/speaker.yaml]
+```
+
+To identify the correct audio device and sample rates for a node:
+
+```bash
+kenzy-devices
+```
+
+### Remote deployment
+
+`kenzy-deploy` manages installation and updates across a fleet of remote hosts over SSH. See `configs/deploy.yaml` for host configuration.
+
+```bash
+kenzy-deploy init       # one-time OS setup on all hosts
+kenzy-deploy install    # first full deployment
+kenzy-deploy upgrade    # push source + skills + .env updates
+kenzy-deploy status     # check service health
+```
+
+Prerequisites on each remote host: SSH key auth and passwordless sudo.
+
+## Configuration
+
+All config files live in `configs/`. Copy and edit as needed — the defaults are reasonable starting points.
+
+Key settings:
+
+* **`configs/node.yaml`** — wake word threshold, VAD silence detection, audio device selection, sound files
+* **`configs/server.yaml`** — URLs for each downstream service; omit a URL to disable that stage
+* **`configs/llm.yaml`** — LLM model (supports OpenAI, Anthropic, Ollama, and any LiteLLM provider), system prompt, location context, per-skill config
+* **`configs/stt.yaml`** — Whisper model size and compute device
+* **`configs/tts.yaml`** — OpenAI TTS model and voice
+* **`configs/speaker.yaml`** — similarity threshold for speaker identification
+
+## Skills
+
+Skills are async Python functions in `skills/` decorated with `@skill`. They are discovered and loaded automatically at startup — no registration required. The LLM calls them as tools based on their docstrings and type signatures.
+
+Included skills:
+
+| Skill file | What it does |
+|---|---|
+| `weather.py` | Current conditions and forecast via NWS |
+| `news.py` | RSS headlines and article summaries |
+| `stocks.py` | Stock quotes via yfinance |
+| `home_assistant.py` | Smart home control via Home Assistant REST API |
+| `random_tools.py` | Coin flip, dice, random number, pick from list |
+| `about.py` | Reports the installed Kenzy version |
+
+### Adding a skill
+
+```python
+# skills/my_skill.py
+from kenzy.llm.skills import skill
+
+@skill
+async def my_skill(query: str) -> str:
+    """One-line description the LLM uses to decide when to call this."""
+    return "result"
+```
+
+Per-skill config lives under `skills.<name>` in `llm.yaml`. Secrets come from environment variables in `.env`.
+
+### Home Assistant device map
+
+Smart home control uses two files in `data/home_assistant/`:
+
+- `device_ids.yaml` — human-readable device hierarchy (floors → rooms → types → aliases)
+- `device_ids.json` — flat alias → HA entity ID mapping
+
+The LLM resolves natural language commands against the YAML to find the right devices, then looks up their entity IDs in the JSON before calling the HA API.
+
+## Development
+
+```bash
+source .venv/bin/activate
+ruff check src/      # lint
+ruff format src/     # format
+mypy src/            # type-check
+pytest               # run tests
+```
+
+## Environment variables
+
+See `.env.example` for the full list. Required variables:
+
+| Variable | Used by |
+|---|---|
+| `OPENAI_API_KEY` | TTS service, LLM service (if using OpenAI models) |
+| `WEATHER_API_KEY` | Reserved for alternative weather providers (not used by the default NWS skill) |
+| `HA_API_KEY` | Home Assistant skill |

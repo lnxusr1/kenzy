@@ -1,0 +1,78 @@
+# kenzy-deploy configuration
+#
+# Run from the project root:
+#   kenzy-deploy init              # one-time OS setup on all hosts
+#   kenzy-deploy install           # first full deployment
+#   kenzy-deploy upgrade           # push an update to all hosts
+#   kenzy-deploy status            # check service health
+#   kenzy-deploy logs stt --host main-server
+#
+# Prerequisites on each remote host
+#   - SSH key auth:      ssh-copy-id user@host
+#   - Passwordless sudo: add "user ALL=(ALL) NOPASSWD: ALL" to /etc/sudoers
+
+defaults:
+  ssh_user:     pi
+  install_path: /opt/kenzy
+  # venv_path defaults to {install_path}/.venv if omitted
+  python_bin:   python3   # must be 3.11+ ; use python3.11 on Bullseye
+  # Files/dirs synced to every host on install/upgrade.
+  # Paths are relative to the project root.  Both files and directories work.
+  sync:
+    - .env
+
+# Extra directories synced per service, in addition to the main source tree.
+# skills/, data/, and models/ are excluded from the base rsync and only sent
+# to hosts that need them.  Add or remove entries here to change the mapping.
+# Per-host 'sync' lists (see hosts below) are merged in after these.
+service_sync:
+  llm:     [skills, data/home_assistant]
+  speaker: [data/speakers]
+
+# Per-host config overrides
+# -------------------------
+# To customise configs for a specific host, create a directory at:
+#   configs/hosts/<host-name>/
+# and place only the files that differ from the base configs/ there.
+# On install/upgrade, these files are merged into {install_path}/configs/
+# on that host only, overwriting just the files present in the overlay.
+#
+# Example — two nodes with different room IDs and audio devices:
+#   configs/hosts/living-room/node.yaml   ← full copy of configs/node.yaml, edited for this host
+#   configs/hosts/bedroom/node.yaml       ← full copy of configs/node.yaml, edited for this host
+#
+# Each overlay file completely replaces the base config file on that host.
+# It must be a complete, valid config — partial files are not merged.
+# Files not present in the overlay are left as the base version (no --delete).
+
+hosts:
+  # Example: this machine — no SSH needed, commands run directly
+  local-server:
+    address:  127.0.0.1
+    local:    true
+    ssh_user: ubuntu          # used as the systemd service User even locally
+    services: [server, stt, tts, llm]
+
+  # Example: room node (Pi Zero 2 W or similar)
+  # Create configs/hosts/living-room/node.yaml to set room_id and audio_device.
+  living-room:
+    address:  192.168.1.10
+    services: [node]
+
+  # Example: dedicated speaker-ID box (GPU optional)
+  speaker-box:
+    address:  192.168.1.30
+    services: [speaker]
+    # sync: [some/extra/path]   # optional host-specific additions
+    # torch_index_url: "https://download.pytorch.org/whl/cu124"
+    # ^ Set this if pip installs a torch wheel that doesn't match the host's
+    #   CUDA version (symptom: libcudart.so.XX not found at startup).
+    #   Run 'nvidia-smi' on the host to find the CUDA version, then pick:
+    #     cu118  cu121  cu124  (CUDA 11.8 / 12.1 / 12.4)
+    #     cpu    (no GPU)
+    #   Can also be set under 'defaults' to apply to all hosts.
+    # pip_packages:
+    #   - "transformers<4.49"
+    # ^ Extra pip installs applied after the main install/upgrade, useful for
+    #   host-specific version pins (e.g. older GPU that requires an older
+    #   transformers because torch 2.7+ cu124 builds are unavailable).

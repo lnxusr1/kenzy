@@ -1,40 +1,37 @@
-site_name: KENZY.Ai Docs
-site_url: https://kenzy.dev/
-repo_url: https://github.com/lnxusr1/kenzy/
+site_name: KENZY
+site_description: Distributed home voice assistant
+docs_dir: docs
 
-theme: 
-    name: readthedocs
-    highlightjs: true
-    prev_next_buttons_location: none
-    titles_only: true
-    collapse_navigation: false
-    logo: https://kenzy.dev/wp-content/uploads/2022/11/kenzy_logo_text_light.png
-
-nav:
-    - Overview: 'index.md'
-    - Setup:
-      - Installation: 'installation.basic.md'
-      - Getting Started: 'kenzy.config.md'
-    - Services & Devices:
-      - Service Settings: 'kenzy.containers.md'
-      - Skill Manager: 'kenzy.devices.skillmanager.md'
-      - Speech-to-Text: 'kenzy.devices.listener.md'
-      - Text-to-Speech: 'kenzy.devices.speaker.md'
-      - Image/Video Processing: 'kenzy.devices.watcher.md'
-    - Extending:
-    #  - Creating a Device: 'kenzy.devices.md'
-      - Creating a Skill: 'kenzy.skill.md'
-      - Skill List: 'kenzy.skills.md'
-    #  - Calls to a Container/Device: 'kenzy.communication.md'
-    - Extras:
-      - Audio/Video Extras: 'installation.audio.md'
-      - Raspberry Pi Notes: 'installation.raspberrypi.md'
-      #- Training your Watcher: 'kenzy.watcher.train.md'
-    - Links:
-      - '@ Code': 'https://kenzy.dev/code'
-      - '@ Community': 'https://kenzy.dev/discussion'
-      - '@ Bugs & Issues': 'https://kenzy.dev/issues'
-      - '@ kenzy.ai': 'https://kenzy.dev'
+theme:
+  name: readthedocs
 
 plugins:
   - search
+
+markdown_extensions:
+  - admonition
+  - codehilite
+  - fenced_code
+  - tables
+  - toc:
+      permalink: true
+
+nav:
+  - Home: index.md
+  - Getting Started: getting-started.md
+  - Architecture: architecture.md
+  - Configuration:
+    - Overview: configuration/index.md
+    - Node: configuration/node.md
+    - Server: configuration/server.md
+    - STT: configuration/stt.md
+    - TTS: configuration/tts.md
+    - LLM: configuration/llm.md
+    - Speaker ID: configuration/speaker.md
+  - Skills:
+    - Overview: skills/index.md
+    - Built-in Skills: skills/builtin.md
+    - Writing Skills: skills/writing-skills.md
+    - Home Assistant: skills/home-assistant.md
+  - Speaker Enrollment: speaker-enrollment.md
+  - Deployment: deployment.md
