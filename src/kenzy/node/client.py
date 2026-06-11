@@ -497,6 +497,8 @@ class NodeClient:
                     await self._end_streaming(reason="server_stop")
                 elif self._state == _STATE_TTS:
                     await self._end_tts(reason="server_stop")
+                elif self._state == _STATE_IDLE and self._player is not None:
+                    self._player.abort()
 
             elif mtype == protocol.MSG_TTS_START:
                 sid = str(msg.get("session_id") or uuid.uuid4())

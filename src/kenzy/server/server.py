@@ -23,6 +23,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import sys
 import uuid
 from dataclasses import dataclass, field
@@ -321,6 +322,18 @@ async def _stdin_control(server: AudioServer) -> None:
 # STT pipeline
 # ---------------------------------------------------------------------------
 
+_STOP_PHRASES: frozenset[str] = frozenset({
+    "stop",
+    "be quiet",
+    "quiet",
+    "shut up",
+    "silence",
+    "please stop",
+    "please be quiet",
+    "please shut up",
+    "shut the heck up",
+})
+
 
 class TranscribingServer(AudioServer):
     """
@@ -488,6 +501,13 @@ class TranscribingServer(AudioServer):
             log.info("[%s] STT: %s | speaker: %s", room_id, text or "(none)", speaker)
 
             if not text:
+                return
+
+            normalized = re.sub(r"[^\w\s]", "", text).strip().lower()
+            if normalized in _STOP_PHRASES:
+                log.info("[%s] stop phrase detected (%r) — ending session", room_id, text)
+                await self.stop_node(room_id)
+                self._tts_active.discard(room_id)
                 return
 
             if self._llm_url:
