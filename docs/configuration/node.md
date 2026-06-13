@@ -23,6 +23,7 @@ The node service runs on each room device. It captures microphone audio, detects
 |---|---|---|
 | `wakeword_models` | `[]` | List of paths to `.tflite` or `.onnx` model files. Empty uses the bundled `hey_kenzie.tflite` |
 | `wakeword_threshold` | `0.5` | Confidence threshold [0.0–1.0] above which a detection fires |
+| `wakeword_vad_threshold` | `0.0` | openwakeword Silero VAD gate [0.0–1.0]. Wake-word predictions are discarded unless the voice-activity score exceeds this. `0` disables it. Set to ~`0.5` to suppress false detections on near-silence/noise. With it enabled you can safely *lower* `wakeword_threshold` (e.g. `0.4`) for better real-speech sensitivity without reintroducing silence false-positives. The Silero VAD model is downloaded automatically by `kenzy-setup`. |
 
 ### Voice activity detection (VAD)
 
@@ -40,7 +41,7 @@ The node service runs on each room device. It captures microphone audio, detects
 | Key | Default | Description |
 |---|---|---|
 | `sound_ready` | `null` | WAV file played on activation (the "chime"). `null` uses the bundled `ready.wav`. Accepts an absolute path or a bare filename loaded from the bundled sounds directory. |
-| `sound_waiting` | `null` | WAV file played while waiting for the server response. Plays once and stops naturally or is interrupted when TTS begins. `null` uses the bundled `waiting.wav`. Set to an empty string to disable. |
+| `sound_waiting` | `null` | WAV file played while waiting for the server response. Plays once and stops naturally or is interrupted when TTS begins. `null` (or an empty string) disables it — pure silence while waiting. Provide a filename or path to enable it. |
 
 !!! tip "Finding the right device name"
     Run `kenzy-devices` after install. It tests every PortAudio device against Kenzy's required sample rates and prints ready-to-paste `node.yaml` settings including `capture_sample_rate` and `playback_sample_rate` if resampling is needed.
@@ -57,7 +58,8 @@ audio_device: "Anker PowerConf S330"  # substring of name shown by kenzy-devices
 capture_sample_rate: 48000            # device native rate; resampled to 16000 Hz
 playback_sample_rate: 48000           # device native rate; resampled to 24000 Hz
 
-wakeword_threshold: 0.6
+wakeword_threshold: 0.4         # lower is safe once VAD gating is on
+wakeword_vad_threshold: 0.5     # reject wake-word hits on near-silence/noise
 silence_rms_threshold: 80
 silence_ms: 500
 

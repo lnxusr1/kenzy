@@ -94,7 +94,15 @@ async def on_wakeword(self, session: NodeSession, model: str, score: float) -> N
 
 ## LLM service
 
-The LLM service maintains a **per-room conversation history** — a rolling window of the last 10 turns, each expiring 3 minutes after it was recorded. History is injected as real `role: user` / `role: assistant` message pairs between the system prompt and the current request, so the model can resolve follow-up references ("tell me more about the second one") naturally.
+### Deterministic fast path
+
+Before the model is consulted, each `/process` request is run through the registered **fast intents** (`@fast_intent` matchers). If one confidently matches — a time/date query, a Home Assistant control command — it answers locally with **no remote model call**, and the pipeline skips straight to TTS. Only requests that every matcher *misses* fall through to the tool-calling LLM below. This keeps high-frequency commands like "turn on the lights" at local-parse-plus-one-HTTP-call latency instead of a full model round-trip. See [Skills → Two resolution tiers](skills/index.md#two-resolution-tiers).
+
+The `/process` response carries an `expect_response` flag (set by the fast path) reserved for re-opening the mic for a follow-up turn without the wake word.
+
+### Conversation history
+
+The LLM service maintains a **per-room conversation history** — a rolling window of the last 10 turns, each expiring 3 minutes after it was recorded. History is injected as real `role: user` / `role: assistant` message pairs between the system prompt and the current request, so the model can resolve follow-up references ("tell me more about the second one") naturally. Fast-path responses are recorded too, so context carries across both tiers.
 
 The tool-calling loop executes skills sequentially until the model returns a plain text response or the iteration limit is reached. Internal tool calls are never stored in conversation history — only the final spoken response and the user's utterance are recorded.
 

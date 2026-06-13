@@ -174,6 +174,41 @@ async def my_skill(query: str) -> str:
         return f"I wasn't able to complete that: {exc}"
 ```
 
+## Fast intents (deterministic path)
+
+An `@skill` is invoked by the LLM after a remote model round-trip. For common, high-frequency commands that should feel **instant**, add a deterministic `@fast_intent` matcher that runs *before* the LLM and answers with no model call.
+
+```python
+# skills/datetime_skill.py
+import datetime
+from kenzy.llm.skills import FastResult, fast_intent
+
+@fast_intent(priority=100)
+async def fast_datetime(utterance: str, room_id: str | None, speaker: str | None) -> FastResult:
+    """Answer time/date questions instantly, no LLM."""
+    text = utterance.lower()
+    if "time" not in text or "what" not in text:
+        return FastResult.miss()          # defer to the next matcher / the LLM
+    now = datetime.datetime.now()
+    return FastResult.handled(f"It's {now.strftime('%-I:%M %p')}.")
+```
+
+A matcher is called as `func(utterance, room_id, speaker)` and must return a `FastResult`:
+
+| Constructor | Effect |
+|---|---|
+| `FastResult.handled(text, voice_prompt=None, expect_response=False)` | Short-circuit the pipeline and speak `text` (skip the LLM) |
+| `FastResult.miss()` | This matcher doesn't apply — fall through to the next matcher, then the LLM |
+| `FastResult.clarify(text)` | Speak a clarifying question (skips the LLM) |
+
+Matchers run in **descending `priority`** order; the first to return a handled/clarify result wins. A matcher that raises is logged and treated as a miss, so one bad skill can't break the pipeline.
+
+**Design guidance:** keep fast intents *high-precision*. Match only what you're confident about and return `miss()` for anything ambiguous — the LLM is the safety net. Because the two front-ends are independent, a skill can be more forgiving in the LLM path while staying strict in the fast path.
+
+A single skill file commonly exposes both: a `@fast_intent` for the easy cases and an `@skill` the LLM falls back on (see [`home_assistant.py`](home-assistant.md)). Both honour `skills.disabled` in `llm.yaml`.
+
+For deterministic intent/slot parsing beyond simple keyword checks, the `llm` extra ships [`padacioso`](https://github.com/OpenVoiceOS/padacioso) (pure-Python, Padatious-style `.intent` syntax) and [`rapidfuzz`](https://github.com/rapidfuzz/RapidFuzz) (fuzzy name matching).
+
 ## Disabling a skill temporarily
 
 Add the function name to `skills.disabled` in `llm.yaml`:
@@ -184,4 +219,4 @@ skills:
     - my_skill
 ```
 
-The file is not deleted; the skill is simply not registered at startup.
+The file is not deleted; the skill is simply not registered at startup. This disables both its `@skill` and any `@fast_intent` of the same name.

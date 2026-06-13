@@ -262,10 +262,15 @@ class NodeClient:
         self._room_id: str = cfg["room_id"]
         self._wakeword_models: list[str] = cfg.get("wakeword_models", [])
         self._wakeword_threshold: float = float(cfg.get("wakeword_threshold", 0.5))
+        # openwakeword Silero VAD gate: predictions are suppressed unless the VAD
+        # speech score exceeds this. 0 disables it (openwakeword default), which
+        # lets near-silence "blips" produce spurious wake-word hits.
+        self._wakeword_vad_threshold: float = float(cfg.get("wakeword_vad_threshold", 0.0))
         self._silence_rms: float = float(cfg.get("silence_rms_threshold", 50.0))
         self._audio_device: str | int | None = cfg.get("audio_device", None)
         self._sound_ready:   str = str(cfg.get("sound_ready")   or "ready.wav")
-        self._sound_waiting: str = str(cfg.get("sound_waiting") or "waiting.wav")
+        _sw = cfg.get("sound_waiting", "waiting.wav")
+        self._sound_waiting: str | None = str(_sw) if _sw else None
         self._capture_rate:  int = int(cfg.get("capture_sample_rate",  protocol.SAMPLE_RATE))
         self._playback_rate: int = int(cfg.get("playback_sample_rate", _TTS_SERVER_RATE))
 
@@ -335,11 +340,16 @@ class NodeClient:
         model_paths = self._wakeword_models if self._wakeword_models else _bundled_model_paths()
         framework = _infer_framework(model_paths)
 
-        self._oww = Model(wakeword_models=model_paths, inference_framework=framework)
+        self._oww = Model(
+            wakeword_models=model_paths,
+            inference_framework=framework,
+            vad_threshold=self._wakeword_vad_threshold,
+        )
         log.info(
-            "openwakeword loaded: %s (framework=%s)",
+            "openwakeword loaded: %s (framework=%s, vad_threshold=%.2f)",
             [Path(p).name for p in model_paths],
             framework,
+            self._wakeword_vad_threshold,
         )
 
     # ------------------------------------------------------------------
@@ -638,13 +648,16 @@ class NodeClient:
         self._player = _SoundPlayer(sound_audio, sound_rate, self._audio_device, self._playback_rate)
         log.info("Sound: %s (%d Hz → %d Hz stream)", self._sound_ready, sound_rate, self._playback_rate)
 
-        try:
-            wait_audio, wait_rate = _load_sound(self._sound_waiting)
-            wait_1d = wait_audio.mean(axis=1).astype(np.int16) if wait_audio.ndim > 1 else wait_audio.astype(np.int16)
-            self._waiting_audio = _resample(wait_1d, wait_rate, self._playback_rate)
-            log.info("Waiting sound: %s (%d Hz → %d Hz)", self._sound_waiting, wait_rate, self._playback_rate)
-        except Exception as exc:
-            log.info("Waiting sound not loaded (%s) — silence during processing", exc)
+        if self._sound_waiting:
+            try:
+                wait_audio, wait_rate = _load_sound(self._sound_waiting)
+                wait_1d = wait_audio.mean(axis=1).astype(np.int16) if wait_audio.ndim > 1 else wait_audio.astype(np.int16)
+                self._waiting_audio = _resample(wait_1d, wait_rate, self._playback_rate)
+                log.info("Waiting sound: %s (%d Hz → %d Hz)", self._sound_waiting, wait_rate, self._playback_rate)
+            except Exception as exc:
+                log.info("Waiting sound not loaded (%s) — silence during processing", exc)
+        else:
+            log.info("Waiting sound disabled — silence during processing")
 
         audio_task = asyncio.create_task(self._audio_loop(), name="audio")
 

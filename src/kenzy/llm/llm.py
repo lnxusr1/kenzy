@@ -60,6 +60,9 @@ class ProcessRequest(BaseModel):
 class ProcessResponse(BaseModel):
     text: str
     voice_prompt: str
+    # Set by a fast intent (or, later, the LLM) to ask the server to re-open the
+    # mic for a follow-up without requiring the wake word. Honoured by the server.
+    expect_response: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -172,6 +175,16 @@ async def process(req: ProcessRequest) -> ProcessResponse:
     raw_speaker     = req.speaker or "unknown"
     display_speaker = raw_speaker if raw_speaker.lower() != "unknown" else None
     log.info("[%s/%s] %s", req.room_id or "?", display_speaker or "?", req.text)
+
+    # Deterministic fast path: try local/instant matchers before the LLM.
+    fast = await skill_registry.dispatch_fast(req.text, req.room_id, raw_speaker)
+    if fast is not None:
+        vp = fast.voice_prompt or _voice_prompt
+        _history.add(req.room_id or "", raw_speaker, req.text, fast.text)
+        return ProcessResponse(
+            text=fast.text, voice_prompt=vp, expect_response=fast.expect_response
+        )
+
     text, voice_prompt = await _run_llm(req.text, raw_speaker, req.room_id)
     return ProcessResponse(text=text, voice_prompt=voice_prompt)
 

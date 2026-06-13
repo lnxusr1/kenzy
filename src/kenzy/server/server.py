@@ -501,6 +501,8 @@ class TranscribingServer(AudioServer):
             log.info("[%s] STT: %s | speaker: %s", room_id, text or "(none)", speaker)
 
             if not text:
+                await self.stop_node(room_id)
+                self._tts_active.discard(room_id)
                 return
 
             normalized = re.sub(r"[^\w\s]", "", text).strip().lower()

@@ -16,6 +16,15 @@ skills/
 
 The LLM decides which skills to call and with what arguments based entirely on the docstrings. Well-written docstrings that describe *when* to use a skill are as important as the skill's implementation.
 
+## Two resolution tiers
+
+Kenzy resolves a request in two stages, fastest first:
+
+1. **Fast path (deterministic).** Before the LLM is consulted, the request is run through any registered **fast intents** — `@fast_intent` matchers that recognise common, high-frequency commands locally and answer instantly with **no remote model call**. Time/date queries and the bulk of Home Assistant control ("turn on the kitchen lights") are handled here.
+2. **LLM fallback.** Anything a fast intent doesn't confidently match falls through to the tool-calling LLM exactly as before. The fast layer is deliberately *high-precision*: when it isn't sure, it defers.
+
+A skill can expose **both** — a deterministic `@fast_intent` front-end for the easy cases and an `@skill` tool definition for the LLM to fall back on. See [Writing Skills](writing-skills.md#fast-intents-deterministic-path) for the fast-intent API.
+
 ## Skill configuration
 
 Per-skill settings live under `skills.<skill_name>` in `llm.yaml`:

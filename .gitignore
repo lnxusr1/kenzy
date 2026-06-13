@@ -48,3 +48,8 @@ Thumbs.db
 # Claude Code
 .claude/
 CLAUDE.md
+models/wakeword
+design/
+site/
+www/
+screenshot_site.py

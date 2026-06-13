@@ -64,6 +64,8 @@ llm = [
     "yfinance>=0.2.0",
     "feedparser>=6.0.0",
     "trafilatura>=1.6.0",
+    "padacioso>=1.0.0",
+    "rapidfuzz>=3.0.0",
 ]
 
 # Local TTS using Kokoro (PyTorch) — also requires: sudo apt-get install espeak-ng

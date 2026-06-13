@@ -11,6 +11,9 @@ All notable changes to this project will be documented in this file.
 - OpenWakeWord detection
 - LLM backed intent processing and tool calling
 - Optional cloud STT using openAI (local STT via faster-whisper is still the default)
+- Deterministic fast-path skill layer (`@fast_intent`): common commands resolve locally with no LLM round-trip, falling back to the LLM automatically when unmatched
+- Wake word VAD gating (`wakeword_vad_threshold`) using openwakeword's Silero VAD to suppress false activations on near-silence/noise
+- SKILL: Time/date queries answered instantly via the fast path
 
 ### Modified
 
@@ -23,6 +26,7 @@ All notable changes to this project will be documented in this file.
 - SKILL: Stock ticket updates
 - SKILL: Random number generator
 - SKILL: News via RSS
+- SKILL: HomeAssistant control now resolves common commands deterministically (padacioso intent parsing + rapidfuzz device matching) before falling back to the LLM resolver; adds optional per-room device overlay (aliases, default groups, exclusions), on/off group asymmetry, explicit-room scoping, and speaker-gated lock/unlock
 
 ### Removed
 

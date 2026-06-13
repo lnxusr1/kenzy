@@ -45,8 +45,17 @@ sound_waiting: null
 #   hey_kenzie.tflite  /  ken_zee.tflite
 wakeword_models: []
 
-# Confidence threshold [0.0–1.0] above which a wake-word fires
+# Confidence threshold [0.0–1.0] above which a wake-word fires.
+# With wakeword_vad_threshold enabled below, this can be lowered (~0.4) to catch
+# more natural/quieter pronunciations without reintroducing silence false-positives.
 wakeword_threshold: 0.5
+
+# openwakeword Silero VAD gate [0.0–1.0]. For every audio frame a voice-activity
+# score is computed, and wake-word predictions are discarded unless that score
+# exceeds this value. 0 disables it (default). Set to ~0.5 to suppress spurious
+# wake-word hits on near-silence/noise. The Silero VAD model is downloaded
+# automatically at first startup.
+wakeword_vad_threshold: 0.0
 
 # Set to false to disable VAD entirely. The node will stream continuously after
 # activation until the server sends a STOP command (hard_cap_ms does not apply).

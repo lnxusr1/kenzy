@@ -29,6 +29,7 @@ import json
 import logging
 import sys
 import typing
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
@@ -40,6 +41,10 @@ log = logging.getLogger(__name__)
 
 _REGISTRY: dict[str, tuple[Callable[..., Any], dict[str, Any]]] = {}
 _CONFIG: dict[str, Any] = {}
+
+# Deterministic fast-path matchers: (priority, name, async_fn). Higher priority
+# runs first.  Kept sorted descending so dispatch is a simple in-order scan.
+_FAST_REGISTRY: list[tuple[int, str, Callable[..., Any]]] = []
 
 
 def set_config(cfg: dict[str, Any]) -> None:
@@ -126,6 +131,91 @@ def skill(func: Callable[..., Any]) -> Callable[..., Any]:
 
 
 # ---------------------------------------------------------------------------
+# Fast-path (deterministic) intents
+# ---------------------------------------------------------------------------
+
+@dataclass
+class FastResult:
+    """Outcome of a deterministic fast-intent matcher.
+
+    Construct via the classmethods:
+      handled  – short-circuit the pipeline and speak ``text`` (skip the LLM).
+      miss     – this matcher does not apply; defer to the next matcher / LLM.
+      clarify  – speak a clarifying question; still skips the LLM and (once the
+                 server honours it) re-opens the mic for the user's reply.
+    """
+
+    status: str                       # "handled" | "miss" | "clarify"
+    text: str = ""
+    voice_prompt: str | None = None   # None → caller substitutes its default
+    expect_response: bool = False
+
+    @classmethod
+    def handled(
+        cls, text: str, voice_prompt: str | None = None, expect_response: bool = False
+    ) -> FastResult:
+        return cls("handled", text, voice_prompt, expect_response)
+
+    @classmethod
+    def miss(cls) -> FastResult:
+        return cls("miss")
+
+    @classmethod
+    def clarify(cls, text: str, voice_prompt: str | None = None) -> FastResult:
+        return cls("clarify", text, voice_prompt, expect_response=True)
+
+    @property
+    def is_handled(self) -> bool:
+        return self.status in ("handled", "clarify")
+
+
+def fast_intent(
+    _func: Callable[..., Any] | None = None, *, priority: int = 0
+) -> Callable[..., Any]:
+    """Register an async function as a deterministic fast-path matcher.
+
+    The matcher is called as ``func(utterance, room_id, speaker)`` and must
+    return a :class:`FastResult`.  Matchers run before the LLM in descending
+    priority order; the first that returns a handled/clarify result
+    short-circuits the pipeline.  Usable bare (``@fast_intent``) or with a
+    priority (``@fast_intent(priority=100)``).
+    """
+
+    def wrap(func: Callable[..., Any]) -> Callable[..., Any]:
+        if not asyncio.iscoroutinefunction(func):
+            raise TypeError(f"@fast_intent requires an async function: {func.__name__}")
+        _FAST_REGISTRY.append((priority, func.__name__, func))
+        _FAST_REGISTRY.sort(key=lambda t: t[0], reverse=True)
+        return func
+
+    return wrap(_func) if _func is not None else wrap
+
+
+async def dispatch_fast(
+    utterance: str, room_id: str | None, speaker: str | None
+) -> FastResult | None:
+    """Run deterministic matchers in priority order.
+
+    Returns the first handled/clarify result, or ``None`` if every matcher
+    misses (the caller should then fall through to the LLM).  A matcher that
+    raises is logged and treated as a miss so one bad skill can't break the
+    pipeline.
+    """
+    for _priority, name, func in _FAST_REGISTRY:
+        try:
+            result: FastResult | None = await func(utterance, room_id, speaker)
+        except Exception as exc:
+            log.warning("Fast intent %r raised: %s", name, exc)
+            continue
+        if result is None or result.status == "miss":
+            continue
+        if result.is_handled:
+            log.info("Fast intent %r handled: %s", name, result.text[:80])
+            return result
+    return None
+
+
+# ---------------------------------------------------------------------------
 # Discovery
 # ---------------------------------------------------------------------------
 
@@ -157,10 +247,15 @@ def load_skills(skills_dir: Path, disabled: list[str]) -> None:
         log.warning("skills.dir does not exist: %s — no skills loaded", skills_dir)
 
     for name in disabled:
-        if _REGISTRY.pop(name, None) is not None:
+        removed = _REGISTRY.pop(name, None) is not None
+        before = len(_FAST_REGISTRY)
+        _FAST_REGISTRY[:] = [t for t in _FAST_REGISTRY if t[1] != name]
+        if removed or len(_FAST_REGISTRY) != before:
             log.info("Skill disabled: %s", name)
 
     log.info("Skills active: %s", sorted(_REGISTRY))
+    if _FAST_REGISTRY:
+        log.info("Fast intents active: %s", [t[1] for t in _FAST_REGISTRY])
 
 
 # ---------------------------------------------------------------------------

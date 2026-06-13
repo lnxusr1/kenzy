@@ -1,9 +1,18 @@
 site_name: KENZY
 site_description: Distributed home voice assistant
+site_url: https://kenzy.dev/
+repo_url: https://github.com/lnxusr1/kenzy/
+copyright: "Copyright © 2026. All rights reserved. <a href='https://kenzy.dev'>Kenzy.dev</a>"
 docs_dir: docs
 
 theme:
   name: readthedocs
+  custom_dir: overrides
+  highlightjs: true
+  prev_next_buttons_location: none
+  titles_only: true
+  collapse_navigation: false
+  logo: https://kenzy.dev/wp-content/uploads/2022/11/kenzy_logo_text_light.png
 
 plugins:
   - search
