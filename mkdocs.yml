@@ -12,7 +12,7 @@ theme:
   prev_next_buttons_location: none
   titles_only: true
   collapse_navigation: false
-  logo: https://kenzy.dev/wp-content/uploads/2022/11/kenzy_logo_text_light.png
+  logo: https://kenzy.dev/assets/img/logo.png
 
 plugins:
   - search
