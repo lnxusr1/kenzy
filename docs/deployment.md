@@ -2,6 +2,17 @@
 
 `kenzy-deploy` manages Kenzy installations across a fleet of remote hosts over SSH. It handles OS setup, Python virtualenv creation, source syncing, systemd unit installation, and service management.
 
+!!! important "kenzy-deploy is a source-push tool — run it from a repository checkout"
+    `kenzy-deploy` does **not** install from PyPI. It is a *source-push* deployer:
+
+    1. It locates your **project root** by walking up from the current directory until it finds `pyproject.toml`, so it must be run from inside a Kenzy checkout (e.g. `~/kenzy`).
+    2. It **rsyncs your local source tree** (`src/`, `configs/`, `pyproject.toml`, and the `skills/`/`data/`/`models/` directories) to each host.
+    3. On each remote it runs an **editable install of the pushed source** (`pip install -e '{install_path}[extras]'`) — never `pip install kenzy`.
+
+    **Consequence:** a bare `pip install kenzy` does *not* give you a working `kenzy-deploy`. You would have the command on your `PATH`, but no project root for it to push — no `configs/`, `skills/`, `data/`, or `pyproject.toml` in your working directory. Use a git checkout on your control machine (the [`install.sh`](https://kenzy.dev/install.sh) one-liner leaves one at `~/kenzy`), and run `kenzy-deploy` from there.
+
+    This source-push model is intentional: edit a skill or config locally, run `kenzy-deploy upgrade`, and the change is live on every host — no release or package publish in the loop.
+
 ## Prerequisites
 
 On each remote host:
