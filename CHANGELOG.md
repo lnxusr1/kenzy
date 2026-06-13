@@ -2,6 +2,37 @@
 
 All notable changes to this project will be documented in this file.
 
+## [3.0.0]
+
+### Added
+
+- Speaker recognition / Voice Identification
+- Deploy scripts and helpers
+- OpenWakeWord detection
+- LLM backed intent processing and tool calling
+- Optional cloud STT using openAI (local STT via faster-whisper is still the default)
+- Deterministic fast-path skill layer (`@fast_intent`): common commands resolve locally with no LLM round-trip, falling back to the LLM automatically when unmatched
+- Wake word VAD gating (`wakeword_vad_threshold`) using openwakeword's Silero VAD to suppress false activations on near-silence/noise
+- SKILL: Time/date queries answered instantly via the fast path
+
+### Modified
+
+- **REWRITE**: Application rewritten as a smart speaker module
+- Implemented microservices architecture for nodes, servers, llm, stt, tts, and speaker identification
+- Speaker nodes now only perform wake word activation and VAD and stream audio to server (Speaker can now run on Raspberry PI Zero 2W)
+- Local TTS moved from speachT5 to Kokoro
+- VAD moved to threshold RMS values
+- SKILL: Moved to National Weather Service free APIs for weather skill
+- SKILL: Stock ticket updates
+- SKILL: Random number generator
+- SKILL: News via RSS
+- SKILL: HomeAssistant control now resolves common commands deterministically (padacioso intent parsing + rapidfuzz device matching) before falling back to the LLM resolver; adds optional per-room device overlay (aliases, default groups, exclusions), on/off group asymmetry, explicit-room scoping, and speaker-gated lock/unlock
+
+### Removed
+
+- Image processing (see kenzy-image for similar functionality)
+- Dashboard
+
 ## [2.1.5]
 
 ### Added

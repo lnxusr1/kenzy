@@ -1,1 +1,1 @@
-mkdocstrings
+mkdocs>=1.5
