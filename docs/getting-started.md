@@ -9,11 +9,39 @@
 sudo apt-get install libportaudio2 portaudio19-dev
 ```
 
-## Installation
+## Quick install
 
-Create a virtual environment and install the extras for the services you intend to run on this host:
+The fastest way to get a host running is the bootstrapper, which clones Kenzy to `~/kenzy`, creates a virtualenv, installs the services you choose, downloads the inference models, and scaffolds a `.env`:
 
 ```bash
+curl -fsSL https://kenzy.dev/install.sh | bash
+```
+
+It prompts for what to install (room node, server stack, or everything). Drive it non-interactively with environment variables:
+
+```bash
+# A room node, unattended
+KENZY_PROFILE=node KENZY_YES=1 bash -c "$(curl -fsSL https://kenzy.dev/install.sh)"
+```
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `KENZY_DIR` | `~/kenzy` | Target checkout directory |
+| `KENZY_BRANCH` | `main` | Git branch / tag to install |
+| `KENZY_PROFILE` | *(prompt)* | `node`, `server`, or `all` — skips the prompt |
+| `KENZY_REPO` | GitHub | Alternate git remote |
+| `KENZY_YES` | `0` | Set `1` to assume defaults / no prompts (CI) |
+
+!!! note "Source install, not PyPI"
+    `install.sh` clones the current microservices source from GitHub — it does **not** `pip install kenzy`. The package on PyPI is still the old 2.x monolith, and v3's `skills/`, `configs/`, and `data/` live outside the Python package, so installs are source-based.
+
+## Manual installation
+
+Prefer to do it by hand? Clone the repo, create a virtual environment, and install the extras for the services you intend to run on this host:
+
+```bash
+git clone https://github.com/lnxusr1/kenzy.git
+cd kenzy
 python3 -m venv .venv
 source .venv/bin/activate
 
