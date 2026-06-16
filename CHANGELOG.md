@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented in this file.
 
+## [3.1.0]
+
+### Added
+
+- **PyPI install path.** Default service configs, `.env.example`, and the built-in skills now ship inside the package; `kenzy-init` scaffolds a config home (`~/.config/kenzy`) from them. A new `kenzy.config` resolver finds configs via `$KENZY_HOME` → `./configs` → `~/.config/kenzy` → packaged default, so services run from a plain `pip install` with no source checkout.
+- **mDNS discovery.** The server advertises `_kenzy._tcp` (`python-zeroconf`); a node with no `server_url` auto-discovers it, and `room_id` defaults to the hostname. An explicit `server_url` still skips discovery.
+- **Config-pull over WebSocket.** On connect, `hello` carries the node's identity, audio capabilities, and an optional join `token`; the server replies with the node's effective config (`node_defaults` + per-room `configs/nodes/<room>.yaml`). Live-tunable values apply immediately; an optional `discovery.token` gates the join.
+- **Opt-in web dashboard** served by `kenzy-server` (`dashboard.enabled`, off by default — zero overhead when off): read-only fleet/health view of connected nodes and backend services.
+- **`kenzy-deploy` install modes.** New `install_mode: source|pypi` (per host or global) plus `--local` (force source) and `--version` (pin a PyPI release); pypi mode pushes only `configs/` and installs `kenzy[extras]` from PyPI.
+- `kenzy-init` command and the `kenzy.discovery` module; `zeroconf` added to the `node` and `server` extras.
+
+### Modified
+
+- **`install.sh`** rewritten as a per-user PyPI installer (profiles, `--no-apt`, `--package` for local wheels/sdists, `--version`, config-home scaffold, `kenzy-*` linked into `~/.local/bin`) — no longer a git-clone bootstrapper.
+- Built-in skills moved into the package (`kenzy/llm/builtin_skills/`); the skill loader now loads built-ins first, then your `skills.dir` overlay (same-named files override built-ins), with `skills.disabled` applying to both.
+- `kenzy-deploy` re-roots on the `deploy.yaml` location (config-root) instead of `pyproject.toml`, so pypi-mode deploys work without a source tree.
+- `build_pypi.sh` builds via `python -m build` (the v3 project has no `setup.py`).
+- Documentation updated throughout (getting-started, configuration, architecture, deployment, skills).
+
 ## [3.0.0]
 
 ### Added

@@ -25,13 +25,13 @@ from __future__ import annotations
 import asyncio
 import importlib.util
 import inspect
-import json
 import logging
 import sys
 import typing
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 log = logging.getLogger(__name__)
 
@@ -62,15 +62,20 @@ def get_config(section: str, key: str, default: Any = None) -> Any:
 # Type → JSON Schema
 # ---------------------------------------------------------------------------
 
+
 def _py_to_json_type(annotation: Any) -> dict[str, Any]:
     """Convert a Python type annotation to a JSON Schema fragment."""
-    if annotation is str:                return {"type": "string"}
-    if annotation is int:                return {"type": "integer"}
-    if annotation is float:              return {"type": "number"}
-    if annotation is bool:               return {"type": "boolean"}
+    if annotation is str:
+        return {"type": "string"}
+    if annotation is int:
+        return {"type": "integer"}
+    if annotation is float:
+        return {"type": "number"}
+    if annotation is bool:
+        return {"type": "boolean"}
 
     origin = typing.get_origin(annotation)
-    args   = typing.get_args(annotation)
+    args = typing.get_args(annotation)
 
     if origin is typing.Literal:
         return {"type": "string", "enum": list(args)}
@@ -84,17 +89,17 @@ def _py_to_json_type(annotation: Any) -> dict[str, Any]:
         if len(non_none) == 1:
             return _py_to_json_type(non_none[0])
 
-    return {"type": "string"}   # safe fallback
+    return {"type": "string"}  # safe fallback
 
 
 def _generate_schema(func: Callable[..., Any]) -> dict[str, Any]:
     """Build a LiteLLM-compatible tool definition from a function."""
-    sig   = inspect.signature(func)
+    sig = inspect.signature(func)
     hints = typing.get_type_hints(func)
-    doc   = inspect.getdoc(func) or func.__name__
+    doc = inspect.getdoc(func) or func.__name__
 
     properties: dict[str, Any] = {}
-    required:   list[str]      = []
+    required: list[str] = []
 
     for name, param in sig.parameters.items():
         if name in ("self", "cls"):
@@ -107,12 +112,12 @@ def _generate_schema(func: Callable[..., Any]) -> dict[str, Any]:
     return {
         "type": "function",
         "function": {
-            "name":        func.__name__,
+            "name": func.__name__,
             "description": doc,
             "parameters": {
-                "type":       "object",
+                "type": "object",
                 "properties": properties,
-                "required":   required,
+                "required": required,
             },
         },
     }
@@ -121,6 +126,7 @@ def _generate_schema(func: Callable[..., Any]) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 # @skill decorator
 # ---------------------------------------------------------------------------
+
 
 def skill(func: Callable[..., Any]) -> Callable[..., Any]:
     """Register an async function as a callable skill."""
@@ -134,6 +140,7 @@ def skill(func: Callable[..., Any]) -> Callable[..., Any]:
 # Fast-path (deterministic) intents
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class FastResult:
     """Outcome of a deterministic fast-intent matcher.
@@ -145,9 +152,9 @@ class FastResult:
                  server honours it) re-opens the mic for the user's reply.
     """
 
-    status: str                       # "handled" | "miss" | "clarify"
+    status: str  # "handled" | "miss" | "clarify"
     text: str = ""
-    voice_prompt: str | None = None   # None → caller substitutes its default
+    voice_prompt: str | None = None  # None → caller substitutes its default
     expect_response: bool = False
 
     @classmethod
@@ -219,6 +226,10 @@ async def dispatch_fast(
 # Discovery
 # ---------------------------------------------------------------------------
 
+#: Built-in skills bundled inside the package (loaded before any user overlay).
+_BUILTIN_DIR = Path(__file__).resolve().parent.parent / "builtin_skills"
+
+
 def _load_dir(directory: Path) -> None:
     """Import all non-private .py files from a directory into the registry."""
     for path in sorted(directory.glob("*.py")):
@@ -239,12 +250,36 @@ def _load_dir(directory: Path) -> None:
                 log.warning("Failed to load skill module %s: %s", path.name, exc)
 
 
-def load_skills(skills_dir: Path, disabled: list[str]) -> None:
-    """Load all skills from skills_dir, then remove any that are disabled."""
-    if skills_dir.is_dir():
-        _load_dir(skills_dir)
-    else:
-        log.warning("skills.dir does not exist: %s — no skills loaded", skills_dir)
+def _dedupe_fast_registry() -> None:
+    """Keep only the last registration for each fast-intent name, then re-sort.
+
+    A user overlay file can re-register a fast intent of the same name as a
+    built-in; since built-ins load first, the later (user) entry wins.
+    """
+    seen: dict[str, tuple[int, str, Callable[..., Any]]] = {}
+    for entry in _FAST_REGISTRY:
+        seen[entry[1]] = entry
+    _FAST_REGISTRY[:] = sorted(seen.values(), key=lambda t: t[0], reverse=True)
+
+
+def load_skills(user_dir: Path | None, disabled: list[str]) -> None:
+    """Load built-in skills, then user skills from ``user_dir``, then apply disables.
+
+    Built-ins (bundled in the package) load first; ``user_dir`` (the config-home
+    ``skills/`` overlay) loads second so a user file overrides a built-in of the
+    same name. ``disabled`` names are then removed from both registries.
+    """
+    if _BUILTIN_DIR.is_dir():
+        _load_dir(_BUILTIN_DIR)
+    else:  # pragma: no cover - only if the package is broken
+        log.warning("Built-in skills directory missing: %s", _BUILTIN_DIR)
+
+    if user_dir is not None and user_dir.is_dir():
+        _load_dir(user_dir)
+    elif user_dir is not None:
+        log.debug("User skills.dir does not exist: %s — built-ins only", user_dir)
+
+    _dedupe_fast_registry()
 
     for name in disabled:
         removed = _REGISTRY.pop(name, None) is not None
@@ -261,6 +296,7 @@ def load_skills(skills_dir: Path, disabled: list[str]) -> None:
 # ---------------------------------------------------------------------------
 # Runtime
 # ---------------------------------------------------------------------------
+
 
 def get_tools() -> list[dict[str, Any]]:
     """Return the tool definitions to pass to LiteLLM."""

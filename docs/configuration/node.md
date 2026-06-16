@@ -9,8 +9,9 @@ The node service runs on each room device. It captures microphone audio, detects
 
 | Key | Default | Description |
 |---|---|---|
-| `server_url` | `"ws://127.0.0.1:8765"` | WebSocket URL of the kenzy-server |
-| `room_id` | `"living_room"` | Unique identifier for this node; used as the key in conversation history and pipeline routing |
+| `server_url` | `null` | WebSocket URL of the kenzy-server. Leave `null`/empty to **auto-discover** the server on the LAN via mDNS; set an explicit `ws://` URL to skip discovery (e.g. across VLANs that block multicast). |
+| `discovery.enabled` | `true` | Browse for the server over mDNS when `server_url` is unset |
+| `room_id` | `null` | Unique identifier for this node; `null` defaults to the **hostname**. Used as the key in conversation history and pipeline routing |
 | `audio_device` | `null` | PortAudio device name substring or integer index. `null` uses the system default. Use `kenzy-devices` to find the correct value. |
 | `capture_sample_rate` | `16000` | Sample rate for microphone capture. Set to the device's native rate if it does not support 16000 Hz; audio is resampled automatically. |
 | `playback_sample_rate` | `24000` | Sample rate for speaker output. Set to the device's native rate if it does not support 24000 Hz; TTS audio is resampled automatically. |
@@ -43,6 +44,9 @@ The node service runs on each room device. It captures microphone audio, detects
 | `sound_ready` | `null` | WAV file played on activation (the "chime"). `null` uses the bundled `ready.wav`. Accepts an absolute path or a bare filename loaded from the bundled sounds directory. |
 | `sound_waiting` | `null` | WAV file played while waiting for the server response. Plays once and stops naturally or is interrupted when TTS begins. `null` (or an empty string) disables it — pure silence while waiting. Provide a filename or path to enable it. |
 
+!!! note "Zero-config nodes (discovery + config-pull)"
+    A node needs almost no local config. With `server_url` unset it finds the server via mDNS, `room_id` defaults to the hostname, and on connect the server **pushes** the node's effective tuning (wake-word thresholds, VAD timing) from its `node_defaults` plus any per-room override in `configs/nodes/<room>.yaml`. Live-tunable keys apply immediately; hardware keys (`audio_device`, sample rates, `wakeword_models`, sounds) stay local and take effect on restart. So in practice a room device only needs its audio hardware settings — everything else is centralised on the server. See [Server Configuration](server.md#discovery-and-config-pull).
+
 !!! tip "Finding the right device name"
     Run `kenzy-devices` after install. It tests every PortAudio device against Kenzy's required sample rates and prints ready-to-paste `node.yaml` settings including `capture_sample_rate` and `playback_sample_rate` if resampling is needed.
 
@@ -52,8 +56,8 @@ The node service runs on each room device. It captures microphone audio, detects
 ## Example
 
 ```yaml
-server_url: "ws://192.168.1.100:8765"
-room_id: "office"
+server_url: null                      # null = discover the server via mDNS
+room_id: "office"                     # null = use the hostname
 audio_device: "Anker PowerConf S330"  # substring of name shown by kenzy-devices
 capture_sample_rate: 48000            # device native rate; resampled to 16000 Hz
 playback_sample_rate: 48000           # device native rate; resampled to 24000 Hz

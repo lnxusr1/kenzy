@@ -28,7 +28,7 @@ discovery:
 # the LAN; do not port-forward it. Set auth_token to require a bearer token on
 # (future) mutating actions.
 dashboard:
-  enabled: true
+  enabled: false
   bind: "127.0.0.1"
   port: 8770
   auth_token: null

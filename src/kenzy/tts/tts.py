@@ -27,6 +27,8 @@ from fastapi import FastAPI
 from fastapi.responses import Response
 from pydantic import BaseModel
 
+from kenzy.logutil import quiet_health_access_log
+
 log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -145,6 +147,7 @@ def _resolve_device(device: str) -> str:
     if device != "auto":
         return device
     import torch  # type: ignore[import-untyped]
+
     if torch.cuda.is_available():
         return "cuda"
     if torch.backends.mps.is_available():
@@ -202,7 +205,9 @@ def main() -> None:
 
     load_dotenv()
 
-    config_path = sys.argv[1] if len(sys.argv) > 1 else "configs/tts.yaml"
+    from kenzy.config import resolve_config
+
+    config_path = resolve_config("tts", sys.argv[1] if len(sys.argv) > 1 else None)
     with open(config_path) as fh:
         cfg: dict[str, Any] = yaml.safe_load(fh)
 
@@ -210,6 +215,7 @@ def main() -> None:
     fmt = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
     logging.basicConfig(level=logging.WARNING, format=fmt)
     logging.getLogger("kenzy").setLevel(log_level)
+    quiet_health_access_log()
 
     _provider = str(cfg.get("provider", "openai")).lower()
 
@@ -225,12 +231,15 @@ def main() -> None:
         kcfg: dict[str, Any] = cfg.get("kokoro", {})
         _kokoro_voice = str(kcfg.get("voice", "af_heart"))
         _kokoro_speed = float(kcfg.get("speed", 1.0))
-        device        = _resolve_device(str(kcfg.get("device", "auto")))
-        lang_code     = str(kcfg.get("lang_code") or _kokoro_voice[0])
+        device = _resolve_device(str(kcfg.get("device", "auto")))
+        lang_code = str(kcfg.get("lang_code") or _kokoro_voice[0])
 
         log.info(
             "TTS provider: kokoro  voice=%s speed=%.2f device=%s lang=%s",
-            _kokoro_voice, _kokoro_speed, device, lang_code,
+            _kokoro_voice,
+            _kokoro_speed,
+            device,
+            lang_code,
         )
         _kokoro_pipeline = KPipeline(lang_code=lang_code, device=device)
 
@@ -238,14 +247,12 @@ def main() -> None:
         try:
             from openai import OpenAI  # type: ignore[import-untyped]
         except ImportError as exc:
-            raise RuntimeError(
-                "openai is not installed — run: pip install openai"
-            ) from exc
+            raise RuntimeError("openai is not installed — run: pip install openai") from exc
 
-        ocfg    = cfg.get("openai", {})
-        _model  = str(ocfg.get("model", "gpt-4o-mini-tts"))
-        _voice  = str(ocfg.get("voice", "sage"))
-        _speed  = float(ocfg.get("speed", 1.0))
+        ocfg = cfg.get("openai", {})
+        _model = str(ocfg.get("model", "gpt-4o-mini-tts"))
+        _voice = str(ocfg.get("voice", "sage"))
+        _speed = float(ocfg.get("speed", 1.0))
         _client = OpenAI()
         log.info("TTS provider: openai  model=%s voice=%s speed=%.2f", _model, _voice, _speed)
 

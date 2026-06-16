@@ -15,8 +15,8 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def _load_datetime_skill():
-    """Import skills/datetime_skill.py by path (it lives outside the package)."""
-    path = ROOT / "skills" / "datetime_skill.py"
+    """Import the bundled datetime_skill by path (loaded the way the registry does)."""
+    path = ROOT / "src" / "kenzy" / "llm" / "builtin_skills" / "datetime_skill.py"
     spec = importlib.util.spec_from_file_location("datetime_skill", path)
     assert spec and spec.loader
     mod = importlib.util.module_from_spec(spec)

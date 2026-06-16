@@ -42,8 +42,8 @@ Injected into every LLM call and used as the default by location-aware skills (e
 
 | Key | Default | Description |
 |---|---|---|
-| `skills.dir` | `"skills"` | Path to the skills directory. Relative paths are resolved from the project root. |
-| `skills.disabled` | `[]` | List of skill function names to disable without deleting the file. |
+| `skills.dir` | `"skills"` | Your skills **overlay** directory, loaded in addition to the bundled built-in skills. Relative paths resolve under the config home — `~/.config/kenzy/skills`, or the repo root in a dev checkout. |
+| `skills.disabled` | `[]` | Skill function names to disable (applies to built-in and overlay skills alike) without deleting any file. |
 
 Per-skill configuration lives under `skills.<skill_name>` as a nested map. See [Built-in Skills](../skills/builtin.md) for the keys each skill accepts.
 

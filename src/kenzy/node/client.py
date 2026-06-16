@@ -34,6 +34,7 @@ import asyncio
 import json
 import logging
 import queue
+import socket
 import uuid
 import wave
 from importlib.resources import as_file, files
@@ -74,9 +75,11 @@ def _resample(audio: np.ndarray[Any, Any], from_rate: int, to_rate: int) -> np.n
         audio.astype(np.float64),
     ).astype(np.int16)
 
+
 # ---------------------------------------------------------------------------
 # Bundled resource helpers
 # ---------------------------------------------------------------------------
+
 
 def _bundled_model_paths() -> list[str]:
     """Return real filesystem path to the bundled hey_kenzie.tflite wake-word model."""
@@ -186,9 +189,9 @@ class _SoundPlayer:
         chime_1d = _resample(chime_1d, chime_rate, sample_rate)
 
         self._chime: np.ndarray[Any, Any] = chime_1d.reshape(-1, 1)
-        self._audio: np.ndarray[Any, Any] = self._chime   # currently queued audio
-        self._pending: np.ndarray[Any, Any] = self._chime # audio to switch to on restart
-        self._pos: int = len(self._audio)                 # past end → silent
+        self._audio: np.ndarray[Any, Any] = self._chime  # currently queued audio
+        self._pending: np.ndarray[Any, Any] = self._chime  # audio to switch to on restart
+        self._pos: int = len(self._audio)  # past end → silent
         self._restart: bool = False
 
         self._stream = sd.OutputStream(
@@ -258,8 +261,15 @@ class NodeClient:
     """
 
     def __init__(self, cfg: dict[str, Any]) -> None:
-        self._server_url: str = cfg["server_url"]
-        self._room_id: str = cfg["room_id"]
+        # server_url is optional: when unset (or empty), the node discovers the
+        # server over mDNS. An explicit value short-circuits discovery.
+        self._server_url: str | None = cfg.get("server_url") or None
+        _disc = cfg.get("discovery") or {}
+        self._discovery_enabled: bool = bool(_disc.get("enabled", True))
+        # Shared-secret presented in hello; must match the server's discovery.token.
+        self._join_token: str | None = _disc.get("token") or None
+        # Identity defaults to the hostname so a fresh node needs no config.
+        self._room_id: str = str(cfg.get("room_id") or socket.gethostname())
         self._wakeword_models: list[str] = cfg.get("wakeword_models", [])
         self._wakeword_threshold: float = float(cfg.get("wakeword_threshold", 0.5))
         # openwakeword Silero VAD gate: predictions are suppressed unless the VAD
@@ -268,18 +278,24 @@ class NodeClient:
         self._wakeword_vad_threshold: float = float(cfg.get("wakeword_vad_threshold", 0.0))
         self._silence_rms: float = float(cfg.get("silence_rms_threshold", 50.0))
         self._audio_device: str | int | None = cfg.get("audio_device", None)
-        self._sound_ready:   str = str(cfg.get("sound_ready")   or "ready.wav")
+        self._sound_ready: str = str(cfg.get("sound_ready") or "ready.wav")
         _sw = cfg.get("sound_waiting", "waiting.wav")
         self._sound_waiting: str | None = str(_sw) if _sw else None
-        self._capture_rate:  int = int(cfg.get("capture_sample_rate",  protocol.SAMPLE_RATE))
+        self._capture_rate: int = int(cfg.get("capture_sample_rate", protocol.SAMPLE_RATE))
         self._playback_rate: int = int(cfg.get("playback_sample_rate", _TTS_SERVER_RATE))
 
         # Timing thresholds, all stored as frame counts (min 1 to avoid ≥0 always-true).
         self._vad_enabled: bool = bool(cfg.get("vad_enabled", True))
         self._silence_frames: int = max(int(cfg.get("silence_ms", 400)) // protocol.FRAME_MS, 1)
-        self._speech_min_frames: int = max(int(cfg.get("speech_min_ms", 500)) // protocol.FRAME_MS, 1)
-        self._no_speech_timeout_frames: int = max(int(cfg.get("no_speech_timeout_ms", 15_000)) // protocol.FRAME_MS, 1)
-        self._hard_cap_frames: int = max(int(cfg.get("hard_cap_ms", 30_000)) // protocol.FRAME_MS, 1)
+        self._speech_min_frames: int = max(
+            int(cfg.get("speech_min_ms", 500)) // protocol.FRAME_MS, 1
+        )
+        self._no_speech_timeout_frames: int = max(
+            int(cfg.get("no_speech_timeout_ms", 15_000)) // protocol.FRAME_MS, 1
+        )
+        self._hard_cap_frames: int = max(
+            int(cfg.get("hard_cap_ms", 30_000)) // protocol.FRAME_MS, 1
+        )
 
         # Thread-safe audio queue filled by the sounddevice callback.
         self._raw_q: queue.Queue[np.ndarray[Any, np.dtype[np.int16]]] = queue.Queue(maxsize=200)
@@ -468,6 +484,57 @@ class NodeClient:
     # Receive loop – inbound server messages → _cmd_q / _tts_q
     # ------------------------------------------------------------------
 
+    def _apply_pulled_config(self, patch: dict[str, Any]) -> None:
+        """Apply server-pushed config to the running node.
+
+        Only live-tunable parameters (thresholds and VAD timing) take effect
+        immediately. Hardware/identity keys (audio_device, sample rates,
+        wakeword models/VAD gate, sounds) need a restart and are reported but
+        not applied live.
+        """
+        applied: list[str] = []
+        fm = protocol.FRAME_MS
+
+        if "wakeword_threshold" in patch:
+            self._wakeword_threshold = float(patch["wakeword_threshold"])
+            applied.append("wakeword_threshold")
+        if "silence_rms_threshold" in patch:
+            self._silence_rms = float(patch["silence_rms_threshold"])
+            applied.append("silence_rms_threshold")
+        if "vad_enabled" in patch:
+            self._vad_enabled = bool(patch["vad_enabled"])
+            applied.append("vad_enabled")
+        if "silence_ms" in patch:
+            self._silence_frames = max(int(patch["silence_ms"]) // fm, 1)
+            applied.append("silence_ms")
+        if "speech_min_ms" in patch:
+            self._speech_min_frames = max(int(patch["speech_min_ms"]) // fm, 1)
+            applied.append("speech_min_ms")
+        if "no_speech_timeout_ms" in patch:
+            self._no_speech_timeout_frames = max(int(patch["no_speech_timeout_ms"]) // fm, 1)
+            applied.append("no_speech_timeout_ms")
+        if "hard_cap_ms" in patch:
+            self._hard_cap_frames = max(int(patch["hard_cap_ms"]) // fm, 1)
+            applied.append("hard_cap_ms")
+
+        restart_keys = {
+            "audio_device",
+            "capture_sample_rate",
+            "playback_sample_rate",
+            "wakeword_models",
+            "wakeword_vad_threshold",
+            "sound_ready",
+            "sound_waiting",
+        }
+        deferred = sorted(restart_keys & patch.keys())
+
+        if applied:
+            log.info("Applied server config: %s", ", ".join(applied))
+        if deferred:
+            log.info("Server config needs restart (not applied live): %s", ", ".join(deferred))
+        if not applied and not deferred:
+            log.debug("Server config had no applicable keys")
+
     async def _recv_loop(self, ws: ClientConnection) -> None:
         # Explicit recv() instead of `async for` so that task cancellation
         # raises CancelledError here without triggering a WebSocket close
@@ -497,7 +564,10 @@ class NodeClient:
             msg = await self._cmd_q.get()
             mtype = msg.get("type")
 
-            if mtype == protocol.MSG_TRIGGER and self._state == _STATE_IDLE:
+            if mtype == protocol.MSG_CONFIG:
+                self._apply_pulled_config(msg.get("config") or {})
+
+            elif mtype == protocol.MSG_TRIGGER and self._state == _STATE_IDLE:
                 sid = msg.get("session_id") or str(uuid.uuid4())
                 log.info("Server trigger → session %s", sid[:8])
                 await self._begin_streaming(sid)
@@ -542,9 +612,7 @@ class NodeClient:
             # openwakeword runs on every frame regardless of state so that
             # mid-stream activations are forwarded to the server.
             if self._oww is not None:
-                scores: dict[str, float] = await loop.run_in_executor(
-                    None, self._oww.predict, flat
-                )
+                scores: dict[str, float] = await loop.run_in_executor(None, self._oww.predict, flat)
                 for name, score in scores.items():
                     if score >= self._wakeword_threshold:
                         log.info("Wake word '%s' score=%.3f", name, score)
@@ -585,7 +653,9 @@ class NodeClient:
 
                 if self._vad_enabled:
                     rms = float(np.sqrt(np.mean(flat.astype(np.float32) ** 2)))
-                    log.debug("Frame %d: RMS=%.1f speech=%d", self._frame_count, rms, self._speech_frames)
+                    log.debug(
+                        "Frame %d: RMS=%.1f speech=%d", self._frame_count, rms, self._speech_frames
+                    )
 
                     if rms >= self._silence_rms:
                         self._speech_frames += 1
@@ -595,12 +665,39 @@ class NodeClient:
 
                     if self._frame_count >= self._hard_cap_frames:
                         await self._end_streaming(reason="hard_cap")
-                    elif self._speech_frames < self._speech_min_frames and self._frame_count >= self._no_speech_timeout_frames:
+                    elif (
+                        self._speech_frames < self._speech_min_frames
+                        and self._frame_count >= self._no_speech_timeout_frames
+                    ):
                         await self._end_streaming(reason="no_speech")
                     elif self._silence_count >= self._silence_frames:
                         await self._end_streaming(reason="silence")
                 else:
                     pass  # stream until server sends STOP
+
+    # ------------------------------------------------------------------
+    # Server resolution (explicit config or mDNS discovery)
+    # ------------------------------------------------------------------
+
+    async def _resolve_server_url(self) -> str:
+        """Return the WebSocket URL: the configured value, else mDNS discovery.
+
+        Raises OSError when discovery is enabled but finds nothing, so the
+        caller's reconnect/backoff loop retries.
+        """
+        if self._server_url:
+            return self._server_url
+        if not self._discovery_enabled:
+            raise OSError("no server_url configured and discovery is disabled")
+
+        from kenzy.discovery import discover_server
+
+        log.info("Discovering Kenzy server over mDNS…")
+        url = await asyncio.to_thread(discover_server, 5.0)
+        if url is None:
+            raise OSError("no Kenzy server found on the network (mDNS)")
+        log.info("Discovered server at %s", url)
+        return url
 
     # ------------------------------------------------------------------
     # Per-connection session
@@ -616,7 +713,14 @@ class NodeClient:
             except asyncio.QueueEmpty:
                 break
 
-        await ws.send(protocol.hello(self._room_id))
+        capabilities = {
+            "audio_device": self._audio_device,
+            "capture_sample_rate": self._capture_rate,
+            "playback_sample_rate": self._playback_rate,
+        }
+        await ws.send(
+            protocol.hello(self._room_id, capabilities=capabilities, token=self._join_token)
+        )
         log.info("Connected; sent hello as room '%s'", self._room_id)
 
         recv_task = asyncio.create_task(self._recv_loop(ws), name="recv")
@@ -645,15 +749,28 @@ class NodeClient:
     async def run(self) -> None:
         self._load_wakeword()
         sound_audio, sound_rate = _load_sound(self._sound_ready)
-        self._player = _SoundPlayer(sound_audio, sound_rate, self._audio_device, self._playback_rate)
-        log.info("Sound: %s (%d Hz → %d Hz stream)", self._sound_ready, sound_rate, self._playback_rate)
+        self._player = _SoundPlayer(
+            sound_audio, sound_rate, self._audio_device, self._playback_rate
+        )
+        log.info(
+            "Sound: %s (%d Hz → %d Hz stream)", self._sound_ready, sound_rate, self._playback_rate
+        )
 
         if self._sound_waiting:
             try:
                 wait_audio, wait_rate = _load_sound(self._sound_waiting)
-                wait_1d = wait_audio.mean(axis=1).astype(np.int16) if wait_audio.ndim > 1 else wait_audio.astype(np.int16)
+                wait_1d = (
+                    wait_audio.mean(axis=1).astype(np.int16)
+                    if wait_audio.ndim > 1
+                    else wait_audio.astype(np.int16)
+                )
                 self._waiting_audio = _resample(wait_1d, wait_rate, self._playback_rate)
-                log.info("Waiting sound: %s (%d Hz → %d Hz)", self._sound_waiting, wait_rate, self._playback_rate)
+                log.info(
+                    "Waiting sound: %s (%d Hz → %d Hz)",
+                    self._sound_waiting,
+                    wait_rate,
+                    self._playback_rate,
+                )
             except Exception as exc:
                 log.info("Waiting sound not loaded (%s) — silence during processing", exc)
         else:
@@ -678,7 +795,8 @@ class NodeClient:
                 delay = 1
                 while True:
                     try:
-                        ws = await websockets.connect(self._server_url)
+                        server_url = await self._resolve_server_url()
+                        ws = await websockets.connect(server_url)
                         delay = 1
                         await self._run_session(ws)
 
@@ -745,7 +863,9 @@ def main() -> None:
 
     import yaml  # type: ignore[import-untyped]
 
-    config_path = sys.argv[1] if len(sys.argv) > 1 else "configs/node.yaml"
+    from kenzy.config import resolve_config
+
+    config_path = resolve_config("node", sys.argv[1] if len(sys.argv) > 1 else None)
     with open(config_path) as fh:
         cfg = yaml.safe_load(fh)
 

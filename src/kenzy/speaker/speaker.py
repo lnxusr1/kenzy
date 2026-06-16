@@ -30,6 +30,8 @@ import numpy as np
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
+from kenzy.logutil import quiet_health_access_log
+
 log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -38,7 +40,7 @@ log = logging.getLogger(__name__)
 
 
 class IdentifyRequest(BaseModel):
-    audio_b64: str           # base64-encoded int16 PCM at 16 kHz mono
+    audio_b64: str  # base64-encoded int16 PCM at 16 kHz mono
     room_id: str | None = None
 
 
@@ -108,7 +110,7 @@ def _load_embeddings() -> dict[str, np.ndarray[Any, Any]]:
     """Return {speaker_name: centroid_embedding} for all enrolled speakers."""
     result: dict[str, np.ndarray[Any, Any]] = {}
     for p in _embeddings_dir.glob("*.npy"):
-        stored = np.load(p)              # (N, dim)
+        stored = np.load(p)  # (N, dim)
         result[p.stem] = stored.mean(axis=0)
     return result
 
@@ -201,7 +203,9 @@ def main() -> None:
     import uvicorn  # type: ignore[import-untyped]
     import yaml  # type: ignore[import-untyped]
 
-    config_path = sys.argv[1] if len(sys.argv) > 1 else "configs/speaker.yaml"
+    from kenzy.config import resolve_config
+
+    config_path = resolve_config("speaker", sys.argv[1] if len(sys.argv) > 1 else None)
     with open(config_path) as fh:
         cfg: dict[str, Any] = yaml.safe_load(fh)
 
@@ -209,6 +213,7 @@ def main() -> None:
     fmt = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
     logging.basicConfig(level=logging.WARNING, format=fmt)
     logging.getLogger("kenzy").setLevel(log_level)
+    quiet_health_access_log()
 
     _embeddings_dir = Path(cfg.get("embeddings_dir", "data/speakers"))
     _embeddings_dir.mkdir(parents=True, exist_ok=True)
@@ -219,9 +224,7 @@ def main() -> None:
     try:
         from speechbrain.pretrained import EncoderClassifier  # type: ignore[import-untyped]
     except ImportError as exc:
-        raise RuntimeError(
-            "speechbrain is not installed – run: pip install speechbrain"
-        ) from exc
+        raise RuntimeError("speechbrain is not installed – run: pip install speechbrain") from exc
 
     model_source = cfg.get("model_source", "speechbrain/spkrec-ecapa-voxceleb")
     model_save_dir = cfg.get("model_save_dir", "models/speaker")

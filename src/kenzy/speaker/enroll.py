@@ -140,6 +140,7 @@ def _init_tts(cfg: dict[str, Any]) -> bool:
     global _tts_url, _tts_timeout
     try:
         import httpx  # type: ignore[import-untyped]  # noqa: F401 — verify importable
+
         tcfg: dict[str, Any] = cfg.get("tts", {})
         url = tcfg.get("url")
         if not url:
@@ -160,6 +161,7 @@ def _speak(text: str, also_print: bool = True) -> None:
         return
     try:
         import httpx  # type: ignore[import-untyped]
+
         resp = httpx.post(
             _tts_url,
             json={"text": text},
@@ -249,7 +251,12 @@ def main() -> None:
             sys.exit(1)
 
         _play_confirm()  # lower-pitched "done" tone
-        _speak(f"Got it. {len(prompts) - i} more to go." if i < len(prompts) else "That's the last one.", also_print=False)
+        _speak(
+            f"Got it. {len(prompts) - i} more to go."
+            if i < len(prompts)
+            else "That's the last one.",
+            also_print=False,
+        )
         time.sleep(0.3)
 
     print()

@@ -21,6 +21,7 @@ in without changing this file.
 from __future__ import annotations
 
 import asyncio
+import importlib.metadata
 import json
 import logging
 import re
@@ -72,9 +73,43 @@ class AudioServer:
         self._host: str = cfg.get("host", "0.0.0.0")
         self._port: int = int(cfg.get("port", 8765))
 
+        # Central node tuning defaults pushed to nodes on connect (config-pull).
+        self._node_defaults: dict[str, Any] = cfg.get("node_defaults", {}) or {}
+        # Optional shared-secret required in the node's hello (discovery.token).
+        self._join_token: str | None = (cfg.get("discovery", {}) or {}).get("token") or None
+
         # room_id → NodeSession  (guarded by _lock)
         self._nodes: dict[str, NodeSession] = {}
         self._lock = asyncio.Lock()
+
+    # ------------------------------------------------------------------
+    # Config-pull: effective per-node config = defaults + per-room override
+    # ------------------------------------------------------------------
+
+    def _effective_node_config(self, room_id: str) -> dict[str, Any]:
+        """Merge central ``node_defaults`` with ``configs/nodes/<room>.yaml``.
+
+        The per-room file (if present) shallow-overrides the defaults. A node
+        with no override file just receives the defaults; absence is logged so
+        operators can see which rooms are unconfigured.
+        """
+        import yaml  # type: ignore[import-untyped]
+
+        from kenzy.config import kenzy_data_root
+
+        effective: dict[str, Any] = dict(self._node_defaults)
+        override = kenzy_data_root() / "configs" / "nodes" / f"{room_id}.yaml"
+        if override.is_file():
+            try:
+                data = yaml.safe_load(override.read_text()) or {}
+                if isinstance(data, dict):
+                    effective.update(data)
+                log.info("[%s] applied per-room override %s", room_id, override)
+            except Exception as exc:
+                log.warning("[%s] failed to read override %s: %s", room_id, override, exc)
+        else:
+            log.info("[%s] no per-room override (%s) — sending defaults only", room_id, override)
+        return effective
 
     # ------------------------------------------------------------------
     # Pipeline hooks (override in subclasses or replace at runtime)
@@ -118,9 +153,7 @@ class AudioServer:
                     await self.on_session_end(session, "disconnect")
                 await self._deregister(session)
 
-    async def _register(
-        self, ws: ServerConnection
-    ) -> NodeSession | None:
+    async def _register(self, ws: ServerConnection) -> NodeSession | None:
         """Wait for the initial HELLO and register the node."""
         try:
             raw = await asyncio.wait_for(ws.recv(), timeout=10.0)
@@ -133,7 +166,18 @@ class AudioServer:
             log.warning("Expected hello, got '%s' from %s", msg.get("type"), ws.remote_address)
             return None
 
+        if self._join_token is not None and msg.get("token") != self._join_token:
+            log.warning("Rejected node from %s: bad/missing join token", ws.remote_address)
+            try:
+                await ws.close(1008, "invalid join token")
+            except Exception:
+                pass
+            return None
+
         room_id: str = str(msg.get("room_id", "unknown"))
+        caps = msg.get("capabilities") or {}
+        if caps:
+            log.info("[%s] capabilities: %s", room_id, caps)
         session = NodeSession(ws=ws, room_id=room_id)
 
         async with self._lock:
@@ -153,6 +197,15 @@ class AudioServer:
             ws.remote_address,
             len(self._nodes),
         )
+
+        # Config-pull: push the node's effective config so it needs no local file.
+        effective = self._effective_node_config(room_id)
+        if effective:
+            try:
+                await ws.send(protocol.config(effective))
+            except Exception as exc:
+                log.warning("[%s] failed to send config: %s", room_id, exc)
+
         return session
 
     async def _deregister(self, session: NodeSession) -> None:
@@ -322,17 +375,19 @@ async def _stdin_control(server: AudioServer) -> None:
 # STT pipeline
 # ---------------------------------------------------------------------------
 
-_STOP_PHRASES: frozenset[str] = frozenset({
-    "stop",
-    "be quiet",
-    "quiet",
-    "shut up",
-    "silence",
-    "please stop",
-    "please be quiet",
-    "please shut up",
-    "shut the heck up",
-})
+_STOP_PHRASES: frozenset[str] = frozenset(
+    {
+        "stop",
+        "be quiet",
+        "quiet",
+        "shut up",
+        "silence",
+        "please stop",
+        "please be quiet",
+        "please shut up",
+        "shut the heck up",
+    }
+)
 
 
 class TranscribingServer(AudioServer):
@@ -389,9 +444,13 @@ class TranscribingServer(AudioServer):
         self._speaker_timeout: float = float(spcfg.get("timeout", 10.0))
         self._unknown_speaker: str = str(spcfg.get("unknown_speaker", "unknown"))
         if self._speaker_url:
-            log.info("Speaker service: %s (timeout=%.0fs)", self._speaker_url, self._speaker_timeout)
+            log.info(
+                "Speaker service: %s (timeout=%.0fs)", self._speaker_url, self._speaker_timeout
+            )
         else:
-            log.info("Speaker service not configured — speaker will be '%s'.", self._unknown_speaker)
+            log.info(
+                "Speaker service not configured — speaker will be '%s'.", self._unknown_speaker
+            )
 
     # ------------------------------------------------------------------
     # Pipeline hooks
@@ -438,9 +497,7 @@ class TranscribingServer(AudioServer):
         if session is None:
             return False
         try:
-            await session.ws.send(
-                protocol.tts_start(session_id, sample_rate, channels)
-            )
+            await session.ws.send(protocol.tts_start(session_id, sample_rate, channels))
             self._tts_active.add(room_id)
             return True
         except websockets.exceptions.ConnectionClosed:
@@ -529,6 +586,7 @@ class TranscribingServer(AudioServer):
 
     async def _call_speaker(self, pcm: bytes, room_id: str) -> str:
         import base64
+
         import httpx  # type: ignore[import-untyped]
 
         payload = {"audio_b64": base64.b64encode(pcm).decode(), "room_id": room_id}
@@ -545,10 +603,9 @@ class TranscribingServer(AudioServer):
             log.warning("[%s] speaker ID failed: %s", room_id, exc)
             return self._unknown_speaker
 
-    async def _call_stt(
-        self, pcm: bytes, room_id: str, session_id: str | None
-    ) -> str:
+    async def _call_stt(self, pcm: bytes, room_id: str, session_id: str | None) -> str:
         import base64
+
         import httpx  # type: ignore[import-untyped]
 
         payload = {
@@ -606,7 +663,7 @@ class TranscribingServer(AudioServer):
                 resp.raise_for_status()
             pcm = resp.content
             for i in range(0, len(pcm), self._tts_chunk_size):
-                if not await self.send_tts_frame(room_id, pcm[i:i + self._tts_chunk_size]):
+                if not await self.send_tts_frame(room_id, pcm[i : i + self._tts_chunk_size]):
                     return  # node disconnected mid-stream
             await self.send_tts_end(room_id, sid)
             log.info("[%s] TTS complete", room_id)
@@ -621,19 +678,20 @@ class TranscribingServer(AudioServer):
                 self._tts_active.discard(room_id)
 
 
-
 # ---------------------------------------------------------------------------
 # CLI entry point
 # ---------------------------------------------------------------------------
 
 
 def main() -> None:
+    import yaml
     from dotenv import load_dotenv  # type: ignore[import-untyped]
-    import yaml  # type: ignore[import-untyped]
 
     load_dotenv()
 
-    config_path = sys.argv[1] if len(sys.argv) > 1 else "configs/server.yaml"
+    from kenzy.config import resolve_config
+
+    config_path = resolve_config("server", sys.argv[1] if len(sys.argv) > 1 else None)
     with open(config_path) as fh:
         cfg = yaml.safe_load(fh)
 
@@ -644,16 +702,48 @@ def main() -> None:
 
     server = TranscribingServer(cfg)
 
+    # mDNS advertisement so nodes can discover this server without a server_url.
+    discovery_cfg = cfg.get("discovery", {}) or {}
+    advertiser = None
+    if discovery_cfg.get("enabled", True):
+        from kenzy.discovery import ServerAdvertiser
+
+        try:
+            version = importlib.metadata.version("kenzy")
+        except importlib.metadata.PackageNotFoundError:
+            version = "0"
+        auth = "required" if discovery_cfg.get("token") else "none"
+        advertiser = ServerAdvertiser(
+            port=server._port,
+            host=server._host,
+            instance=str(discovery_cfg.get("instance", "kenzy-server")),
+            properties={"version": version, "auth": auth},
+        )
+
+    # Dashboard: opt-in and only wired up when enabled (zero overhead when off).
+    dashboard = None
+    if (cfg.get("dashboard", {}) or {}).get("enabled", False):
+        from kenzy.server.dashboard import Dashboard, DashboardConfig
+
+        dashboard = Dashboard(server, cfg, DashboardConfig.from_cfg(cfg))
+
     async def _main() -> None:
         coros: list[Any] = [server.serve()]
+        if dashboard is not None:
+            coros.append(dashboard.serve())
         if sys.stdin.isatty():
             coros.append(_stdin_control(server))
         await asyncio.gather(*coros)
 
+    if advertiser is not None:
+        advertiser.start()
     try:
         asyncio.run(_main())
     except KeyboardInterrupt:
         pass
+    finally:
+        if advertiser is not None:
+            advertiser.stop()
 
 
 if __name__ == "__main__":

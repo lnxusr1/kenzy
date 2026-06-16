@@ -45,7 +45,7 @@ openai:
 ## Kokoro provider
 
 **Requires:**
-- `pip install -e ".[kokoro]"` (installs the `kokoro` package and PyTorch)
+- The `kokoro` extra: `pip install 'kenzy[kokoro]'` (or `pip install -e ".[kokoro]"` in a source checkout) — installs the `kokoro` package and PyTorch
 - `sudo apt-get install espeak-ng` (system phonemization library)
 - Run `kenzy-setup` after install to pre-download model weights
 
@@ -100,8 +100,8 @@ kokoro:
 # System dependency
 sudo apt-get install espeak-ng
 
-# Python package
-pip install -e ".[kokoro]"
+# Python package (or `pip install -e ".[kokoro]"` in a source checkout)
+pip install 'kenzy[kokoro]'
 
 # Pre-download model weights
 kenzy-setup

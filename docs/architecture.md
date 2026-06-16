@@ -27,7 +27,8 @@ Control messages are JSON text frames. Audio is raw int16 PCM binary frames at 1
 
 | Message | Direction | Purpose |
 |---|---|---|
-| `hello` | node → server | Registration with `room_id` on connect |
+| `hello` | node → server | Registration on connect; carries `room_id`, optional audio `capabilities` and a join `token` |
+| `config` | server → node | Effective node config pushed right after `hello` (config-pull) |
 | `audio_start` | node → server | Begins a capture session |
 | `audio_end` | node → server | Ends a capture session, includes `reason` |
 | `wakeword` | node → server | Wake word fired mid-stream |
@@ -38,6 +39,14 @@ Control messages are JSON text frames. Audio is raw int16 PCM binary frames at 1
 | `tts_end` | server → node | Ends TTS playback |
 
 Binary frames sent server → node between `tts_start` and `tts_end` are raw int16 PCM at 24 kHz mono.
+
+## Discovery & config-pull
+
+The server advertises itself as `_kenzy._tcp` over **mDNS**, so a node with no `server_url` finds it automatically; an explicit `server_url` skips discovery. On connect, the node's `hello` carries its identity (`room_id`, defaulting to the hostname), audio `capabilities`, and an optional join `token`; the server validates the token and replies with a `config` frame holding the node's **effective config** — the server's `node_defaults` merged with the per-room override `configs/nodes/<room>.yaml`. Live-tunable values apply immediately; hardware values take effect on restart. The result: room devices carry only their audio settings, and tuning is centralised on the server.
+
+## Dashboard
+
+`kenzy-server` can serve an **opt-in** web dashboard (`dashboard.enabled`, off by default) on its own bind/port. When disabled it is wired up nowhere and adds zero overhead. When enabled it serves a static SPA plus read-only JSON (`/api/state` for the node grid and backend `/health`, `/api/rooms/<room>/config` for effective config). It reuses the server's existing registry and connections — no new transport.
 
 ## Node state machine
 
@@ -51,7 +60,7 @@ The node runs three concurrent asyncio tasks:
 
 **`_recv_loop`** — reads inbound messages from the server WebSocket and routes them to `_cmd_q` (JSON control) or `_tts_q` (binary PCM).
 
-**`_cmd_loop`** — processes `_cmd_q`: handles `trigger`, `stop`, `tts_start`, `tts_end`.
+**`_cmd_loop`** — processes `_cmd_q`: handles `config` (apply pulled config), `trigger`, `stop`, `tts_start`, `tts_end`.
 
 ### State transitions
 

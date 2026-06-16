@@ -10,16 +10,17 @@ from __future__ import annotations
 import sys
 
 # Rates tested for capture and playback.
-_CAPTURE_RATES:  list[int] = [16_000, 44_100, 48_000]
+_CAPTURE_RATES: list[int] = [16_000, 44_100, 48_000]
 _PLAYBACK_RATES: list[int] = [24_000, 44_100, 48_000]
 
 # Rates Kenzy uses internally.
-_KENZY_CAPTURE  = 16_000
+_KENZY_CAPTURE = 16_000
 _KENZY_PLAYBACK = 24_000
 
 
 def _check(fn: object, device: int, rate: int, channels: int = 1) -> bool:
     import sounddevice as sd  # type: ignore[import-untyped]
+
     try:
         fn(device=device, samplerate=rate, channels=channels, dtype="int16")  # type: ignore[call-arg]
         return True
@@ -51,18 +52,18 @@ def main() -> None:
     suggestions: list[tuple[int, str, int, int]] = []
 
     for i, dev in enumerate(devices):
-        n_in  = int(dev["max_input_channels"])
+        n_in = int(dev["max_input_channels"])
         n_out = int(dev["max_output_channels"])
         if n_in == 0 and n_out == 0:
             continue
 
-        name         = str(dev["name"])
+        name = str(dev["name"])
         default_rate = int(dev["default_samplerate"])
 
         print(f"[{i:2d}] {name}")
         print(f"      in={n_in}  out={n_out}  default={default_rate} Hz")
 
-        best_capture:  int | None = None
+        best_capture: int | None = None
         best_playback: int | None = None
 
         if n_in > 0:
@@ -103,12 +104,16 @@ def main() -> None:
         # short enough to be readable, long enough to be unambiguous.
         short = name.split(":")[0].strip() if ":" in name else name
         resampling = []
-        if cap  != _KENZY_CAPTURE:  resampling.append(f"capture {cap}→{_KENZY_CAPTURE} Hz")
-        if play != _KENZY_PLAYBACK: resampling.append(f"playback {play}→{_KENZY_PLAYBACK} Hz")
-        note = f"  # resampling: {', '.join(resampling)}" if resampling else "  # no resampling needed"
+        if cap != _KENZY_CAPTURE:
+            resampling.append(f"capture {cap}→{_KENZY_CAPTURE} Hz")
+        if play != _KENZY_PLAYBACK:
+            resampling.append(f"playback {play}→{_KENZY_PLAYBACK} Hz")
+        note = (
+            f"  # resampling: {', '.join(resampling)}" if resampling else "  # no resampling needed"
+        )
 
         print(f"  [{idx}] {name}")
-        print(f"      audio_device: \"{short}\"{note}")
+        print(f'      audio_device: "{short}"{note}')
         if cap != _KENZY_CAPTURE:
             print(f"      capture_sample_rate: {cap}")
         if play != _KENZY_PLAYBACK:

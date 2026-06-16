@@ -50,12 +50,28 @@ def _c(code: str, text: str) -> str:
     return f"{code}{text}\033[0m" if _TTY else text
 
 
-def _bold(t: str) -> str:  return _c("\033[1m", t)
-def _green(t: str) -> str: return _c("\033[32m", t)
-def _red(t: str) -> str:   return _c("\033[31m", t)
-def _yellow(t: str) -> str: return _c("\033[33m", t)
-def _cyan(t: str) -> str:  return _c("\033[36m", t)
-def _dim(t: str) -> str:   return _c("\033[2m", t)
+def _bold(t: str) -> str:
+    return _c("\033[1m", t)
+
+
+def _green(t: str) -> str:
+    return _c("\033[32m", t)
+
+
+def _red(t: str) -> str:
+    return _c("\033[31m", t)
+
+
+def _yellow(t: str) -> str:
+    return _c("\033[33m", t)
+
+
+def _cyan(t: str) -> str:
+    return _c("\033[36m", t)
+
+
+def _dim(t: str) -> str:
+    return _c("\033[2m", t)
 
 
 def _header(host: str, msg: str) -> None:
@@ -83,35 +99,35 @@ def _warn(msg: str) -> None:
 # ---------------------------------------------------------------------------
 
 SERVICE_INFO: dict[str, dict[str, str]] = {
-    "node":    {
+    "node": {
         "script": "kenzy-node",
         "config": "configs/node.yaml",
-        "desc":   "Kenzy Node (wake word + audio capture)",
+        "desc": "Kenzy Node (wake word + audio capture)",
     },
-    "server":  {
+    "server": {
         "script": "kenzy-server",
         "config": "configs/server.yaml",
-        "desc":   "Kenzy Server (WebSocket hub + pipeline)",
+        "desc": "Kenzy Server (WebSocket hub + pipeline)",
     },
-    "stt":     {
+    "stt": {
         "script": "kenzy-stt",
         "config": "configs/stt.yaml",
-        "desc":   "Kenzy STT (speech-to-text)",
+        "desc": "Kenzy STT (speech-to-text)",
     },
-    "tts":     {
+    "tts": {
         "script": "kenzy-tts",
         "config": "configs/tts.yaml",
-        "desc":   "Kenzy TTS (text-to-speech)",
+        "desc": "Kenzy TTS (text-to-speech)",
     },
-    "llm":     {
+    "llm": {
         "script": "kenzy-llm",
         "config": "configs/llm.yaml",
-        "desc":   "Kenzy LLM (language model)",
+        "desc": "Kenzy LLM (language model)",
     },
     "speaker": {
         "script": "kenzy-speaker",
         "config": "configs/speaker.yaml",
-        "desc":   "Kenzy Speaker (voice identification)",
+        "desc": "Kenzy Speaker (voice identification)",
     },
 }
 
@@ -119,11 +135,11 @@ SERVICE_INFO: dict[str, dict[str, str]] = {
 APT_BASE: list[str] = ["python3", "python3-pip", "python3-venv", "git", "rsync"]
 
 APT_EXTRA: dict[str, list[str]] = {
-    "node":    ["libportaudio2", "portaudio19-dev", "python3-dev"],
-    "server":  [],
-    "stt":     ["ffmpeg", "libgomp1"],
-    "tts":     ["espeak-ng"],
-    "llm":     [],
+    "node": ["libportaudio2", "portaudio19-dev", "python3-dev"],
+    "server": [],
+    "stt": ["ffmpeg", "libgomp1"],
+    "tts": ["espeak-ng"],
+    "llm": [],
     "speaker": ["libportaudio2", "portaudio19-dev", "python3-dev", "libgomp1"],
 }
 
@@ -132,12 +148,18 @@ APT_EXTRA: dict[str, list[str]] = {
 # based on service_sync in deploy.yaml.
 RSYNC_EXCLUDES: list[str] = [
     # Match at any depth — intentionally unanchored.
-    "__pycache__/", "*.pyc", ".mypy_cache/", ".ruff_cache/", "*.egg-info/",
+    "__pycache__/",
+    "*.pyc",
+    ".mypy_cache/",
+    ".ruff_cache/",
+    "*.egg-info/",
     # Root-anchored: only exclude the top-level directory, not same-named
     # subdirectories inside the package (e.g. src/kenzy/llm/skills/).
     "/.venv/",
-    "/skills/", "/data/", "/models/",
-    "/.env",         # secrets stay on each host
+    "/skills/",
+    "/data/",
+    "/models/",
+    "/.env",  # secrets stay on each host
 ]
 
 # ---------------------------------------------------------------------------
@@ -147,17 +169,19 @@ RSYNC_EXCLUDES: list[str] = [
 
 @dataclass
 class HostConfig:
-    name:            str
-    address:         str
-    ssh_user:        str
-    install_path:    str
-    venv_path:       str
-    python_bin:      str
-    local:           bool = False   # run commands directly instead of over SSH
-    services:        list[str] = field(default_factory=list)
-    sync:            list[str] = field(default_factory=list)  # extra paths to sync
+    name: str
+    address: str
+    ssh_user: str
+    install_path: str
+    venv_path: str
+    python_bin: str
+    local: bool = False  # run commands directly instead of over SSH
+    services: list[str] = field(default_factory=list)
+    sync: list[str] = field(default_factory=list)  # extra paths to sync
     torch_index_url: str | None = None  # PyTorch wheel index; None = auto-detect
-    pip_packages:    list[str] = field(default_factory=list)  # extra pip installs after main
+    pip_packages: list[str] = field(default_factory=list)  # extra pip installs after main
+    install_mode: str = "source"  # "source" (rsync + pip -e) or "pypi" (pip install kenzy)
+    version: str | None = None  # pin a PyPI version (pypi mode); None = latest >=3
 
 
 # ---------------------------------------------------------------------------
@@ -165,9 +189,12 @@ class HostConfig:
 # ---------------------------------------------------------------------------
 
 _SSH_OPTS: list[str] = [
-    "-o", "BatchMode=yes",
-    "-o", "StrictHostKeyChecking=accept-new",
-    "-o", "ConnectTimeout=10",
+    "-o",
+    "BatchMode=yes",
+    "-o",
+    "StrictHostKeyChecking=accept-new",
+    "-o",
+    "ConnectTimeout=10",
 ]
 
 
@@ -184,12 +211,18 @@ def _run(
 
     if host.local:
         result = subprocess.run(
-            cmd, shell=True, input=stdin, capture_output=True, text=True,
+            cmd,
+            shell=True,
+            input=stdin,
+            capture_output=True,
+            text=True,
         )
     else:
         result = subprocess.run(
             ["ssh", *_SSH_OPTS, f"{host.ssh_user}@{host.address}", cmd],
-            input=stdin, capture_output=True, text=True,
+            input=stdin,
+            capture_output=True,
+            text=True,
         )
 
     if check and result.returncode != 0:
@@ -224,7 +257,9 @@ def _rsync(host: HostConfig, local_path: Path) -> bool:
             return True
         result = subprocess.run(
             [
-                "rsync", "-az", "--delete",
+                "rsync",
+                "-az",
+                "--delete",
                 "--info=progress2",
                 *excludes,
                 f"{local_path}/",
@@ -235,7 +270,9 @@ def _rsync(host: HostConfig, local_path: Path) -> bool:
     else:
         result = subprocess.run(
             [
-                "rsync", "-az", "--delete",
+                "rsync",
+                "-az",
+                "--delete",
                 "--info=progress2",
                 *excludes,
                 f"{local_path}/",
@@ -268,8 +305,13 @@ def _rsync_host_configs(host: HostConfig, local_path: Path) -> None:
             return  # overlay IS the live configs dir — nothing to copy
         cmd = ["rsync", "-az", "--info=progress2", f"{overlay}/", f"{dst}/"]
     else:
-        cmd = ["rsync", "-az", "--info=progress2",
-               f"{overlay}/", f"{host.ssh_user}@{host.address}:{dst}/"]
+        cmd = [
+            "rsync",
+            "-az",
+            "--info=progress2",
+            f"{overlay}/",
+            f"{host.ssh_user}@{host.address}:{dst}/",
+        ]
 
     result = subprocess.run(cmd, text=True)
     if result.returncode != 0:
@@ -381,8 +423,8 @@ def _write_units(host: HostConfig) -> bool:
 def _effective_yaml(host: HostConfig, filename: str, local_path: Path) -> dict[str, Any]:
     """Return parsed YAML for a service config, preferring the host overlay if present."""
     overlay = local_path / "configs" / "hosts" / host.name / filename
-    base    = local_path / "configs" / filename
-    path    = overlay if overlay.exists() else base
+    base = local_path / "configs" / filename
+    path = overlay if overlay.exists() else base
     if not path.exists():
         return {}
     with open(path) as fh:
@@ -400,6 +442,64 @@ def _pip_extras(host: HostConfig, local_path: Path) -> str:
             _info("tts.yaml provider=kokoro — adding kokoro extra")
 
     return ",".join(extras)
+
+
+def _pip_target(host: HostConfig, extras: str, *, upgrade: bool) -> str:
+    """Build the pip install target for this host's install mode.
+
+    - source: editable install of the rsynced tree (``-e '<path>[extras]'``).
+    - pypi:   ``'kenzy[extras]'`` pinned to ``==version`` or floored at ``>=3.0.0``
+              (so the legacy 2.x monolith is never resolved); ``-U`` on upgrade.
+    """
+    if host.install_mode == "pypi":
+        spec = f"kenzy[{extras}]" + (f"=={host.version}" if host.version else ">=3.0.0")
+        return f"{'-U ' if upgrade else ''}'{spec}'"
+    return f"-e '{host.install_path}[{extras}]'"
+
+
+def _sync_tree(host: HostConfig, local_path: Path) -> bool:
+    """Transfer what the host needs: full source (source mode) or just configs
+    (pypi mode, code comes from PyPI), then per-host sync paths and overlays."""
+    if host.install_mode == "pypi":
+        _info("pypi mode: code from PyPI, syncing configs only…")
+        if not _rsync_path(host, local_path, "configs"):
+            return False
+        _ok("configs synced")
+    else:
+        _info("syncing source…")
+        if not _rsync(host, local_path):
+            return False
+        _ok("source synced")
+
+    for subpath in host.sync:
+        _info(f"syncing {subpath}…")
+        if _rsync_path(host, local_path, subpath):
+            _ok(f"{subpath} synced")
+
+    _rsync_host_configs(host, local_path)
+    return True
+
+
+def _provision(host: HostConfig, local_path: Path, *, upgrade: bool) -> bool:
+    """Shared install/upgrade body: sync, venv, pip, host pip packages."""
+    if not _sync_tree(host, local_path):
+        return False
+    if not _ensure_venv(host):
+        return False
+
+    extras = _pip_extras(host, local_path)
+    _maybe_install_cpu_torch(host, extras)
+
+    target = _pip_target(host, extras, upgrade=upgrade)
+    _info(f"pip install {target}…")
+    r = _ssh(host, f"{host.venv_path}/bin/pip install -q {target}")
+    if r.returncode != 0:
+        _err("pip install failed")
+        return False
+    _ok("packages updated" if upgrade else "packages installed")
+
+    _apply_pip_packages(host)
+    return True
 
 
 _TORCH_CPU_INDEX = "https://download.pytorch.org/whl/cpu"
@@ -483,11 +583,9 @@ def cmd_init(hosts: list[HostConfig]) -> None:
     for host in hosts:
         _header(host.name, f"init  {host.address}")
 
-        packages = sorted(set(APT_BASE + [
-            pkg
-            for svc in host.services
-            for pkg in APT_EXTRA.get(svc, [])
-        ]))
+        packages = sorted(
+            set(APT_BASE + [pkg for svc in host.services for pkg in APT_EXTRA.get(svc, [])])
+        )
         _info(f"apt packages: {' '.join(packages)}")
 
         r = _ssh(host, f"apt-get install -y {' '.join(packages)}", sudo=True)
@@ -508,39 +606,15 @@ def cmd_init(hosts: list[HostConfig]) -> None:
 
 
 def cmd_install(hosts: list[HostConfig], local_path: Path) -> None:
-    """First-time full install: rsync, venv, pip, systemd."""
+    """First-time full install: sync, venv, pip, models, systemd."""
     for host in hosts:
-        _header(host.name, f"install  {host.address}  services={host.services}")
-
-        _info("syncing source…")
-        if not _rsync(host, local_path):
-            continue
-        _ok("source synced")
-
-        for subpath in host.sync:
-            _info(f"syncing {subpath}…")
-            if _rsync_path(host, local_path, subpath):
-                _ok(f"{subpath} synced")
-
-        _rsync_host_configs(host, local_path)
-
-        if not _ensure_venv(host):
-            continue
-
-        extras = _pip_extras(host, local_path)
-        _maybe_install_cpu_torch(host, extras)
-
-        _info(f"pip install -e '[{extras}]'…")
-        r = _ssh(
-            host,
-            f"{host.venv_path}/bin/pip install -q -e '{host.install_path}[{extras}]'",
+        _header(
+            host.name,
+            f"install  {host.address}  services={host.services}  mode={host.install_mode}",
         )
-        if r.returncode != 0:
-            _err("pip install failed")
-            continue
-        _ok("packages installed")
 
-        _apply_pip_packages(host)
+        if not _provision(host, local_path, upgrade=False):
+            continue
 
         _info("downloading models (kenzy-setup)…")
         r = _ssh(
@@ -568,39 +642,12 @@ def cmd_install(hosts: list[HostConfig], local_path: Path) -> None:
 
 
 def cmd_upgrade(hosts: list[HostConfig], local_path: Path) -> None:
-    """Sync source, update packages, re-write units, restart services."""
+    """Sync, update packages, re-write units, restart services."""
     for host in hosts:
-        _header(host.name, f"upgrade  {host.address}")
+        _header(host.name, f"upgrade  {host.address}  mode={host.install_mode}")
 
-        _info("syncing source…")
-        if not _rsync(host, local_path):
+        if not _provision(host, local_path, upgrade=True):
             continue
-        _ok("source synced")
-
-        for subpath in host.sync:
-            _info(f"syncing {subpath}…")
-            if _rsync_path(host, local_path, subpath):
-                _ok(f"{subpath} synced")
-
-        _rsync_host_configs(host, local_path)
-
-        if not _ensure_venv(host):
-            continue
-
-        extras = _pip_extras(host, local_path)
-        _maybe_install_cpu_torch(host, extras)
-
-        _info(f"pip install -e '[{extras}]'…")
-        r = _ssh(
-            host,
-            f"{host.venv_path}/bin/pip install -q -e '{host.install_path}[{extras}]'",
-        )
-        if r.returncode != 0:
-            _err("pip install failed")
-            continue
-        _ok("packages updated")
-
-        _apply_pip_packages(host)
 
         _info("updating systemd unit files…")
         _write_units(host)
@@ -654,14 +701,21 @@ def cmd_logs(service: str, host: HostConfig) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _load_hosts(config_path: str) -> list[HostConfig]:
+def _load_hosts(
+    config_path: str,
+    *,
+    force_source: bool = False,
+    version_override: str | None = None,
+) -> list[HostConfig]:
     with open(config_path) as fh:
         raw: dict[str, Any] = yaml.safe_load(fh)
 
     defaults: dict[str, Any] = raw.get("defaults", {})
+    # install_mode/version may be set at top level or under defaults; per-host wins.
+    default_mode = str(raw.get("install_mode", defaults.get("install_mode", "source")))
+    default_version = raw.get("version", defaults.get("version"))
     service_sync: dict[str, list[str]] = {
-        k: [str(p) for p in v]
-        for k, v in raw.get("service_sync", {}).items()
+        k: [str(p) for p in v] for k, v in raw.get("service_sync", {}).items()
     }
     hosts: list[HostConfig] = []
 
@@ -697,19 +751,26 @@ def _load_hosts(config_path: str) -> list[HostConfig]:
             if p not in pip_pkgs:
                 pip_pkgs.append(p)
 
-        hosts.append(HostConfig(
-            name=name,
-            address=str(hcfg["address"]),
-            ssh_user=_d(hcfg, "ssh_user", "pi"),
-            install_path=install_path,
-            venv_path=_d(hcfg, "venv_path", f"{install_path}/.venv"),
-            python_bin=_d(hcfg, "python_bin", "python3"),
-            local=bool(hcfg.get("local", defaults.get("local", False))),
-            services=list(hcfg.get("services", [])),
-            sync=sync_paths,
-            torch_index_url=str(torch_url) if torch_url else None,
-            pip_packages=pip_pkgs,
-        ))
+        mode = "source" if force_source else str(hcfg.get("install_mode", default_mode))
+        ver = version_override or hcfg.get("version", default_version)
+
+        hosts.append(
+            HostConfig(
+                name=name,
+                address=str(hcfg["address"]),
+                ssh_user=_d(hcfg, "ssh_user", "pi"),
+                install_path=install_path,
+                venv_path=_d(hcfg, "venv_path", f"{install_path}/.venv"),
+                python_bin=_d(hcfg, "python_bin", "python3"),
+                local=bool(hcfg.get("local", defaults.get("local", False))),
+                services=list(hcfg.get("services", [])),
+                sync=sync_paths,
+                torch_index_url=str(torch_url) if torch_url else None,
+                pip_packages=pip_pkgs,
+                install_mode=mode,
+                version=str(ver) if ver else None,
+            )
+        )
 
     return hosts
 
@@ -724,13 +785,21 @@ def _select(all_hosts: list[HostConfig], name: str | None) -> list[HostConfig]:
     return matches
 
 
-def _find_project_root() -> Path:
-    """Walk up from CWD until pyproject.toml is found."""
-    here = Path.cwd()
-    for path in [here, *here.parents]:
+def _config_root(config_path: str) -> Path:
+    """Operational/source root holding configs/, skills/, data/ — the rsync base.
+
+    Rooted on the deploy.yaml location (config-root) rather than pyproject.toml,
+    so pypi-mode deploys work from an operational tree with no source checkout.
+    A ``<root>/configs/deploy.yaml`` layout yields ``<root>``; otherwise falls
+    back to a pyproject walk, then the file's own directory.
+    """
+    p = Path(config_path).resolve()
+    if p.parent.name == "configs":
+        return p.parent.parent
+    for path in [p.parent, *p.parent.parents]:
         if (path / "pyproject.toml").exists():
             return path
-    return here
+    return p.parent
 
 
 # ---------------------------------------------------------------------------
@@ -745,21 +814,35 @@ def main() -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(
-        "--config", default="configs/deploy.yaml",
+        "--config",
+        default="configs/deploy.yaml",
         metavar="PATH",
         help="Deploy config file (default: configs/deploy.yaml)",
     )
     parser.add_argument(
-        "--host", default=None, metavar="NAME",
+        "--host",
+        default=None,
+        metavar="NAME",
         help="Target a single host by name (default: all hosts)",
+    )
+    parser.add_argument(
+        "--local",
+        action="store_true",
+        help="Force source (rsync + editable) install mode, overriding deploy.yaml",
+    )
+    parser.add_argument(
+        "--version",
+        default=None,
+        metavar="V",
+        help="Override the PyPI version to install (pypi mode), e.g. 3.1.0",
     )
 
     sub = parser.add_subparsers(dest="command", required=True)
 
-    sub.add_parser("init",    help="Install OS dependencies + create install directory")
+    sub.add_parser("init", help="Install OS dependencies + create install directory")
     sub.add_parser("install", help="Full first-time install (sync, venv, pip, systemd)")
     sub.add_parser("upgrade", help="Sync source, update packages, restart services")
-    sub.add_parser("status",  help="Show service status on target host(s)")
+    sub.add_parser("status", help="Show service status on target host(s)")
 
     for action in ("start", "stop", "restart"):
         p = sub.add_parser(action, help=f"{action.capitalize()} a service")
@@ -770,8 +853,8 @@ def main() -> None:
 
     args = parser.parse_args()
 
-    all_hosts = _load_hosts(args.config)
-    local_path = _find_project_root()
+    all_hosts = _load_hosts(args.config, force_source=args.local, version_override=args.version)
+    local_path = _config_root(args.config)
 
     if args.command == "logs":
         if not args.host:

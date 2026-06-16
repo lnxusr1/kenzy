@@ -38,6 +38,7 @@ def _setup_speechbrain(model_source: str, model_save_dir: str) -> None:
         log.info("speechbrain not installed — skipping")
         return
     import os
+
     sentinel = os.path.join(model_save_dir, "hyperparams.yaml")
     if os.path.exists(sentinel):
         log.info("SpeechBrain model already present at %s — skipping", model_save_dir)
@@ -77,8 +78,10 @@ def main() -> None:
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
 
+    from kenzy.config import resolve_config
+
     # Read speaker config to locate model paths (optional).
-    speaker_config = sys.argv[1] if len(sys.argv) > 1 else "configs/speaker.yaml"
+    speaker_config = resolve_config("speaker", sys.argv[1] if len(sys.argv) > 1 else None)
     cfg: dict[str, Any] = {}
     try:
         with open(speaker_config) as fh:
@@ -86,14 +89,14 @@ def main() -> None:
     except FileNotFoundError:
         log.debug("Speaker config not found at %s — using defaults", speaker_config)
 
-    model_source   = str(cfg.get("model_source",   "speechbrain/spkrec-ecapa-voxceleb"))
+    model_source = str(cfg.get("model_source", "speechbrain/spkrec-ecapa-voxceleb"))
     model_save_dir = str(cfg.get("model_save_dir", "models/speaker"))
 
     _setup_openwakeword()
     _setup_speechbrain(model_source, model_save_dir)
 
     # Kokoro: initialize if tts.yaml specifies provider: kokoro.
-    tts_config = "configs/tts.yaml"
+    tts_config = resolve_config("tts")
     tts_cfg: dict[str, Any] = {}
     try:
         with open(tts_config) as fh:
@@ -102,9 +105,9 @@ def main() -> None:
         log.debug("TTS config not found at %s — skipping Kokoro setup", tts_config)
 
     if str(tts_cfg.get("provider", "openai")).lower() == "kokoro":
-        kcfg     = tts_cfg.get("kokoro", {})
-        voice    = str(kcfg.get("voice",  "af_heart"))
-        device   = str(kcfg.get("device", "cpu"))
+        kcfg = tts_cfg.get("kokoro", {})
+        voice = str(kcfg.get("voice", "af_heart"))
+        device = str(kcfg.get("device", "cpu"))
         lang_code = str(kcfg.get("lang_code") or voice[0])
         _setup_kokoro(voice, device, lang_code)
 

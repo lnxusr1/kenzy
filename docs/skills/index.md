@@ -1,17 +1,20 @@
 # Skills
 
-Skills are the mechanism by which Kenzy takes actions in the world — fetching weather, reading news, controlling smart home devices, and more. Each skill is an async Python function decorated with `@skill` in the `skills/` directory. The LLM calls skills as tools based on their docstrings and type signatures.
+Skills are the mechanism by which Kenzy takes actions in the world — fetching weather, reading news, controlling smart home devices, and more. Each skill is an async Python function decorated with `@skill`. The LLM calls skills as tools based on their docstrings and type signatures.
 
 ## How skills work
 
-At startup, the LLM service scans the `skills/` directory, imports every `.py` file, and registers all functions decorated with `@skill`. The decorator introspects each function's signature, type annotations, and docstring to generate the JSON Schema tool definition that LiteLLM passes to the model. No separate configuration or registration step is needed.
+Skills load from two places at LLM-service startup:
+
+1. **Built-in skills** ship inside the package (`kenzy/llm/builtin_skills/`) and always load first.
+2. **Your overlay** — the directory named by `skills.dir` in `llm.yaml` (default `skills/` under your config home: `~/.config/kenzy/skills`, or the repo root in a dev checkout). Loaded second, so a file here that defines a skill of the **same name** overrides the built-in one.
+
+Every `.py` file is imported and all `@skill`-decorated functions are registered. The decorator introspects each function's signature, type annotations, and docstring to generate the JSON Schema tool definition that LiteLLM passes to the model — no separate configuration or registration step. Disable any skill (built-in or custom) by its function name under `skills.disabled` in `llm.yaml`.
 
 ```
-skills/
-  weather.py       ← defines get_current_weather(), get_forecast()
-  news.py          ← defines get_news(), get_news_article()
-  home_assistant.py ← defines handle_home_control()
-  my_skill.py      ← your custom skill
+kenzy/llm/builtin_skills/   ← bundled: weather, news, home_assistant, stocks, …
+~/.config/kenzy/skills/
+  my_skill.py               ← your custom skill (overrides a built-in of the same name)
 ```
 
 The LLM decides which skills to call and with what arguments based entirely on the docstrings. Well-written docstrings that describe *when* to use a skill are as important as the skill's implementation.

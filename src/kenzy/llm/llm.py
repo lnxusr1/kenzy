@@ -26,7 +26,7 @@ import logging
 import re
 import sys
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -34,16 +34,10 @@ from fastapi import FastAPI
 from pydantic import BaseModel
 
 from kenzy.llm import skills as skill_registry
+from kenzy.logutil import quiet_health_access_log
 
 log = logging.getLogger(__name__)
 
-
-def _find_project_root() -> Path:
-    """Walk up from CWD until pyproject.toml is found."""
-    for path in [Path.cwd(), *Path.cwd().parents]:
-        if (path / "pyproject.toml").exists():
-            return path
-    return Path.cwd()
 
 # ---------------------------------------------------------------------------
 # Request / response models
@@ -73,29 +67,30 @@ class ProcessResponse(BaseModel):
 # Conversation history
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class _Turn:
-    timestamp:      float
-    speaker:        str    # raw value — "unknown" if not identified
-    user_text:      str
-    assistant_text: str    # spoken text only (no JSON wrapper, no tool internals)
+    timestamp: float
+    speaker: str  # raw value — "unknown" if not identified
+    user_text: str
+    assistant_text: str  # spoken text only (no JSON wrapper, no tool internals)
 
 
 class ConversationHistory:
     """Per-room rolling history of the last N turns within a time window."""
 
-    MAX_TURNS: int   = 10
-    MAX_AGE:   float = 180.0   # seconds (3 minutes)
+    MAX_TURNS: int = 10
+    MAX_AGE: float = 180.0  # seconds (3 minutes)
 
     def __init__(self) -> None:
         self._rooms: dict[str, list[_Turn]] = {}
 
     def _prune(self, room_id: str) -> None:
-        turns   = self._rooms.get(room_id, [])
-        cutoff  = time.time() - self.MAX_AGE
-        turns   = [t for t in turns if t.timestamp >= cutoff]
+        turns = self._rooms.get(room_id, [])
+        cutoff = time.time() - self.MAX_AGE
+        turns = [t for t in turns if t.timestamp >= cutoff]
         if len(turns) > self.MAX_TURNS:
-            turns = turns[-self.MAX_TURNS:]
+            turns = turns[-self.MAX_TURNS :]
         self._rooms[room_id] = turns
 
     def add(self, room_id: str, speaker: str, user_text: str, assistant_text: str) -> None:
@@ -117,7 +112,7 @@ class ConversationHistory:
         out: list[dict[str, Any]] = []
         for turn in self._rooms.get(room_id, []):
             label = turn.speaker if turn.speaker.lower() != "unknown" else "unidentified speaker"
-            out.append({"role": "user",      "content": f"[{label}] {turn.user_text}"})
+            out.append({"role": "user", "content": f"[{label}] {turn.user_text}"})
             out.append({"role": "assistant", "content": turn.assistant_text})
         return out
 
@@ -131,13 +126,13 @@ _history: ConversationHistory = ConversationHistory()
 
 app = FastAPI(title="Kenzy LLM Service", version="0.1.0")
 
-_model:               str = "gpt-4o"
-_base_url:            str | None = None
-_system_prompt:       str = "You are Kenzy, a helpful home assistant. Be concise."
-_voice_prompt:        str = "Respond in a friendly, conversational tone."
+_model: str = "gpt-4o"
+_base_url: str | None = None
+_system_prompt: str = "You are Kenzy, a helpful home assistant. Be concise."
+_voice_prompt: str = "Respond in a friendly, conversational tone."
 _max_tool_iterations: int = 5
-_location:            str = ""   # "City, State, Country" assembled at startup
-_timezone:            str = ""   # IANA timezone string e.g. "America/Chicago"
+_location: str = ""  # "City, State, Country" assembled at startup
+_timezone: str = ""  # IANA timezone string e.g. "America/Chicago"
 
 # Appended to every system prompt — instructs the LLM to return structured output.
 # voice_prompt tells kenzy-tts how to speak the response (tone, pace, style).
@@ -172,7 +167,7 @@ async def health() -> dict[str, str]:
 @app.post("/process", response_model=ProcessResponse)
 async def process(req: ProcessRequest) -> ProcessResponse:
     # Preserve raw speaker for history; derive display name for logging.
-    raw_speaker     = req.speaker or "unknown"
+    raw_speaker = req.speaker or "unknown"
     display_speaker = raw_speaker if raw_speaker.lower() != "unknown" else None
     log.info("[%s/%s] %s", req.room_id or "?", display_speaker or "?", req.text)
 
@@ -197,8 +192,10 @@ async def process(req: ProcessRequest) -> ProcessResponse:
 def _build_context() -> str:
     """Build a per-request context block with current date/time and location."""
     import datetime
+
     try:
         import zoneinfo
+
         tz: datetime.tzinfo | None = zoneinfo.ZoneInfo(_timezone) if _timezone else None
     except Exception:
         tz = None
@@ -265,38 +262,41 @@ async def _run_llm(text: str, speaker: str, room_id: str | None) -> tuple[str, s
     history_messages = _history.get_messages(room_id or "")
 
     messages: list[dict[str, Any]] = [
-        {"role": "system", "content": f"{_system_prompt}\n\n{_build_context()}\n{_JSON_INSTRUCTION}"},
+        {
+            "role": "system",
+            "content": f"{_system_prompt}\n\n{_build_context()}\n{_JSON_INSTRUCTION}",
+        },
         *history_messages,
-        {"role": "user",   "content": user_content},
+        {"role": "user", "content": user_content},
     ]
 
     tools = skill_registry.get_tools()
     kwargs: dict[str, Any] = {
-        "model":    _model,
+        "model": _model,
         "messages": messages,
     }
     if _base_url:
         kwargs["base_url"] = _base_url
     if tools:
-        kwargs["tools"]       = tools
+        kwargs["tools"] = tools
         kwargs["tool_choice"] = "auto"
 
     for iteration in range(_max_tool_iterations):
         response = await acompletion(**kwargs)
-        message  = response.choices[0].message
+        message = response.choices[0].message
 
         # Serialise the assistant turn back into the message list.
         assistant_msg: dict[str, Any] = {
-            "role":    "assistant",
+            "role": "assistant",
             "content": message.content or "",
         }
         if message.tool_calls:
             assistant_msg["tool_calls"] = [
                 {
-                    "id":       tc.id,
-                    "type":     "function",
+                    "id": tc.id,
+                    "type": "function",
                     "function": {
-                        "name":      tc.function.name,
+                        "name": tc.function.name,
                         "arguments": tc.function.arguments,
                     },
                 }
@@ -310,9 +310,11 @@ async def _run_llm(text: str, speaker: str, room_id: str | None) -> tuple[str, s
             return spoken, vp
 
         # Execute each tool call and append results.
-        log.debug("Tool calls (iteration %d): %s",
-                  iteration + 1,
-                  [tc.function.name for tc in message.tool_calls])
+        log.debug(
+            "Tool calls (iteration %d): %s",
+            iteration + 1,
+            [tc.function.name for tc in message.tool_calls],
+        )
 
         for tc in message.tool_calls:
             try:
@@ -321,11 +323,13 @@ async def _run_llm(text: str, speaker: str, room_id: str | None) -> tuple[str, s
                 args = {}
             result = await skill_registry.execute(tc.function.name, args)
             log.debug("  %s(%s) → %s", tc.function.name, args, result[:120])
-            messages.append({
-                "role":         "tool",
-                "tool_call_id": tc.id,
-                "content":      result,
-            })
+            messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": tc.id,
+                    "content": result,
+                }
+            )
 
         # Feed tool results back to the LLM.
         kwargs["messages"] = messages
@@ -348,7 +352,9 @@ def main() -> None:
 
     load_dotenv()
 
-    config_path = sys.argv[1] if len(sys.argv) > 1 else "configs/llm.yaml"
+    from kenzy.config import resolve_config
+
+    config_path = resolve_config("llm", sys.argv[1] if len(sys.argv) > 1 else None)
     with open(config_path) as fh:
         cfg: dict[str, Any] = yaml.safe_load(fh)
 
@@ -356,33 +362,43 @@ def main() -> None:
     fmt = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
     logging.basicConfig(level=logging.WARNING, format=fmt)
     logging.getLogger("kenzy").setLevel(log_level)
+    quiet_health_access_log()
 
-    global _model, _base_url, _system_prompt, _voice_prompt, _max_tool_iterations, _location, _timezone
-    _model               = str(cfg.get("model", "gpt-4o"))
-    _base_url            = cfg.get("base_url") or None
-    _system_prompt       = str(cfg.get("system_prompt", _system_prompt))
-    _voice_prompt        = str(cfg.get("voice_prompt", _voice_prompt))
+    global \
+        _model, \
+        _base_url, \
+        _system_prompt, \
+        _voice_prompt, \
+        _max_tool_iterations, \
+        _location, \
+        _timezone
+    _model = str(cfg.get("model", "gpt-4o"))
+    _base_url = cfg.get("base_url") or None
+    _system_prompt = str(cfg.get("system_prompt", _system_prompt))
+    _voice_prompt = str(cfg.get("voice_prompt", _voice_prompt))
     _max_tool_iterations = int(cfg.get("max_tool_iterations", 5))
 
     loc = cfg.get("location", {})
-    _location = ", ".join(filter(None, [
-        loc.get("city"), loc.get("state"), loc.get("country")
-    ]))
+    _location = ", ".join(filter(None, [loc.get("city"), loc.get("state"), loc.get("country")]))
     _timezone = str(loc.get("timezone", ""))
     if _location:
         log.info("Location: %s (tz=%s)", _location, _timezone or "system local")
 
     log.info("LLM: model=%s base_url=%s", _model, _base_url or "(provider default)")
 
-    # Load skills from the configured directory (default: skills/ at project root).
-    # The framework (__init__.py) stays in the package; skill files live outside it.
+    # Built-in skills ship inside the package; the configured directory is a
+    # user overlay (default: skills/ under the config home — repo root in a dev
+    # checkout, ~/.config/kenzy otherwise). A relative skills.dir resolves
+    # against that operational-tree root.
     skills_cfg = cfg.get("skills", {})
     # Make top-level location available to skills via get_config("location", ...)
     skills_cfg["location"] = cfg.get("location", {})
     disabled = skills_cfg.get("disabled", [])
 
-    raw_dir  = skills_cfg.get("dir", "skills")
-    user_dir = Path(raw_dir) if Path(raw_dir).is_absolute() else _find_project_root() / raw_dir
+    from kenzy.config import kenzy_data_root
+
+    raw_dir = skills_cfg.get("dir", "skills")
+    user_dir = Path(raw_dir) if Path(raw_dir).is_absolute() else kenzy_data_root() / raw_dir
 
     skill_registry.set_config(skills_cfg)
     skill_registry.load_skills(user_dir, disabled)

@@ -21,7 +21,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 @pytest.fixture
 def ha():
-    """Load skills/home_assistant.py by path with the index built from real files."""
+    """Load the bundled home_assistant skill by path with the index from real files."""
     # Resolve paths relative to project root regardless of cwd.
     reg.set_config({
         "home_assistant": {
@@ -30,7 +30,7 @@ def ha():
             "device_overlay":  str(ROOT / "data/home_assistant/device_overlay.yaml"),
         }
     })
-    path = ROOT / "skills" / "home_assistant.py"
+    path = ROOT / "src" / "kenzy" / "llm" / "builtin_skills" / "home_assistant.py"
     spec = importlib.util.spec_from_file_location("home_assistant", path)
     assert spec and spec.loader
     mod = importlib.util.module_from_spec(spec)

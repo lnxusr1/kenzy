@@ -11,29 +11,31 @@ sudo apt-get install libportaudio2 portaudio19-dev
 
 ## Quick install
 
-The fastest way to get a host running is the bootstrapper, which clones Kenzy to `~/kenzy`, creates a virtualenv, installs the services you choose, downloads the inference models, and scaffolds a `.env`:
+The fastest way to get a host running is the bootstrapper. It creates a per-user virtualenv under `~/.local/share/kenzy`, installs the services you choose from PyPI, downloads the inference models, scaffolds your config home at `~/.config/kenzy`, and links the `kenzy-*` commands into `~/.local/bin`:
 
 ```bash
 curl -fsSL https://kenzy.dev/install.sh | bash
 ```
 
-It prompts for what to install (room node, server stack, or everything). Drive it non-interactively with environment variables:
+It prompts for what to install (room node, server stack, or everything). Pass flags after `bash -s --`, or use the matching environment variables, to drive it non-interactively:
 
 ```bash
 # A room node, unattended
-KENZY_PROFILE=node KENZY_YES=1 bash -c "$(curl -fsSL https://kenzy.dev/install.sh)"
+curl -fsSL https://kenzy.dev/install.sh | bash -s -- --profile node --yes
 ```
 
-| Variable | Default | Purpose |
-|---|---|---|
-| `KENZY_DIR` | `~/kenzy` | Target checkout directory |
-| `KENZY_BRANCH` | `main` | Git branch / tag to install |
-| `KENZY_PROFILE` | *(prompt)* | `node`, `server`, or `all` — skips the prompt |
-| `KENZY_REPO` | GitHub | Alternate git remote |
-| `KENZY_YES` | `0` | Set `1` to assume defaults / no prompts (CI) |
+| Flag | Variable | Default | Purpose |
+|---|---|---|---|
+| `--profile` | `KENZY_PROFILE` | *(prompt)* | `node`, `server`, or `all` — skips the prompt |
+| `--no-apt` | `KENZY_NO_APT` | `0` | Don't install system packages (non-Debian hosts) |
+| `--package` | `KENZY_PACKAGE` | *(PyPI)* | Install a local wheel/sdist/source dir instead of PyPI |
+| `--version` | `KENZY_VERSION` | *(latest ≥3)* | Pin a specific PyPI version |
+| `--yes` | `KENZY_YES` | `0` | Assume defaults / no prompts (CI) |
+| `--home` | `KENZY_HOME` | `~/.config/kenzy` | Config home (configs, skills, data, `.env`) |
+| `--venv` | `KENZY_VENV` | `~/.local/share/kenzy/venv` | Virtualenv location |
 
-!!! note "Source install, not PyPI"
-    `install.sh` clones the current microservices source from GitHub — it does **not** `pip install kenzy`. The package on PyPI is still the old 2.x monolith, and v3's `skills/`, `configs/`, and `data/` live outside the Python package, so installs are source-based.
+!!! note "Requires Kenzy ≥ 3.0 on PyPI"
+    The installer floors the version at `3.0.0` so it never resolves the legacy 2.x monolith. Default configs, skills, and `.env.example` ship **inside** the package and are scaffolded to your config home by `kenzy-init`; edit the copies under `~/.config/kenzy`, not the package. To trial an unreleased build before it's on PyPI, point `--package` at a locally built wheel.
 
 ## Manual installation
 
@@ -109,11 +111,11 @@ HA_API_KEY="..."               # Home Assistant long-lived access token (home co
 
 ## Configure services
 
-Each service reads its settings from a YAML file in `configs/`. The bundled files contain sensible defaults with comments explaining every key. At minimum you will want to:
+Each service reads its settings from a YAML file. For a `pip`/`install.sh` install these live in your **config home** (`~/.config/kenzy/configs/`, scaffolded by `kenzy-init`); in a source checkout they're in the repo's `configs/`. The bundled files contain sensible defaults with comments explaining every key. At minimum you will want to:
 
-1. Set `server_url` in `configs/node.yaml` to point at your server host
-2. Set the service URLs in `configs/server.yaml` to point at wherever each service is running
-3. Set your LLM model and location in `configs/llm.yaml`
+1. In `server.yaml`, set the service URLs and your `node_defaults` (node tuning is pushed to nodes on connect)
+2. In `llm.yaml`, set your LLM model and location
+3. Nodes usually need **no** config — they discover the server via mDNS and pull their tuning. Set `server_url` in `node.yaml` only to pin a specific server (e.g. across VLANs), and `audio_device` for non-default hardware.
 
 See the [Configuration](configuration/index.md) section for a full reference.
 

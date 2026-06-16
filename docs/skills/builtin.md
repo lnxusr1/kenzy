@@ -1,6 +1,6 @@
 # Built-in Skills
 
-## Weather — `skills/weather.py`
+## Weather — `builtin_skills/weather.py`
 
 Provides current conditions and multi-day forecasts using the [National Weather Service API](https://www.weather.gov/documentation/services-web-api) (US only, no API key required). Geocoding uses Nominatim (OpenStreetMap).
 
@@ -20,7 +20,7 @@ Provides current conditions and multi-day forecasts using the [National Weather 
 
 ---
 
-## News — `skills/news.py`
+## News — `builtin_skills/news.py`
 
 Fetches headlines and article summaries from configurable RSS feeds. Articles are extracted with [trafilatura](https://trafilatura.readthedocs.io) and summarized by a sub-LLM call.
 
@@ -54,7 +54,7 @@ Add or replace any category by editing the `feeds` map. Any RSS 2.0 or Atom feed
 
 ---
 
-## Stocks — `skills/stocks.py`
+## Stocks — `builtin_skills/stocks.py`
 
 Returns stock quotes using [yfinance](https://github.com/ranaroussi/yfinance).
 
@@ -76,7 +76,7 @@ Apple Inc. (AAPL)
 
 ---
 
-## Home Assistant — `skills/home_assistant.py`
+## Home Assistant — `builtin_skills/home_assistant.py`
 
 Controls and queries smart home devices via the [Home Assistant REST API](https://developers.home-assistant.io/docs/api/rest/). See [Home Assistant](home-assistant.md) for full setup documentation.
 
@@ -101,7 +101,7 @@ Controls and queries smart home devices via the [Home Assistant REST API](https:
 
 ---
 
-## Random Tools — `skills/random_tools.py`
+## Random Tools — `builtin_skills/random_tools.py`
 
 Utility skills for randomness and selection.
 
@@ -118,7 +118,7 @@ Utility skills for randomness and selection.
 
 ---
 
-## About — `skills/about.py`
+## About — `builtin_skills/about.py`
 
 | Function | Description |
 |---|---|

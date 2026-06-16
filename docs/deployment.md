@@ -1,17 +1,17 @@
 # Deployment
 
-`kenzy-deploy` manages Kenzy installations across a fleet of remote hosts over SSH. It handles OS setup, Python virtualenv creation, source syncing, systemd unit installation, and service management.
+`kenzy-deploy` manages Kenzy installations across a fleet of remote hosts over SSH. It handles OS setup, Python virtualenv creation, package installation, systemd unit installation, and service management.
 
-!!! important "kenzy-deploy is a source-push tool — run it from a repository checkout"
-    `kenzy-deploy` does **not** install from PyPI. It is a *source-push* deployer:
+## Install modes
 
-    1. It locates your **project root** by walking up from the current directory until it finds `pyproject.toml`, so it must be run from inside a Kenzy checkout (e.g. `~/kenzy`).
-    2. It **rsyncs your local source tree** (`src/`, `configs/`, `pyproject.toml`, and the `skills/`/`data/`/`models/` directories) to each host.
-    3. On each remote it runs an **editable install of the pushed source** (`pip install -e '{install_path}[extras]'`) — never `pip install kenzy`.
+`kenzy-deploy` supports two install modes, set by `install_mode` in `deploy.yaml` (top-level default, overridable per host, or with CLI flags):
 
-    **Consequence:** a bare `pip install kenzy` does *not* give you a working `kenzy-deploy`. You would have the command on your `PATH`, but no project root for it to push — no `configs/`, `skills/`, `data/`, or `pyproject.toml` in your working directory. Use a git checkout on your control machine (the [`install.sh`](https://kenzy.dev/install.sh) one-liner leaves one at `~/kenzy`), and run `kenzy-deploy` from there.
+- **`source`** (default) — *source-push*. Rsyncs your local tree (`src/`, `configs/`, `pyproject.toml`, plus the `skills/`/`data/`/`models/` paths) to each host and runs an editable install (`pip install -e '{install_path}[extras]'`). Edit a skill or config locally, run `kenzy-deploy upgrade`, and it's live everywhere — no package publish in the loop.
+- **`pypi`** — installs `kenzy[extras]` from PyPI (pinned to `version:`/`--version`, else the latest `>=3`). Only `configs/` and the per-host `sync` paths are pushed; the code comes from PyPI. `upgrade` adds `-U`.
 
-    This source-push model is intentional: edit a skill or config locally, run `kenzy-deploy upgrade`, and the change is live on every host — no release or package publish in the loop.
+CLI overrides: `--local` forces `source` for every host; `--version X` overrides the pinned PyPI version.
+
+Run `kenzy-deploy` from a directory whose `configs/deploy.yaml` it can find: the rsync base ("config-root") is derived from the `deploy.yaml` location (`<root>/configs/deploy.yaml` → `<root>`), **not** `pyproject.toml` — so `pypi` mode works from an operational tree (config + skills + data) with no source checkout, while `source` mode still expects a repo checkout there. The [`install.sh`](https://kenzy.dev/install.sh) one-liner sets up a control machine, or use a git checkout.
 
 ## Prerequisites
 
@@ -29,6 +29,9 @@ On each remote host:
 Edit `configs/deploy.yaml`:
 
 ```yaml
+install_mode: source      # source (rsync + pip -e) or pypi (pip install kenzy)
+# version: 3.1.0          # pypi mode only; omit for the latest 3.x
+
 defaults:
   ssh_user:     pi
   install_path: /opt/kenzy
@@ -72,6 +75,8 @@ hosts:
 | `python_bin` | *(from defaults)* | Python executable name |
 | `local` | `false` | Set `true` for the local machine (no SSH used) |
 | `sync` | `[]` | Additional paths synced to this host specifically |
+| `install_mode` | *(from top-level, `source`)* | `source` or `pypi` for this host |
+| `version` | *(from top-level)* | PyPI version to install in `pypi` mode |
 
 ### Path syncing
 
@@ -97,9 +102,9 @@ kenzy-deploy init --host living-room   # single host
 
 First full deployment:
 
-1. Syncs source code to `install_path`
+1. Syncs the tree to `install_path` — full source in `source` mode, `configs/` only in `pypi` mode
 2. Creates a Python virtualenv at `install_path/.venv`
-3. Installs the package with the appropriate service extras
+3. Installs the package with the appropriate service extras (editable from source, or from PyPI)
 4. Syncs skill/data directories per `service_sync`
 5. Syncs `.env` and any other `sync` paths
 6. Generates and installs systemd unit files
@@ -115,8 +120,8 @@ kenzy-deploy install --host main-server
 
 Push an update to running hosts:
 
-1. Syncs updated source code
-2. Reinstalls the package (picks up dependency changes)
+1. Syncs the updated tree (source, or `configs/` in `pypi` mode)
+2. Reinstalls/updates the package (editable from source, or `pip install -U` from PyPI)
 3. Re-syncs skills, data, `.env`, and other configured paths
 4. Restarts all services
 
@@ -162,6 +167,9 @@ On each `install` or `upgrade`, after syncing the base `configs/`, the deploy sc
 
 !!! note "Complete files required"
     The overlay is a file-level replacement, not a key-level merge. A host-specific config file must be complete and valid on its own — the service will not fall back to base `configs/` values for keys that are missing. The recommended approach is to copy the full base config file into the overlay directory and change only the lines that differ.
+
+!!! tip "Nodes: prefer config-pull for tuning"
+    For **node** tuning (wake-word thresholds, VAD timing) you usually don't need a per-host overlay at all. Set `node_defaults` in the server's `server.yaml` and per-room values in `configs/nodes/<room_id>.yaml`; the server pushes them to each node on connect. Reserve the deploy overlay for genuinely host-local node settings like `audio_device`. See [Discovery & config-pull](configuration/server.md#discovery-and-config-pull).
 
 ```yaml
 # configs/hosts/living-room/node.yaml  (full copy of configs/node.yaml, with these lines changed)

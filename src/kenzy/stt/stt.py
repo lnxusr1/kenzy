@@ -21,6 +21,8 @@ import numpy as np
 from fastapi import FastAPI
 from pydantic import BaseModel
 
+from kenzy.logutil import quiet_health_access_log
+
 log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -29,7 +31,7 @@ log = logging.getLogger(__name__)
 
 
 class TranscribeRequest(BaseModel):
-    audio_b64: str           # base64-encoded int16 PCM at 16 kHz mono
+    audio_b64: str  # base64-encoded int16 PCM at 16 kHz mono
     room_id: str | None = None
     session_id: str | None = None
 
@@ -87,7 +89,9 @@ def main() -> None:
     import uvicorn  # type: ignore[import-untyped]
     import yaml  # type: ignore[import-untyped]
 
-    config_path = sys.argv[1] if len(sys.argv) > 1 else "configs/stt.yaml"
+    from kenzy.config import resolve_config
+
+    config_path = resolve_config("stt", sys.argv[1] if len(sys.argv) > 1 else None)
     with open(config_path) as fh:
         cfg: dict[str, Any] = yaml.safe_load(fh)
 
@@ -95,6 +99,7 @@ def main() -> None:
     fmt = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
     logging.basicConfig(level=logging.WARNING, format=fmt)
     logging.getLogger("kenzy").setLevel(log_level)
+    quiet_health_access_log()
 
     try:
         from faster_whisper import WhisperModel  # type: ignore[import-untyped]

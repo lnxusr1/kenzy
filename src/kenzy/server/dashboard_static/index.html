@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Kenzy · Dashboard</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header>
+    <h1>KENZY</h1>
+    <span class="sub">server dashboard</span>
+    <span id="status" class="status">connecting…</span>
+  </header>
+
+  <main>
+    <section>
+      <h2>Nodes</h2>
+      <table id="nodes">
+        <thead>
+          <tr><th>Room</th><th>State</th><th>Session</th></tr>
+        </thead>
+        <tbody><tr><td colspan="3" class="muted">loading…</td></tr></tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>Services</h2>
+      <table id="services">
+        <thead>
+          <tr><th>Service</th><th>Status</th><th>Detail</th></tr>
+        </thead>
+        <tbody><tr><td colspan="3" class="muted">loading…</td></tr></tbody>
+      </table>
+    </section>
+  </main>
+
+  <footer>read-only fleet view · polling every 2s</footer>
+  <script src="app.js"></script>
+</body>
+</html>

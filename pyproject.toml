@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "kenzy"
-version = "3.0.0"
+version = "3.1.0"
 description = "Distributed home voice-assistant: kenzy-node, kenzy-server, kenzy-stt, kenzy-tts, kenzy-llm, kenzy-speaker"
 requires-python = ">=3.11"
 
@@ -20,12 +20,14 @@ dependencies = [
 node = [
     "sounddevice>=0.4.6",
     "openwakeword>=0.6.0",
+    "zeroconf>=0.130",
 ]
 
 # Install on the server host
 server = [
     "httpx>=0.27.0",
     "python-dotenv>=1.0.0",
+    "zeroconf>=0.130",
 ]
 
 # Install on the STT service host
@@ -93,14 +95,22 @@ kenzy-llm     = "kenzy.llm.llm:main"
 kenzy-speaker = "kenzy.speaker.speaker:main"
 kenzy-enroll  = "kenzy.speaker.enroll:main"
 kenzy-setup   = "kenzy.setup:main"
+kenzy-init    = "kenzy.init:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.setuptools.package-data]
+"kenzy" = [
+    "data/configs/*.yaml",
+    "data/.env.example",
+]
 "kenzy.node" = [
     "models/*.tflite",
     "sounds/*.wav",
+]
+"kenzy.server" = [
+    "dashboard_static/*",
 ]
 
 # ---------------------------------------------------------------------------
@@ -114,6 +124,9 @@ testpaths   = ["tests"]
 [tool.ruff]
 line-length = 100
 src = ["src"]
+# Built-in skills are author-facing example code (like user overlay skills); they
+# are bundled in the package but kept out of the strict lint/type gate.
+extend-exclude = ["src/kenzy/llm/builtin_skills"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP"]
@@ -122,3 +135,7 @@ select = ["E", "F", "I", "UP"]
 python_version = "3.11"
 strict         = true
 mypy_path      = "src"
+
+[[tool.mypy.overrides]]
+module = "kenzy.llm.builtin_skills.*"
+ignore_errors = true
