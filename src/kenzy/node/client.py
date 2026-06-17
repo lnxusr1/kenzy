@@ -33,8 +33,10 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import queue
 import socket
+import sys
 import uuid
 import wave
 from importlib.resources import as_file, files
@@ -315,6 +317,10 @@ class NodeClient:
         self._ws: ClientConnection | None = None
         self._oww: Any = None  # openwakeword Model
         self._player: _SoundPlayer | None = None
+        # Opt-in log ring buffer for the dashboard log viewer; attached only when
+        # the server asks (config `keep_logs: true`), so a dashboard-less server
+        # induces no node-side overhead.
+        self._log_buffer: Any = None
         self._waiting_audio: np.ndarray[Any, Any] | None = None
 
         self._silence_count: int = 0
@@ -484,6 +490,16 @@ class NodeClient:
     # Receive loop – inbound server messages → _cmd_q / _tts_q
     # ------------------------------------------------------------------
 
+    def _set_log_capture(self, on: bool) -> None:
+        """Attach/detach the dashboard log ring buffer (idempotent)."""
+        if on and self._log_buffer is None:
+            from kenzy.logutil import install_ring_handler
+
+            self._log_buffer = install_ring_handler("kenzy", capacity=500)
+        elif not on and self._log_buffer is not None:
+            logging.getLogger("kenzy").removeHandler(self._log_buffer)
+            self._log_buffer = None
+
     def _apply_pulled_config(self, patch: dict[str, Any]) -> None:
         """Apply server-pushed config to the running node.
 
@@ -516,6 +532,10 @@ class NodeClient:
         if "hard_cap_ms" in patch:
             self._hard_cap_frames = max(int(patch["hard_cap_ms"]) // fm, 1)
             applied.append("hard_cap_ms")
+
+        if "keep_logs" in patch:
+            self._set_log_capture(bool(patch["keep_logs"]))
+            applied.append("keep_logs")
 
         restart_keys = {
             "audio_device",
@@ -588,6 +608,18 @@ class NodeClient:
 
             elif mtype == protocol.MSG_TTS_END:
                 await self._end_tts(reason="complete")
+
+            elif mtype == protocol.MSG_RESTART:
+                # Re-exec ourselves: re-reads config and re-inits audio, with no
+                # dependence on a service manager's restart policy.
+                log.warning("Server requested restart — re-executing node")
+                os.execv(sys.executable, [sys.executable, *sys.argv])
+
+            elif mtype == protocol.MSG_REQUEST_LOGS and self._ws is not None:
+                lv = logging.getLevelNamesMapping().get(str(msg.get("level", "")).upper(), 0)
+                limit = int(msg.get("limit", 200))
+                entries = self._log_buffer.tail(lv, limit) if self._log_buffer else []
+                await self._ws.send(protocol.node_logs(str(msg.get("request_id", "")), entries))
 
     # ------------------------------------------------------------------
     # Audio loop – always running, routes frames by current state

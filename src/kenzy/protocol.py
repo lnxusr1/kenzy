@@ -24,6 +24,9 @@ MSG_STOP = "stop"
 MSG_ACK = "ack"
 MSG_TTS_START = "tts_start"
 MSG_TTS_END = "tts_end"
+MSG_RESTART = "restart"
+MSG_REQUEST_LOGS = "request_logs"
+MSG_LOGS = "logs"
 
 # ---------------------------------------------------------------------------
 # Audio format (shared by node and server)
@@ -90,6 +93,20 @@ def trigger(session_id: str | None = None) -> str:
 
 def stop() -> str:
     return json.dumps({"type": MSG_STOP})
+
+
+def restart() -> str:
+    return json.dumps({"type": MSG_RESTART})
+
+
+def request_logs(request_id: str, level: str = "", limit: int = 200) -> str:
+    return json.dumps(
+        {"type": MSG_REQUEST_LOGS, "request_id": request_id, "level": level, "limit": limit}
+    )
+
+
+def node_logs(request_id: str, entries: list[dict[str, Any]]) -> str:
+    return json.dumps({"type": MSG_LOGS, "request_id": request_id, "logs": entries})
 
 
 def ack(session_id: str) -> str:

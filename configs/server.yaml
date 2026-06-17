@@ -31,10 +31,17 @@ dashboard:
   enabled: true
   bind: "127.0.0.1"
   port: 8770
+  # Browser login for mutating actions (config edits, controls). Defaults to
+  # admin / password; change it with `kenzy-passwd` (run on the server node).
+  # It's plaintext HTTP on a LAN bind — keep it off the public internet.
+  auth:
+    username: "admin"
+    password_hash: "scrypt$16384:8:1$tI5Hed-tJCVbiLvz3n12kA$29VNd72xhZKs_H0TyxhempZRKLrn9PEABFXGHo8tlwk"
+  # Optional bearer token for API/CLI clients (curl/scripts); humans use the login above.
   auth_token: null
-  logs: false
-  tuning: false
-  controls: false
+  logs: true
+  tuning: true
+  controls: true
 
 # Config-pull defaults (see below)
 node_defaults:

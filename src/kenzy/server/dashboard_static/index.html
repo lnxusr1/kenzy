@@ -1,41 +1,24 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Kenzy · Dashboard</title>
-  <link rel="stylesheet" href="styles.css" />
-</head>
-<body>
-  <header>
-    <h1>KENZY</h1>
-    <span class="sub">server dashboard</span>
-    <span id="status" class="status">connecting…</span>
-  </header>
-
-  <main>
-    <section>
-      <h2>Nodes</h2>
-      <table id="nodes">
-        <thead>
-          <tr><th>Room</th><th>State</th><th>Session</th></tr>
-        </thead>
-        <tbody><tr><td colspan="3" class="muted">loading…</td></tr></tbody>
-      </table>
-    </section>
-
-    <section>
-      <h2>Services</h2>
-      <table id="services">
-        <thead>
-          <tr><th>Service</th><th>Status</th><th>Detail</th></tr>
-        </thead>
-        <tbody><tr><td colspan="3" class="muted">loading…</td></tr></tbody>
-      </table>
-    </section>
-  </main>
-
-  <footer>read-only fleet view · polling every 2s</footer>
-  <script src="app.js"></script>
-</body>
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>KENZY — Fleet Console</title>
+    <meta name="color-scheme" content="dark light" />
+    <link rel="stylesheet" href="/css/tokens.css" />
+    <link rel="stylesheet" href="/css/app.css" />
+    <script type="importmap">
+      {
+        "imports": {
+          "preact": "/vendor/preact.module.js",
+          "preact/hooks": "/vendor/hooks.module.js",
+          "htm": "/vendor/htm.module.js"
+        }
+      }
+    </script>
+  </head>
+  <body>
+    <div id="app"><div class="boot">Loading KENZY…</div></div>
+    <script type="module" src="/js/app.js"></script>
+  </body>
 </html>

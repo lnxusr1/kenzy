@@ -94,6 +94,7 @@ kenzy-tts     = "kenzy.tts.tts:main"
 kenzy-llm     = "kenzy.llm.llm:main"
 kenzy-speaker = "kenzy.speaker.speaker:main"
 kenzy-enroll  = "kenzy.speaker.enroll:main"
+kenzy-passwd  = "kenzy.passwd:main"
 kenzy-setup   = "kenzy.setup:main"
 kenzy-init    = "kenzy.init:main"
 
@@ -111,6 +112,7 @@ where = ["src"]
 ]
 "kenzy.server" = [
     "dashboard_static/*",
+    "dashboard_static/**/*",
 ]
 
 # ---------------------------------------------------------------------------

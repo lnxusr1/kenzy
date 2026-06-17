@@ -24,10 +24,13 @@ import asyncio
 import importlib.metadata
 import json
 import logging
+import os
 import re
 import sys
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 import websockets
@@ -38,6 +41,32 @@ from websockets.asyncio.server import ServerConnection
 from kenzy import protocol
 
 log = logging.getLogger(__name__)
+
+# Per-room override keys a dashboard editor may set — exactly the keys the node
+# honors via NodeClient._apply_pulled_config (live-tunable + restart-required).
+# Anything else is rejected on write, so a per-room override can't carry secrets
+# or junk. (room_id / server_url are node-local identity, never pushed.)
+_ALLOWED_OVERRIDE_KEYS = frozenset(
+    {
+        "wakeword_threshold",
+        "wakeword_vad_threshold",
+        "silence_rms_threshold",
+        "vad_enabled",
+        "silence_ms",
+        "speech_min_ms",
+        "no_speech_timeout_ms",
+        "hard_cap_ms",
+        "audio_device",
+        "capture_sample_rate",
+        "playback_sample_rate",
+        "wakeword_models",
+        "sound_ready",
+        "sound_waiting",
+    }
+)
+_SECRET_KEY_RE = re.compile(r"key|token|secret|password|passwd|credential", re.IGNORECASE)
+_SAFE_ROOM_RE = re.compile(r"[A-Za-z0-9._-]+")
+_ANNOUNCE_VOICE_PROMPT = "Read this aloud as a clear, calm public announcement."
 
 
 # ---------------------------------------------------------------------------
@@ -77,10 +106,36 @@ class AudioServer:
         self._node_defaults: dict[str, Any] = cfg.get("node_defaults", {}) or {}
         # Optional shared-secret required in the node's hello (discovery.token).
         self._join_token: str | None = (cfg.get("discovery", {}) or {}).get("token") or None
+        # Shared service-to-service bearer for outbound calls to stt/tts/llm/speaker.
+        # KENZY_SERVICE_TOKEN (a real env var, seen by all services) is canonical;
+        # discovery.token is a fallback for single-host setups.
+        self._service_token: str | None = os.environ.get("KENZY_SERVICE_TOKEN") or self._join_token
 
         # room_id → NodeSession  (guarded by _lock)
         self._nodes: dict[str, NodeSession] = {}
         self._lock = asyncio.Lock()
+        # Observers notified when the node registry/state changes (the dashboard
+        # registers one for live push). Empty by default ⇒ zero overhead.
+        self._state_listeners: list[Callable[[], None]] = []
+        # Pull-based logs: when the dashboard's `logs` flag is on it sets this, and
+        # nodes are told (config `keep_logs`) to keep a buffer. Off ⇒ no node cost.
+        self._capture_node_logs: bool = False
+        self._log_waiters: dict[str, asyncio.Future[list[dict[str, Any]]]] = {}
+
+    def add_state_listener(self, fn: Callable[[], None]) -> None:
+        """Register a callback fired (in-loop) when the node registry/state changes."""
+        self._state_listeners.append(fn)
+
+    def _notify_state(self) -> None:
+        for fn in self._state_listeners:
+            try:
+                fn()
+            except Exception:  # a listener must never break the pipeline
+                log.debug("state listener error", exc_info=True)
+
+    def _service_headers(self) -> dict[str, str]:
+        """Bearer header for outbound backend calls (empty when no token set)."""
+        return {"Authorization": f"Bearer {self._service_token}"} if self._service_token else {}
 
     # ------------------------------------------------------------------
     # Config-pull: effective per-node config = defaults + per-room override
@@ -109,7 +164,124 @@ class AudioServer:
                 log.warning("[%s] failed to read override %s: %s", room_id, override, exc)
         else:
             log.info("[%s] no per-room override (%s) — sending defaults only", room_id, override)
+        # Invariant: secrets never leave the server, even if an operator put one in
+        # node_defaults by mistake.
+        leaked = [k for k in effective if _SECRET_KEY_RE.search(k)]
+        for k in leaked:
+            del effective[k]
+        if leaked:
+            log.warning("[%s] dropped secret-like keys from served config: %s", room_id, leaked)
+        if self._capture_node_logs:
+            effective["keep_logs"] = True
         return effective
+
+    async def request_node_logs(
+        self, room_id: str, level: str = "", limit: int = 200, timeout: float = 5.0
+    ) -> list[dict[str, Any]] | None:
+        """Ask a node for its log buffer and await the reply (None on failure)."""
+        session = self._nodes.get(room_id)
+        if session is None:
+            return None
+        req_id = str(uuid.uuid4())
+        fut: asyncio.Future[list[dict[str, Any]]] = asyncio.get_running_loop().create_future()
+        self._log_waiters[req_id] = fut
+        try:
+            await session.ws.send(protocol.request_logs(req_id, level, limit))
+            return await asyncio.wait_for(fut, timeout)
+        except Exception:
+            return None
+        finally:
+            self._log_waiters.pop(req_id, None)
+
+    # ------------------------------------------------------------------
+    # Per-room override read/write (dashboard config editor) + live re-push
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def allowed_override_keys() -> list[str]:
+        return sorted(_ALLOWED_OVERRIDE_KEYS)
+
+    def _override_path(self, room_id: str) -> Path:
+        from kenzy.config import kenzy_data_root
+
+        if room_id in (".", "..") or not _SAFE_ROOM_RE.fullmatch(room_id):
+            raise ValueError("invalid room id")
+        return kenzy_data_root() / "configs" / "nodes" / f"{room_id}.yaml"
+
+    def read_node_override(self, room_id: str) -> dict[str, Any]:
+        import yaml
+
+        path = self._override_path(room_id)
+        if not path.is_file():
+            return {}
+        data = yaml.safe_load(path.read_text()) or {}
+        return data if isinstance(data, dict) else {}
+
+    def write_node_override(self, room_id: str, mapping: dict[str, Any]) -> None:
+        """Validate and persist configs/nodes/<room>.yaml (empty ⇒ remove file)."""
+        import yaml
+
+        if not isinstance(mapping, dict):
+            raise ValueError("override must be a mapping")
+        unknown = sorted(k for k in mapping if k not in _ALLOWED_OVERRIDE_KEYS)
+        if unknown:
+            raise ValueError("unsupported keys: " + ", ".join(unknown))
+        path = self._override_path(room_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if mapping:
+            path.write_text(yaml.safe_dump(dict(sorted(mapping.items())), default_flow_style=False))
+            log.info("[%s] wrote per-room override (%d keys)", room_id, len(mapping))
+        elif path.is_file():
+            path.unlink()
+            log.info("[%s] cleared per-room override", room_id)
+
+    async def push_config(self, room_id: str) -> bool:
+        """Re-push effective config to a connected node (live config_update)."""
+        session = self._nodes.get(room_id)
+        if session is None:
+            return False
+        await session.ws.send(protocol.config(self._effective_node_config(room_id)))
+        self._notify_state()
+        return True
+
+    # ------------------------------------------------------------------
+    # Friendly room names (dashboard label only — never sent to the node)
+    # ------------------------------------------------------------------
+
+    def _names_path(self) -> Path:
+        from kenzy.config import kenzy_data_root
+
+        return kenzy_data_root() / "configs" / "node_names.yaml"
+
+    def read_node_names(self) -> dict[str, str]:
+        import yaml
+
+        path = self._names_path()
+        if not path.is_file():
+            return {}
+        data = yaml.safe_load(path.read_text()) or {}
+        return {str(k): str(v) for k, v in data.items()} if isinstance(data, dict) else {}
+
+    def set_display_name(self, room_id: str, name: str) -> None:
+        """Set/clear a room's friendly display name (empty ⇒ remove)."""
+        import yaml
+
+        if room_id in (".", "..") or not _SAFE_ROOM_RE.fullmatch(room_id):
+            raise ValueError("invalid room id")
+        name = name.strip()
+        if len(name) > 64:
+            raise ValueError("name too long (max 64)")
+        names = self.read_node_names()
+        if name:
+            names[room_id] = name
+        else:
+            names.pop(room_id, None)
+        path = self._names_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if names:
+            path.write_text(yaml.safe_dump(dict(sorted(names.items())), default_flow_style=False))
+        elif path.is_file():
+            path.unlink()
 
     # ------------------------------------------------------------------
     # Pipeline hooks (override in subclasses or replace at runtime)
@@ -206,6 +378,7 @@ class AudioServer:
             except Exception as exc:
                 log.warning("[%s] failed to send config: %s", room_id, exc)
 
+        self._notify_state()
         return session
 
     async def _deregister(self, session: NodeSession) -> None:
@@ -217,6 +390,7 @@ class AudioServer:
             session.room_id,
             len(self._nodes),
         )
+        self._notify_state()
 
     # ------------------------------------------------------------------
     # Per-node message loop
@@ -246,9 +420,11 @@ class AudioServer:
             )
             await self.on_session_start(session)
             await session.send_json({"type": protocol.MSG_ACK, "session_id": session.session_id})
+            self._notify_state()
 
         elif mtype == protocol.MSG_AUDIO_END:
             session.streaming = False
+            self._notify_state()
             reason = msg.get("reason", "unknown")
             log.info(
                 "[%s/%s] audio_end reason=%s",
@@ -270,6 +446,11 @@ class AudioServer:
                 score,
             )
             await self.on_wakeword(session, model, score)
+
+        elif mtype == protocol.MSG_LOGS:
+            fut = self._log_waiters.get(str(msg.get("request_id", "")))
+            if fut is not None and not fut.done():
+                fut.set_result(msg.get("logs") or [])
 
         else:
             log.debug("[%s] unhandled control msg: %s", session.room_id, mtype)
@@ -321,6 +502,27 @@ class AudioServer:
             except Exception as exc:
                 log.warning("broadcast_trigger failed for '%s': %s", session.room_id, exc)
         return count
+
+    async def restart_node(self, room_id: str) -> bool:
+        """Ask a connected node to re-exec itself."""
+        session = self._nodes.get(room_id)
+        if session is None:
+            log.warning("restart_node: '%s' is not connected", room_id)
+            return False
+        try:
+            await session.ws.send(protocol.restart())
+            return True
+        except Exception as exc:
+            log.warning("restart_node: '%s' send failed: %s", room_id, exc)
+            return False
+
+    async def announce(self, text: str, rooms: list[str] | None = None) -> int:
+        """Speak ``text`` aloud on target rooms (all connected if None).
+
+        Returns the number of nodes addressed. The base server has no TTS
+        pipeline; ``TranscribingServer`` provides the real implementation.
+        """
+        return 0
 
     def connected_nodes(self) -> list[str]:
         return list(self._nodes.keys())
@@ -596,6 +798,7 @@ class TranscribingServer(AudioServer):
                     self._speaker_url,  # type: ignore[arg-type]
                     json=payload,
                     timeout=self._speaker_timeout,
+                    headers=self._service_headers(),
                 )
                 resp.raise_for_status()
             return str(resp.json()["speaker"])
@@ -618,6 +821,7 @@ class TranscribingServer(AudioServer):
                 self._stt_url,  # type: ignore[arg-type]
                 json=payload,
                 timeout=self._stt_timeout,
+                headers=self._service_headers(),
             )
             resp.raise_for_status()
         return str(resp.json()["text"])
@@ -638,6 +842,7 @@ class TranscribingServer(AudioServer):
                 self._llm_url,  # type: ignore[arg-type]
                 json=payload,
                 timeout=self._llm_timeout,
+                headers=self._service_headers(),
             )
             resp.raise_for_status()
             data = resp.json()
@@ -659,6 +864,7 @@ class TranscribingServer(AudioServer):
                     self._tts_url,
                     json={"text": text, "voice_prompt": voice_prompt, "room_id": room_id},
                     timeout=self._tts_timeout,
+                    headers=self._service_headers(),
                 )
                 resp.raise_for_status()
             pcm = resp.content
@@ -676,6 +882,53 @@ class TranscribingServer(AudioServer):
             if room_id in self._tts_active:
                 await self.stop_node(room_id)
                 self._tts_active.discard(room_id)
+
+    # ------------------------------------------------------------------
+    # Announcements: synth once, play on every (or selected) room
+    # ------------------------------------------------------------------
+
+    async def _synthesize(self, text: str, voice_prompt: str) -> bytes | None:
+        if not self._tts_url:
+            return None
+        import httpx
+
+        try:
+            async with httpx.AsyncClient() as client:
+                resp = await client.post(
+                    self._tts_url,
+                    json={"text": text, "voice_prompt": voice_prompt, "room_id": "announce"},
+                    timeout=self._tts_timeout,
+                    headers=self._service_headers(),
+                )
+                resp.raise_for_status()
+            return resp.content
+        except Exception as exc:
+            log.error("announce TTS synth failed: %s", exc)
+            return None
+
+    async def _stream_pcm(self, room_id: str, pcm: bytes) -> None:
+        sid = str(uuid.uuid4())
+        if not await self.send_tts_start(room_id, sid, sample_rate=24000, channels=1):
+            return
+        for i in range(0, len(pcm), self._tts_chunk_size):
+            if not await self.send_tts_frame(room_id, pcm[i : i + self._tts_chunk_size]):
+                return
+        await self.send_tts_end(room_id, sid)
+
+    async def announce(self, text: str, rooms: list[str] | None = None) -> int:
+        text = text.strip()
+        if not text or not self._tts_url:
+            return 0
+        async with self._lock:
+            targets = [r for r in (rooms or list(self._nodes)) if r in self._nodes]
+        if not targets:
+            return 0
+        pcm = await self._synthesize(text, _ANNOUNCE_VOICE_PROMPT)
+        if not pcm:
+            return 0
+        await asyncio.gather(*(self._stream_pcm(r, pcm) for r in targets), return_exceptions=True)
+        log.info("Announced to %d node(s): %r", len(targets), text[:60])
+        return len(targets)
 
 
 # ---------------------------------------------------------------------------

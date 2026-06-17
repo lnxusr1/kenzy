@@ -1,0 +1,77 @@
+/* Kenzy dashboard — design tokens.
+   Palette: petrol #013249 + golden #ffb500 + white. "Operations console"
+   aesthetic. Dark by default; [data-theme="light"] flips it. */
+
+:root {
+  /* Brand */
+  --petrol: #013249;
+  --petrol-700: #022a3c;
+  --petrol-900: #01161f;
+  --gold: #ffb500;
+  --gold-soft: #ffcb4d;
+
+  /* Status LEDs */
+  --led-up: #3ad6a0;
+  --led-busy: #ffb500;
+  --led-down: #ff5a52;
+  --led-idle: #5f7d8c;
+
+  /* Type */
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", "Cascadia Code", Menlo, Consolas, monospace;
+
+  /* Geometry */
+  --radius: 4px;
+  --radius-lg: 8px;
+  --border-w: 1px;
+
+  /* Spacing scale */
+  --s1: 4px;  --s2: 8px;  --s3: 12px; --s4: 16px;
+  --s5: 24px; --s6: 32px; --s7: 48px; --s8: 64px;
+
+  --shadow: 0 1px 2px rgba(0,0,0,.25), 0 8px 24px rgba(0,0,0,.18);
+  --t-fast: 120ms cubic-bezier(.2,.7,.2,1);
+  --t-med: 240ms cubic-bezier(.2,.7,.2,1);
+}
+
+/* ---- Dark (default) ---- */
+:root, :root[data-theme="dark"] {
+  --bg: var(--petrol-900);
+  --bg-grid: rgba(255,255,255,.025);
+  --panel: #052636;
+  --panel-2: #06303f;
+  --panel-hover: #073b4e;
+  --border: rgba(120,180,205,.16);
+  --border-strong: rgba(255,181,0,.45);
+  --text: #e8f1f5;
+  --text-dim: #9fb6c2;
+  --text-faint: #6e8a98;
+  --accent: var(--gold);
+  --accent-ink: #1a1300;
+}
+
+/* ---- Light ---- */
+:root[data-theme="light"] {
+  --bg: #eef3f5;
+  --bg-grid: rgba(1,50,73,.04);
+  --panel: #ffffff;
+  --panel-2: #f5f9fb;
+  --panel-hover: #eef5f8;
+  --border: rgba(1,50,73,.14);
+  --border-strong: rgba(1,50,73,.5);
+  --text: #022a3c;
+  --text-dim: #3c5867;
+  --text-faint: #6b8492;
+  --accent: #b97f00;
+  --accent-ink: #ffffff;
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme]) {
+    --bg: #eef3f5; --bg-grid: rgba(1,50,73,.04);
+    --panel: #ffffff; --panel-2: #f5f9fb; --panel-hover: #eef5f8;
+    --border: rgba(1,50,73,.14); --border-strong: rgba(1,50,73,.5);
+    --text: #022a3c; --text-dim: #3c5867; --text-faint: #6b8492;
+    --accent: #b97f00; --accent-ink: #ffffff;
+  }
+}

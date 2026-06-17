@@ -27,6 +27,7 @@ from fastapi import FastAPI
 from fastapi.responses import Response
 from pydantic import BaseModel
 
+from kenzy.fastapi_auth import install_logs_endpoint, install_service_auth
 from kenzy.logutil import quiet_health_access_log
 
 log = logging.getLogger(__name__)
@@ -216,6 +217,8 @@ def main() -> None:
     logging.basicConfig(level=logging.WARNING, format=fmt)
     logging.getLogger("kenzy").setLevel(log_level)
     quiet_health_access_log()
+    install_service_auth(app)
+    install_logs_endpoint(app)
 
     _provider = str(cfg.get("provider", "openai")).lower()
 

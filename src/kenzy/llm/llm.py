@@ -33,6 +33,7 @@ from typing import Any
 from fastapi import FastAPI
 from pydantic import BaseModel
 
+from kenzy.fastapi_auth import install_logs_endpoint, install_service_auth
 from kenzy.llm import skills as skill_registry
 from kenzy.logutil import quiet_health_access_log
 
@@ -363,6 +364,8 @@ def main() -> None:
     logging.basicConfig(level=logging.WARNING, format=fmt)
     logging.getLogger("kenzy").setLevel(log_level)
     quiet_health_access_log()
+    install_service_auth(app)
+    install_logs_endpoint(app)
 
     global \
         _model, \
