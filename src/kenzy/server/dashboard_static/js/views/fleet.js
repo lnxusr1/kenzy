@@ -53,11 +53,12 @@ function NodeCard({ node, onConfigure }) {
   `;
 }
 
-function ServiceChip({ svc }) {
+function ServiceChip({ svc, onConfigure }) {
   const detail = svc.detail || {};
   const bits = [detail.model, detail.provider, detail.voice].filter(Boolean).join(" · ");
   return html`
-    <div class="chip">
+    <div class="chip" role="button" tabindex="0" title="Configure ${svc.name}"
+         onClick=${() => onConfigure(svc.name)}>
       <span class=${"led " + (svc.up ? "up" : "down")}></span>
       <span class="name">${svc.name}</span>
       <span class="detail">${svc.up ? bits || "ok" : "down"}</span>
@@ -65,7 +66,7 @@ function ServiceChip({ svc }) {
   `;
 }
 
-export function FleetView({ onConfigure }) {
+export function FleetView({ onConfigure, onConfigureService }) {
   const { data, loading, error } = useFleet();
   if (loading && !data) return html`<div class="empty">Loading fleet…</div>`;
   if (error && !data) return html`<div class="empty">Could not reach the server: ${error}</div>`;
@@ -98,7 +99,9 @@ export function FleetView({ onConfigure }) {
     <section class="section">
       <header><h2>Backend services</h2><span class="rule"></span></header>
       ${services.length
-        ? html`<div class="chips">${services.map((s) => html`<${ServiceChip} key=${s.name} svc=${s} />`)}</div>`
+        ? html`<div class="chips">${services.map(
+            (s) => html`<${ServiceChip} key=${s.name} svc=${s} onConfigure=${onConfigureService} />`,
+          )}</div>`
         : html`<div class="empty">No backend services configured.</div>`}
     </section>
   `;

@@ -195,6 +195,58 @@ async def test_set_override_rejects_unknown_keys(tmp_path, monkeypatch):
     assert cap.sent[0]["ok"] is False and "unsupported" in cap.sent[0]["error"]
 
 
+async def test_set_service_config_gated_and_writes(tmp_path, monkeypatch):
+    monkeypatch.setenv("KENZY_HOME", str(tmp_path))
+    s = AudioServer({})
+
+    # Controls off → rejected, nothing written.
+    off = Dashboard(s, {}, DashboardConfig(enabled=True, controls=False))
+    cap = _Cap()
+    await off._handle_ws_message(
+        cap,
+        json.dumps(
+            {"id": "1", "type": "set_service_config", "service": "stt", "config": {"port": 9001}}
+        ),
+    )
+    assert cap.sent[0]["ok"] is False
+    assert s.read_service_override("stt") == {}
+
+    # Controls on → override written (restart attempted; no service running ⇒ False).
+    on = Dashboard(s, {}, DashboardConfig(enabled=True, controls=True))
+    cap = _Cap()
+    await on._handle_ws_message(
+        cap,
+        json.dumps(
+            {"id": "2", "type": "set_service_config", "service": "stt", "config": {"port": 9001}}
+        ),
+    )
+    acks = [m for m in cap.sent if m.get("type") == "ack"]
+    assert acks and acks[0]["ok"] is True
+    assert s.read_service_override("stt") == {"port": 9001}
+    saved = [m for m in cap.sent if m.get("type") == "service_saved"]
+    assert saved and saved[0]["restarted"] is False  # no service to restart in tests
+
+
+async def test_set_service_config_rejects_secrets(tmp_path, monkeypatch):
+    monkeypatch.setenv("KENZY_HOME", str(tmp_path))
+    s = AudioServer({})
+    on = Dashboard(s, {}, DashboardConfig(enabled=True, controls=True))
+    cap = _Cap()
+    await on._handle_ws_message(
+        cap,
+        json.dumps(
+            {
+                "id": "1",
+                "type": "set_service_config",
+                "service": "tts",
+                "config": {"openai": {"api_key": "sk-x"}},
+            }
+        ),
+    )
+    assert cap.sent[0]["ok"] is False and "secret" in cap.sent[0]["error"]
+    assert s.read_service_override("tts") == {}
+
+
 def test_configured_flag_tracks_override(tmp_path, monkeypatch):
     monkeypatch.setenv("KENZY_HOME", str(tmp_path))
     s = AudioServer({})

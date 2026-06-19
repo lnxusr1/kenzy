@@ -2,6 +2,7 @@ import { html, useState, useEffect } from "./html.js";
 import { useFleet, useToasts, dismiss } from "./store.js";
 import { FleetView } from "./views/fleet.js";
 import { ConfigView } from "./views/config.js";
+import { ServicesView } from "./views/services.js";
 import { LogsView } from "./views/logs.js";
 import { SettingsView } from "./views/settings.js";
 
@@ -21,6 +22,7 @@ function Toasts() {
 
 const NAV = [
   { id: "fleet", label: "Fleet", ico: "▣" },
+  { id: "services", label: "Services", ico: "❏" },
   { id: "logs", label: "Logs", ico: "≡" },
   { id: "settings", label: "Settings", ico: "⚙" },
 ];
@@ -70,17 +72,24 @@ export function Shell({ user, onLogout }) {
   const logsOn = !!(data && data.flags && data.flags.logs);
   const [view, setView] = useState("fleet");
   const [node, setNode] = useState(null);
+  const [svc, setSvc] = useState(null);
   const [navOpen, setNavOpen] = useState(false);
   const active = NAV.find((n) => n.id === view) || NAV[0];
   const title = view === "config" ? "Node config" : active.label;
 
   const go = (id) => {
+    if (id === "services") setSvc(null); // sidebar Services always opens the list
     setView(id);
     setNavOpen(false);
   };
   const configure = (id) => {
     setNode(id);
     setView("config");
+  };
+  const configureService = (name) => {
+    setSvc(name);
+    setView("services");
+    setNavOpen(false);
   };
 
   return html`
@@ -129,11 +138,14 @@ export function Shell({ user, onLogout }) {
         <main class="content">
           ${view === "config"
             ? html`<${ConfigView} node=${node} onBack=${() => go("fleet")} />`
-            : view === "logs"
-              ? html`<${LogsView} />`
-              : view === "settings"
-                ? html`<${SettingsView} onLogout=${onLogout} />`
-                : html`<${FleetView} onConfigure=${configure} />`}
+            : view === "services"
+              ? html`<${ServicesView} selected=${svc} onSelect=${setSvc} />`
+              : view === "logs"
+                ? html`<${LogsView} />`
+                : view === "settings"
+                  ? html`<${SettingsView} onLogout=${onLogout} />`
+                  : html`<${FleetView} onConfigure=${configure}
+                      onConfigureService=${configureService} />`}
         </main>
       </div>
     </div>

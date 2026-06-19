@@ -35,6 +35,7 @@ stt = [
     "fastapi>=0.100.0",
     "uvicorn>=0.23.0",
     "faster-whisper>=1.0.0",
+    "zeroconf>=0.130",
 ]
 
 # Install on the TTS service host
@@ -43,6 +44,7 @@ tts = [
     "uvicorn>=0.23.0",
     "openai>=1.0.0",
     "python-dotenv>=1.0.0",
+    "zeroconf>=0.130",
 ]
 
 # Install on the speaker identification host
@@ -54,6 +56,7 @@ speaker = [
     "torchaudio>=2.0.0",
     "sounddevice>=0.4.6",
     "httpx>=0.27.0",
+    "zeroconf>=0.130",
 ]
 
 # Install on the LLM service host
@@ -68,6 +71,7 @@ llm = [
     "trafilatura>=1.6.0",
     "padacioso>=1.0.0",
     "rapidfuzz>=3.0.0",
+    "zeroconf>=0.130",
 ]
 
 # Local TTS using Kokoro (PyTorch) — also requires: sudo apt-get install espeak-ng

@@ -24,6 +24,14 @@ The server is the central WebSocket hub. It accepts connections from room nodes,
 
 On connect, a node's `hello` carries its stable `node_id` and its room name; the server replies with the node's **effective config** = `node_defaults` merged with `configs/nodes/<node_id>.yaml`. Live-tunable keys apply immediately on the node; hardware keys (audio device, sample rates, wakeword models, sounds) take effect on restart. The per-node file is keyed by `node_id`, so a node keeps its config even if its room is renamed; pre-existing room-named files migrate automatically on first connect. This is how a room device runs with no local tuning file — see [Node Configuration](node.md).
 
+### Central config for backend services
+
+The server is also the config authority for the backend HTTP services. It exposes an **always-on** endpoint `GET /config/<service>` on the node WebSocket port (it runs whenever the server runs, independent of the dashboard), returning that service's **effective config** = the packaged default deep-merged with the server-owned override at `configs/services/<service>.yaml`. Secret-like keys are stripped, so secrets never leave the server — they stay in each host's environment / `.env`.
+
+At boot, `kenzy-stt`/`kenzy-tts`/`kenzy-llm`/`kenzy-speaker` discover the server the same way a node does (mDNS, or an explicit `KENZY_SERVER_URL`), pull their config from this endpoint, and **block with retry/backoff until the server answers** — so the server must come up first (set `After=kenzy-server` in systemd units; the installer does this). The endpoint is gated by the service-to-service bearer (`discovery.token` / `KENZY_SERVICE_TOKEN`) when one is set. Each service also exposes a token-protected `POST /restart` that re-execs it to re-pull fresh config. Passing an explicit config path to a service (e.g. `kenzy-stt configs/stt.yaml`) bypasses the pull and loads locally — a dev/offline escape hatch.
+
+Edit it all from the dashboard's **Services** tab: it reads each service's secret-stripped effective config, writes your changes to `configs/services/<service>.yaml` on the server, and restarts the service to apply. Secrets stay in the service host's environment and are never shown or stored.
+
 ### Dashboard
 
 Opt-in web fleet manager served by `kenzy-server`. **Off by default**; when disabled nothing is wired up (no route, no overhead). When enabled it provides a live fleet/health view, a per-node config editor (with room rename), node controls (trigger/stop/restart), TTS announcements, a log viewer, and a settings page. See the [Dashboard guide](../dashboard.md) for the full walkthrough.

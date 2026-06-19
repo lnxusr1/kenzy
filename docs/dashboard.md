@@ -62,18 +62,30 @@ rooms — an intercom).
 
 Open a node's **Configure** page to:
 
-- **Rename its room** — the room name is the node's friendly label everywhere, is sent
-  to the assistant as context, and is **pushed to the node and saved** to its
-  `node.yaml` (the node must be connected). Identity is the stable `node_id`, so
-  renaming a room never orphans its config.
+- **Rename its room** — the room name is the node's friendly label everywhere and is
+  sent to the assistant as context. It is **server-owned**: stored in
+  `configs/nodes/<node_id>.yaml`, applied live if the node is connected and otherwise
+  pulled on its next connect (so you can name a node before it's ever booted). Identity
+  is the stable `node_id`, so renaming a room never orphans its config.
 - **Edit per-node settings** — wake-word threshold/VAD, silence/VAD timing, audio
   device, sample rates, wake-word models, and sound files. Saved values are written to
-  `configs/nodes/<node_id>.yaml` and **live-re-pushed** to the connected node.
-  Live-tunable keys apply immediately; hardware keys take effect on the next restart.
+  `configs/nodes/<node_id>.yaml` and **live-re-pushed** to the connected node. Each key
+  shows a **live** or **restart** badge: live keys apply immediately on save; hardware
+  keys are applied on the node's next boot or via the Restart button.
 - **Control the node** — **Trigger** (start a session), **Stop**, or **Restart** (the
   node re-execs itself, with or without systemd).
 
 Secrets (API keys) are never served to a node and never editable here.
+
+## Configuring backend services
+
+The **Services** tab lists the configured backend services (STT, TTS, LLM, Speaker)
+with live health. Open one to edit its **effective config** in a generic editor —
+each field is the packaged default or your stored override. Saving writes
+`configs/services/<service>.yaml` on the server and **restarts the service** so the new
+config takes effect (the service re-pulls on boot); a separate **Restart** button
+restarts without editing. Secrets (API keys) are read from the service host's
+environment and are never shown or stored here. Requires `dashboard.controls: true`.
 
 ## Logs
 

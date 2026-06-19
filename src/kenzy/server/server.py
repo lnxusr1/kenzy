@@ -37,8 +37,12 @@ import websockets
 import websockets.exceptions
 import websockets.server
 from websockets.asyncio.server import ServerConnection
+from websockets.datastructures import Headers
+from websockets.http11 import Request, Response
 
 from kenzy import protocol
+from kenzy.config import SERVICES
+from kenzy.serviceauth import check_bearer
 
 log = logging.getLogger(__name__)
 
@@ -71,6 +75,34 @@ _SERVER_MANAGED_KEYS = frozenset({"room_id"})
 _SECRET_KEY_RE = re.compile(r"key|token|secret|password|passwd|credential", re.IGNORECASE)
 _SAFE_ID_RE = re.compile(r"[A-Za-z0-9._-]+")
 _ANNOUNCE_VOICE_PROMPT = "Read this aloud as a clear, calm public announcement."
+
+
+def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    """Recursively merge ``override`` into a copy of ``base`` (override wins)."""
+    out = dict(base)
+    for k, v in override.items():
+        if isinstance(v, dict) and isinstance(out.get(k), dict):
+            out[k] = _deep_merge(out[k], v)
+        else:
+            out[k] = v
+    return out
+
+
+def _strip_secrets(data: dict[str, Any]) -> list[str]:
+    """Recursively delete secret-like keys in place; return the dotted paths dropped."""
+    dropped: list[str] = []
+
+    def _walk(d: dict[str, Any], prefix: str) -> None:
+        for key in list(d):
+            path = f"{prefix}{key}"
+            if _SECRET_KEY_RE.search(key):
+                del d[key]
+                dropped.append(path)
+            elif isinstance(d[key], dict):
+                _walk(d[key], f"{path}.")
+
+    _walk(data, "")
+    return dropped
 
 
 # ---------------------------------------------------------------------------
@@ -262,6 +294,111 @@ class AudioServer:
         await session.ws.send(protocol.config(self._effective_node_config(node_id)))
         self._notify_state()
         return True
+
+    # ------------------------------------------------------------------
+    # Central service config store (stt/tts/llm/speaker pull this at boot)
+    # ------------------------------------------------------------------
+
+    def _effective_service_config(self, service: str) -> dict[str, Any]:
+        """Effective config for a backend service = packaged default ← stored override.
+
+        The stored override lives at ``configs/services/<service>.yaml`` (server-
+        owned) and is deep-merged over the packaged default. Secret-like keys are
+        stripped, so secrets are never stored or served — they stay in each host's
+        environment/``.env``.
+        """
+        import yaml
+
+        from kenzy.config import kenzy_data_root, packaged_config
+
+        base: dict[str, Any] = {}
+        pkg = packaged_config(service)
+        if pkg.is_file():
+            loaded = yaml.safe_load(pkg.read_text()) or {}
+            if isinstance(loaded, dict):
+                base = loaded
+        override = kenzy_data_root() / "configs" / "services" / f"{service}.yaml"
+        if override.is_file():
+            try:
+                data = yaml.safe_load(override.read_text()) or {}
+                if isinstance(data, dict):
+                    base = _deep_merge(base, data)
+                log.info("[%s] applied service override %s", service, override)
+            except Exception as exc:
+                log.warning("[%s] failed to read override %s: %s", service, override, exc)
+        dropped = _strip_secrets(base)
+        if dropped:
+            log.warning("[%s] dropped secret-like keys from served config: %s", service, dropped)
+        return base
+
+    def _service_override_path(self, service: str) -> Path:
+        from kenzy.config import kenzy_data_root
+
+        if service not in SERVICES or service == "node":
+            raise ValueError(f"unknown service: {service}")
+        return kenzy_data_root() / "configs" / "services" / f"{service}.yaml"
+
+    def read_service_override(self, service: str) -> dict[str, Any]:
+        import yaml
+
+        path = self._service_override_path(service)
+        if not path.is_file():
+            return {}
+        data = yaml.safe_load(path.read_text()) or {}
+        return data if isinstance(data, dict) else {}
+
+    def write_service_override(self, service: str, mapping: dict[str, Any]) -> None:
+        """Persist configs/services/<service>.yaml (empty ⇒ remove file).
+
+        Rejects secret-like keys outright — secrets live in each host's
+        environment/``.env``, never in the central store.
+        """
+        import copy
+
+        import yaml
+
+        if not isinstance(mapping, dict):
+            raise ValueError("config must be a mapping")
+        dropped = _strip_secrets(copy.deepcopy(mapping))
+        if dropped:
+            raise ValueError("secret-like keys are not allowed: " + ", ".join(dropped))
+        path = self._service_override_path(service)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if mapping:
+            path.write_text(yaml.safe_dump(mapping, default_flow_style=False, sort_keys=True))
+            log.info("[%s] wrote service override (%d keys)", service, len(mapping))
+        elif path.is_file():
+            path.unlink()
+            log.info("[%s] cleared service override", service)
+
+    @staticmethod
+    def _http_json(status: int, payload: Any) -> Response:
+        headers = Headers()
+        headers["Content-Type"] = "application/json"
+        return Response(
+            status, "OK" if status == 200 else "ERR", headers, json.dumps(payload).encode()
+        )
+
+    async def _process_config_request(
+        self, connection: ServerConnection, request: Request
+    ) -> Response | None:
+        """websockets ``process_request`` hook: serve ``GET /config/<service>``.
+
+        Always-on (runs whenever the server runs, independent of the dashboard)
+        and token-gated by the service-to-service bearer. Returns ``None`` for any
+        other path so the WebSocket handshake (node connections) proceeds normally.
+        """
+        path = request.path.split("?", 1)[0]
+        if not path.startswith("/config/"):
+            return None
+        service = path[len("/config/") :]
+        if service not in SERVICES or service == "node":
+            return self._http_json(404, {"error": "unknown service"})
+        if self._service_token and not check_bearer(
+            request.headers.get("authorization"), self._service_token
+        ):
+            return self._http_json(401, {"error": "invalid service token"})
+        return self._http_json(200, self._effective_service_config(service))
 
     def _migrate_room_keyed_files(self, node_id: str, room_id: str) -> None:
         """One-time migration: re-key a room-named override file to ``node_id``.
@@ -573,7 +710,12 @@ class AudioServer:
 
     async def serve(self) -> None:
         log.info("Kenzy server listening on %s:%d", self._host, self._port)
-        async with websockets.serve(self._handle, self._host, self._port):
+        async with websockets.serve(
+            self._handle,
+            self._host,
+            self._port,
+            process_request=self._process_config_request,
+        ):
             await asyncio.Future()  # run until cancelled
 
 

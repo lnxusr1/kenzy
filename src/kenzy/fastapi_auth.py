@@ -6,8 +6,10 @@ Kept separate from ``kenzy.serviceauth`` because that module is also imported by
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
+import sys
 from collections.abc import Awaitable, Callable
 
 from fastapi import FastAPI, Request
@@ -16,6 +18,8 @@ from starlette.responses import Response
 
 from kenzy.logutil import install_ring_handler
 from kenzy.serviceauth import check_bearer
+
+log = logging.getLogger(__name__)
 
 
 def install_service_auth(app: FastAPI) -> None:
@@ -52,3 +56,25 @@ def install_logs_endpoint(app: FastAPI, logger_name: str = "kenzy") -> None:
         return {"logs": buf.tail(lv, limit)}
 
     app.add_api_route("/logs", logs, methods=["GET"])
+
+
+def install_restart_endpoint(app: FastAPI) -> None:
+    """Expose ``POST /restart`` that re-execs the service (re-pulls fresh config).
+
+    Mirrors the node's self-restart: the process replaces itself with the same
+    argv, so it works with or without a service manager. Protected by the
+    service-token middleware like every route except /health. The dashboard POSTs
+    here after editing a service's central config so the new config takes effect.
+    """
+
+    async def restart() -> dict[str, str]:
+        async def _exec() -> None:
+            # Give the HTTP response a moment to flush before re-execing.
+            await asyncio.sleep(0.1)
+            log.warning("Restart requested — re-executing service")
+            os.execv(sys.executable, [sys.executable, *sys.argv])
+
+        asyncio.create_task(_exec())
+        return {"status": "restarting"}
+
+    app.add_api_route("/restart", restart, methods=["POST"])

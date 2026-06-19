@@ -152,6 +152,8 @@ button { font: inherit; cursor: pointer; }
   background: var(--panel); border: var(--border-w) solid var(--border); border-radius: var(--radius);
   padding: var(--s3) var(--s4);
 }
+.chip[role="button"] { cursor: pointer; }
+.chip[role="button"]:hover { border-color: var(--accent); }
 .chip .name { font-weight: 700; text-transform: uppercase; font-size: 12px; letter-spacing: .08em; }
 .chip .detail { margin-left: auto; font-family: var(--font-mono); font-size: 11px; color: var(--text-faint); }
 
@@ -237,6 +239,7 @@ button { font: inherit; cursor: pointer; }
 .list-item input { flex: 1; min-width: 0; }
 .list-x { flex: none; width: auto; padding: 0 var(--s3); font-size: 16px; line-height: 1; }
 .list-add { width: 100%; font-size: 12px; padding: 7px; }
+.cfg .section + .section { margin-top: var(--s4); }
 .cfg-actions { margin-top: var(--s5); }
 .cfg-actions .btn-primary { width: auto; padding-inline: var(--s6); }
 .cfg-msg { margin-top: var(--s4); font-size: 13px; }

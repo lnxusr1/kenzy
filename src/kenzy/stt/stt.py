@@ -14,14 +14,17 @@ from __future__ import annotations
 import asyncio
 import base64
 import logging
-import sys
 from typing import Any
 
 import numpy as np
 from fastapi import FastAPI
 from pydantic import BaseModel
 
-from kenzy.fastapi_auth import install_logs_endpoint, install_service_auth
+from kenzy.fastapi_auth import (
+    install_logs_endpoint,
+    install_restart_endpoint,
+    install_service_auth,
+)
 from kenzy.logutil import quiet_health_access_log
 
 log = logging.getLogger(__name__)
@@ -88,21 +91,24 @@ def main() -> None:
     global _whisper, _language, _sem
 
     import uvicorn  # type: ignore[import-untyped]
-    import yaml  # type: ignore[import-untyped]
 
-    from kenzy.config import resolve_config
+    from kenzy.serviceboot import load_service_config
 
-    config_path = resolve_config("stt", sys.argv[1] if len(sys.argv) > 1 else None)
-    with open(config_path) as fh:
-        cfg: dict[str, Any] = yaml.safe_load(fh)
-
-    log_level: int = getattr(logging, str(cfg.get("log_level", "info")).upper(), logging.INFO)
+    # Logging up front so the (possibly retrying) config pull is visible.
     fmt = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
     logging.basicConfig(level=logging.WARNING, format=fmt)
+    logging.getLogger("kenzy").setLevel(logging.INFO)
+
+    # Central config: pull from the server (blocking until it answers); an explicit
+    # config path loads locally instead (dev/offline escape hatch).
+    cfg: dict[str, Any] = load_service_config("stt")
+
+    log_level: int = getattr(logging, str(cfg.get("log_level", "info")).upper(), logging.INFO)
     logging.getLogger("kenzy").setLevel(log_level)
     quiet_health_access_log()
     install_service_auth(app)
     install_logs_endpoint(app)
+    install_restart_endpoint(app)
 
     try:
         from faster_whisper import WhisperModel  # type: ignore[import-untyped]

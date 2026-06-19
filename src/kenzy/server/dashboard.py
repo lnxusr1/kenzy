@@ -369,6 +369,26 @@ class Dashboard:
         if path == "/api/logs":
             return self._json(200, {"logs": self._tail_server_logs(request)})
 
+        if path.startswith("/api/services/") and path.endswith("/config"):
+            if not self._authorized_mutation(request):
+                return self._json(401, {"error": "auth required"})
+            name = path[len("/api/services/") : -len("/config")]
+            try:
+                cfg = self._server._effective_service_config(name)
+                override = self._server.read_service_override(name)
+            except Exception:
+                return self._json(404, {"error": "unknown service"})
+            return self._json(
+                200,
+                {
+                    "service": name,
+                    "config": cfg,  # effective, secret-stripped
+                    "override": override,
+                    "reachable": name in self._service_urls,
+                    "controls": self._dcfg.controls,
+                },
+            )
+
         if path.startswith("/api/services/") and path.endswith("/logs"):
             name = path[len("/api/services/") : -len("/logs")]
             return self._json(200, {"logs": await self._service_logs(name, request)})
@@ -421,6 +441,21 @@ class Dashboard:
             return logs if isinstance(logs, list) else []
         except Exception:
             return []
+
+    async def _restart_service(self, name: str) -> bool:
+        """POST /restart to a backend service so it re-execs and re-pulls config."""
+        health_url = self._service_urls.get(name)
+        if not health_url:
+            return False
+        base = health_url[: -len("/health")]
+        import httpx
+
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                r = await client.post(f"{base}/restart", headers=self._server._service_headers())
+            return r.status_code == 200
+        except Exception:
+            return False
 
     async def _node_logs(self, node_id: str, request: Request) -> dict[str, Any]:
         if not self._dcfg.logs:
@@ -520,6 +555,24 @@ class Dashboard:
             else:
                 await ack(False, "no nodes reachable or TTS not configured")
             await connection.send(json.dumps({"type": "announce_result", "count": count}))
+        elif mtype == "set_service_config":
+            if not self._dcfg.controls:
+                return await ack(False, "controls are disabled (set dashboard.controls: true)")
+            service = str(msg.get("service", ""))
+            try:
+                self._server.write_service_override(service, msg.get("config") or {})
+            except (ValueError, OSError) as exc:
+                return await ack(False, str(exc))
+            restarted = await self._restart_service(service)
+            await ack(True)
+            await connection.send(
+                json.dumps({"type": "service_saved", "service": service, "restarted": restarted})
+            )
+        elif mtype == "restart_service":
+            if not self._dcfg.controls:
+                return await ack(False, "controls are disabled (set dashboard.controls: true)")
+            ok = await self._restart_service(str(msg.get("service", "")))
+            await ack(ok, None if ok else "service not reachable")
         elif mtype == "set_password":
             # Account self-service — allowed for any signed-in user (not gated by
             # `controls`), but the current password must be re-supplied.

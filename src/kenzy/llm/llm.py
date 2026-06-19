@@ -24,7 +24,6 @@ from __future__ import annotations
 import json
 import logging
 import re
-import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -33,7 +32,11 @@ from typing import Any
 from fastapi import FastAPI
 from pydantic import BaseModel
 
-from kenzy.fastapi_auth import install_logs_endpoint, install_service_auth
+from kenzy.fastapi_auth import (
+    install_logs_endpoint,
+    install_restart_endpoint,
+    install_service_auth,
+)
 from kenzy.llm import skills as skill_registry
 from kenzy.logutil import quiet_health_access_log
 
@@ -348,24 +351,26 @@ async def _run_llm(text: str, speaker: str, room_id: str | None) -> tuple[str, s
 
 def main() -> None:
     import uvicorn  # type: ignore[import-untyped]
-    import yaml  # type: ignore[import-untyped]
     from dotenv import load_dotenv  # type: ignore[import-untyped]
 
     load_dotenv()
 
-    from kenzy.config import resolve_config
+    from kenzy.serviceboot import load_service_config
 
-    config_path = resolve_config("llm", sys.argv[1] if len(sys.argv) > 1 else None)
-    with open(config_path) as fh:
-        cfg: dict[str, Any] = yaml.safe_load(fh)
-
-    log_level: int = getattr(logging, str(cfg.get("log_level", "info")).upper(), logging.INFO)
     fmt = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
     logging.basicConfig(level=logging.WARNING, format=fmt)
+    logging.getLogger("kenzy").setLevel(logging.INFO)
+
+    # Central config: pull from the server (blocking until it answers); an explicit
+    # config path loads locally instead (dev/offline escape hatch).
+    cfg: dict[str, Any] = load_service_config("llm")
+
+    log_level: int = getattr(logging, str(cfg.get("log_level", "info")).upper(), logging.INFO)
     logging.getLogger("kenzy").setLevel(log_level)
     quiet_health_access_log()
     install_service_auth(app)
     install_logs_endpoint(app)
+    install_restart_endpoint(app)
 
     global \
         _model, \
