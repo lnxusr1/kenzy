@@ -36,6 +36,9 @@
 
 /* ---- Dark (default) ---- */
 :root, :root[data-theme="dark"] {
+  /* Theme native controls (select dropdowns, number spinners, scrollbars)
+     consistently across browsers. */
+  color-scheme: dark;
   --bg: var(--petrol-900);
   --bg-grid: rgba(255,255,255,.025);
   --panel: #052636;
@@ -52,6 +55,7 @@
 
 /* ---- Light ---- */
 :root[data-theme="light"] {
+  color-scheme: light;
   --bg: #eef3f5;
   --bg-grid: rgba(1,50,73,.04);
   --panel: #ffffff;

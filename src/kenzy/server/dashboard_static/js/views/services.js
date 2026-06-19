@@ -1,6 +1,7 @@
 import { html, useState, useEffect } from "../html.js";
 import { useFleet, send, notify } from "../store.js";
 import { getSettings } from "../api.js";
+import { serviceEnum } from "../schema.js";
 
 // --- nested ⇄ flat (dotted path) helpers for the generic editor -------------
 
@@ -83,15 +84,21 @@ function ServiceEditor({ name, onBack }) {
     const t = typeOf(orig[k]);
     const v = vals[k];
     const overridden = k in ovFlat;
+    const opts = serviceEnum(name, k);
     let input;
-    if (t === "bool") {
+    if (opts) {
+      input = html`<select disabled=${!info.controls} onChange=${(e) => setKey(k, e.target.value)}>
+        ${opts.map((o) => html`<option value=${o} selected=${v === o}>${o}</option>`)}
+      </select>`;
+    } else if (t === "bool") {
       input = html`<select disabled=${!info.controls}
         onChange=${(e) => setKey(k, e.target.value === "true")}>
         <option value="true" selected=${v === true}>on</option>
         <option value="false" selected=${v === false}>off</option>
       </select>`;
     } else if (t === "num") {
-      input = html`<input type="number" step="any" disabled=${!info.controls}
+      const step = Number.isInteger(orig[k]) ? "1" : "any";
+      input = html`<input type="number" step=${step} disabled=${!info.controls}
         value=${v ?? ""} onInput=${(e) => setKey(k, e.target.value === "" ? null : Number(e.target.value))} />`;
     } else {
       input = html`<input disabled=${!info.controls} value=${v ?? ""}

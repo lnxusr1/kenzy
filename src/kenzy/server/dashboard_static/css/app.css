@@ -334,6 +334,8 @@ button { font: inherit; cursor: pointer; }
 }
 .logs-bar select:focus { outline: none; border-color: var(--accent); }
 .logs-bar .btn-ghost { width: auto; padding: 8px var(--s4); margin-left: auto; }
+.logs-boost { display: flex; gap: var(--s3); align-items: center; }
+.logs-boost select, .logs-boost .btn-ghost { margin: 0; }
 .logview {
   font-family: var(--font-mono); font-size: 12px; line-height: 1.7;
   background: var(--petrol-900); border: 1px solid var(--border); border-radius: var(--radius-lg);

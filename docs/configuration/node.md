@@ -18,7 +18,8 @@ The node service runs on each room device. It captures microphone audio, detects
 | `audio_device` | `null` | PortAudio device name substring or integer index. `null` uses the system default. Use `kenzy-devices` to find the correct value. |
 | `capture_sample_rate` | `16000` | Sample rate for microphone capture. Set to the device's native rate if it does not support 16000 Hz; audio is resampled automatically. |
 | `playback_sample_rate` | `24000` | Sample rate for speaker output. Set to the device's native rate if it does not support 24000 Hz; TTS audio is resampled automatically. |
-| `log_level` | `"info"` | Log verbosity |
+| `log_level` | `"info"` | What the node prints to its console (`debug`/`info`/`warning`/`error`). Live-tunable from the dashboard. |
+| `log_capture_level` | `"debug"` | **Server-owned.** How deep the dashboard log viewer can see for this node (`trace`/`debug`/…), independent of `log_level`. Captured only while the dashboard's logs flag is on (otherwise zero overhead). Set `trace` to include per-frame audio logs. |
 | `verbose` | `false` | Also enables debug output from websockets and asyncio internals |
 
 ### Wake word

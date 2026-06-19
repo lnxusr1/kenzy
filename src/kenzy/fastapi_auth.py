@@ -43,12 +43,16 @@ def install_service_auth(app: FastAPI) -> None:
         return await call_next(request)
 
 
-def install_logs_endpoint(app: FastAPI, logger_name: str = "kenzy") -> None:
+def install_logs_endpoint(
+    app: FastAPI, logger_name: str = "kenzy", capture_level: int = logging.DEBUG
+) -> None:
     """Capture this service's logs in a ring buffer and expose ``GET /logs``.
 
-    Protected by the service-token middleware like every route except /health.
+    The buffer captures down to ``capture_level`` (default debug) so the dashboard
+    viewer can show more than the console prints. Protected by the service-token
+    middleware like every route except /health.
     """
-    buf = install_ring_handler(logger_name)
+    buf = install_ring_handler(logger_name, level=capture_level)
     levels = logging.getLevelNamesMapping()
 
     async def logs(level: str = "", limit: int = 200) -> dict[str, object]:

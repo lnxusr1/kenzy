@@ -51,6 +51,7 @@ import websockets.exceptions
 from websockets.asyncio.client import ClientConnection
 
 from kenzy import protocol
+from kenzy.logutil import TRACE
 
 log = logging.getLogger(__name__)
 
@@ -372,6 +373,12 @@ class NodeClient:
         # the server asks (config `keep_logs: true`), so a dashboard-less server
         # induces no node-side overhead.
         self._log_buffer: Any = None
+        # Console (display) level vs how deep the dashboard buffer captures. Both
+        # are live-tunable from the dashboard via config-pull.
+        from kenzy.logutil import level_value
+
+        self._log_level: int = level_value(cfg.get("log_level"), logging.INFO)
+        self._log_capture_level: int = level_value(cfg.get("log_capture_level"), logging.DEBUG)
         self._waiting_audio: np.ndarray[Any, Any] | None = None
 
         self._silence_count: int = 0
@@ -554,13 +561,21 @@ class NodeClient:
             log.warning("Could not persist %s to %s: %s", key, path, exc)
 
     def _set_log_capture(self, on: bool) -> None:
-        """Attach/detach the dashboard log ring buffer (idempotent)."""
-        if on and self._log_buffer is None:
-            from kenzy.logutil import install_ring_handler
+        """Attach/detach the dashboard log ring buffer (idempotent).
 
-            self._log_buffer = install_ring_handler("kenzy", capacity=500)
+        When attached the buffer captures down to ``log_capture_level`` (default
+        debug) and the logger is lowered to match; when detached the logger is
+        restored to the console ``log_level`` so an idle node carries no extra
+        logging overhead.
+        """
+        from kenzy.logutil import install_ring_handler, remove_ring_handler
+
+        if on and self._log_buffer is None:
+            self._log_buffer = install_ring_handler(
+                "kenzy", capacity=500, level=self._log_capture_level
+            )
         elif not on and self._log_buffer is not None:
-            logging.getLogger("kenzy").removeHandler(self._log_buffer)
+            remove_ring_handler(self._log_buffer, "kenzy", display_level=self._log_level)
             self._log_buffer = None
 
     def _apply_pulled_config(self, patch: dict[str, Any], initial: bool = False) -> None:
@@ -607,6 +622,23 @@ class NodeClient:
         if "hard_cap_ms" in patch:
             self._hard_cap_frames = max(int(patch["hard_cap_ms"]) // fm, 1)
             applied.append("hard_cap_ms")
+
+        if "log_level" in patch:
+            from kenzy.logutil import level_value, set_display_level
+
+            self._log_level = level_value(patch["log_level"], self._log_level)
+            set_display_level(self._log_level)
+            applied.append("log_level")
+        if "log_capture_level" in patch:
+            from kenzy.logutil import level_value
+
+            self._log_capture_level = level_value(
+                patch["log_capture_level"], self._log_capture_level
+            )
+            if self._log_buffer is not None:  # update the live capture depth
+                self._log_buffer.setLevel(self._log_capture_level)
+                logging.getLogger("kenzy").setLevel(min(self._log_level, self._log_capture_level))
+            applied.append("log_capture_level")
 
         if "keep_logs" in patch:
             self._set_log_capture(bool(patch["keep_logs"]))
@@ -795,8 +827,14 @@ class NodeClient:
 
                 if self._vad_enabled:
                     rms = float(np.sqrt(np.mean(flat.astype(np.float32) ** 2)))
-                    log.debug(
-                        "Frame %d: RMS=%.1f speech=%d", self._frame_count, rms, self._speech_frames
+                    # Per-frame hot path → TRACE (below DEBUG) so default debug
+                    # capture isn't flooded; opt in with log_capture_level: trace.
+                    log.log(
+                        TRACE,
+                        "Frame %d: RMS=%.1f speech=%d",
+                        self._frame_count,
+                        rms,
+                        self._speech_frames,
                     )
 
                     if rms >= self._silence_rms:
@@ -1070,19 +1108,17 @@ def main() -> None:
     import yaml  # type: ignore[import-untyped]
 
     from kenzy.config import resolve_config, writable_config_path
+    from kenzy.logutil import configure_logging, level_value
 
     config_path = resolve_config("node", sys.argv[1] if len(sys.argv) > 1 else None)
     with open(config_path) as fh:
         cfg = yaml.safe_load(fh) or {}
 
-    log_level: int = getattr(logging, str(cfg.get("log_level", "info")).upper(), logging.INFO)
-    verbose: bool = bool(cfg.get("verbose", False))
-    fmt = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
-
-    # Root logger: verbose passes everything through; otherwise suppress
-    # noisy third-party loggers (websockets, asyncio, sounddevice).
-    logging.basicConfig(level=log_level if verbose else logging.WARNING, format=fmt)
-    logging.getLogger("kenzy").setLevel(log_level)
+    # Console follows log_level (default info); the dashboard log buffer can go
+    # deeper (log_capture_level) once the server enables capture (config-pull).
+    configure_logging(
+        level_value(cfg.get("log_level"), logging.INFO), bool(cfg.get("verbose", False))
+    )
 
     # Ensure a stable node_id, persisting a generated one to a writable config
     # file (redirected out of the packaged read-only default if needed).

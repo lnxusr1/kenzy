@@ -30,7 +30,7 @@ from websockets.datastructures import Headers
 from websockets.http11 import Request, Response
 
 from kenzy import serviceauth
-from kenzy.logutil import install_ring_handler
+from kenzy.logutil import install_ring_handler, level_value
 
 if TYPE_CHECKING:
     from websockets.asyncio.server import ServerConnection
@@ -118,9 +118,11 @@ class Dashboard:
         self._svc_cache: tuple[float, list[dict[str, Any]]] | None = None
         server.add_state_listener(self._on_state_change)
         # Pull-based logs (only when the `logs` sub-flag is on): tell nodes to keep a
-        # buffer, and capture the server's own logs for the viewer.
+        # buffer, and capture the server's own logs for the viewer down to the
+        # configured capture depth (default debug).
         server._capture_node_logs = dcfg.logs
-        self._server_logs = install_ring_handler("kenzy") if dcfg.logs else None
+        capture = level_value(cfg.get("log_capture_level"), logging.DEBUG)
+        self._server_logs = install_ring_handler("kenzy", level=capture) if dcfg.logs else None
 
     # ------------------------------------------------------------------
     # Auth — read-only GETs are LAN-open; mutations need a login cookie
@@ -573,6 +575,15 @@ class Dashboard:
                 return await ack(False, "controls are disabled (set dashboard.controls: true)")
             ok = await self._restart_service(str(msg.get("service", "")))
             await ack(ok, None if ok else "service not reachable")
+        elif mtype == "boost_trace":
+            if not self._dcfg.controls:
+                return await ack(False, "controls are disabled (set dashboard.controls: true)")
+            try:
+                seconds = int(msg.get("seconds", 30))
+            except (TypeError, ValueError):
+                seconds = 30
+            ok = await self._server.boost_node_trace(str(msg.get("node", "")), seconds)
+            await ack(ok, None if ok else "node not connected")
         elif mtype == "set_password":
             # Account self-service — allowed for any signed-in user (not gated by
             # `controls`), but the current password must be re-supplied.

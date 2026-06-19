@@ -3,6 +3,7 @@
 host: "127.0.0.1"
 port: 8769
 log_level: "info"
+log_capture_level: "debug"  # how deep the dashboard log viewer can see (debug/trace); set via the dashboard
 
 # ---------------------------------------------------------------------------
 # Provider selection

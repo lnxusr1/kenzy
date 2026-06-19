@@ -5,6 +5,7 @@
 host: "127.0.0.1"
 port: 8768
 log_level: "info"
+log_capture_level: "debug"  # how deep the dashboard log viewer can see (debug/trace); set via the dashboard
 
 # --- Model ---
 # SpeechBrain ECAPA-TDNN model (downloaded once by kenzy-setup).

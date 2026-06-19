@@ -8,8 +8,9 @@
 # log, and reach the server.
 
 # Logging (used immediately, before server config arrives)
-# log_level controls the kenzy logger (debug, info, warning, error).
-# verbose: true also enables debug output from websockets/asyncio/sounddevice.
+# log_level controls what the node prints to its console (debug, info, warning,
+# error). Also live-tunable from the dashboard. verbose: true additionally enables
+# debug output from websockets/asyncio/sounddevice.
 log_level: "info"
 verbose: false
 
@@ -55,3 +56,4 @@ node_id: "c130ef9c-2a66-4306-9ac4-0a4c80c979ce"
 # speech_min_ms: 400              # min speech before silence detection arms
 # no_speech_timeout_ms: 15000     # give up if no speech after activation
 # hard_cap_ms: 30000              # unconditional session length ceiling (VAD)
+# log_capture_level: debug        # how deep the dashboard log viewer can see (debug/trace)

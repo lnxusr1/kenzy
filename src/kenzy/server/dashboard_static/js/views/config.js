@@ -1,5 +1,6 @@
 import { html, useState, useEffect } from "../html.js";
 import { send, notify } from "../store.js";
+import { nodeEnum } from "../schema.js";
 
 // Editor field types per key (the server's allow-list).
 const TYPES = {
@@ -100,8 +101,15 @@ export function ConfigView({ node, onBack }) {
     const inherited = info.config[k];
     const cur = over[k];
     const set = cur !== undefined;
+    const opts = nodeEnum(k);
     let input;
-    if (t === "bool") {
+    if (opts) {
+      input = html`<select disabled=${!info.controls}
+        onChange=${(e) => setKey(k, e.target.value === "" ? undefined : e.target.value)}>
+        <option value="" selected=${!set}>inherit</option>
+        ${opts.map((o) => html`<option value=${o} selected=${cur === o}>${o}</option>`)}
+      </select>`;
+    } else if (t === "bool") {
       input = html`<select disabled=${!info.controls}
         onChange=${(e) => setKey(k, e.target.value === "" ? undefined : e.target.value === "true")}>
         <option value="" selected=${!set}>inherit</option>

@@ -300,6 +300,42 @@ async def test_set_room_via_ws_pushes_and_reflects(tmp_path, monkeypatch):
     assert cap.sent[0]["ok"] is False
 
 
+async def test_boost_node_trace(tmp_path, monkeypatch):
+    monkeypatch.setenv("KENZY_HOME", str(tmp_path))
+    (tmp_path / "configs").mkdir(parents=True)
+    s = AudioServer({})
+    # Not connected → no boost.
+    assert await s.boost_node_trace("ghost", 5) is False
+
+    node = _Cap()
+    s._nodes["n1"] = NodeSession(ws=node, node_id="n1", room_id="r")
+    assert await s.boost_node_trace("n1", 1) is True
+    # Transient overlay makes the effective config (and the pushed frame) TRACE.
+    assert s._effective_node_config("n1")["log_capture_level"] == "trace"
+    assert any(
+        m.get("type") == "config" and m["config"].get("log_capture_level") == "trace"
+        for m in node.sent
+    )
+    # Revert clears the overlay (and isn't persisted anywhere).
+    s._boost_tasks["n1"].cancel()
+    await s._revert_trace("n1", 0)
+    assert "log_capture_level" not in s._effective_node_config("n1")
+    assert s.read_node_override("n1") == {}
+
+
+async def test_boost_trace_gated_by_controls(tmp_path, monkeypatch):
+    monkeypatch.setenv("KENZY_HOME", str(tmp_path))
+    s = AudioServer({})
+    s._nodes["n1"] = NodeSession(ws=_Cap(), node_id="n1", room_id="r")
+    off = Dashboard(s, {}, DashboardConfig(enabled=True, controls=False))
+    cap = _Cap()
+    await off._handle_ws_message(
+        cap, json.dumps({"id": "1", "type": "boost_trace", "node": "n1", "seconds": 30})
+    )
+    assert cap.sent[0]["ok"] is False
+    assert "n1" not in s._transient_node_cfg  # nothing applied
+
+
 async def test_set_room_persists_for_offline_node(tmp_path, monkeypatch):
     # Room is server-owned: setting it for a not-yet-connected node stores it and
     # it's pulled on connect (pre-seed / reimage workflow).

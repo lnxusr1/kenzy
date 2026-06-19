@@ -92,22 +92,21 @@ def main() -> None:
 
     import uvicorn  # type: ignore[import-untyped]
 
+    from kenzy.logutil import configure_logging, level_value
     from kenzy.serviceboot import load_service_config
 
-    # Logging up front so the (possibly retrying) config pull is visible.
-    fmt = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
-    logging.basicConfig(level=logging.WARNING, format=fmt)
-    logging.getLogger("kenzy").setLevel(logging.INFO)
+    configure_logging(logging.INFO)  # provisional, so the config pull's retries are visible
 
     # Central config: pull from the server (blocking until it answers); an explicit
     # config path loads locally instead (dev/offline escape hatch).
     cfg: dict[str, Any] = load_service_config("stt")
 
-    log_level: int = getattr(logging, str(cfg.get("log_level", "info")).upper(), logging.INFO)
-    logging.getLogger("kenzy").setLevel(log_level)
+    configure_logging(level_value(cfg.get("log_level"), logging.INFO))
     quiet_health_access_log()
     install_service_auth(app)
-    install_logs_endpoint(app)
+    install_logs_endpoint(
+        app, capture_level=level_value(cfg.get("log_capture_level"), logging.DEBUG)
+    )
     install_restart_endpoint(app)
 
     try:

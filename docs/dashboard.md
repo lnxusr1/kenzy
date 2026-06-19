@@ -68,10 +68,12 @@ Open a node's **Configure** page to:
   pulled on its next connect (so you can name a node before it's ever booted). Identity
   is the stable `node_id`, so renaming a room never orphans its config.
 - **Edit per-node settings** — wake-word threshold/VAD, silence/VAD timing, audio
-  device, sample rates, wake-word models, and sound files. Saved values are written to
-  `configs/nodes/<node_id>.yaml` and **live-re-pushed** to the connected node. Each key
-  shows a **live** or **restart** badge: live keys apply immediately on save; hardware
-  keys are applied on the node's next boot or via the Restart button.
+  device, sample rates, wake-word models, sound files, and the node's `log_level` /
+  `log_capture_level`. Saved values are written to `configs/nodes/<node_id>.yaml` and
+  **live-re-pushed** to the connected node. Each key shows a **live** or **restart**
+  badge: live keys apply immediately on save; hardware keys are applied on the node's
+  next boot or via the Restart button. Options with a fixed set of values (log levels,
+  on/off, etc.) are dropdown choosers; numeric fields are number inputs.
 - **Control the node** — **Trigger** (start a session), **Stop**, or **Restart** (the
   node re-execs itself, with or without systemd).
 
@@ -91,8 +93,21 @@ environment and are never shown or stored here. Requires `dashboard.controls: tr
 
 With `dashboard.logs: true`, the **Logs** tab pulls a bounded in-memory buffer from a
 source you pick: the server, any backend service, or any connected node. Filter by
-level. Logs are pull-based — a node only keeps a buffer when the dashboard asks it to,
-so a dashboard-less server adds no node overhead.
+level (down to **TRACE**). Logs are pull-based — a node only keeps a buffer when the
+dashboard asks it to, so a dashboard-less server adds no node overhead.
+
+Each source captures down to its **`log_capture_level`** (default `debug`),
+independently of what it prints to its own console (`log_level`). So a node logging
+INFO to its console can still surface DEBUG in the viewer. Levels below a source's
+capture level aren't kept — raise that source's `log_capture_level` (e.g. to `trace`,
+which includes the node's per-frame audio logs) from its config to see deeper.
+
+**Temporary TRACE capture (nodes).** The node's most detailed logs (per-frame
+RMS/VAD) are at TRACE, off by default to avoid flooding. When a node is the selected
+source, a **Capture TRACE** button (with a duration picker) boosts that node to TRACE
+capture live for the chosen window and then auto-reverts — no restart, nothing
+persisted. Refresh during/after the window to view the captured detail. Requires
+`dashboard.controls`.
 
 ## Settings
 

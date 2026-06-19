@@ -91,6 +91,23 @@ def test_apply_pulled_config_initial_applies_hardware_keys():
     assert node._wakeword_threshold == 0.7
 
 
+def test_apply_pulled_config_log_levels():
+    import logging
+
+    from kenzy.logutil import TRACE
+
+    node = NodeClient({})
+    assert node._log_level == logging.INFO and node._log_capture_level == logging.DEBUG
+    node._apply_pulled_config({"log_level": "warning", "log_capture_level": "trace"})
+    assert node._log_level == logging.WARNING
+    assert node._log_capture_level == TRACE
+
+
+def test_log_keys_are_overridable():
+    keys = AudioServer.allowed_override_keys()
+    assert "log_level" in keys and "log_capture_level" in keys
+
+
 def test_apply_pulled_config_adopts_room(tmp_path):
     # Room name is server-owned: the node adopts + persists it from the config frame.
     cfg_path = tmp_path / "node.yaml"

@@ -66,6 +66,8 @@ _ALLOWED_OVERRIDE_KEYS = frozenset(
         "wakeword_models",
         "sound_ready",
         "sound_waiting",
+        "log_level",
+        "log_capture_level",
     }
 )
 # Server-owned keys stored in the per-node override file and pushed via config-pull,
@@ -158,6 +160,10 @@ class AudioServer:
         # nodes are told (config `keep_logs`) to keep a buffer. Off ⇒ no node cost.
         self._capture_node_logs: bool = False
         self._log_waiters: dict[str, asyncio.Future[list[dict[str, Any]]]] = {}
+        # Transient (non-persisted) per-node config overlays + their revert timers,
+        # used by the dashboard's temporary TRACE log boost.
+        self._transient_node_cfg: dict[str, dict[str, Any]] = {}
+        self._boost_tasks: dict[str, asyncio.Task[None]] = {}
 
     def add_state_listener(self, fn: Callable[[], None]) -> None:
         """Register a callback fired (in-loop) when the node registry/state changes."""
@@ -201,6 +207,11 @@ class AudioServer:
                 log.warning("[%s] failed to read override %s: %s", node_id, override, exc)
         else:
             log.info("[%s] no per-node override (%s) — sending defaults only", node_id, override)
+        # Transient overlay (e.g. a temporary TRACE log boost): wins over stored
+        # config but is never persisted.
+        transient = self._transient_node_cfg.get(node_id)
+        if transient:
+            effective.update(transient)
         # Invariant: secrets never leave the server, even if an operator put one in
         # node_defaults by mistake.
         leaked = [k for k in effective if _SECRET_KEY_RE.search(k)]
@@ -399,6 +410,37 @@ class AudioServer:
         ):
             return self._http_json(401, {"error": "invalid service token"})
         return self._http_json(200, self._effective_service_config(service))
+
+    async def boost_node_trace(self, node_id: str, seconds: int = 30) -> bool:
+        """Temporarily capture TRACE-level logs on a node, auto-reverting later.
+
+        Pushes a transient ``log_capture_level: trace`` to the connected node
+        (live, no restart), then after ``seconds`` re-pushes its normal config so
+        the deep capture doesn't run indefinitely. Returns False if not connected.
+        """
+        if node_id not in self._nodes:
+            return False
+        seconds = max(1, min(int(seconds), 300))
+        old = self._boost_tasks.pop(node_id, None)
+        if old:
+            old.cancel()
+        self._transient_node_cfg[node_id] = {"log_capture_level": "trace"}
+        await self.push_config(node_id)
+        self._boost_tasks[node_id] = asyncio.create_task(
+            self._revert_trace(node_id, seconds), name=f"trace-revert-{node_id}"
+        )
+        log.info("[%s] TRACE log capture boosted for %ds", node_id, seconds)
+        return True
+
+    async def _revert_trace(self, node_id: str, seconds: int) -> None:
+        try:
+            await asyncio.sleep(seconds)
+        except asyncio.CancelledError:
+            return  # superseded by a newer boost, which owns the revert
+        self._transient_node_cfg.pop(node_id, None)
+        self._boost_tasks.pop(node_id, None)
+        await self.push_config(node_id)
+        log.info("[%s] TRACE log capture reverted", node_id)
 
     def _migrate_room_keyed_files(self, node_id: str, room_id: str) -> None:
         """One-time migration: re-key a room-named override file to ``node_id``.
@@ -1135,10 +1177,11 @@ def main() -> None:
     with open(config_path) as fh:
         cfg = yaml.safe_load(fh)
 
-    log_level: int = getattr(logging, str(cfg.get("log_level", "info")).upper(), logging.INFO)
-    fmt = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
-    logging.basicConfig(level=logging.WARNING, format=fmt)
-    logging.getLogger("kenzy").setLevel(log_level)
+    from kenzy.logutil import configure_logging, level_value
+
+    configure_logging(
+        level_value(cfg.get("log_level"), logging.INFO), bool(cfg.get("verbose", False))
+    )
 
     server = TranscribingServer(cfg)
 
