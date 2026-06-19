@@ -30,6 +30,7 @@ curl -fsSL https://kenzy.dev/install.sh | bash -s -- --profile node --yes
 | `--no-apt` | `KENZY_NO_APT` | `0` | Don't install system packages (non-Debian hosts) |
 | `--package` | `KENZY_PACKAGE` | *(PyPI)* | Install a local wheel/sdist/source dir instead of PyPI |
 | `--version` | `KENZY_VERSION` | *(latest ≥3)* | Pin a specific PyPI version |
+| `--node-id` | `KENZY_NODE_ID` | *(generated)* | Stable `node_id` for a node install (so its server-side config can be pre-seeded by that id). A generated id is printed when omitted. The room name is set later from the dashboard, not at install. |
 | `--yes` | `KENZY_YES` | `0` | Assume defaults / no prompts (CI) |
 | `--home` | `KENZY_HOME` | `~/.config/kenzy` | Config home (configs, skills, data, `.env`) |
 | `--venv` | `KENZY_VENV` | `~/.local/share/kenzy/venv` | Virtualenv location |
@@ -139,6 +140,7 @@ Say your wake word ("Hey Kenzie") and start talking.
 
 ## Next steps
 
+- [Enable the dashboard](dashboard.md) to manage your nodes and services from one web UI
 - [Enroll speakers](speaker-enrollment.md) so Kenzy knows who is talking
 - [Add skills](skills/writing-skills.md) to extend what Kenzy can do
 - [Deploy remotely](deployment.md) to push updates to all your devices at once

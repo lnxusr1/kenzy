@@ -31,3 +31,9 @@ export async function getState() {
   if (!r.ok) throw new Error(`state ${r.status}`);
   return await r.json();
 }
+
+export async function getSettings() {
+  const r = await fetch("/api/settings");
+  if (!r.ok) throw new Error(`settings ${r.status}`);
+  return await r.json();
+}

@@ -170,7 +170,13 @@ button { font: inherit; cursor: pointer; }
 }
 .announce input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent); }
 .announce .btn-primary { flex: none; width: auto; margin: 0; padding: 10px var(--s5); }
-@media (max-width: 520px) { .announce { flex-wrap: wrap; } .announce input { order: 2; } .announce .btn-primary { order: 3; } }
+@media (max-width: 520px) {
+  /* Phone portrait: keep the input full-width on its row and wrap the button
+     beneath it (instead of both shrinking to share one line). */
+  .announce { flex-wrap: wrap; }
+  .announce input { flex: 1 1 auto; }
+  .announce .btn-primary { flex-basis: 100%; width: 100%; }
+}
 
 .card-cfg { width: 100%; margin-top: var(--s4); padding: 7px; font-size: 12px; }
 .unclaimed {
@@ -193,6 +199,7 @@ button { font: inherit; cursor: pointer; }
 
 /* ============================ CONFIG EDITOR ============================ */
 .cfg .back { display: inline-flex; width: auto; margin-bottom: var(--s4); }
+.cfg .node-sub { margin: -8px 0 var(--s4); color: var(--text-faint); word-break: break-all; }
 .banner {
   background: color-mix(in srgb, var(--led-busy) 14%, var(--panel));
   border: 1px solid color-mix(in srgb, var(--led-busy) 45%, transparent);
@@ -209,6 +216,13 @@ button { font: inherit; cursor: pointer; }
 }
 .cfg-row.overridden { box-shadow: inset 3px 0 0 var(--accent); }
 .cfg-key { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.applies {
+  align-self: flex-start; font-family: var(--font-mono); font-size: 9px; letter-spacing: .1em;
+  text-transform: uppercase; padding: 1px 6px; border-radius: 999px;
+  border: 1px solid var(--border); color: var(--text-dim);
+}
+.applies.live { color: var(--led-ok, var(--accent)); border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
+.applies.restart { color: var(--led-busy); border-color: color-mix(in srgb, var(--led-busy) 45%, transparent); }
 .cfg-input input, .cfg-input select {
   width: 100%; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius);
   color: var(--text); font: inherit; padding: 8px var(--s3);
@@ -264,10 +278,30 @@ button { font: inherit; cursor: pointer; }
 }
 .btn-primary:hover { filter: brightness(1.07); }
 .btn-primary:active { transform: translateY(1px); }
-.btn-primary[disabled] { opacity: .6; cursor: progress; }
+.btn-primary[disabled] { opacity: .6; cursor: not-allowed; }
 .login .err { color: var(--led-down); font-size: 13px; margin: 0 0 var(--s4); text-align: center; min-height: 1.2em; }
 .login .hint { margin-top: var(--s5); text-align: center; font-size: 12px; color: var(--text-faint); }
 .login .hint code { font-family: var(--font-mono); color: var(--text-dim); }
+
+/* ============================ SETTINGS ============================ */
+.settings { display: grid; gap: var(--s6); align-content: start; }
+.card.pad { padding: var(--s5); cursor: default; }
+.card.pad:hover { transform: none; border-color: var(--border); background: var(--panel); }
+.kv { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: var(--s3) var(--s5); align-items: baseline; }
+.kv dt { color: var(--text-faint); font-size: 12px; letter-spacing: .04em; }
+.kv dd { margin: 0; text-align: right; font-size: 13px; word-break: break-all; }
+.kv dd .badge { font-size: 10px; }
+
+.flags { display: grid; gap: var(--s3); }
+.flagrow { display: flex; align-items: center; gap: var(--s3); padding: var(--s3); border: 1px solid var(--border); border-radius: var(--radius); }
+.flagrow.on { box-shadow: inset 3px 0 0 var(--led-up); }
+.flagrow .flagtext { display: flex; flex-direction: column; gap: 1px; }
+.flagrow .flagtext b { font-size: 13px; }
+.flags > .micro { margin: var(--s2) 0 0; }
+
+.pw-form { display: grid; gap: 0; max-width: 420px; }
+.pw-form > .micro { margin: 0 0 var(--s4); }
+.pw-form .btn-primary { width: auto; justify-self: start; padding-inline: var(--s5); }
 
 .boot { min-height: 100vh; display: grid; place-items: center; color: var(--text-faint); font-family: var(--font-mono); letter-spacing: .2em; text-transform: uppercase; font-size: 12px; }
 

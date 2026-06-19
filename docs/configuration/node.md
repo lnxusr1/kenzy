@@ -5,13 +5,16 @@
 
 The node service runs on each room device. It captures microphone audio, detects the wake word, streams PCM to the server, and plays back TTS responses.
 
+`node.yaml` is **bootstrap-only**: it holds just what the node needs to start up, log, and reach the server (`log_level`/`verbose`, `server_url`/`discovery`, and a stable `node_id`). On every boot the node **pulls its full operational config from the server** — audio device, sample rates, wakeword models/threshold/VAD, sounds, VAD timing, and its room name — and does **not initialize audio until that config arrives**. Configure all of it from the [dashboard](../dashboard.md), keyed by the node's `node_id`. The operational keys below may still be set locally as a *pre-connect fallback* for any key the server does not push, but the dashboard/server is authoritative.
+
 ## Full reference
 
 | Key | Default | Description |
 |---|---|---|
 | `server_url` | `null` | WebSocket URL of the kenzy-server. Leave `null`/empty to **auto-discover** the server on the LAN via mDNS; set an explicit `ws://` URL to skip discovery (e.g. across VLANs that block multicast). |
 | `discovery.enabled` | `true` | Browse for the server over mDNS when `server_url` is unset |
-| `room_id` | `null` | Unique identifier for this node; `null` defaults to the **hostname**. Used as the key in conversation history and pipeline routing |
+| `node_id` | *(generated)* | Stable primary identifier for this node. Leave unset — one is generated and written back to `node.yaml` on first run (or assigned at install with `kenzy-init --node-id ID`), then kept across restarts. The server keys the registry, per-node config, and all controls on it, so a node's identity (and its config) survives even when the room name changes or the device is reimaged. |
+| `room_id` | `null` | Human **room name** (e.g. `kitchen`). **Server-owned**: set it from the [dashboard](../dashboard.md). Until the server provides one it falls back to the **hostname**. Sent to the assistant as context (used in conversation history). |
 | `audio_device` | `null` | PortAudio device name substring or integer index. `null` uses the system default. Use `kenzy-devices` to find the correct value. |
 | `capture_sample_rate` | `16000` | Sample rate for microphone capture. Set to the device's native rate if it does not support 16000 Hz; audio is resampled automatically. |
 | `playback_sample_rate` | `24000` | Sample rate for speaker output. Set to the device's native rate if it does not support 24000 Hz; TTS audio is resampled automatically. |
@@ -45,7 +48,7 @@ The node service runs on each room device. It captures microphone audio, detects
 | `sound_waiting` | `null` | WAV file played while waiting for the server response. Plays once and stops naturally or is interrupted when TTS begins. `null` (or an empty string) disables it — pure silence while waiting. Provide a filename or path to enable it. |
 
 !!! note "Zero-config nodes (discovery + config-pull)"
-    A node needs almost no local config. With `server_url` unset it finds the server via mDNS, `room_id` defaults to the hostname, and on connect the server **pushes** the node's effective tuning (wake-word thresholds, VAD timing) from its `node_defaults` plus any per-room override in `configs/nodes/<room>.yaml`. Live-tunable keys apply immediately; hardware keys (`audio_device`, sample rates, `wakeword_models`, sounds) stay local and take effect on restart. So in practice a room device only needs its audio hardware settings — everything else is centralised on the server. See [Server Configuration](server.md#discovery-and-config-pull).
+    A node needs no operational local config. With `server_url` unset it finds the server via mDNS, generates a stable `node_id` on first run (or one assigned at install via `kenzy-init --node-id`), and **blocks until the server answers** — it connects, sends `hello`, and waits for the server's `config` frame before initializing audio. That effective config is the server's `node_defaults` plus any per-node override in `configs/nodes/<node_id>.yaml`. **Hardware keys** (`audio_device`, sample rates, `wakeword_models`/VAD gate, sounds) are applied as the audio stack is built on this first pull; a *later* change to a hardware key needs a restart (one click in the dashboard). **Live-tunable keys** (wake-word threshold, silence RMS, VAD timing) apply immediately on every push. So a room device can run with an essentially empty `node.yaml`, and everything — including its room name — is configured from the [dashboard](../dashboard.md) and centralised on the server. Pre-seed a node by creating `configs/nodes/<node_id>.yaml` on the server before the device first connects. See [Server Configuration](server.md#discovery-and-config-pull).
 
 !!! tip "Finding the right device name"
     Run `kenzy-devices` after install. It tests every PortAudio device against Kenzy's required sample rates and prints ready-to-paste `node.yaml` settings including `capture_sample_rate` and `playback_sample_rate` if resampling is needed.
@@ -55,18 +58,22 @@ The node service runs on each room device. It captures microphone audio, detects
 
 ## Example
 
+A typical node only needs the bootstrap keys — audio and tuning come from the server:
+
 ```yaml
+log_level: "info"
 server_url: null                      # null = discover the server via mDNS
-room_id: "office"                     # null = use the hostname
+discovery:
+  enabled: true
+# node_id is generated and written here automatically on first run — leave it unset
+```
+
+The operational keys may still be set locally as a **pre-connect fallback** for any key the server does not push (e.g. to pin a device before the node is configured in the dashboard):
+
+```yaml
 audio_device: "Anker PowerConf S330"  # substring of name shown by kenzy-devices
 capture_sample_rate: 48000            # device native rate; resampled to 16000 Hz
 playback_sample_rate: 48000           # device native rate; resampled to 24000 Hz
-
-wakeword_threshold: 0.4         # lower is safe once VAD gating is on
-wakeword_vad_threshold: 0.5     # reject wake-word hits on near-silence/noise
-silence_rms_threshold: 80
-silence_ms: 500
-
-sound_ready: null
-sound_waiting: null
+wakeword_threshold: 0.4               # lower is safe once VAD gating is on
+wakeword_vad_threshold: 0.5           # reject wake-word hits on near-silence/noise
 ```

@@ -20,21 +20,27 @@ The server is the central WebSocket hub. It accepts connections from room nodes,
 | `discovery.enabled` | `true` | Advertise the server as `_kenzy._tcp` over mDNS so nodes auto-discover it without a hardcoded `server_url` |
 | `discovery.instance` | `"kenzy-server"` | mDNS instance name |
 | `discovery.token` | — | Shared secret required in each node's `hello`; mismatching nodes are rejected. Sets the `auth` flag in the advertisement. |
-| `node_defaults` | `{}` | Node tuning defaults (wake-word thresholds, VAD timing) pushed to every node on connect. Per-room overrides live in `configs/nodes/<room_id>.yaml` and shallow-merge over these. |
+| `node_defaults` | `{}` | Node tuning defaults (wake-word thresholds, VAD timing) pushed to every node on connect. Per-node overrides live in `configs/nodes/<node_id>.yaml` and shallow-merge over these. |
 
-On connect, the server sends each node its **effective config** = `node_defaults` merged with `configs/nodes/<room_id>.yaml`. Live-tunable keys apply immediately on the node; hardware keys (audio device, sample rates, wakeword models, sounds) are reported but take effect on restart. This is how a room device runs with no local tuning file — see [Node Configuration](node.md).
+On connect, a node's `hello` carries its stable `node_id` and its room name; the server replies with the node's **effective config** = `node_defaults` merged with `configs/nodes/<node_id>.yaml`. Live-tunable keys apply immediately on the node; hardware keys (audio device, sample rates, wakeword models, sounds) take effect on restart. The per-node file is keyed by `node_id`, so a node keeps its config even if its room is renamed; pre-existing room-named files migrate automatically on first connect. This is how a room device runs with no local tuning file — see [Node Configuration](node.md).
 
 ### Dashboard
 
-Opt-in web dashboard served by `kenzy-server`. **Off by default**; when disabled nothing is wired up (no route, no overhead). It currently shows a read-only fleet/health view (connected nodes, backend `/health`).
+Opt-in web fleet manager served by `kenzy-server`. **Off by default**; when disabled nothing is wired up (no route, no overhead). When enabled it provides a live fleet/health view, a per-node config editor (with room rename), node controls (trigger/stop/restart), TTS announcements, a log viewer, and a settings page. See the [Dashboard guide](../dashboard.md) for the full walkthrough.
 
 | Key | Default | Description |
 |---|---|---|
 | `dashboard.enabled` | `false` | Master switch. `false` ⇒ nothing below is mounted. |
-| `dashboard.bind` | `"127.0.0.1"` | Listener address — keep it on localhost or the LAN; do **not** port-forward it |
+| `dashboard.bind` | `"127.0.0.1"` | Listener address — keep it on localhost or the LAN; do **not** port-forward it (login is plaintext HTTP) |
 | `dashboard.port` | `8770` | Dashboard HTTP port (separate from the node WS port) |
-| `dashboard.auth_token` | `null` | Bearer token required for (future) mutating actions |
-| `dashboard.logs` / `tuning` / `controls` | `false` | Reserved sub-flags for later dashboard phases |
+| `dashboard.auth.username` / `dashboard.auth.password_hash` | `admin` / *(hash of `password`)* | Browser login. Change it with the server-only **`kenzy-passwd`** CLI (or the dashboard's Settings page); never edit the hash by hand. |
+| `dashboard.auth_token` | `null` | Optional bearer token for API/CLI clients (the browser uses the login cookie, not this) |
+| `dashboard.controls` | `false` | Enable mutating actions — config edits, room rename, trigger/stop/restart, announcements. `false` ⇒ read-only. |
+| `dashboard.logs` | `false` | Enable the pull-based log viewer (server, services, and per-node buffers) |
+| `dashboard.tuning` | `false` | Reserved sub-flag for a later phase |
+
+!!! warning "Keep the dashboard off the public internet"
+    Login runs over plaintext HTTP on a LAN bind and defaults to `admin` / `password`. Bind it to localhost or the LAN only, change the password with `kenzy-passwd`, and do **not** port-forward the dashboard port.
 
 ### STT service
 

@@ -3,6 +3,7 @@ import { useFleet, useToasts, dismiss } from "./store.js";
 import { FleetView } from "./views/fleet.js";
 import { ConfigView } from "./views/config.js";
 import { LogsView } from "./views/logs.js";
+import { SettingsView } from "./views/settings.js";
 
 function Toasts() {
   const toasts = useToasts();
@@ -21,7 +22,7 @@ function Toasts() {
 const NAV = [
   { id: "fleet", label: "Fleet", ico: "▣" },
   { id: "logs", label: "Logs", ico: "≡" },
-  { id: "settings", label: "Settings", ico: "⚙", soon: true },
+  { id: "settings", label: "Settings", ico: "⚙" },
 ];
 
 function ThemeToggle() {
@@ -68,17 +69,17 @@ export function Shell({ user, onLogout }) {
   const { data } = useFleet();
   const logsOn = !!(data && data.flags && data.flags.logs);
   const [view, setView] = useState("fleet");
-  const [room, setRoom] = useState(null);
+  const [node, setNode] = useState(null);
   const [navOpen, setNavOpen] = useState(false);
   const active = NAV.find((n) => n.id === view) || NAV[0];
-  const title = view === "config" ? `Config · ${room}` : active.label;
+  const title = view === "config" ? "Node config" : active.label;
 
   const go = (id) => {
     setView(id);
     setNavOpen(false);
   };
-  const configure = (r) => {
-    setRoom(r);
+  const configure = (id) => {
+    setNode(id);
     setView("config");
   };
 
@@ -90,16 +91,18 @@ export function Shell({ user, onLogout }) {
         <div class="brand"><span class="wordmark"><span class="glyph"></span><span class="name">Kenzy</span></span></div>
         <nav class="nav">
           ${NAV.map((n) => {
-            const soon = n.soon || (n.id === "logs" && !logsOn);
+            // The Logs view is the only nav item that can be unavailable — it's
+            // gated by the server's `dashboard.logs` flag.
+            const disabled = n.id === "logs" && !logsOn;
             return html`
-              <a key=${n.id} href="#" aria-disabled=${soon ? "true" : "false"}
+              <a key=${n.id} href="#" aria-disabled=${disabled ? "true" : "false"}
                  class=${n.id === view || (view === "config" && n.id === "fleet") ? "active" : ""}
                  onClick=${(e) => {
                    e.preventDefault();
-                   if (!soon) go(n.id);
+                   if (!disabled) go(n.id);
                  }}>
                 <span class="ico">${n.ico}</span>${n.label}
-                ${soon ? html`<span class="micro" style="margin-left:auto">${n.soon ? "soon" : "off"}</span>` : null}
+                ${disabled ? html`<span class="micro" style="margin-left:auto">off</span>` : null}
               </a>
             `;
           })}
@@ -125,10 +128,12 @@ export function Shell({ user, onLogout }) {
         </header>
         <main class="content">
           ${view === "config"
-            ? html`<${ConfigView} room=${room} onBack=${() => go("fleet")} />`
+            ? html`<${ConfigView} node=${node} onBack=${() => go("fleet")} />`
             : view === "logs"
               ? html`<${LogsView} />`
-              : html`<${FleetView} onConfigure=${configure} />`}
+              : view === "settings"
+                ? html`<${SettingsView} onLogout=${onLogout} />`
+                : html`<${FleetView} onConfigure=${configure} />`}
         </main>
       </div>
     </div>

@@ -149,7 +149,7 @@ kenzy-deploy logs node --host living-room
 
 ## Per-host configuration
 
-All hosts receive the same base `configs/` directory on every install and upgrade. To give a specific host different settings — a different `room_id`, `audio_device`, LLM model, etc. — create a per-host overlay directory:
+All hosts receive the same base `configs/` directory on every install and upgrade. To give a specific host different settings — a host-local `audio_device`, a different LLM model, etc. — create a per-host overlay directory:
 
 ```
 configs/
@@ -168,12 +168,11 @@ On each `install` or `upgrade`, after syncing the base `configs/`, the deploy sc
 !!! note "Complete files required"
     The overlay is a file-level replacement, not a key-level merge. A host-specific config file must be complete and valid on its own — the service will not fall back to base `configs/` values for keys that are missing. The recommended approach is to copy the full base config file into the overlay directory and change only the lines that differ.
 
-!!! tip "Nodes: prefer config-pull for tuning"
-    For **node** tuning (wake-word thresholds, VAD timing) you usually don't need a per-host overlay at all. Set `node_defaults` in the server's `server.yaml` and per-room values in `configs/nodes/<room_id>.yaml`; the server pushes them to each node on connect. Reserve the deploy overlay for genuinely host-local node settings like `audio_device`. See [Discovery & config-pull](configuration/server.md#discovery-and-config-pull).
+!!! tip "Nodes: prefer config-pull"
+    A node's operational config (audio device, wake-word thresholds, VAD timing, sounds, **and its room name**) is server-owned and pulled on connect — you usually don't need a per-host node overlay at all. Set `node_defaults` in the server's `server.yaml` and per-node values (including `room_id`) in `configs/nodes/<node_id>.yaml`; the server pushes them to each node when it connects. Pre-seed a not-yet-deployed device by assigning its `node_id` at install (`kenzy-init --node-id`) and creating that override file ahead of time. Reserve the deploy overlay for cases where you must pin a value *before* the node can reach the server. See [Discovery & config-pull](configuration/server.md#discovery-and-config-pull).
 
 ```yaml
 # configs/hosts/living-room/node.yaml  (full copy of configs/node.yaml, with these lines changed)
-room_id: "living_room"
 audio_device: "plughw:CARD=speakerphone,DEV=0"
 # ... all other keys from the base node.yaml must also be present
 ```

@@ -39,6 +39,17 @@ Node (mic) ──PCM over WebSocket──► Server
 
 ## Setup
 
+Kenzy installs from PyPI — the default configs, built-in skills, and `.env.example`
+ship as package data, so a service runs from a bare install with no source checkout:
+
+```bash
+pipx install "kenzy[node]"           # or use the one-line installer at kenzy.dev/install.sh
+kenzy-setup                          # download wake-word / speaker-ID models (run once)
+kenzy-init                           # scaffold a config home (~/.config/kenzy)
+```
+
+For development from a checkout, use an editable install instead:
+
 ```bash
 # Create and activate a virtualenv
 python3 -m venv .venv
@@ -97,13 +108,28 @@ kenzy-deploy status     # check service health
 
 Prerequisites on each remote host: SSH key auth and passwordless sudo.
 
+## Dashboard
+
+`kenzy-server` can serve an **opt-in** web fleet manager (off by default). Enable it in
+`server.yaml` (`dashboard.enabled: true`, `controls: true`, `logs: true`) and open
+`http://127.0.0.1:8770/dashboard`. It gives you one place to:
+
+- See live node + backend-service health
+- Configure each node and **rename its room** (pushed to the node and saved)
+- Trigger / stop / restart nodes and send TTS **announcements** to every room
+- Read server, service, and per-node **logs**
+
+Login defaults to `admin` / `password` — change it with `kenzy-passwd` (server host
+only). It is plaintext HTTP on a LAN bind, so **do not port-forward it**. See the
+[Dashboard guide](https://docs.kenzy.dev/dashboard/).
+
 ## Configuration
 
 All config files live in `configs/`. Copy and edit as needed — the defaults are reasonable starting points.
 
 Key settings:
 
-* **`configs/node.yaml`** — wake word threshold, VAD silence detection, audio device selection, sound files
+* **`configs/node.yaml`** — wake word threshold, VAD silence detection, audio device selection, sound files. A node gets a stable auto-generated `node_id` and pulls its tuning from the server on connect; `room_id` is the room name (sent to the assistant, editable from the dashboard)
 * **`configs/server.yaml`** — URLs for each downstream service; omit a URL to disable that stage
 * **`configs/llm.yaml`** — LLM model (supports OpenAI, Anthropic, Ollama, and any LiteLLM provider), system prompt, location context, per-skill config
 * **`configs/stt.yaml`** — Whisper model size and compute device

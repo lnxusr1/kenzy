@@ -19,24 +19,36 @@ const TYPES = {
   sound_waiting: "str",
 };
 
-export function ConfigView({ room, onBack }) {
+// Keys that re-init audio hardware: a change is pulled on the node's next boot,
+// or applied immediately via a Restart. Everything else applies live on save.
+const RESTART_KEYS = new Set([
+  "audio_device",
+  "capture_sample_rate",
+  "playback_sample_rate",
+  "wakeword_models",
+  "wakeword_vad_threshold",
+  "sound_ready",
+  "sound_waiting",
+]);
+
+export function ConfigView({ node, onBack }) {
   const [info, setInfo] = useState(null);
   const [over, setOver] = useState({});
-  const [name, setName] = useState("");
+  const [room, setRoom] = useState("");
   const [saving, setSaving] = useState(false);
 
   async function load() {
-    const r = await fetch(`/api/rooms/${encodeURIComponent(room)}/config`);
+    const r = await fetch(`/api/nodes/${encodeURIComponent(node)}/config`);
     const data = await r.json();
     setInfo(data);
     setOver({ ...(data.override || {}) });
-    setName(data.display_name || "");
+    setRoom(data.room || "");
   }
   useEffect(() => {
     load();
-  }, [room]);
+  }, [node]);
 
-  if (!info) return html`<div class="empty">Loading ${room}…</div>`;
+  if (!info) return html`<div class="empty">Loading…</div>`;
 
   const setKey = (k, v) => {
     const next = { ...over };
@@ -50,6 +62,7 @@ export function ConfigView({ room, onBack }) {
     // Drop blank rows from list fields; omit a key entirely if it ends up empty.
     const config = {};
     for (const [key, val] of Object.entries(over)) {
+      if (key === "room_id") continue; // server-managed, set via the room field
       if (TYPES[key] === "list") {
         const arr = (val || []).map((s) => s.trim()).filter(Boolean);
         if (arr.length) config[key] = arr;
@@ -57,29 +70,29 @@ export function ConfigView({ room, onBack }) {
         config[key] = val;
       }
     }
-    const res = await send("set_override", { room, config });
+    const res = await send("set_override", { node, config });
     setSaving(false);
     if (res.ok) {
-      notify(`Config saved for ${room} — applied live if connected.`);
+      notify(`Config saved — applied live if connected.`);
       load();
     } else {
       notify(res.error || "Save failed.", "err");
     }
   }
 
-  async function saveName() {
-    const res = await send("set_name", { room, name });
+  async function saveRoom() {
+    const res = await send("set_room", { node, name: room.trim() });
     if (res.ok) {
-      notify(name ? `Renamed ${room} → “${name}”.` : `Name cleared for ${room}.`);
+      notify(`Room name set to “${room.trim()}” — applied now if connected, else on next connect.`);
       load();
     } else {
-      notify(res.error || "Could not save name.", "err");
+      notify(res.error || "Could not set the room name.", "err");
     }
   }
 
   async function ctl(type) {
-    const res = await send(type, { room });
-    notify(res.ok ? `${cap(type)} sent to ${room}.` : res.error || `${type} failed`, res.ok ? "ok" : "err");
+    const res = await send(type, { node });
+    notify(res.ok ? `${cap(type)} sent.` : res.error || `${type} failed`, res.ok ? "ok" : "err");
   }
 
   const row = (k) => {
@@ -121,9 +134,14 @@ export function ConfigView({ room, onBack }) {
         placeholder=${inherited ?? "default"}
         onInput=${(e) => setKey(k, e.target.value === "" ? undefined : e.target.value)} />`;
     }
+    const restart = RESTART_KEYS.has(k);
     return html`
       <div class=${"cfg-row" + (set ? " overridden" : "")}>
         <div class="cfg-key"><span class="mono">${k}</span>
+          <span class=${"applies " + (restart ? "restart" : "live")}
+                title=${restart
+                  ? "Audio hardware key — applied on the node's next boot or via Restart"
+                  : "Applied live on save"}>${restart ? "restart" : "live"}</span>
           <span class="micro">${set ? "override" : `inherits ${fmt(inherited)}`}</span></div>
         <div class="cfg-input">${input}</div>
       </div>`;
@@ -133,20 +151,27 @@ export function ConfigView({ room, onBack }) {
     <div class="cfg">
       <button class="btn-ghost back" onClick=${onBack}>← Fleet</button>
       <div class="section">
-        <header><h2>Config · <span class="mono">${room}</span></h2><span class="rule"></span></header>
+        <header><h2>${info.room || "Node"}</h2><span class="rule"></span></header>
+        <p class="micro mono node-sub">node ${info.node_id}${info.connected ? "" : " · offline"}</p>
         ${!info.controls
           ? html`<div class="banner">Editing is read-only — set <code class="mono">dashboard.controls: true</code> in server.yaml to enable.</div>`
           : null}
         <div class="name-row">
-          <div class="cfg-key"><span class="mono">display name</span>
-            <span class="micro">shown in the fleet grid</span></div>
+          <div class="cfg-key"><span class="mono">room name</span>
+            <span class="micro">server-owned; stored &amp; pulled on connect, and sent to the assistant</span></div>
           <div class="name-input">
-            <input disabled=${!info.controls} value=${name}
-                   placeholder=${room} maxlength="64"
-                   onInput=${(e) => setName(e.target.value)} />
-            <button class="btn-ghost" disabled=${!info.controls} onClick=${saveName}>Rename</button>
+            <input disabled=${!info.controls} value=${room}
+                   placeholder="kitchen" maxlength="64"
+                   onInput=${(e) => setRoom(e.target.value)} />
+            <button class="btn-ghost" disabled=${!info.controls || !room.trim()}
+                    onClick=${saveRoom}>Set</button>
           </div>
         </div>
+        ${!info.connected
+          ? html`<p class="micro">Node is offline — the room name is saved now and applied when it connects.</p>`
+          : null}
+        <p class="micro">Badges: <span class="applies live">live</span> applies on save ·
+          <span class="applies restart">restart</span> audio keys apply on the node's next boot or via Restart below.</p>
         <div class="cfg-grid">${info.editable.map(row)}</div>
         <div class="cfg-actions">
           <button class="btn-primary" disabled=${!info.controls || saving} onClick=${save}>

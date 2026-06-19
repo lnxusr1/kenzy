@@ -27,8 +27,9 @@ Control messages are JSON text frames. Audio is raw int16 PCM binary frames at 1
 
 | Message | Direction | Purpose |
 |---|---|---|
-| `hello` | node → server | Registration on connect; carries `room_id`, optional audio `capabilities` and a join `token` |
+| `hello` | node → server | Registration on connect; carries the stable `node_id` (primary key) + `room_id` (room name), optional audio `capabilities` and a join `token` |
 | `config` | server → node | Effective node config pushed right after `hello` (config-pull) |
+| `set_room` | server → node | Dashboard renames the node's room; the node persists it to `node.yaml` and applies it live |
 | `audio_start` | node → server | Begins a capture session |
 | `audio_end` | node → server | Ends a capture session, includes `reason` |
 | `wakeword` | node → server | Wake word fired mid-stream |
@@ -42,11 +43,11 @@ Binary frames sent server → node between `tts_start` and `tts_end` are raw int
 
 ## Discovery & config-pull
 
-The server advertises itself as `_kenzy._tcp` over **mDNS**, so a node with no `server_url` finds it automatically; an explicit `server_url` skips discovery. On connect, the node's `hello` carries its identity (`room_id`, defaulting to the hostname), audio `capabilities`, and an optional join `token`; the server validates the token and replies with a `config` frame holding the node's **effective config** — the server's `node_defaults` merged with the per-room override `configs/nodes/<room>.yaml`. Live-tunable values apply immediately; hardware values take effect on restart. The result: room devices carry only their audio settings, and tuning is centralised on the server.
+The server advertises itself as `_kenzy._tcp` over **mDNS**, so a node with no `server_url` finds it automatically; an explicit `server_url` skips discovery. On connect, the node's `hello` carries its **identity** — a stable `node_id` (generated and persisted in `node.yaml` on first run) plus its `room_id` (room name, defaulting to the hostname) — its audio `capabilities`, and an optional join `token`. The server validates the token and replies with a `config` frame holding the node's **effective config** — the server's `node_defaults` merged with the per-node override `configs/nodes/<node_id>.yaml`. Live-tunable values apply immediately; hardware values take effect on restart. The server keys its registry, per-node config, and all controls on `node_id`, so a node keeps its identity and config even when its room is renamed; the room name is just a human label sent to the assistant as context and editable from the dashboard. The result: room devices carry only their identity and audio settings, and everything else is centralised on the server.
 
 ## Dashboard
 
-`kenzy-server` can serve an **opt-in** web dashboard (`dashboard.enabled`, off by default) on its own bind/port. When disabled it is wired up nowhere and adds zero overhead. When enabled it serves a static SPA plus read-only JSON (`/api/state` for the node grid and backend `/health`, `/api/rooms/<room>/config` for effective config). It reuses the server's existing registry and connections — no new transport.
+`kenzy-server` can serve an **opt-in** web fleet manager (`dashboard.enabled`, off by default) on its own bind/port. When disabled it is wired up nowhere and adds zero overhead. When enabled it serves a no-build SPA over the `websockets` HTTP hook (no new dependency): username/password login, a live fleet/health view, a per-node config editor with room rename, node controls (trigger/stop/restart), TTS announcements, a pull-based log viewer, and a settings page (system info, feature flags, password change). It reuses the server's existing registry and connections — no new transport. See the [Dashboard guide](dashboard.md).
 
 ## Node state machine
 

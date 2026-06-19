@@ -18,8 +18,11 @@ from kenzy.server.server import AudioServer, NodeSession
 from kenzy.serviceauth import COOKIE_NAME, hash_password, sign_cookie
 
 
-def _req(path: str) -> Request:
-    return Request(path, Headers())
+def _req(path: str, *, bearer: str | None = None) -> Request:
+    headers = Headers()
+    if bearer:
+        headers["Authorization"] = f"Bearer {bearer}"
+    return Request(path, headers)
 
 
 def test_config_disabled_by_default():
@@ -63,7 +66,7 @@ class _StubWS:
 async def test_dashboard_http_surfaces():
     server = AudioServer({"node_defaults": {"wakeword_threshold": 0.5}})
     server._nodes["den"] = NodeSession(
-        ws=_StubWS(), room_id="den", streaming=True, session_id="abcd1234ef"
+        ws=_StubWS(), node_id="den", room_id="den", streaming=True, session_id="abcd1234ef"
     )
     dash = Dashboard(server, {}, DashboardConfig(enabled=True, bind="127.0.0.1", port=8771))
     task = asyncio.create_task(dash.serve())
@@ -79,13 +82,14 @@ async def test_dashboard_http_surfaces():
             r = await c.get("/api/state")
             assert r.status_code == 200
             state = r.json()
-            assert state["nodes"][0]["room_id"] == "den"
+            assert state["nodes"][0]["node_id"] == "den"
+            assert state["nodes"][0]["room"] == "den"
             assert state["nodes"][0]["streaming"] is True
             assert state["services"] == []  # none configured
             assert state["flags"] == {"logs": False, "tuning": False, "controls": False}
 
-            # per-room effective config (read-only)
-            r = await c.get("/api/rooms/den/config")
+            # per-node effective config (read-only)
+            r = await c.get("/api/nodes/den/config")
             assert r.json()["config"]["wakeword_threshold"] == 0.5
 
             # unknown api endpoint
@@ -105,13 +109,13 @@ def test_node_state_includes_ip():
         remote_address = ("192.168.1.42", 54321)
 
     s = AudioServer({})
-    s._nodes["den"] = NodeSession(ws=_WSAddr(), room_id="den")
+    s._nodes["den"] = NodeSession(ws=_WSAddr(), node_id="den", room_id="den")
     d = Dashboard(s, {}, DashboardConfig(enabled=True))
     node = d._nodes_state()[0]
     assert node["ip"] == "192.168.1.42"
     # stub without remote_address → ip is None, not an error
-    s._nodes["bath"] = NodeSession(ws=_StubWS(), room_id="bath")
-    assert {n["room_id"]: n["ip"] for n in d._nodes_state()}["bath"] is None
+    s._nodes["bath"] = NodeSession(ws=_StubWS(), node_id="bath", room_id="bath")
+    assert {n["node_id"]: n["ip"] for n in d._nodes_state()}["bath"] is None
 
 
 def test_effective_config_strips_secrets():
@@ -150,7 +154,7 @@ async def test_set_override_gated_by_controls(tmp_path, monkeypatch):
     await dash._handle_ws_message(
         cap,
         json.dumps(
-            {"id": "1", "type": "set_override", "room": "kit", "config": {"vad_enabled": False}}
+            {"id": "1", "type": "set_override", "node": "kit", "config": {"vad_enabled": False}}
         ),
     )
     assert cap.sent[0] == {"type": "ack", "id": "1", "ok": False, "error": cap.sent[0]["error"]}
@@ -169,7 +173,7 @@ async def test_set_override_applies_when_controls_on(tmp_path, monkeypatch):
             {
                 "id": "2",
                 "type": "set_override",
-                "room": "kit",
+                "node": "kit",
                 "config": {"wakeword_threshold": 0.7},
             }
         ),
@@ -186,74 +190,107 @@ async def test_set_override_rejects_unknown_keys(tmp_path, monkeypatch):
     cap = _Cap()
     await dash._handle_ws_message(
         cap,
-        json.dumps({"id": "3", "type": "set_override", "room": "kit", "config": {"api_key": "x"}}),
+        json.dumps({"id": "3", "type": "set_override", "node": "kit", "config": {"api_key": "x"}}),
     )
     assert cap.sent[0]["ok"] is False and "unsupported" in cap.sent[0]["error"]
 
 
-def test_display_name_set_validate_clear(tmp_path, monkeypatch):
+def test_configured_flag_tracks_override(tmp_path, monkeypatch):
     monkeypatch.setenv("KENZY_HOME", str(tmp_path))
     s = AudioServer({})
-    s.set_display_name("kitchen", "The Kitchen")
-    assert s.read_node_names() == {"kitchen": "The Kitchen"}
-    with pytest.raises(ValueError):
-        s.set_display_name("../x", "X")
-    with pytest.raises(ValueError):
-        s.set_display_name("kitchen", "x" * 65)
-    s.set_display_name("kitchen", "")  # clears
-    assert s.read_node_names() == {}
-
-
-async def test_set_name_via_ws_surfaces_in_state(tmp_path, monkeypatch):
-    monkeypatch.setenv("KENZY_HOME", str(tmp_path))
-    s = AudioServer({})
-    s._nodes["kitchen"] = NodeSession(ws=_StubWS(), room_id="kitchen")
+    s._nodes["kitchen"] = NodeSession(ws=_StubWS(), node_id="kitchen", room_id="kitchen")
     dash = Dashboard(s, {}, DashboardConfig(enabled=True, controls=True))
     assert dash._nodes_state()[0]["configured"] is False  # fresh node is unconfigured
-
-    cap = _Cap()
-    await dash._handle_ws_message(
-        cap, json.dumps({"id": "1", "type": "set_name", "room": "kitchen", "name": "Kitchen"})
-    )
-    assert any(m.get("type") == "ack" and m["ok"] for m in cap.sent)
-    node = dash._nodes_state()[0]
-    assert node["display_name"] == "Kitchen" and node["configured"] is True
+    s.write_node_override("kitchen", {"wakeword_threshold": 0.7})
+    assert dash._nodes_state()[0]["configured"] is True
 
 
-async def test_set_name_gated_by_controls(tmp_path, monkeypatch):
+def test_migrate_room_keyed_files(tmp_path, monkeypatch):
     monkeypatch.setenv("KENZY_HOME", str(tmp_path))
     s = AudioServer({})
-    dash = Dashboard(s, {}, DashboardConfig(enabled=True, controls=False))
+    # Pre-split override keyed by the room name.
+    s.write_node_override("kitchen", {"wakeword_threshold": 0.7})
+    # First connect under a stable node_id adopts it.
+    s._migrate_room_keyed_files("node-xyz", "kitchen")
+    assert s.read_node_override("node-xyz") == {"wakeword_threshold": 0.7}
+    assert s.read_node_override("kitchen") == {}  # old file moved
+
+
+async def test_set_room_via_ws_pushes_and_reflects(tmp_path, monkeypatch):
+    monkeypatch.setenv("KENZY_HOME", str(tmp_path))
+    s = AudioServer({})
+    node = _Cap()  # records frames sent to the node
+    s._nodes["n-1"] = NodeSession(ws=node, node_id="n-1", room_id="kitchen")
+    on = Dashboard(s, {}, DashboardConfig(enabled=True, controls=True))
+
     cap = _Cap()
-    await dash._handle_ws_message(
-        cap, json.dumps({"id": "1", "type": "set_name", "room": "k", "name": "X"})
+    await on._handle_ws_message(
+        cap, json.dumps({"id": "1", "type": "set_room", "node": "n-1", "name": "office"})
+    )
+    assert any(m.get("type") == "ack" and m["ok"] for m in cap.sent)
+    assert {m["type"] for m in node.sent} == {"set_room"}  # pushed to the node
+    assert node.sent[0]["room_id"] == "office"
+    assert s._nodes["n-1"].room_id == "office"  # reflected server-side immediately
+
+    # Gated by controls.
+    off = Dashboard(s, {}, DashboardConfig(enabled=True, controls=False))
+    cap = _Cap()
+    await off._handle_ws_message(
+        cap, json.dumps({"id": "2", "type": "set_room", "node": "n-1", "name": "den"})
     )
     assert cap.sent[0]["ok"] is False
-    assert s.read_node_names() == {}
+
+    # Invalid (empty) name → error ack, nothing pushed.
+    cap = _Cap()
+    await on._handle_ws_message(
+        cap, json.dumps({"id": "3", "type": "set_room", "node": "n-1", "name": "  "})
+    )
+    assert cap.sent[0]["ok"] is False
+
+
+async def test_set_room_persists_for_offline_node(tmp_path, monkeypatch):
+    # Room is server-owned: setting it for a not-yet-connected node stores it and
+    # it's pulled on connect (pre-seed / reimage workflow).
+    monkeypatch.setenv("KENZY_HOME", str(tmp_path))
+    s = AudioServer({})
+    assert await s.set_room("ghost", "office") is True
+    assert s.read_node_override("ghost") == {"room_id": "office"}
+    assert s._effective_node_config("ghost")["room_id"] == "office"
+
+
+def test_write_node_override_preserves_room(tmp_path, monkeypatch):
+    # An editor save (tuning keys) must not wipe the server-managed room_id.
+    monkeypatch.setenv("KENZY_HOME", str(tmp_path))
+    s = AudioServer({})
+    s._write_override_file("kit", {"room_id": "kitchen"})
+    s.write_node_override("kit", {"wakeword_threshold": 0.7})
+    saved = s.read_node_override("kit")
+    assert saved["room_id"] == "kitchen"
+    assert saved["wakeword_threshold"] == 0.7
 
 
 async def test_controls_gated_and_dispatched(tmp_path, monkeypatch):
     s = AudioServer({})
     node = _Cap()  # records frames the server sends to the node
-    s._nodes["kit"] = NodeSession(ws=node, room_id="kit")
+    s._nodes["kit"] = NodeSession(ws=node, node_id="kit", room_id="kit")
 
     # controls off → refused, nothing sent to the node
     off = Dashboard(s, {}, DashboardConfig(enabled=True, controls=False))
     cap = _Cap()
-    await off._handle_ws_message(cap, json.dumps({"id": "1", "type": "restart", "room": "kit"}))
+    await off._handle_ws_message(cap, json.dumps({"id": "1", "type": "restart", "node": "kit"}))
     assert cap.sent[0]["ok"] is False and node.sent == []
 
     # controls on → dispatched to the node
     on = Dashboard(s, {}, DashboardConfig(enabled=True, controls=True))
     cap = _Cap()
     for i, t in enumerate(("trigger", "stop", "restart")):
-        await on._handle_ws_message(cap, json.dumps({"id": str(i), "type": t, "room": "kit"}))
+        await on._handle_ws_message(cap, json.dumps({"id": str(i), "type": t, "node": "kit"}))
     assert all(m["ok"] for m in cap.sent if m["type"] == "ack")
     assert {m["type"] for m in node.sent} == {"trigger", "stop", "restart"}
 
-    # unknown room → ok False
+    # unknown node → ok False
     cap = _Cap()
-    await on._handle_ws_message(cap, json.dumps({"id": "9", "type": "stop", "room": "ghost"}))
+    await on._handle_ws_message(cap, json.dumps({"id": "9", "type": "stop", "node": "ghost"}))
     assert cap.sent[0]["ok"] is False
 
 
@@ -272,8 +309,8 @@ async def test_announce_streams_to_all_nodes(monkeypatch):
 
     s = TranscribingServer({"tts": {"url": "http://tts/speak"}})
     a, b = _RecWS(), _RecWS()
-    s._nodes["a"] = NodeSession(ws=a, room_id="a")
-    s._nodes["b"] = NodeSession(ws=b, room_id="b")
+    s._nodes["a"] = NodeSession(ws=a, node_id="a", room_id="a")
+    s._nodes["b"] = NodeSession(ws=b, node_id="b", room_id="b")
 
     async def fake_synth(text, vp):
         return b"\x00\x01\x02\x03"
@@ -295,7 +332,7 @@ async def test_announce_ws_gated_empty_and_ok(monkeypatch):
     from kenzy.server.server import TranscribingServer
 
     s = TranscribingServer({"tts": {"url": "http://tts/speak"}})
-    s._nodes["a"] = NodeSession(ws=_RecWS(), room_id="a")
+    s._nodes["a"] = NodeSession(ws=_RecWS(), node_id="a", room_id="a")
 
     off = Dashboard(s, {}, DashboardConfig(enabled=True, controls=False))
     cap = _Cap()
@@ -354,7 +391,7 @@ async def test_request_node_logs_roundtrip():
         async def send(self, raw):
             captured["req"] = json.loads(raw)
 
-    sess = NodeSession(ws=_NodeWS(), room_id="kit")
+    sess = NodeSession(ws=_NodeWS(), node_id="kit", room_id="kit")
     s._nodes["kit"] = sess
 
     async def driver():
@@ -391,6 +428,97 @@ async def test_dashboard_log_routes():
     assert d2._tail_server_logs(_req("/api/logs")) == []
 
 
+def _server_yaml(tmp_path, pw_hash: str):
+    p = tmp_path / "server.yaml"
+    p.write_text(
+        "dashboard:\n"
+        "  enabled: true\n"
+        "  auth:\n"
+        '    username: "admin"\n'
+        f'    password_hash: "{pw_hash}"\n'
+    )
+    return p
+
+
+def test_settings_state_fields(tmp_path):
+    pw = hash_password("password")
+    cfg = {
+        "stt": {"url": "http://127.0.0.1:8767/transcribe"},
+        "discovery": {"enabled": True, "instance": "kenzy-server", "token": "t"},
+    }
+    s = AudioServer(cfg)
+    path = _server_yaml(tmp_path, pw)
+    d = Dashboard(
+        s,
+        cfg,
+        DashboardConfig(enabled=True, controls=True, auth_username="admin", auth_password_hash=pw),
+        config_path=path,
+    )
+    st = d._settings_state()
+    assert st["username"] == "admin"
+    assert st["server"]["port"] == 8765
+    assert st["dashboard"]["port"] == 8770
+    assert st["discovery"]["auth_required"] is True
+    assert st["flags"]["controls"] is True
+    assert {svc["name"] for svc in st["services"]} == {"stt"}
+    assert st["can_set_password"] is True
+
+
+def test_settings_state_without_config_path():
+    d = Dashboard(AudioServer({}), {}, DashboardConfig(enabled=True))
+    assert d._settings_state()["can_set_password"] is False
+
+
+async def test_settings_endpoint_requires_auth():
+    d = Dashboard(AudioServer({}), {}, DashboardConfig(enabled=True, auth_token="secret"))
+    r = await d.process_request(None, _req("/api/settings"))
+    assert r.status_code == 401
+    r = await d.process_request(None, _req("/api/settings", bearer="secret"))
+    assert r.status_code == 200
+    assert "version" in json.loads(r.body)
+
+
+async def test_set_password_via_ws(tmp_path):
+    pw = hash_password("password")
+    path = _server_yaml(tmp_path, pw)
+    s = AudioServer({})
+    d = Dashboard(
+        s,
+        {},
+        DashboardConfig(enabled=True, auth_username="admin", auth_password_hash=pw),
+        config_path=path,
+    )
+
+    # Wrong current password → refused, nothing written.
+    cap = _Cap()
+    await d._handle_ws_message(
+        cap, json.dumps({"id": "1", "type": "set_password", "current": "nope", "new": "longenough"})
+    )
+    assert cap.sent[0]["ok"] is False and "incorrect" in cap.sent[0]["error"]
+    assert d._dcfg.auth_password_hash == pw
+
+    # Too-short new password → refused before verifying current.
+    cap = _Cap()
+    await d._handle_ws_message(
+        cap, json.dumps({"id": "2", "type": "set_password", "current": "password", "new": "ab"})
+    )
+    assert cap.sent[0]["ok"] is False
+
+    # Correct current + valid new → applied live and persisted to server.yaml.
+    cap = _Cap()
+    await d._handle_ws_message(
+        cap,
+        json.dumps({"id": "3", "type": "set_password", "current": "password", "new": "s3cret!!"}),
+    )
+    assert cap.sent[0]["ok"] is True
+    from kenzy.serviceauth import verify_password
+
+    assert d._dcfg.auth_password_hash != pw
+    assert verify_password("s3cret!!", d._dcfg.auth_password_hash)
+    assert d._cookie_secret == d._dcfg.auth_password_hash  # sessions invalidated
+    assert d._dcfg.auth_password_hash in path.read_text()  # written through
+
+
 async def test_ws_live_channel_requires_auth_and_pushes():
     pw = hash_password("password")
     server = AudioServer({})
@@ -420,10 +548,12 @@ async def test_ws_live_channel_requires_auth_and_pushes():
             snap = json.loads(await asyncio.wait_for(ws.recv(), 2))
             assert snap["type"] == "state" and snap["data"]["nodes"] == []
 
-            server._nodes["kitchen"] = NodeSession(ws=_StubWS(), room_id="kitchen")
+            server._nodes["kitchen"] = NodeSession(
+                ws=_StubWS(), node_id="kitchen", room_id="kitchen"
+            )
             server._notify_state()
             push = json.loads(await asyncio.wait_for(ws.recv(), 2))
-            assert any(n["room_id"] == "kitchen" for n in push["data"]["nodes"])
+            assert any(n["node_id"] == "kitchen" for n in push["data"]["nodes"])
     finally:
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)

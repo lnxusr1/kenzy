@@ -49,6 +49,21 @@ def packaged_config(service: str) -> Path:
     return _PACKAGED_CONFIGS / f"{service}.yaml"
 
 
+def writable_config_path(service: str, resolved: Path) -> Path:
+    """Return a writable config path for ``service`` given its ``resolved`` path.
+
+    Used when a service needs to persist back into its own config (e.g. a node
+    writing its generated ``node_id``). ``resolved`` is returned as-is unless it
+    is the packaged read-only default, in which case writes are redirected to
+    ``kenzy_home()/configs/<service>.yaml``.
+    """
+    try:
+        resolved.resolve().relative_to(_PACKAGED_CONFIGS.resolve())
+    except ValueError:
+        return resolved  # a real user/dev/explicit path — write in place
+    return kenzy_home() / "configs" / f"{service}.yaml"
+
+
 def resolve_config(service: str, explicit: str | None = None) -> Path:
     """Resolve the config file path for ``service``.
 

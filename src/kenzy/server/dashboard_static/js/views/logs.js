@@ -10,14 +10,14 @@ function fmtTime(ts) {
 export function LogsView() {
   const { data } = useFleet();
   const services = ((data && data.services) || []).map((s) => s.name);
-  const nodes = ((data && data.nodes) || []).map((n) => n.room_id);
+  const nodes = (data && data.nodes) || [];
   const sources = [
     { id: "server", label: "Server", url: "/api/logs" },
     ...services.map((n) => ({ id: `svc:${n}`, label: `service · ${n}`, url: `/api/services/${n}/logs` })),
-    ...nodes.map((r) => ({
-      id: `node:${r}`,
-      label: `node · ${r}`,
-      url: `/api/rooms/${encodeURIComponent(r)}/logs`,
+    ...nodes.map((n) => ({
+      id: `node:${n.node_id}`,
+      label: `node · ${n.room || n.node_id}`,
+      url: `/api/nodes/${encodeURIComponent(n.node_id)}/logs`,
     })),
   ];
 

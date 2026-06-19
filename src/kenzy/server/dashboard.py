@@ -16,6 +16,7 @@ import asyncio
 import base64
 import binascii
 import hmac
+import importlib.metadata
 import json
 import logging
 import secrets
@@ -93,10 +94,20 @@ def _service_targets(cfg: dict[str, Any]) -> dict[str, str]:
 class Dashboard:
     """Serves the read-only fleet/health dashboard over HTTP."""
 
-    def __init__(self, server: AudioServer, cfg: dict[str, Any], dcfg: DashboardConfig) -> None:
+    def __init__(
+        self,
+        server: AudioServer,
+        cfg: dict[str, Any],
+        dcfg: DashboardConfig,
+        config_path: Path | str | None = None,
+    ) -> None:
         self._server = server
         self._dcfg = dcfg
         self._service_urls = _service_targets(cfg)
+        self._discovery = cfg.get("discovery", {}) or {}
+        # Path to server.yaml, so the Settings page can persist a password change
+        # (None when the server was started without a resolvable config file).
+        self._config_path = Path(config_path) if config_path else None
         # Cookie-signing key: the password hash is a stable server-side secret, so
         # sessions survive restarts and a password change invalidates them. Fall
         # back to a per-process random key when no password is configured.
@@ -173,17 +184,16 @@ class Dashboard:
     # ------------------------------------------------------------------
 
     def _nodes_state(self) -> list[dict[str, Any]]:
-        names = self._server.read_node_names()
         nodes: list[dict[str, Any]] = []
-        for room_id, session in sorted(self._server._nodes.items()):
-            has_override = self._server.read_node_override(room_id) != {}
+        for node_id, session in sorted(self._server._nodes.items()):
+            has_override = self._server.read_node_override(node_id) != {}
             addr = getattr(session.ws, "remote_address", None)
             nodes.append(
                 {
-                    "room_id": room_id,
-                    "display_name": names.get(room_id),
+                    "node_id": node_id,
+                    "room": session.room_id,
                     "ip": addr[0] if addr else None,
-                    "configured": room_id in names or has_override,
+                    "configured": has_override,
                     "connected": True,
                     "streaming": bool(session.streaming),
                     "session_id": session.session_id,
@@ -227,6 +237,55 @@ class Dashboard:
                 "controls": self._dcfg.controls,
             },
         }
+
+    def _settings_state(self) -> dict[str, Any]:
+        """Read-only server/dashboard info shown on the Settings page."""
+        try:
+            version = importlib.metadata.version("kenzy")
+        except importlib.metadata.PackageNotFoundError:
+            version = "dev"
+        return {
+            "version": version,
+            "username": self._dcfg.auth_username,
+            "server": {"host": self._server._host, "port": self._server._port},
+            "dashboard": {"bind": self._dcfg.bind, "port": self._dcfg.port},
+            "discovery": {
+                "enabled": bool(self._discovery.get("enabled", True)),
+                "instance": str(self._discovery.get("instance", "kenzy-server")),
+                "auth_required": bool(self._discovery.get("token")),
+            },
+            "services": [
+                {"name": n, "url": u[: -len("/health")]} for n, u in self._service_urls.items()
+            ],
+            "flags": {
+                "controls": self._dcfg.controls,
+                "logs": self._dcfg.logs,
+                "tuning": self._dcfg.tuning,
+            },
+            # The Settings password form is only offered when we can persist it.
+            "can_set_password": self._config_path is not None and self._config_path.is_file(),
+        }
+
+    def _set_password(self, new_password: str) -> None:
+        """Persist a new dashboard password to server.yaml and apply it live.
+
+        Rewrites ``dashboard.auth.password_hash`` (preserving comments via
+        :func:`kenzy.passwd.set_auth`) and updates the in-memory hash + cookie
+        secret so it takes effect immediately — no restart. Because the signing
+        secret changes, existing sessions are invalidated and must sign in again.
+        """
+        if self._config_path is None or not self._config_path.is_file():
+            raise OSError("server.yaml not found — cannot persist the password")
+        from kenzy.passwd import set_auth
+        from kenzy.serviceauth import hash_password
+
+        username = self._dcfg.auth_username or "admin"
+        new_hash = hash_password(new_password)
+        text = self._config_path.read_text()
+        self._config_path.write_text(set_auth(text, username, new_hash))
+        self._dcfg.auth_username = username
+        self._dcfg.auth_password_hash = new_hash
+        self._cookie_secret = new_hash
 
     # ------------------------------------------------------------------
     # HTTP handling (via the websockets process_request hook)
@@ -279,18 +338,27 @@ class Dashboard:
         if path == "/api/state":
             return self._json(200, await self._state())
 
-        if path.startswith("/api/rooms/") and path.endswith("/config"):
-            room = path[len("/api/rooms/") : -len("/config")]
+        if path == "/api/settings":
+            if not self._authorized_mutation(request):
+                return self._json(401, {"error": "auth required"})
+            return self._json(200, self._settings_state())
+
+        if path.startswith("/api/nodes/") and path.endswith("/config"):
+            node_id = path[len("/api/nodes/") : -len("/config")]
             try:
-                cfg = self._server._effective_node_config(room)
-                override = self._server.read_node_override(room)
+                cfg = self._server._effective_node_config(node_id)
+                override = self._server.read_node_override(node_id)
             except Exception:
                 cfg, override = {}, {}
+            session = self._server._nodes.get(node_id)
             return self._json(
                 200,
                 {
-                    "room_id": room,
-                    "display_name": self._server.read_node_names().get(room),
+                    "node_id": node_id,
+                    # Room is server-owned: fall back to the stored override room
+                    # when the node is offline so it's editable before it connects.
+                    "room": session.room_id if session else override.get("room_id"),
+                    "connected": session is not None,
                     "config": cfg,
                     "override": override,
                     "editable": self._server.allowed_override_keys(),
@@ -305,9 +373,9 @@ class Dashboard:
             name = path[len("/api/services/") : -len("/logs")]
             return self._json(200, {"logs": await self._service_logs(name, request)})
 
-        if path.startswith("/api/rooms/") and path.endswith("/logs"):
-            room = path[len("/api/rooms/") : -len("/logs")]
-            return self._json(200, await self._node_logs(room, request))
+        if path.startswith("/api/nodes/") and path.endswith("/logs"):
+            node_id = path[len("/api/nodes/") : -len("/logs")]
+            return self._json(200, await self._node_logs(node_id, request))
 
         if path.startswith("/api/"):
             return self._json(404, {"error": "unknown endpoint"})
@@ -354,11 +422,11 @@ class Dashboard:
         except Exception:
             return []
 
-    async def _node_logs(self, room: str, request: Request) -> dict[str, Any]:
+    async def _node_logs(self, node_id: str, request: Request) -> dict[str, Any]:
         if not self._dcfg.logs:
             return {"logs": [], "reachable": False}
         level, limit = self._log_query(request)
-        entries = await self._server.request_node_logs(room, level, limit)
+        entries = await self._server.request_node_logs(node_id, level, limit)
         return {"logs": entries or [], "reachable": entries is not None}
 
     # ------------------------------------------------------------------
@@ -408,36 +476,37 @@ class Dashboard:
         if mtype == "set_override":
             if not self._dcfg.controls:
                 return await ack(False, "controls are disabled (set dashboard.controls: true)")
-            room = str(msg.get("room", ""))
+            node = str(msg.get("node", ""))
             try:
-                self._server.write_node_override(room, msg.get("config") or {})
+                self._server.write_node_override(node, msg.get("config") or {})
             except (ValueError, OSError) as exc:
                 return await ack(False, str(exc))
-            applied = await self._server.push_config(room)  # live re-push if connected
+            applied = await self._server.push_config(node)  # live re-push if connected
             await ack(True)
             await self._broadcast_state()
             await connection.send(
-                json.dumps({"type": "override_saved", "room": room, "applied_live": applied})
+                json.dumps({"type": "override_saved", "node": node, "applied_live": applied})
             )
-        elif mtype == "set_name":
+        elif mtype == "set_room":
             if not self._dcfg.controls:
                 return await ack(False, "controls are disabled (set dashboard.controls: true)")
             try:
-                self._server.set_display_name(str(msg.get("room", "")), str(msg.get("name", "")))
-            except (ValueError, OSError) as exc:
+                ok = await self._server.set_room(str(msg.get("node", "")), str(msg.get("name", "")))
+            except ValueError as exc:
                 return await ack(False, str(exc))
-            await ack(True)
-            await self._broadcast_state()
+            await ack(ok, None if ok else "node not connected")
+            if ok:
+                await self._broadcast_state()
         elif mtype in ("trigger", "stop", "restart"):
             if not self._dcfg.controls:
                 return await ack(False, "controls are disabled (set dashboard.controls: true)")
-            room = str(msg.get("room", ""))
+            node = str(msg.get("node", ""))
             action = {
                 "trigger": self._server.trigger_node,
                 "stop": self._server.stop_node,
                 "restart": self._server.restart_node,
             }[mtype]
-            ok = await action(room)
+            ok = await action(node)
             await ack(ok, None if ok else "node not connected")
         elif mtype == "announce":
             if not self._dcfg.controls:
@@ -451,6 +520,22 @@ class Dashboard:
             else:
                 await ack(False, "no nodes reachable or TTS not configured")
             await connection.send(json.dumps({"type": "announce_result", "count": count}))
+        elif mtype == "set_password":
+            # Account self-service — allowed for any signed-in user (not gated by
+            # `controls`), but the current password must be re-supplied.
+            current = str(msg.get("current", ""))
+            new = str(msg.get("new", ""))
+            if len(new) < 4:
+                return await ack(False, "new password must be at least 4 characters")
+            if self._dcfg.auth_password_hash is None or not serviceauth.verify_password(
+                current, self._dcfg.auth_password_hash
+            ):
+                return await ack(False, "current password is incorrect")
+            try:
+                self._set_password(new)
+            except (ValueError, OSError) as exc:
+                return await ack(False, str(exc))
+            await ack(True)
         else:
             await ack(False, f"unknown message type: {mtype!r}")
 

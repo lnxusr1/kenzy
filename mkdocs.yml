@@ -29,6 +29,7 @@ nav:
   - Home: index.md
   - Getting Started: getting-started.md
   - Architecture: architecture.md
+  - Dashboard: dashboard.md
   - Configuration:
     - Overview: configuration/index.md
     - Node: configuration/node.md

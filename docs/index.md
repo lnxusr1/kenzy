@@ -10,6 +10,7 @@ Kenzy is a distributed home voice assistant built as six independently deployabl
 - **Extensible skills** — add new capabilities by dropping a Python file in `skills/`; no registration required
 - **LLM-agnostic** — works with OpenAI, Anthropic, Ollama, LM Studio, and any provider supported by LiteLLM
 - **Conversation history** — per-room rolling context window so follow-up questions resolve naturally
+- **Web dashboard** — an opt-in fleet manager: live health, per-node config + room rename, controls, announcements, and logs in one place
 
 ## Services at a glance
 
@@ -26,5 +27,6 @@ Kenzy is a distributed home voice assistant built as six independently deployabl
 
 - [Getting Started](getting-started.md) — install, configure, and run your first session
 - [Architecture](architecture.md) — how the pieces fit together
+- [Dashboard](dashboard.md) — the opt-in web fleet manager
 - [Skills](skills/index.md) — extend Kenzy with custom capabilities
 - [Deployment](deployment.md) — push to a fleet of remote hosts with `kenzy-deploy`

@@ -8,8 +8,9 @@ All notable changes to this project will be documented in this file.
 
 - **PyPI install path.** Default service configs, `.env.example`, and the built-in skills now ship inside the package; `kenzy-init` scaffolds a config home (`~/.config/kenzy`) from them. A new `kenzy.config` resolver finds configs via `$KENZY_HOME` → `./configs` → `~/.config/kenzy` → packaged default, so services run from a plain `pip install` with no source checkout.
 - **mDNS discovery.** The server advertises `_kenzy._tcp` (`python-zeroconf`); a node with no `server_url` auto-discovers it, and `room_id` defaults to the hostname. An explicit `server_url` still skips discovery.
-- **Config-pull over WebSocket.** On connect, `hello` carries the node's identity, audio capabilities, and an optional join `token`; the server replies with the node's effective config (`node_defaults` + per-room `configs/nodes/<room>.yaml`). Live-tunable values apply immediately; an optional `discovery.token` gates the join.
-- **Opt-in web dashboard** served by `kenzy-server` (`dashboard.enabled`, off by default — zero overhead when off): read-only fleet/health view of connected nodes and backend services.
+- **Config-pull over WebSocket.** On connect, `hello` carries the node's identity, audio capabilities, and an optional join `token`; the server replies with the node's effective config (`node_defaults` + per-node `configs/nodes/<node_id>.yaml`). Live-tunable values apply immediately; an optional `discovery.token` gates the join.
+- **Stable node identity (`node_id`).** Each node generates and persists a stable `node_id` (written to its `node.yaml` on first run); the server now keys the registry, per-node config overrides, and all controls on it instead of the room name. `room_id` becomes the human **room name** — editable from the dashboard (pushed to the node and persisted), sent to the assistant as context, and used as the node's label throughout the UI. Pre-split, room-named override files auto-migrate to the `node_id` key on first connect.
+- **Opt-in web dashboard** served by `kenzy-server` (`dashboard.enabled`, off by default — zero overhead when off): a full fleet manager — login auth (`kenzy-passwd`), live fleet/health view, per-node config editor with room rename, Trigger/Stop/Restart, TTS announcements, a pull-based log viewer, and a Settings page (system info, feature flags, password change). Secrets are never served to nodes.
 - **`kenzy-deploy` install modes.** New `install_mode: source|pypi` (per host or global) plus `--local` (force source) and `--version` (pin a PyPI release); pypi mode pushes only `configs/` and installs `kenzy[extras]` from PyPI.
 - `kenzy-init` command and the `kenzy.discovery` module; `zeroconf` added to the `node` and `server` extras.
 
@@ -19,7 +20,7 @@ All notable changes to this project will be documented in this file.
 - Built-in skills moved into the package (`kenzy/llm/builtin_skills/`); the skill loader now loads built-ins first, then your `skills.dir` overlay (same-named files override built-ins), with `skills.disabled` applying to both.
 - `kenzy-deploy` re-roots on the `deploy.yaml` location (config-root) instead of `pyproject.toml`, so pypi-mode deploys work without a source tree.
 - `build_pypi.sh` builds via `python -m build` (the v3 project has no `setup.py`).
-- Documentation updated throughout (getting-started, configuration, architecture, deployment, skills).
+- Documentation updated throughout (getting-started, configuration, architecture, deployment, skills) and a new **Dashboard** guide added.
 
 ## [3.0.0]
 

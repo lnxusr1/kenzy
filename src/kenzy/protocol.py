@@ -25,6 +25,7 @@ MSG_ACK = "ack"
 MSG_TTS_START = "tts_start"
 MSG_TTS_END = "tts_end"
 MSG_RESTART = "restart"
+MSG_SET_ROOM = "set_room"
 MSG_REQUEST_LOGS = "request_logs"
 MSG_LOGS = "logs"
 
@@ -46,11 +47,20 @@ FRAME_BYTES: int = FRAME_SAMPLES * SAMPLE_WIDTH  # 2 560 bytes
 
 def hello(
     room_id: str,
+    node_id: str | None = None,
     version: str = "1.0",
     capabilities: dict[str, Any] | None = None,
     token: str | None = None,
 ) -> str:
+    """Node→server registration.
+
+    ``room_id`` is the human room *name* (sent to the backends as context).
+    ``node_id`` is the node's stable primary identifier; when omitted the server
+    falls back to using ``room_id`` as the key (legacy nodes).
+    """
     payload: dict[str, Any] = {"type": MSG_HELLO, "room_id": room_id, "version": version}
+    if node_id is not None:
+        payload["node_id"] = node_id
     if capabilities is not None:
         payload["capabilities"] = capabilities
     if token is not None:
@@ -97,6 +107,11 @@ def stop() -> str:
 
 def restart() -> str:
     return json.dumps({"type": MSG_RESTART})
+
+
+def set_room(room_id: str) -> str:
+    """Server→node: set the node's room name (the node persists + applies it)."""
+    return json.dumps({"type": MSG_SET_ROOM, "room_id": room_id})
 
 
 def request_logs(request_id: str, level: str = "", limit: int = 200) -> str:

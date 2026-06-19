@@ -1,6 +1,13 @@
 # Kenzy room node configuration
+#
+# This file is BOOTSTRAP-ONLY. A node pulls its full operational config (audio
+# device, sample rates, wakeword models/threshold/VAD, sounds, VAD timing, and
+# its room name) from the server on every boot, and does not initialize audio
+# until that config arrives. Configure all of that from the dashboard, keyed by
+# this node's node_id; the keys below are only what the node needs to start up,
+# log, and reach the server.
 
-# Logging
+# Logging (used immediately, before server config arrives)
 # log_level controls the kenzy logger (debug, info, warning, error).
 # verbose: true also enables debug output from websockets/asyncio/sounddevice.
 log_level: "info"
@@ -14,73 +21,37 @@ server_url: null
 # mDNS discovery (used only when server_url is unset)
 discovery:
   enabled: true
+  # Shared-secret join token; must match the server's discovery.token if set.
+  # token: ""
 
-# Unique identifier for this room/node. Leave null to default to the hostname.
-room_id: null
+# Stable primary identifier for this node. Generated on first run (or assigned
+# at install via `kenzy-init --node-id`) and kept across restarts. The server
+# keys this node's config, controls, and room name on it.
+node_id: "c130ef9c-2a66-4306-9ac4-0a4c80c979ce"
 
-# Audio device for both capture and playback.
-# Use a substring of the device name as shown by sounddevice (PortAudio names,
-# not ALSA hw: tags).  A device index integer also works.  null = system default.
-# Example: "Anker PowerConf S330"
-audio_device: null
+# ---------------------------------------------------------------------------
+# Everything below is SERVER-OWNED and normally configured from the dashboard
+# (pulled on connect). Values set here act only as a pre-connect fallback for
+# any key the server does not push; uncomment a key only if you need that.
+# ---------------------------------------------------------------------------
 
-# Sample rate used to open the microphone input stream.
-# Set to match the device's native rate if it doesn't support 16000 Hz.
-# Captured audio is automatically resampled to 16000 Hz before processing.
-# Common values: 16000 (default), 44100, 48000
-capture_sample_rate: 16000
+# Room name (e.g. "kitchen"). Server-owned: set it from the dashboard. Falls
+# back to the hostname until the server provides one.
+# room_id: null
 
-# Sample rate used to open the speaker output stream.
-# Set to match the device's native rate if it doesn't support 24000 Hz.
-# TTS audio from the server (24000 Hz) is automatically resampled for playback.
-# Common values: 24000 (default), 44100, 48000
-playback_sample_rate: 24000
-
-# WAV file to play on activation.
-# Absolute/relative path to a custom file, or null to use the bundled ready.wav.
-sound_ready: null
-
-# WAV file to play while waiting for the server response (after the user speaks).
-# Plays once and stops naturally, or is cut off when TTS begins or the wake word fires.
-# Set to null to disable (pure silence while waiting).
-sound_waiting: null
-
-# openwakeword model files to load.
-# Provide a list of absolute paths to override the bundled models.
-# Leave empty (or omit) to use the two bundled .tflite models:
-#   hey_kenzie.tflite  /  ken_zee.tflite
-wakeword_models: []
-
-# Confidence threshold [0.0–1.0] above which a wake-word fires.
-# With wakeword_vad_threshold enabled below, this can be lowered (~0.4) to catch
-# more natural/quieter pronunciations without reintroducing silence false-positives.
-wakeword_threshold: 0.5
-
-# openwakeword Silero VAD gate [0.0–1.0]. For every audio frame a voice-activity
-# score is computed, and wake-word predictions are discarded unless that score
-# exceeds this value. 0 disables it (default). Set to ~0.5 to suppress spurious
-# wake-word hits on near-silence/noise. The Silero VAD model is downloaded
-# automatically at first startup.
-wakeword_vad_threshold: 0.0
-
-# Set to false to disable VAD entirely. The node will stream continuously after
-# activation until the server sends a STOP command (hard_cap_ms does not apply).
-vad_enabled: true
-
-# RMS amplitude below which a sample is considered silence.
-# 16-bit PCM range is 0–32767; 50 is very quiet, 200 is conversational noise floor.
-silence_rms_threshold: 50
-
-# Milliseconds of consecutive silence that ends an active session (post-speech).
-silence_ms: 400
-
-# Minimum milliseconds of speech that must be heard before silence detection
-# is enabled. Prevents the session ending during the pause after the wake word.
-speech_min_ms: 400
-
-# Milliseconds to wait for speech before giving up (no_speech timeout).
-# Applies only when speech_min_ms worth of speech has not yet been heard.
-no_speech_timeout_ms: 15000
-
-# Hard upper limit on session length in milliseconds.
-hard_cap_ms: 30000
+# Audio device for both capture and playback (PortAudio substring or index;
+# null = system default). Example: "Anker PowerConf S330"
+# audio_device: null
+# capture_sample_rate: 16000      # mic open rate; resampled to 16000 internally
+# playback_sample_rate: 24000     # speaker open rate; TTS (24000) resampled to it
+# sound_ready: null               # activation chime (path, or null = bundled)
+# sound_waiting: null             # processing sound (path, or null = silent)
+# wakeword_models: []             # paths to .tflite/.onnx; empty = bundled
+# wakeword_threshold: 0.5         # confidence [0-1] to fire the wake word
+# wakeword_vad_threshold: 0.0     # Silero VAD gate [0-1]; 0 disables
+# vad_enabled: true               # false = stream until server STOP
+# silence_rms_threshold: 50       # RMS below this is silence (0-32767)
+# silence_ms: 400                 # consecutive silence that ends a session
+# speech_min_ms: 400              # min speech before silence detection arms
+# no_speech_timeout_ms: 15000     # give up if no speech after activation
+# hard_cap_ms: 30000              # unconditional session length ceiling (VAD)

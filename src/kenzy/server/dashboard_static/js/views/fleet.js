@@ -27,9 +27,13 @@ function AnnounceBar() {
     </div>`;
 }
 
+function shortId(id) {
+  return id && id.length > 12 ? id.slice(0, 8) + "…" : id;
+}
+
 function NodeCard({ node, onConfigure }) {
   const streaming = node.streaming;
-  const title = node.display_name || node.room_id;
+  const title = node.room || node.node_id;
   return html`
     <div class="card">
       <div class="top">
@@ -38,13 +42,13 @@ function NodeCard({ node, onConfigure }) {
         <span class=${"badge" + (streaming ? " streaming" : "")}>${streaming ? "streaming" : "idle"}</span>
       </div>
       <dl>
-        ${node.display_name ? html`<dt>room id</dt><dd>${node.room_id}</dd>` : null}
+        <dt>node</dt><dd title=${node.node_id}>${shortId(node.node_id)}</dd>
         <dt>address</dt><dd>${node.ip || "—"}</dd>
         <dt>session</dt><dd>${node.session_id || "—"}</dd>
         <dt>link</dt><dd>${node.connected ? "connected" : "down"}</dd>
       </dl>
       ${!node.configured ? html`<div class="unclaimed">⚑ unconfigured</div>` : null}
-      <button class="btn-ghost card-cfg" onClick=${() => onConfigure(node.room_id)}>Configure</button>
+      <button class="btn-ghost card-cfg" onClick=${() => onConfigure(node.node_id)}>Configure</button>
     </div>
   `;
 }
@@ -86,7 +90,7 @@ export function FleetView({ onConfigure }) {
       <header><h2>Room nodes</h2><span class="rule"></span></header>
       ${nodes.length
         ? html`<div class="grid">${nodes.map(
-            (n) => html`<${NodeCard} key=${n.room_id} node=${n} onConfigure=${onConfigure} />`,
+            (n) => html`<${NodeCard} key=${n.node_id} node=${n} onConfigure=${onConfigure} />`,
           )}</div>`
         : html`<div class="empty">No nodes connected yet.</div>`}
     </section>

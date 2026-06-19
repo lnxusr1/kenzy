@@ -12,6 +12,7 @@ import argparse
 import json
 import re
 import shutil
+import uuid
 from pathlib import Path
 
 from kenzy.config import SERVICES, kenzy_home, packaged_config
@@ -39,13 +40,17 @@ def _copy(src: Path, dst: Path, force: bool) -> str:
     return "write"
 
 
-def _set_room_id(node_yaml: Path, room: str) -> None:
-    """Set ``room_id:`` in the scaffolded node.yaml (replacing the template line)."""
-    value = json.dumps(room)  # double-quoted scalar: safe for spaces/special chars
+def _set_node_id(node_yaml: Path, node_id: str) -> None:
+    """Set ``node_id:`` in the scaffolded node.yaml (replacing the template line).
+
+    The template ships ``node_id`` commented out, so the live-key regex won't
+    match and we append a real key. A re-run with --force replaces it in place.
+    """
+    value = json.dumps(node_id)  # double-quoted scalar: safe for special chars
     text = node_yaml.read_text()
-    new, n = re.subn(r"(?m)^room_id:.*$", f"room_id: {value}", text)
-    if n == 0:  # template without a room_id line — append one
-        new = text.rstrip("\n") + f"\nroom_id: {value}\n"
+    new, n = re.subn(r"(?m)^node_id:.*$", f"node_id: {value}", text)
+    if n == 0:  # only the commented template line — append a real key
+        new = text.rstrip("\n") + f"\nnode_id: {value}\n"
     node_yaml.write_text(new)
 
 
@@ -64,26 +69,30 @@ def _enable_dashboard(server_yaml: Path) -> None:
 def scaffold(
     home: Path,
     force: bool = False,
-    room: str | None = None,
+    node_id: str | None = None,
     profile: str = "all",
     enable_dashboard: bool = False,
 ) -> None:
     home = home.expanduser()
     print(f"Scaffolding Kenzy config home: {home}  (profile: {profile})")
 
-    # A node needs only its own identity + audio config; everything else (other
-    # service configs, .env secrets, skills, data) lives on the server.
+    # A node needs only its bootstrap config (identity + how to reach the server);
+    # everything operational (audio, wakeword, sounds, room name) is pulled from
+    # the server on every boot. Other service configs/secrets live on the server.
     node_only = profile == "node"
     services = ["node"] if node_only else SERVICES
 
     for svc in services:
         action = _copy(packaged_config(svc), home / "configs" / f"{svc}.yaml", force)
         print(f"  [{action}] configs/{svc}.yaml")
-        # Bake the chosen room name into a freshly written node.yaml. Skip when the
-        # file pre-existed (and not --force) so a re-run never clobbers a custom id.
-        if svc == "node" and room and action == "write":
-            _set_room_id(home / "configs" / "node.yaml", room)
-            print(f"  [edit ] configs/node.yaml (room_id: {room})")
+        # Bake a stable node_id into a freshly written node.yaml so the node's
+        # server-side config can be pre-seeded by that id. Use the supplied id, or
+        # generate one and print it. Skip when the file pre-existed (and not
+        # --force) so a re-run never clobbers an existing identity.
+        if svc == "node" and action == "write":
+            nid = node_id or str(uuid.uuid4())
+            _set_node_id(home / "configs" / "node.yaml", nid)
+            print(f"  [edit ] configs/node.yaml (node_id: {nid})")
         # Turn the dashboard on in a freshly written server.yaml (installer handoff).
         if svc == "server" and enable_dashboard and action == "write":
             _enable_dashboard(home / "configs" / "server.yaml")
@@ -107,19 +116,14 @@ def scaffold(
         readme.write_text(_SKILLS_README)
     print("  [dir ] skills/")
 
-    # Per-room node overrides (config-pull): configs/nodes/<room_id>.yaml
+    # Per-node overrides (config-pull) live in configs/nodes/<node_id>.yaml — keyed
+    # by the node's stable node_id, which isn't known until the node first connects
+    # (it's auto-generated then). So we create the directory but no stub here; create
+    # a node's override from the dashboard once it has connected, or pre-seed it by
+    # node_id (see the --node-id plan in design/centralized-config.md).
     nodes_dir = home / "configs" / "nodes"
     nodes_dir.mkdir(parents=True, exist_ok=True)
     print("  [dir ] configs/nodes/")
-    if room:
-        stub = nodes_dir / f"{room}.yaml"
-        if not stub.exists() or force:
-            stub.write_text(
-                f"# Per-room overrides for '{room}'. The server shallow-merges these\n"
-                "# over node_defaults (server.yaml) and pushes them to the node on\n"
-                "# connect (config-pull). Add any node.yaml tuning keys here.\n"
-            )
-            print(f"  [write] configs/nodes/{room}.yaml")
 
     for sub in _DATA_DIRS:
         (home / "data" / sub).mkdir(parents=True, exist_ok=True)
@@ -147,11 +151,12 @@ def main() -> None:
         help="Overwrite existing config and .env files",
     )
     parser.add_argument(
-        "--room",
+        "--node-id",
         default=None,
-        metavar="NAME",
-        help="Room/node id to bake into configs/node.yaml (default: the node's "
-        "hostname at runtime). Also creates a configs/nodes/<NAME>.yaml stub.",
+        metavar="ID",
+        help="Stable node_id to bake into configs/node.yaml (default: a generated "
+        "uuid, printed so you can pre-seed configs/nodes/<id>.yaml on the server). "
+        "The node's room name is set later from the dashboard, not at install.",
     )
     parser.add_argument(
         "--profile",
@@ -171,7 +176,7 @@ def main() -> None:
     scaffold(
         home,
         force=args.force,
-        room=args.room,
+        node_id=args.node_id,
         profile=args.profile,
         enable_dashboard=args.enable_dashboard,
     )

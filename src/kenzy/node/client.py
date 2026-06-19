@@ -35,6 +35,7 @@ import json
 import logging
 import os
 import queue
+import re
 import socket
 import sys
 import uuid
@@ -64,6 +65,43 @@ _STATE_TTS = "tts"
 
 # Rate at which the server sends TTS PCM (fixed by the TTS service).
 _TTS_SERVER_RATE = 24_000
+
+
+def _set_yaml_scalar(text: str, key: str, value: str) -> str:
+    """Update or append a top-level scalar ``key: value`` in a YAML document.
+
+    Preserves the rest of the file (comments and layout) — a regex edit, not a
+    redump. ``value`` is JSON-quoted, which is valid YAML.
+    """
+    quoted = json.dumps(value)
+    pattern = re.compile(rf"(?m)^{re.escape(key)}:.*$")
+    if pattern.search(text):
+        return pattern.sub(f"{key}: {quoted}", text, count=1)
+    sep = "" if text == "" or text.endswith("\n") else "\n"
+    return f"{text}{sep}{key}: {quoted}\n"
+
+
+def _ensure_node_id(cfg: dict[str, Any], config_path: Path | None) -> str:
+    """Return the node's stable ``node_id``, generating + persisting one if absent.
+
+    A generated id is written back into ``config_path`` (``node.yaml``) so the
+    node keeps the same identity across restarts even though its room name may
+    change.
+    """
+    existing = cfg.get("node_id")
+    if existing:
+        return str(existing)
+    node_id = str(uuid.uuid4())
+    cfg["node_id"] = node_id
+    if config_path is not None:
+        try:
+            text = config_path.read_text() if config_path.is_file() else ""
+            config_path.parent.mkdir(parents=True, exist_ok=True)
+            config_path.write_text(_set_yaml_scalar(text, "node_id", node_id))
+            log.info("Generated node_id %s (saved to %s)", node_id, config_path)
+        except OSError as exc:
+            log.warning("Generated node_id %s but could not save it (%s)", node_id, exc)
+    return node_id
 
 
 def _resample(audio: np.ndarray[Any, Any], from_rate: int, to_rate: int) -> np.ndarray[Any, Any]:
@@ -262,7 +300,10 @@ class NodeClient:
     forever with exponential-backoff reconnection.
     """
 
-    def __init__(self, cfg: dict[str, Any]) -> None:
+    def __init__(self, cfg: dict[str, Any], config_path: Path | None = None) -> None:
+        # Path to this node's writable config file, for persisting identity
+        # (node_id) and a server-pushed room name. None ⇒ no write-back.
+        self._config_path: Path | None = config_path
         # server_url is optional: when unset (or empty), the node discovers the
         # server over mDNS. An explicit value short-circuits discovery.
         self._server_url: str | None = cfg.get("server_url") or None
@@ -270,8 +311,12 @@ class NodeClient:
         self._discovery_enabled: bool = bool(_disc.get("enabled", True))
         # Shared-secret presented in hello; must match the server's discovery.token.
         self._join_token: str | None = _disc.get("token") or None
-        # Identity defaults to the hostname so a fresh node needs no config.
+        # Room name defaults to the hostname so a fresh node needs no config; it is
+        # the human label sent to the backends and is editable from the dashboard.
         self._room_id: str = str(cfg.get("room_id") or socket.gethostname())
+        # Stable primary identifier (generated/persisted in main()); falls back to
+        # the room name if a caller constructs the client without ensuring one.
+        self._node_id: str = str(cfg.get("node_id") or self._room_id)
         self._wakeword_models: list[str] = cfg.get("wakeword_models", [])
         self._wakeword_threshold: float = float(cfg.get("wakeword_threshold", 0.5))
         # openwakeword Silero VAD gate: predictions are suppressed unless the VAD
@@ -317,6 +362,12 @@ class NodeClient:
         self._ws: ClientConnection | None = None
         self._oww: Any = None  # openwakeword Model
         self._player: _SoundPlayer | None = None
+        # Audio hardware is built lazily, only after the first server config frame
+        # arrives (zero-config nodes pull all hardware keys from the server). Until
+        # then the node blocks: no mic, no wakeword, no playback.
+        self._audio_ready: bool = False
+        self._input_stream: sd.InputStream | None = None
+        self._audio_task: asyncio.Task[None] | None = None
         # Opt-in log ring buffer for the dashboard log viewer; attached only when
         # the server asks (config `keep_logs: true`), so a dashboard-less server
         # induces no node-side overhead.
@@ -490,6 +541,18 @@ class NodeClient:
     # Receive loop – inbound server messages → _cmd_q / _tts_q
     # ------------------------------------------------------------------
 
+    def _persist_config_key(self, key: str, value: str) -> None:
+        """Write a top-level scalar back into this node's config file (best effort)."""
+        path = self._config_path
+        if path is None:
+            return
+        try:
+            text = path.read_text() if path.is_file() else ""
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(_set_yaml_scalar(text, key, value))
+        except OSError as exc:
+            log.warning("Could not persist %s to %s: %s", key, path, exc)
+
     def _set_log_capture(self, on: bool) -> None:
         """Attach/detach the dashboard log ring buffer (idempotent)."""
         if on and self._log_buffer is None:
@@ -500,16 +563,28 @@ class NodeClient:
             logging.getLogger("kenzy").removeHandler(self._log_buffer)
             self._log_buffer = None
 
-    def _apply_pulled_config(self, patch: dict[str, Any]) -> None:
+    def _apply_pulled_config(self, patch: dict[str, Any], initial: bool = False) -> None:
         """Apply server-pushed config to the running node.
 
-        Only live-tunable parameters (thresholds and VAD timing) take effect
-        immediately. Hardware/identity keys (audio_device, sample rates,
-        wakeword models/VAD gate, sounds) need a restart and are reported but
-        not applied live.
+        Live-tunable parameters (thresholds and VAD timing) always take effect
+        immediately. Hardware/identity keys (audio_device, sample rates, wakeword
+        models/VAD gate, sounds) are applied **only on the initial pull** — the
+        node now initializes audio *after* this first config arrives, so those
+        keys must be in place before ``_init_audio`` runs. A later live change to
+        a hardware key is reported as needing a restart, not applied in place.
         """
         applied: list[str] = []
         fm = protocol.FRAME_MS
+
+        # Room name is server-owned: adopt + persist it whenever the server pushes
+        # a new one (on connect or via a live rename).
+        if "room_id" in patch:
+            new_room = str(patch["room_id"] or "").strip()
+            if new_room and new_room != self._room_id:
+                log.info("Server set room name: '%s' → '%s'", self._room_id, new_room)
+                self._room_id = new_room
+                self._persist_config_key("room_id", new_room)
+                applied.append("room_id")
 
         if "wakeword_threshold" in patch:
             self._wakeword_threshold = float(patch["wakeword_threshold"])
@@ -546,7 +621,35 @@ class NodeClient:
             "sound_ready",
             "sound_waiting",
         }
-        deferred = sorted(restart_keys & patch.keys())
+
+        if initial:
+            # First pull, before audio is built: apply hardware/identity keys to
+            # the instance so _init_audio constructs the stream from them.
+            if "audio_device" in patch:
+                self._audio_device = patch["audio_device"]
+                applied.append("audio_device")
+            if "capture_sample_rate" in patch:
+                self._capture_rate = int(patch["capture_sample_rate"])
+                applied.append("capture_sample_rate")
+            if "playback_sample_rate" in patch:
+                self._playback_rate = int(patch["playback_sample_rate"])
+                applied.append("playback_sample_rate")
+            if "wakeword_models" in patch:
+                self._wakeword_models = list(patch["wakeword_models"] or [])
+                applied.append("wakeword_models")
+            if "wakeword_vad_threshold" in patch:
+                self._wakeword_vad_threshold = float(patch["wakeword_vad_threshold"])
+                applied.append("wakeword_vad_threshold")
+            if "sound_ready" in patch:
+                self._sound_ready = str(patch["sound_ready"] or "ready.wav")
+                applied.append("sound_ready")
+            if "sound_waiting" in patch:
+                sw = patch["sound_waiting"]
+                self._sound_waiting = str(sw) if sw else None
+                applied.append("sound_waiting")
+            deferred: list[str] = []
+        else:
+            deferred = sorted(restart_keys & patch.keys())
 
         if applied:
             log.info("Applied server config: %s", ", ".join(applied))
@@ -608,6 +711,13 @@ class NodeClient:
 
             elif mtype == protocol.MSG_TTS_END:
                 await self._end_tts(reason="complete")
+
+            elif mtype == protocol.MSG_SET_ROOM:
+                new_room = str(msg.get("room_id", "")).strip()
+                if new_room and new_room != self._room_id:
+                    log.info("Server set room name: '%s' → '%s'", self._room_id, new_room)
+                    self._room_id = new_room
+                    self._persist_config_key("room_id", new_room)
 
             elif mtype == protocol.MSG_RESTART:
                 # Re-exec ourselves: re-reads config and re-inits audio, with no
@@ -732,54 +842,39 @@ class NodeClient:
         return url
 
     # ------------------------------------------------------------------
-    # Per-connection session
+    # Audio hardware (built lazily after the first config pull)
     # ------------------------------------------------------------------
 
-    async def _run_session(self, ws: ClientConnection) -> None:
-        self._ws = ws
+    async def _read_initial_config(self, ws: ClientConnection) -> dict[str, Any]:
+        """Read inbound frames until the first ``config`` frame, returning its body.
 
-        # Drain stale commands from a previous session.
-        while not self._cmd_q.empty():
+        Any other control messages that arrive first are buffered onto ``_cmd_q``
+        so the command loop sees them once it starts; binary frames (TTS) are
+        ignored — none should precede config on a fresh connection.
+        """
+        while True:
+            raw = await ws.recv()
+            if isinstance(raw, bytes):
+                continue
             try:
-                self._cmd_q.get_nowait()
-            except asyncio.QueueEmpty:
-                break
-
-        capabilities = {
-            "audio_device": self._audio_device,
-            "capture_sample_rate": self._capture_rate,
-            "playback_sample_rate": self._playback_rate,
-        }
-        await ws.send(
-            protocol.hello(self._room_id, capabilities=capabilities, token=self._join_token)
-        )
-        log.info("Connected; sent hello as room '%s'", self._room_id)
-
-        recv_task = asyncio.create_task(self._recv_loop(ws), name="recv")
-        cmd_task = asyncio.create_task(self._cmd_loop(), name="cmd")
-        try:
-            await asyncio.wait({recv_task, cmd_task}, return_when=asyncio.FIRST_COMPLETED)
-        finally:
-            # Close the socket first so _recv_loop's ws.recv() unblocks via
-            # ConnectionClosed rather than being hard-cancelled mid-handshake.
+                msg = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+            if msg.get("type") == protocol.MSG_CONFIG:
+                return msg.get("config") or {}
             try:
-                await asyncio.wait_for(ws.close(), timeout=2.0)
-            except Exception:
+                self._cmd_q.put_nowait(msg)
+            except asyncio.QueueFull:
                 pass
-            recv_task.cancel()
-            cmd_task.cancel()
-            try:
-                await asyncio.gather(recv_task, cmd_task, return_exceptions=True)
-            except asyncio.CancelledError:
-                pass
-            self._ws = None
 
-    # ------------------------------------------------------------------
-    # Main entry point
-    # ------------------------------------------------------------------
+    async def _init_audio(self) -> None:
+        """Build wakeword model, sounds, output player, and mic input stream.
 
-    async def run(self) -> None:
+        Called once, after the first server config has been applied. Subsequent
+        hardware-key changes require a restart (which re-runs this from scratch).
+        """
         self._load_wakeword()
+
         sound_audio, sound_rate = _load_sound(self._sound_ready)
         self._player = _SoundPlayer(
             sound_audio, sound_rate, self._audio_device, self._playback_rate
@@ -808,66 +903,145 @@ class NodeClient:
         else:
             log.info("Waiting sound disabled — silence during processing")
 
-        audio_task = asyncio.create_task(self._audio_loop(), name="audio")
+        # Scale the blocksize so each callback still delivers ~80 ms of audio
+        # regardless of the capture rate (e.g. 3840 samples at 48 kHz).
+        capture_blocksize = int(protocol.FRAME_SAMPLES * self._capture_rate // protocol.SAMPLE_RATE)
+        self._input_stream = sd.InputStream(
+            samplerate=self._capture_rate,
+            channels=protocol.CHANNELS,
+            dtype="int16",
+            blocksize=capture_blocksize,
+            device=self._audio_device,
+            callback=self._audio_callback,
+        )
+        self._input_stream.start()
+        self._audio_task = asyncio.create_task(self._audio_loop(), name="audio")
+        self._audio_ready = True
+        log.info("Audio initialized from server config — node is live")
 
-        try:
-            # Scale the blocksize so each callback still delivers ~80 ms of audio
-            # regardless of the capture rate (e.g. 3840 samples at 48 kHz).
-            capture_blocksize = int(
-                protocol.FRAME_SAMPLES * self._capture_rate // protocol.SAMPLE_RATE
+    # ------------------------------------------------------------------
+    # Per-connection session
+    # ------------------------------------------------------------------
+
+    async def _run_session(self, ws: ClientConnection) -> None:
+        self._ws = ws
+
+        # Drain stale commands from a previous session.
+        while not self._cmd_q.empty():
+            try:
+                self._cmd_q.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+
+        capabilities = {
+            "audio_device": self._audio_device,
+            "capture_sample_rate": self._capture_rate,
+            "playback_sample_rate": self._playback_rate,
+        }
+        await ws.send(
+            protocol.hello(
+                self._room_id,
+                node_id=self._node_id,
+                capabilities=capabilities,
+                token=self._join_token,
             )
-            with sd.InputStream(
-                samplerate=self._capture_rate,
-                channels=protocol.CHANNELS,
-                dtype="int16",
-                blocksize=capture_blocksize,
-                device=self._audio_device,
-                callback=self._audio_callback,
-            ):
-                delay = 1
-                while True:
-                    try:
-                        server_url = await self._resolve_server_url()
-                        ws = await websockets.connect(server_url)
-                        delay = 1
-                        await self._run_session(ws)
+        )
+        log.info("Connected; sent hello as room '%s' (node %s)", self._room_id, self._node_id)
 
-                    except (
-                        websockets.exceptions.WebSocketException,
-                        OSError,
-                        ConnectionRefusedError,
-                    ) as exc:
-                        log.warning("Connection error: %s", exc)
+        # Zero-config bootstrap: on the very first connection, block until the
+        # server pushes our config, then build the audio hardware from it. On
+        # later reconnects audio already exists; the fresh config frame arrives
+        # via the normal recv/cmd path and is applied live (hardware deferred).
+        if not self._audio_ready:
+            log.info("Waiting for server config before initializing audio…")
+            cfg = await asyncio.wait_for(self._read_initial_config(ws), timeout=20.0)
+            self._apply_pulled_config(cfg, initial=True)
+            await self._init_audio()
 
-                    except asyncio.CancelledError:
-                        raise  # propagate; outer finally handles cleanup
+        recv_task = asyncio.create_task(self._recv_loop(ws), name="recv")
+        cmd_task = asyncio.create_task(self._cmd_loop(), name="cmd")
+        try:
+            await asyncio.wait({recv_task, cmd_task}, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            # Close the socket first so _recv_loop's ws.recv() unblocks via
+            # ConnectionClosed rather than being hard-cancelled mid-handshake.
+            try:
+                await asyncio.wait_for(ws.close(), timeout=2.0)
+            except Exception:
+                pass
+            recv_task.cancel()
+            cmd_task.cancel()
+            try:
+                await asyncio.gather(recv_task, cmd_task, return_exceptions=True)
+            except asyncio.CancelledError:
+                pass
+            self._ws = None
 
-                    except Exception as exc:
-                        log.error("Unexpected error: %s", exc, exc_info=True)
+    # ------------------------------------------------------------------
+    # Main entry point
+    # ------------------------------------------------------------------
 
-                    finally:
-                        if self._state == _STATE_STREAMING:
-                            self._state = _STATE_IDLE
-                            self._session_id = None
+    async def run(self) -> None:
+        # Audio hardware is NOT built here. The node connects first, pulls its
+        # config from the server, and only then initializes audio (in
+        # _init_audio, on the first connection). Until the server is reachable
+        # and answers, the node blocks in this reconnect/backoff loop.
+        try:
+            delay = 1
+            while True:
+                try:
+                    server_url = await self._resolve_server_url()
+                    ws = await websockets.connect(server_url)
+                    delay = 1
+                    await self._run_session(ws)
 
-                    log.info("Reconnecting in %d s…", delay)
-                    await asyncio.sleep(delay)
-                    delay = min(delay * 2, 60)
+                except TimeoutError:
+                    log.warning("Timed out waiting for server config; retrying")
+
+                except (
+                    websockets.exceptions.WebSocketException,
+                    OSError,
+                    ConnectionRefusedError,
+                ) as exc:
+                    log.warning("Connection error: %s", exc)
+
+                except asyncio.CancelledError:
+                    raise  # propagate; outer finally handles cleanup
+
+                except Exception as exc:
+                    log.error("Unexpected error: %s", exc, exc_info=True)
+
+                finally:
+                    if self._state == _STATE_STREAMING:
+                        self._state = _STATE_IDLE
+                        self._session_id = None
+
+                log.info("Reconnecting in %d s…", delay)
+                await asyncio.sleep(delay)
+                delay = min(delay * 2, 60)
 
         finally:
             # Guaranteed cleanup regardless of how we exit (normal return,
             # CancelledError from connect or sleep, unexpected exception).
-            audio_task.cancel()
-            try:
-                await asyncio.gather(audio_task, return_exceptions=True)
-            except asyncio.CancelledError:
-                pass
+            if self._audio_task is not None:
+                self._audio_task.cancel()
+                try:
+                    await asyncio.gather(self._audio_task, return_exceptions=True)
+                except asyncio.CancelledError:
+                    pass
             if self._tts_task and not self._tts_task.done():
                 self._tts_task.cancel()
                 try:
                     await self._tts_task
                 except asyncio.CancelledError:
                     pass
+            if self._input_stream is not None:
+                try:
+                    self._input_stream.stop()
+                    self._input_stream.close()
+                except Exception:
+                    pass
+                self._input_stream = None
             if self._player:
                 self._player.close()
                 self._player = None
@@ -895,11 +1069,11 @@ def main() -> None:
 
     import yaml  # type: ignore[import-untyped]
 
-    from kenzy.config import resolve_config
+    from kenzy.config import resolve_config, writable_config_path
 
     config_path = resolve_config("node", sys.argv[1] if len(sys.argv) > 1 else None)
     with open(config_path) as fh:
-        cfg = yaml.safe_load(fh)
+        cfg = yaml.safe_load(fh) or {}
 
     log_level: int = getattr(logging, str(cfg.get("log_level", "info")).upper(), logging.INFO)
     verbose: bool = bool(cfg.get("verbose", False))
@@ -910,8 +1084,13 @@ def main() -> None:
     logging.basicConfig(level=log_level if verbose else logging.WARNING, format=fmt)
     logging.getLogger("kenzy").setLevel(log_level)
 
+    # Ensure a stable node_id, persisting a generated one to a writable config
+    # file (redirected out of the packaged read-only default if needed).
+    write_path = writable_config_path("node", config_path)
+    _ensure_node_id(cfg, write_path)
+
     try:
-        asyncio.run(NodeClient(cfg).run())
+        asyncio.run(NodeClient(cfg, config_path=write_path).run())
     except KeyboardInterrupt:
         pass
 

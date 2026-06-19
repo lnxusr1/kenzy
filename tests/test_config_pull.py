@@ -8,6 +8,7 @@ import json
 
 import pytest
 import websockets
+import yaml
 
 from kenzy import protocol
 from kenzy.node.client import NodeClient
@@ -63,6 +64,43 @@ def test_apply_pulled_config_updates_live_params():
     assert node._capture_rate == protocol.SAMPLE_RATE
 
 
+def test_apply_pulled_config_initial_applies_hardware_keys():
+    # On the FIRST pull (before audio is built), hardware keys are applied so
+    # _init_audio constructs the stream from server-pushed values.
+    node = NodeClient({})
+    node._apply_pulled_config(
+        {
+            "audio_device": "USB Mic",
+            "capture_sample_rate": 48000,
+            "playback_sample_rate": 44100,
+            "wakeword_models": ["/m/custom.onnx"],
+            "wakeword_vad_threshold": 0.5,
+            "sound_ready": "ding.wav",
+            "sound_waiting": "",  # falsy → disabled
+            "wakeword_threshold": 0.7,  # live keys still apply on the initial pull
+        },
+        initial=True,
+    )
+    assert node._audio_device == "USB Mic"
+    assert node._capture_rate == 48000
+    assert node._playback_rate == 44100
+    assert node._wakeword_models == ["/m/custom.onnx"]
+    assert node._wakeword_vad_threshold == 0.5
+    assert node._sound_ready == "ding.wav"
+    assert node._sound_waiting is None
+    assert node._wakeword_threshold == 0.7
+
+
+def test_apply_pulled_config_adopts_room(tmp_path):
+    # Room name is server-owned: the node adopts + persists it from the config frame.
+    cfg_path = tmp_path / "node.yaml"
+    cfg_path.write_text('node_id: "n-1"\n')
+    node = NodeClient({"node_id": "n-1", "room_id": "kitchen"}, config_path=cfg_path)
+    node._apply_pulled_config({"room_id": "office"})
+    assert node._room_id == "office"
+    assert yaml.safe_load(cfg_path.read_text())["room_id"] == "office"
+
+
 # ---------------------------------------------------------------------------
 # End-to-end over the WebSocket protocol
 # ---------------------------------------------------------------------------
@@ -92,6 +130,48 @@ async def test_config_pushed_after_hello(tmp_path, monkeypatch):
             assert msg["type"] == protocol.MSG_CONFIG
             assert msg["config"]["wakeword_threshold"] == 0.7  # override
             assert msg["config"]["silence_ms"] == 400          # default
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+async def test_config_pushed_even_when_empty(tmp_path, monkeypatch):
+    # A zero-config node (no defaults, no override) must still receive a config
+    # frame — it blocks on this frame before initializing audio.
+    monkeypatch.setenv("KENZY_HOME", str(tmp_path))
+    (tmp_path / "configs").mkdir(parents=True)
+    server = AudioServer({"host": "127.0.0.1", "port": 8796})
+    task = await _serve(server)
+    try:
+        async with websockets.connect("ws://127.0.0.1:8796") as ws:
+            await ws.send(protocol.hello("kitchen", node_id="n-zero"))
+            msg = json.loads(await asyncio.wait_for(ws.recv(), timeout=2.0))
+            assert msg["type"] == protocol.MSG_CONFIG
+            assert msg["config"] == {}
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+async def test_node_id_is_registry_key(tmp_path, monkeypatch):
+    monkeypatch.setenv("KENZY_HOME", str(tmp_path))
+    nodes = tmp_path / "configs" / "nodes"
+    nodes.mkdir(parents=True)
+    # Override keyed by node_id (not the room name) is the one that's served.
+    (nodes / "n-42.yaml").write_text("wakeword_threshold: 0.9\n")
+    server = AudioServer({
+        "host": "127.0.0.1", "port": 8797,
+        "node_defaults": {"wakeword_threshold": 0.5},
+    })
+    task = await _serve(server)
+    try:
+        async with websockets.connect("ws://127.0.0.1:8797") as ws:
+            await ws.send(protocol.hello("kitchen", node_id="n-42"))
+            msg = json.loads(await asyncio.wait_for(ws.recv(), timeout=2.0))
+            assert msg["config"]["wakeword_threshold"] == 0.9  # keyed by node_id
+            await asyncio.sleep(0.05)
+            assert "n-42" in server._nodes  # registry keyed by node_id
+            assert server._nodes["n-42"].room_id == "kitchen"
     finally:
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
