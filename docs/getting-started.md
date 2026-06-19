@@ -9,6 +9,17 @@
 sudo apt-get install libportaudio2 portaudio19-dev
 ```
 
+!!! warning "Room-node hardware"
+    Wake-word, voice activity detection, and reliable audio streaming need a board with enough CPU/RAM headroom. Tested/confirmed room-node boards:
+
+    - **Orange Pi Zero 3 / Zero 3W** (recommended low-cost option)
+    - **Raspberry Pi 3, 4, or 5**
+
+    The backend services (server/STT/LLM/TTS/speaker) require a more powerful machine for local inference — run those on a different machine or configure to them to use cloud services for optimum experience.
+
+!!! tip "Use a speakerphone with hardware AEC"
+    Strongly prefer a USB **speakerphone with built-in acoustic echo cancellation (AEC)** as the node's combined mic+speaker (a conference speakerphone works well). Kenzy does **not** perform AEC itself, so without it the node hears its own TTS playback — causing false wakes / self-interruption — and you'd have to add echo cancellation outside Kenzy. Set the chosen device with `audio_device` (find the name via `kenzy-devices`).
+
 ## Quick install
 
 The fastest way to get a host running is the bootstrapper. It creates a per-user virtualenv under `~/.local/share/kenzy`, installs the services you choose from PyPI, downloads the inference models, scaffolds your config home at `~/.config/kenzy`, and links the `kenzy-*` commands into `~/.local/bin`:
@@ -48,7 +59,7 @@ cd kenzy
 python3 -m venv .venv
 source .venv/bin/activate
 
-# Room node only (Pi Zero 2 W, Pi 4, etc.)
+# Room node only (Orange Pi Zero 3/3W, Raspberry Pi 3/4/5)
 pip install -e ".[node]"
 
 # Full server stack (STT, TTS, LLM, speaker ID)

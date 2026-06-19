@@ -23,7 +23,8 @@ All notable changes to this project will be documented in this file.
 - Built-in skills moved into the package (`kenzy/llm/builtin_skills/`); the skill loader now loads built-ins first, then your `skills.dir` overlay (same-named files override built-ins), with `skills.disabled` applying to both.
 - `kenzy-deploy` re-roots on the `deploy.yaml` location (config-root) instead of `pyproject.toml`, so pypi-mode deploys work without a source tree.
 - `build_pypi.sh` builds via `python -m build` (the v3 project has no `setup.py`).
-- Documentation updated throughout (getting-started, configuration, architecture, deployment, skills) and a new **Dashboard** guide added; centralized config, zero-config nodes, and the log viewer documented across the node/server/service references.
+- **Wake word.** The bundled default is now a single model, `hey_ken_zee.tflite` (the previous `hey_kenzie.tflite` / `ken_zee.tflite` models were removed); custom `wakeword_models` still override it.
+- Documentation updated throughout (getting-started, configuration, architecture, deployment, skills) and a new **Dashboard** guide added; centralized config, zero-config nodes, and the log viewer documented across the node/server/service references. Added room-node hardware guidance (tested boards: Orange Pi Zero 3/3W or Raspberry Pi 3/4/5) and a recommendation to use a speakerphone with hardware AEC. Docs site restyled to the Kenzy palette via `extra_css`.
 
 ## [3.0.0]
 

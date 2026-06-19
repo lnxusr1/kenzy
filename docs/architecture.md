@@ -124,4 +124,4 @@ The tool-calling loop executes skills sequentially until the model returns a pla
 
 ## Wake-word models
 
-Two `.tflite` models ship with the package: `hey_kenzie.tflite` (loaded by default) and `ken_zee.tflite`. Custom models (`.tflite` or `.onnx`) can be specified via `wakeword_models` in `configs/node.yaml`; the inference framework is inferred from the file extension.
+One `.tflite` model ships with the package and is loaded by default: `hey_ken_zee.tflite` (wake phrase "hey Kenzie"). Custom models (`.tflite` or `.onnx`) can be specified via `wakeword_models` in `configs/node.yaml`; the inference framework is inferred from the file extension.

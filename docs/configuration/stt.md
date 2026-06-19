@@ -36,8 +36,8 @@ The STT service accepts POST requests with base64-encoded PCM audio and returns 
 | `medium` | ~1.5 GB | Slow on CPU | Recommended with a GPU |
 | `large-v3` | ~3 GB | Slow | Best accuracy; GPU strongly recommended |
 
-!!! tip "Raspberry Pi"
-    On a Pi Zero 2 W, run the STT service on a more powerful server and point `stt.url` in `server.yaml` at it. The `tiny` or `base` model on a modern x86 CPU gives acceptable latency.
+!!! tip "Run STT off the node"
+    Don't run STT on a room-node board (Orange Pi Zero 3 / Raspberry Pi 3–5) — run it on a more powerful server and point `stt.url` in `server.yaml` at it. The `tiny` or `base` model on a modern x86 CPU gives acceptable latency.
 
 ## Example
 

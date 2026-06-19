@@ -26,7 +26,7 @@ The node service runs on each room device. It captures microphone audio, detects
 
 | Key | Default | Description |
 |---|---|---|
-| `wakeword_models` | `[]` | List of paths to `.tflite` or `.onnx` model files. Empty uses the bundled `hey_kenzie.tflite` |
+| `wakeword_models` | `[]` | List of paths to `.tflite` or `.onnx` model files. Empty uses the bundled `hey_ken_zee.tflite` |
 | `wakeword_threshold` | `0.5` | Confidence threshold [0.0–1.0] above which a detection fires |
 | `wakeword_vad_threshold` | `0.0` | openwakeword Silero VAD gate [0.0–1.0]. Wake-word predictions are discarded unless the voice-activity score exceeds this. `0` disables it. Set to ~`0.5` to suppress false detections on near-silence/noise. With it enabled you can safely *lower* `wakeword_threshold` (e.g. `0.4`) for better real-speech sensitivity without reintroducing silence false-positives. The Silero VAD model is downloaded automatically by `kenzy-setup`. |
 
@@ -53,6 +53,9 @@ The node service runs on each room device. It captures microphone audio, detects
 
 !!! tip "Finding the right device name"
     Run `kenzy-devices` after install. It tests every PortAudio device against Kenzy's required sample rates and prints ready-to-paste `node.yaml` settings including `capture_sample_rate` and `playback_sample_rate` if resampling is needed.
+
+!!! tip "Prefer a speakerphone with hardware AEC"
+    Use a USB **speakerphone with built-in acoustic echo cancellation** as the node's mic+speaker. Kenzy does not cancel echo itself, so without hardware AEC the node hears its own TTS playback and may falsely wake or interrupt — otherwise you must handle echo cancellation outside Kenzy.
 
 !!! tip "Custom wake word"
     Custom wake word models can be trained at [openWakeWord](https://github.com/dscripka/openWakeWord) and pointed to via `wakeword_models`. Both `.tflite` and `.onnx` formats are supported.

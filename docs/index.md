@@ -1,6 +1,6 @@
 # KENZY
 
-Kenzy is a distributed home voice assistant built as six independently deployable microservices. Wake-word detection runs locally on low-power room nodes (Raspberry Pi Zero 2 W or similar). Audio streams over WebSocket to a central server that runs the full speech-to-text → LLM → text-to-speech pipeline and streams synthesized speech back to the room.
+Kenzy is a distributed home voice assistant built as six independently deployable microservices. Wake-word detection runs locally on low-power room nodes (Orange Pi Zero 3 / 3W or Raspberry Pi 3 / 4 / 5). Audio streams over WebSocket to a central server that runs the full speech-to-text → LLM → text-to-speech pipeline and streams synthesized speech back to the room.
 
 ## Key features
 

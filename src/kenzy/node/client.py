@@ -123,9 +123,9 @@ def _resample(audio: np.ndarray[Any, Any], from_rate: int, to_rate: int) -> np.n
 
 
 def _bundled_model_paths() -> list[str]:
-    """Return real filesystem path to the bundled hey_kenzie.tflite wake-word model."""
+    """Return real filesystem path to the bundled hey_ken_zee.tflite wake-word model."""
     model_dir = files("kenzy.node").joinpath("models")
-    return [str(model_dir.joinpath("hey_kenzie.tflite"))]
+    return [str(model_dir.joinpath("hey_ken_zee.tflite"))]
 
 
 def _infer_framework(model_paths: list[str]) -> str:
