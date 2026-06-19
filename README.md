@@ -125,16 +125,18 @@ only). It is plaintext HTTP on a LAN bind, so **do not port-forward it**. See th
 
 ## Configuration
 
-All config files live in `configs/`. Copy and edit as needed — the defaults are reasonable starting points.
+The server is the configuration authority for the whole fleet. Nodes and the backend
+services pull their config from it at boot and are edited from the dashboard; the YAML
+files below are the server-side store and the seed defaults.
 
 Key settings:
 
-* **`configs/node.yaml`** — wake word threshold, VAD silence detection, audio device selection, sound files. A node gets a stable auto-generated `node_id` and pulls its tuning from the server on connect; `room_id` is the room name (sent to the assistant, editable from the dashboard)
-* **`configs/server.yaml`** — URLs for each downstream service; omit a URL to disable that stage
-* **`configs/llm.yaml`** — LLM model (supports OpenAI, Anthropic, Ollama, and any LiteLLM provider), system prompt, location context, per-skill config
-* **`configs/stt.yaml`** — Whisper model size and compute device
-* **`configs/tts.yaml`** — OpenAI TTS model and voice
-* **`configs/speaker.yaml`** — similarity threshold for speaker identification
+* **`configs/node.yaml`** — **bootstrap-only** (identity + how to reach the server + early logging). A node auto-generates a stable `node_id`, then blocks until the server pushes its full operational config (audio device, wake-word threshold/VAD, sounds, room name) and initializes audio from that. Per-node overrides live in `configs/nodes/<node_id>.yaml`; the room name is server-owned and set from the dashboard.
+* **`configs/server.yaml`** — URLs for each downstream service (omit a URL to disable that stage), `node_defaults`, discovery, and the dashboard block
+* **`configs/services/<svc>.yaml`** — server-owned overrides for the backend services (stt/tts/llm/speaker), edited from the dashboard's **Services** tab; each service pulls its effective config (packaged default + this override, secrets stripped) from the server at boot
+* **`configs/llm.yaml` / `stt.yaml` / `tts.yaml` / `speaker.yaml`** — packaged seed defaults for those services (model/voice/thresholds/etc.)
+
+Secrets stay in each host's environment / `.env` — never in the config store.
 
 ## Skills
 

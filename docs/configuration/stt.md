@@ -5,13 +5,17 @@
 
 The STT service accepts POST requests with base64-encoded PCM audio and returns a transcript. It is built on [faster-whisper](https://github.com/SYSTRAN/faster-whisper), a CTranslate2-optimized implementation of OpenAI Whisper.
 
+!!! note "Pulled from the server"
+    `kenzy-stt` pulls this config from the server at boot — it discovers the server via mDNS (or `KENZY_SERVER_URL`) and blocks until it answers, so start the server first. Edit it from the dashboard's **Services** tab (writes `configs/services/stt.yaml` on the server and restarts the service). Passing an explicit path (`kenzy-stt configs/stt.yaml`) loads locally instead — a dev/offline escape hatch. See [central config for backend services](server.md#central-config-for-backend-services).
+
 ## Full reference
 
 | Key | Default | Description |
 |---|---|---|
 | `host` | `"127.0.0.1"` | Bind address |
 | `port` | `8767` | HTTP port |
-| `log_level` | `"info"` | Log verbosity |
+| `log_level` | `"info"` | What the service prints to its console |
+| `log_capture_level` | `"debug"` | How deep the dashboard log viewer can see (`trace`/`debug`/…), independent of `log_level` |
 
 ### Whisper model
 

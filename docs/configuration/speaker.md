@@ -5,6 +5,9 @@
 
 The speaker identification service uses a SpeechBrain ECAPA-TDNN model to compare incoming audio against enrolled speaker profiles and return the closest match.
 
+!!! note "Pulled from the server"
+    `kenzy-speaker` pulls this config from the server at boot — it discovers the server via mDNS (or `KENZY_SERVER_URL`) and blocks until it answers, so start the server first. Edit it from the dashboard's **Services** tab (writes `configs/services/speaker.yaml` on the server and restarts the service). Passing an explicit path loads locally instead (dev/offline). The `kenzy-enroll` CLI still reads a local config. See [central config for backend services](server.md#central-config-for-backend-services).
+
 ## Full reference
 
 ### Service
@@ -13,7 +16,8 @@ The speaker identification service uses a SpeechBrain ECAPA-TDNN model to compar
 |---|---|---|
 | `host` | `"127.0.0.1"` | Bind address |
 | `port` | `8768` | HTTP port |
-| `log_level` | `"info"` | Log verbosity |
+| `log_level` | `"info"` | What the service prints to its console |
+| `log_capture_level` | `"debug"` | How deep the dashboard log viewer can see, independent of `log_level` |
 
 ### Model
 

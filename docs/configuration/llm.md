@@ -5,6 +5,9 @@
 
 The LLM service processes transcribed text through a tool-calling loop and returns a spoken response. It uses [LiteLLM](https://github.com/BerriAI/litellm) as the model abstraction layer, so any provider LiteLLM supports works out of the box.
 
+!!! note "Pulled from the server"
+    `kenzy-llm` pulls this config from the server at boot — it discovers the server via mDNS (or `KENZY_SERVER_URL`) and blocks until it answers, so start the server first. Edit it from the dashboard's **Services** tab (writes `configs/services/llm.yaml` on the server and restarts the service). Passing an explicit path loads locally instead (dev/offline). See [central config for backend services](server.md#central-config-for-backend-services).
+
 ## Full reference
 
 ### Core
@@ -13,7 +16,8 @@ The LLM service processes transcribed text through a tool-calling loop and retur
 |---|---|---|
 | `host` | `"127.0.0.1"` | Bind address |
 | `port` | `8766` | HTTP port |
-| `log_level` | `"info"` | Log verbosity |
+| `log_level` | `"info"` | What the service prints to its console |
+| `log_capture_level` | `"debug"` | How deep the dashboard log viewer can see, independent of `log_level` |
 | `model` | `"gpt-4o"` | LiteLLM model string (see [Model strings](#model-strings)) |
 | `base_url` | — | Provider base URL. Required for Ollama, LM Studio, and similar local providers. |
 | `max_tool_iterations` | `5` | Maximum skill call iterations per request before returning whatever the model has |
