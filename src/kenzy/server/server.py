@@ -1001,12 +1001,14 @@ class TranscribingServer(AudioServer):
                 return
 
             if self._llm_url:
-                response_text, voice_prompt = await self._call_llm(
+                response_text, voice_prompt, actions = await self._call_llm(
                     text, room_name, session_id, speaker
                 )
                 log.info("[%s] LLM: %s", node_id, response_text)
                 log.debug("[%s] voice_prompt: %s", node_id, voice_prompt)
                 await self._run_tts(node_id, room_name, session_id, response_text, voice_prompt)
+                if actions:
+                    await self._dispatch_actions(actions, node_id, room_name)
 
         except asyncio.CancelledError:
             raise
@@ -1057,7 +1059,7 @@ class TranscribingServer(AudioServer):
 
     async def _call_llm(
         self, text: str, room_id: str, session_id: str | None, speaker: str | None = None
-    ) -> tuple[str, str]:
+    ) -> tuple[str, str, list[dict[str, Any]]]:
         import httpx  # type: ignore[import-untyped]
 
         payload = {
@@ -1065,6 +1067,8 @@ class TranscribingServer(AudioServer):
             "room_id": room_id,
             "session_id": session_id,
             "speaker": speaker,
+            # Connected room names so the model can target real rooms (announce/intercom).
+            "rooms": sorted({s.room_id for s in self._nodes.values()}),
         }
         async with httpx.AsyncClient() as client:
             resp = await client.post(
@@ -1075,7 +1079,40 @@ class TranscribingServer(AudioServer):
             )
             resp.raise_for_status()
             data = resp.json()
-        return str(data["text"]), str(data["voice_prompt"])
+        actions = data.get("actions") or []
+        return str(data["text"]), str(data["voice_prompt"]), actions
+
+    async def _dispatch_actions(
+        self, actions: list[dict[str, Any]], source_node_id: str, source_room: str
+    ) -> None:
+        """Actuate server-side actions returned by the LLM (e.g. announce).
+
+        ``announce()`` keys on ``node_id``, but the LLM targets human room names, so
+        names are resolved here. The asking node is excluded so it doesn't hear the
+        broadcast on top of its own spoken reply.
+        """
+        for action in actions:
+            atype = action.get("type")
+            if atype != "announce":
+                log.warning("[%s] unknown LLM action type: %r", source_node_id, atype)
+                continue
+            msg = str(action.get("text", "")).strip()
+            if not msg:
+                continue
+            names = action.get("rooms")
+            if names:
+                wanted = {str(n).strip().lower() for n in names}
+                targets = [
+                    nid
+                    for nid, s in self._nodes.items()
+                    if s.room_id.lower() in wanted and nid != source_node_id
+                ]
+            else:
+                targets = [nid for nid in self._nodes if nid != source_node_id]
+            if not targets:
+                continue
+            count = await self.announce(msg, targets)
+            log.info("[%s] announced to %d node(s): %s", source_node_id, count, msg)
 
     async def _run_tts(
         self, node_id: str, room_name: str, session_id: str | None, text: str, voice_prompt: str

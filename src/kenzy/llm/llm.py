@@ -53,6 +53,9 @@ class ProcessRequest(BaseModel):
     room_id: str | None = None
     session_id: str | None = None
     speaker: str | None = None
+    # Names of the rooms currently connected (sent by the server) so the model can
+    # target real rooms for announcements / intercom and use their canonical names.
+    rooms: list[str] = []
 
 
 class ProcessResponse(BaseModel):
@@ -61,6 +64,9 @@ class ProcessResponse(BaseModel):
     # Set by a fast intent (or, later, the LLM) to ask the server to re-open the
     # mic for a follow-up without requiring the wake word. Honoured by the server.
     expect_response: bool = False
+    # Server-side actions a skill asked for (e.g. broadcast an announcement) that the
+    # LLM service can't perform itself. The server actuates each after speaking `text`.
+    actions: list[dict[str, Any]] = []
 
 
 # ---------------------------------------------------------------------------
@@ -175,17 +181,27 @@ async def process(req: ProcessRequest) -> ProcessResponse:
     display_speaker = raw_speaker if raw_speaker.lower() != "unknown" else None
     log.info("[%s/%s] %s", req.room_id or "?", display_speaker or "?", req.text)
 
+    # Request-scoped accumulator for any server-side actions a skill queues.
+    skill_registry.begin_actions()
+
     # Deterministic fast path: try local/instant matchers before the LLM.
     fast = await skill_registry.dispatch_fast(req.text, req.room_id, raw_speaker)
     if fast is not None:
         vp = fast.voice_prompt or _voice_prompt
         _history.add(req.room_id or "", raw_speaker, req.text, fast.text)
         return ProcessResponse(
-            text=fast.text, voice_prompt=vp, expect_response=fast.expect_response
+            text=fast.text,
+            voice_prompt=vp,
+            expect_response=fast.expect_response,
+            actions=skill_registry.take_actions(),
         )
 
-    text, voice_prompt = await _run_llm(req.text, raw_speaker, req.room_id)
-    return ProcessResponse(text=text, voice_prompt=voice_prompt)
+    text, voice_prompt = await _run_llm(
+        req.text, raw_speaker, req.room_id, available_rooms=req.rooms
+    )
+    return ProcessResponse(
+        text=text, voice_prompt=voice_prompt, actions=skill_registry.take_actions()
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -250,7 +266,12 @@ def _parse_response(content: str) -> tuple[str, str]:
     return stripped, _voice_prompt
 
 
-async def _run_llm(text: str, speaker: str, room_id: str | None) -> tuple[str, str]:
+async def _run_llm(
+    text: str,
+    speaker: str,
+    room_id: str | None,
+    available_rooms: list[str] | None = None,
+) -> tuple[str, str]:
     from litellm import acompletion  # type: ignore[import-untyped]
 
     # Build current user message — named speakers only in the prefix.
@@ -265,11 +286,13 @@ async def _run_llm(text: str, speaker: str, room_id: str | None) -> tuple[str, s
     # Inject conversation history between system message and current turn.
     history_messages = _history.get_messages(room_id or "")
 
+    system_content = f"{_system_prompt}\n\n{_build_context()}"
+    if available_rooms:
+        system_content += "\nConnected rooms: " + ", ".join(available_rooms)
+    system_content += f"\n{_JSON_INSTRUCTION}"
+
     messages: list[dict[str, Any]] = [
-        {
-            "role": "system",
-            "content": f"{_system_prompt}\n\n{_build_context()}\n{_JSON_INSTRUCTION}",
-        },
+        {"role": "system", "content": system_content},
         *history_messages,
         {"role": "user", "content": user_content},
     ]

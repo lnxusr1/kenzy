@@ -23,6 +23,7 @@ Skills read API keys from environment variables (.env).  Other settings
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import importlib.util
 import inspect
 import logging
@@ -34,6 +35,39 @@ from pathlib import Path
 from typing import Any
 
 log = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Server-side actions (request-scoped)
+# ---------------------------------------------------------------------------
+# Some skills don't compute an answer — they ask the *server* to do something the
+# LLM service can't (it doesn't hold the node connections), e.g. broadcast an
+# announcement or start an intercom call. Such a skill records an action here; the
+# LLM service collects them after the tool loop and returns them on ProcessResponse
+# for the server to actuate. A ContextVar keeps this isolated per /process request.
+
+_actions: contextvars.ContextVar[list[dict[str, Any]]] = contextvars.ContextVar("kenzy_actions")
+
+
+def begin_actions() -> contextvars.Token[list[dict[str, Any]]]:
+    """Start a fresh action accumulator for the current request; returns a reset token."""
+    return _actions.set([])
+
+
+def add_action(action: dict[str, Any]) -> None:
+    """Queue a server-side action (e.g. ``{"type": "announce", ...}``) from a skill."""
+    try:
+        _actions.get().append(action)
+    except LookupError:  # called outside a request scope — no-op
+        log.debug("add_action(%s) outside a request scope — ignored", action.get("type"))
+
+
+def take_actions() -> list[dict[str, Any]]:
+    """Return the actions queued during this request (empty if none / no scope)."""
+    try:
+        return list(_actions.get())
+    except LookupError:
+        return []
+
 
 # ---------------------------------------------------------------------------
 # Registry

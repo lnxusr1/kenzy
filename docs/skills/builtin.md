@@ -123,3 +123,15 @@ Utility skills for randomness and selection.
 | Function | Description |
 |---|---|
 | `get_assistant_version()` | Returns the installed Kenzy package version |
+
+---
+
+## Announce — `builtin_skills/announce.py`
+
+Broadcasts a spoken message to other rooms. Say *"Hey Kenzy… tell everyone dinner's ready"* and Kenzy speaks it in every room, then confirms in the room you asked from.
+
+| Function | Description |
+|---|---|
+| `announce(message, rooms="")` | Speak `message` aloud in other rooms; `rooms` is an optional comma-separated list of room names (empty = everywhere) |
+
+This is the first user of the **server-actions** mechanism: the skill can't speak in other rooms itself (it runs in `kenzy-llm`), so it queues an action that `kenzy-server` actuates via its existing `announce()` (synthesize once, stream to the target nodes). The asking room is excluded from the broadcast so it doesn't hear the message twice. The server tells the model which room names are currently connected, so it targets real rooms.
