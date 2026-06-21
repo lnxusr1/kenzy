@@ -31,6 +31,7 @@ send STOP (interrupting TTS) followed by TRIGGER (starting a new session).
 from __future__ import annotations
 
 import asyncio
+import collections
 import json
 import logging
 import os
@@ -63,6 +64,7 @@ log = logging.getLogger(__name__)
 _STATE_IDLE = "idle"
 _STATE_STREAMING = "streaming"
 _STATE_TTS = "tts"
+_STATE_INTERCOM = "intercom"  # live two-way call: stream mic out, play peer audio live
 
 # Rate at which the server sends TTS PCM (fixed by the TTS service).
 _TTS_SERVER_RATE = 24_000
@@ -204,6 +206,56 @@ def _load_sound(name_or_path: str) -> tuple[np.ndarray[Any, Any], int]:
         return _read(wav_file)  # type: ignore[arg-type]
 
 
+class _StreamBuffer:
+    """Thread-safe FIFO of int16 mono PCM for live streaming playback.
+
+    The producer (asyncio thread — incoming intercom/media frames) calls
+    :meth:`feed`; the real-time audio callback calls :meth:`read`. A
+    ``collections.deque`` of numpy chunks is the only shared state; ``append`` and
+    ``popleft`` are individually atomic under the GIL, and the read cursor
+    (``_cur``/``_pos``) is touched only by the callback thread — so no mutex is
+    needed in the RT path. Underflow returns silence (zero-padding) rather than
+    blocking, so a late frame just produces a brief gap, never a glitchy stall.
+    """
+
+    def __init__(self) -> None:
+        self._q: collections.deque[np.ndarray[Any, np.dtype[np.int16]]] = collections.deque()
+        self._cur: np.ndarray[Any, np.dtype[np.int16]] | None = None
+        self._pos: int = 0
+
+    def feed(self, pcm: np.ndarray[Any, Any]) -> None:
+        """Append int16 mono PCM (at the player's sample rate) to the queue."""
+        chunk = np.ascontiguousarray(pcm, dtype=np.int16).reshape(-1)
+        if chunk.size:
+            self._q.append(chunk)
+
+    def read(self, frames: int) -> np.ndarray[Any, np.dtype[np.int16]]:
+        """Return exactly ``frames`` samples, zero-padded if the buffer underflows."""
+        out = np.zeros(frames, dtype=np.int16)
+        n = 0
+        while n < frames:
+            if self._cur is None or self._pos >= self._cur.size:
+                try:
+                    self._cur = self._q.popleft()
+                    self._pos = 0
+                except IndexError:
+                    break  # underflow → leave the rest as silence
+            take = min(frames - n, self._cur.size - self._pos)
+            out[n : n + take] = self._cur[self._pos : self._pos + take]
+            self._pos += take
+            n += take
+        return out
+
+    def clear(self) -> None:
+        self._q.clear()
+        self._cur = None
+        self._pos = 0
+
+    @property
+    def empty(self) -> bool:
+        return self._cur is None and not self._q
+
+
 class _SoundPlayer:
     """
     Single persistent output stream for all audio output (chime + TTS).
@@ -235,6 +287,11 @@ class _SoundPlayer:
         self._pos: int = len(self._audio)  # past end → silent
         self._restart: bool = False
 
+        # Live streaming mode (intercom / media): when on, the callback drains a
+        # ring buffer instead of the one-shot _audio array. Off by default.
+        self._streaming: bool = False
+        self._ring = _StreamBuffer()
+
         self._stream = sd.OutputStream(
             samplerate=sample_rate,
             channels=1,
@@ -251,6 +308,9 @@ class _SoundPlayer:
         time_info: Any,
         status: sd.CallbackFlags,
     ) -> None:
+        if self._streaming:
+            outdata[:, 0] = self._ring.read(frames)
+            return
         if self._restart and self._pos >= len(self._audio):
             self._restart = False
             self._audio = self._pending
@@ -281,9 +341,24 @@ class _SoundPlayer:
         self._restart = False
         self._pos = len(self._audio)
 
+    def start_stream(self) -> None:
+        """Switch to live streaming mode (a fresh, empty ring buffer)."""
+        self._restart = False
+        self._ring.clear()
+        self._streaming = True
+
+    def feed(self, pcm: np.ndarray[Any, Any]) -> None:
+        """Append int16 mono PCM (at the player's sample rate) for live playback."""
+        self._ring.feed(pcm)
+
+    def stop_stream(self) -> None:
+        """Leave streaming mode and fall back to silence."""
+        self._streaming = False
+        self._ring.clear()
+
     @property
     def active(self) -> bool:
-        return self._pos < len(self._audio) or self._restart
+        return self._streaming or self._pos < len(self._audio) or self._restart
 
     def close(self) -> None:
         self._stream.stop()
@@ -360,6 +435,9 @@ class NodeClient:
 
         self._state: str = _STATE_IDLE
         self._session_id: str | None = None
+        # Set when an incoming call is ringing; after the consent prompt finishes
+        # playing, the node auto-captures the spoken yes/no answer.
+        self._awaiting_consent: bool = False
         self._ws: ClientConnection | None = None
         self._oww: Any = None  # openwakeword Model
         self._player: _SoundPlayer | None = None
@@ -517,9 +595,11 @@ class NodeClient:
         run_in_executor(sd.wait), which blocks a thread that cannot be
         interrupted once started.
         """
+        completed = False
         try:
             while self._player is not None and self._player.active:
                 await asyncio.sleep(0.05)
+            completed = True
         except asyncio.CancelledError:
             if self._player is not None:
                 self._player.abort()
@@ -529,6 +609,12 @@ class NodeClient:
             self._session_id = None
             self._tts_task = None
             log.info("TTS playback complete")
+        # If this was an incoming-call consent prompt, capture the yes/no answer now
+        # that it has finished playing.
+        if completed and self._awaiting_consent:
+            self._awaiting_consent = False
+            log.info("Consent prompt finished — capturing answer")
+            await self._begin_streaming(str(uuid.uuid4()))
 
     async def _stop_tts_playback(self) -> None:
         """Cancel any in-progress TTS playback and return to IDLE."""
@@ -543,6 +629,34 @@ class NodeClient:
             self._player.abort()
         self._state = _STATE_IDLE
         self._session_id = None
+
+    # ------------------------------------------------------------------
+    # Intercom (live two-way call)
+    # ------------------------------------------------------------------
+
+    async def _begin_intercom(self, peer_room: str) -> None:
+        """Enter a live call: stream mic out continuously, play peer audio live."""
+        self._awaiting_consent = False
+        # Stop whatever we were doing (likely playing the "calling…" reply or idle).
+        if self._state == _STATE_TTS:
+            await self._stop_tts_playback()
+        elif self._state == _STATE_STREAMING:
+            await self._end_streaming(reason="intercom")
+        self._state = _STATE_INTERCOM
+        self._session_id = str(uuid.uuid4())
+        if self._player is not None:
+            self._player.abort()  # cut any residual one-shot audio
+            self._player.start_stream()  # switch to live streaming playback
+        log.info("Intercom connected with '%s'", peer_room)
+
+    async def _end_intercom(self, reason: str = "ended") -> None:
+        if self._state != _STATE_INTERCOM:
+            return
+        self._state = _STATE_IDLE
+        self._session_id = None
+        if self._player is not None:
+            self._player.stop_stream()
+        log.info("Intercom ended (%s)", reason)
 
     # ------------------------------------------------------------------
     # Receive loop – inbound server messages → _cmd_q / _tts_q
@@ -700,6 +814,12 @@ class NodeClient:
             except websockets.exceptions.ConnectionClosed:
                 break
             if isinstance(raw, bytes):
+                if self._state == _STATE_INTERCOM and self._player is not None:
+                    # Live peer audio (16 kHz mono) → resample to the playback rate and
+                    # feed the streaming buffer.
+                    audio = np.frombuffer(raw, dtype=np.int16)
+                    self._player.feed(_resample(audio, protocol.SAMPLE_RATE, self._playback_rate))
+                    continue
                 try:
                     self._tts_q.put_nowait(raw)
                 except asyncio.QueueFull:
@@ -743,6 +863,27 @@ class NodeClient:
 
             elif mtype == protocol.MSG_TTS_END:
                 await self._end_tts(reason="complete")
+
+            elif mtype == protocol.MSG_CALL_REQUEST:
+                # Incoming call rings: arm consent capture. The server streams the
+                # spoken prompt next; when it finishes playing, _tts_wait_done opens a
+                # capture window for the yes/no answer. No audio is bridged yet.
+                self._awaiting_consent = True
+                log.info("Incoming call from '%s' — prompting for consent", msg.get("from_room"))
+
+            elif mtype == protocol.MSG_CALL_CANCEL:
+                self._awaiting_consent = False
+                if self._state == _STATE_TTS:
+                    await self._stop_tts_playback()
+                elif self._state == _STATE_STREAMING:
+                    await self._end_streaming(reason="call_cancelled")
+                log.info("Call cancelled")
+
+            elif mtype == protocol.MSG_INTERCOM_START:
+                await self._begin_intercom(str(msg.get("peer_room", "")))
+
+            elif mtype == protocol.MSG_INTERCOM_END:
+                await self._end_intercom(reason=str(msg.get("reason", "ended")))
 
             elif mtype == protocol.MSG_SET_ROOM:
                 new_room = str(msg.get("room_id", "")).strip()
@@ -807,7 +948,28 @@ class NodeClient:
                             # pipeline so no STOP round-trip is needed.
                             await self._stop_tts_playback()
                             await self._begin_streaming(str(uuid.uuid4()))
+                        elif self._state == _STATE_INTERCOM:
+                            # Wake word ends the call immediately (no command needed),
+                            # then opens a fresh command session on this node.
+                            if self._ws is not None:
+                                try:
+                                    await self._ws.send(protocol.intercom_end("wakeword"))
+                                except Exception:
+                                    pass
+                            await self._end_intercom(reason="wakeword")
+                            await self._begin_streaming(str(uuid.uuid4()))
                         break
+
+            if self._state == _STATE_INTERCOM:
+                if self._ws is None:
+                    await self._end_intercom(reason="connection_lost")
+                    continue
+                try:
+                    await self._ws.send(flat.tobytes())  # live mic → server relays to peer
+                except Exception as exc:
+                    log.warning("Intercom audio send failed: %s", exc)
+                    await self._end_intercom(reason="connection_error")
+                continue
 
             if self._state == _STATE_STREAMING:
                 if self._ws is None:

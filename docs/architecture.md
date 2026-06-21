@@ -38,8 +38,12 @@ Control messages are JSON text frames. Audio is raw int16 PCM binary frames at 1
 | `ack` | server → node | Confirms `audio_start` was received |
 | `tts_start` | server → node | Begins TTS playback; includes `sample_rate` and `channels` |
 | `tts_end` | server → node | Ends TTS playback |
+| `call_request` | server → node | Ring the node for an incoming intercom call (no audio bridged yet) |
+| `call_cancel` | server → node | Caller cancelled before the receiver accepted |
+| `intercom_start` | server → node | Consent accepted — begin a live two-way call with the peer room |
+| `intercom_end` | server ↔ node | End the call (sent to both ends; a node sends it when its wake word fires mid-call) |
 
-Binary frames sent server → node between `tts_start` and `tts_end` are raw int16 PCM at 24 kHz mono.
+Binary frames sent server → node between `tts_start` and `tts_end` are raw int16 PCM at 24 kHz mono. During an intercom call, raw mic PCM is relayed node ↔ server ↔ peer node.
 
 ## Discovery & config-pull
 

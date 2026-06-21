@@ -61,7 +61,16 @@ function ServiceEditor({ name, onBack }) {
     // apply every leaf the user changed away from the effective baseline.
     const override = JSON.parse(JSON.stringify(info.override || {}));
     for (const [k, v] of Object.entries(vals)) {
-      if (!eq(v, orig[k])) setPath(override, k, v);
+      let val = v;
+      // Number fields hold a raw string while editing; coerce back to a number so
+      // decimals (e.g. 0.25) survive and aren't written to YAML as strings.
+      if (typeof orig[k] === "number" && typeof v === "string") {
+        if (v === "") continue;
+        const num = Number(v);
+        if (Number.isNaN(num)) continue;
+        val = num;
+      }
+      if (!eq(val, orig[k])) setPath(override, k, val);
     }
     setSaving(true);
     const res = await send("set_service_config", { service: name, config: override });
@@ -97,9 +106,11 @@ function ServiceEditor({ name, onBack }) {
         <option value="false" selected=${v === false}>off</option>
       </select>`;
     } else if (t === "num") {
+      // Store the raw string while typing (coerced back to a number on save) so a
+      // decimal like 0.25 isn't collapsed to an integer mid-keystroke.
       const step = Number.isInteger(orig[k]) ? "1" : "any";
-      input = html`<input type="number" step=${step} disabled=${!info.controls}
-        value=${v ?? ""} onInput=${(e) => setKey(k, e.target.value === "" ? null : Number(e.target.value))} />`;
+      input = html`<input type="number" step=${step} inputmode="decimal" disabled=${!info.controls}
+        value=${v ?? ""} onInput=${(e) => setKey(k, e.target.value)} />`;
     } else {
       input = html`<input disabled=${!info.controls} value=${v ?? ""}
         placeholder=${orig[k] === null ? "null" : ""}

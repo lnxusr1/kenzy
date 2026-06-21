@@ -28,6 +28,11 @@ MSG_RESTART = "restart"
 MSG_SET_ROOM = "set_room"
 MSG_REQUEST_LOGS = "request_logs"
 MSG_LOGS = "logs"
+# Intercom (live two-way call between two rooms; gated by the receiver's consent).
+MSG_CALL_REQUEST = "call_request"  # server→node: ring the receiver (no audio yet)
+MSG_CALL_CANCEL = "call_cancel"  # server→node: caller hung up before accept
+MSG_INTERCOM_START = "intercom_start"  # server→node: consent accepted, begin the call
+MSG_INTERCOM_END = "intercom_end"  # server↔node: end the call
 
 # ---------------------------------------------------------------------------
 # Audio format (shared by node and server)
@@ -141,6 +146,33 @@ def tts_start(session_id: str, sample_rate: int = 22050, channels: int = 1) -> s
 
 def tts_end(session_id: str) -> str:
     return json.dumps({"type": MSG_TTS_END, "session_id": session_id})
+
+
+def call_request(from_room: str) -> str:
+    """Server→node: ring the receiver for an intercom call. No audio is bridged yet."""
+    return json.dumps({"type": MSG_CALL_REQUEST, "from_room": from_room})
+
+
+def call_cancel() -> str:
+    """Server→node: the caller cancelled before the receiver accepted."""
+    return json.dumps({"type": MSG_CALL_CANCEL})
+
+
+def intercom_start(peer_room: str, sample_rate: int = SAMPLE_RATE, channels: int = CHANNELS) -> str:
+    """Server→node: consent accepted — begin live two-way audio with the peer room."""
+    return json.dumps(
+        {
+            "type": MSG_INTERCOM_START,
+            "peer_room": peer_room,
+            "sample_rate": sample_rate,
+            "channels": channels,
+        }
+    )
+
+
+def intercom_end(reason: str = "ended") -> str:
+    """End an intercom call (server→node to tear down, or node→server on wake word)."""
+    return json.dumps({"type": MSG_INTERCOM_END, "reason": reason})
 
 
 def parse(raw: str | bytes) -> dict[str, Any]:

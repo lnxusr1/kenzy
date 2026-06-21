@@ -135,3 +135,15 @@ Broadcasts a spoken message to other rooms. Say *"Hey Kenzy… tell everyone din
 | `announce(message, rooms="")` | Speak `message` aloud in other rooms; `rooms` is an optional comma-separated list of room names (empty = everywhere) |
 
 This is the first user of the **server-actions** mechanism: the skill can't speak in other rooms itself (it runs in `kenzy-llm`), so it queues an action that `kenzy-server` actuates via its existing `announce()` (synthesize once, stream to the target nodes). The asking room is excluded from the broadcast so it doesn't hear the message twice. The server tells the model which room names are currently connected, so it targets real rooms.
+
+---
+
+## Intercom — `builtin_skills/intercom.py`
+
+Starts a live two-way voice call to another room. Say *"call the living room"* and Kenzy rings that room; the call connects **only after someone there says "yes"** to accept it.
+
+| Function | Description |
+|---|---|
+| `connect_room(room)` | Ring `room` for a live intercom call (the other room must verbally accept) |
+
+Like `announce`, this queues a server action. The server rings the target room, plays a spoken consent prompt, and bridges audio **only on a clear spoken "yes"** (default-deny on silence/ambiguity/timeout). During an active call a wake word at either end ends it immediately. Requires a speakerphone with hardware echo cancellation.

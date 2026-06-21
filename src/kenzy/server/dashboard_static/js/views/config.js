@@ -67,6 +67,11 @@ export function ConfigView({ node, onBack }) {
       if (TYPES[key] === "list") {
         const arr = (val || []).map((s) => s.trim()).filter(Boolean);
         if (arr.length) config[key] = arr;
+      } else if (TYPES[key] === "num") {
+        // Number fields hold a raw string while editing (so decimals like "0.5"
+        // aren't collapsed mid-type); coerce here, dropping blank/invalid entries.
+        const num = Number(val);
+        if (val !== "" && val != null && !Number.isNaN(num)) config[key] = num;
       } else {
         config[key] = val;
       }
@@ -134,9 +139,11 @@ export function ConfigView({ node, onBack }) {
           onClick=${() => setKey(k, [...items, ""])}>+ Add model</button>
       </div>`;
     } else if (t === "num") {
-      input = html`<input type="number" step="any" disabled=${!info.controls}
+      // Keep the raw string while typing — coercing to Number() per keystroke turns
+      // "0." into 0 and snaps the field back, making decimals impossible to enter.
+      input = html`<input type="number" step="any" inputmode="decimal" disabled=${!info.controls}
         value=${set ? cur : ""} placeholder=${inherited ?? "default"}
-        onInput=${(e) => setKey(k, e.target.value === "" ? undefined : Number(e.target.value))} />`;
+        onInput=${(e) => setKey(k, e.target.value === "" ? undefined : e.target.value)} />`;
     } else {
       input = html`<input disabled=${!info.controls} value=${set ? cur : ""}
         placeholder=${inherited ?? "default"}

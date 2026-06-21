@@ -77,6 +77,21 @@ _SERVER_MANAGED_KEYS = frozenset({"room_id"})
 _SECRET_KEY_RE = re.compile(r"key|token|secret|password|passwd|credential", re.IGNORECASE)
 _SAFE_ID_RE = re.compile(r"[A-Za-z0-9._-]+")
 _ANNOUNCE_VOICE_PROMPT = "Read this aloud as a clear, calm public announcement."
+_INTERCOM_VOICE_PROMPT = "Read this aloud as a brief, friendly spoken notification."
+# How long to wait for the receiver's spoken consent before declining (no answer).
+_CALL_TIMEOUT_SEC = 25.0
+# Words that count as accepting an incoming call. Default-deny: anything else declines.
+_AFFIRM_WORDS = frozenset(
+    {"yes", "yeah", "yep", "yup", "sure", "ok", "okay", "accept", "accepted", "affirmative"}
+)
+
+
+def _is_affirmative(text: str) -> bool:
+    """True only for a clear yes (default-deny on silence/ambiguity/no)."""
+    norm = re.sub(r"[^\w\s]", "", text or "").strip().lower()
+    if not norm:
+        return False
+    return bool(set(norm.split()) & _AFFIRM_WORDS) or "go ahead" in norm
 
 
 def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
@@ -119,6 +134,8 @@ class NodeSession:
     room_id: str
     session_id: str | None = field(default=None)
     streaming: bool = field(default=False)
+    # node_id of the peer this node is in a live intercom call with (None = not in a call).
+    intercom_peer: str | None = field(default=None)
 
     async def send_json(self, payload: dict[str, Any]) -> None:
         await self.ws.send(json.dumps(payload))
@@ -574,9 +591,13 @@ class AudioServer:
         return session
 
     async def _deregister(self, session: NodeSession) -> None:
+        peer_id = session.intercom_peer
         async with self._lock:
             if self._nodes.get(session.node_id) is session:
                 del self._nodes[session.node_id]
+        # If it was in a call, tear the call down on the peer.
+        if peer_id:
+            await self.end_intercom(peer_id, reason="peer_disconnected")
         log.info(
             "Node %s (room '%s') disconnected – %d node(s) remaining",
             session.node_id,
@@ -592,7 +613,9 @@ class AudioServer:
     async def _node_loop(self, session: NodeSession) -> None:
         async for raw in session.ws:
             if isinstance(raw, bytes):
-                if session.streaming:
+                if session.intercom_peer is not None:
+                    await self._relay_intercom(session, raw)
+                elif session.streaming:
                     await self.on_audio_frame(session, raw)
             else:
                 try:
@@ -640,6 +663,10 @@ class AudioServer:
             )
             await self.on_wakeword(session, model, score)
 
+        elif mtype == protocol.MSG_INTERCOM_END:
+            # Node-initiated end (e.g. its wake word fired during the call).
+            await self.end_intercom(session.node_id, reason=str(msg.get("reason", "peer")))
+
         elif mtype == protocol.MSG_LOGS:
             fut = self._log_waiters.get(str(msg.get("request_id", "")))
             if fut is not None and not fut.done():
@@ -647,6 +674,47 @@ class AudioServer:
 
         else:
             log.debug("[%s] unhandled control msg: %s", session.node_id, mtype)
+
+    # ------------------------------------------------------------------
+    # Intercom relay + teardown (call setup lives in TranscribingServer)
+    # ------------------------------------------------------------------
+
+    async def _relay_intercom(self, session: NodeSession, data: bytes) -> None:
+        """Forward a live audio frame from one paired node to its peer."""
+        peer = self._nodes.get(session.intercom_peer or "")
+        if peer is None:
+            return
+        try:
+            await peer.ws.send(data)
+        except Exception:
+            await self.end_intercom(session.node_id, reason="peer_lost")
+
+    async def end_intercom(self, node_id: str, reason: str = "ended") -> bool:
+        """Tear down a call on both ends. Safe to call with either party's node_id."""
+        session = self._nodes.get(node_id)
+        peer_id = session.intercom_peer if session else None
+        if session is None and peer_id is None:
+            return False
+        ids = {node_id}
+        if peer_id:
+            ids.add(peer_id)
+        ended = False
+        for nid in ids:
+            s = self._nodes.get(nid)
+            if s is None:
+                continue
+            was_in_call = s.intercom_peer is not None
+            s.intercom_peer = None
+            if was_in_call:
+                ended = True
+                try:
+                    await s.ws.send(protocol.intercom_end(reason))
+                except Exception:
+                    pass
+        if ended:
+            log.info("Intercom ended (%s): %s", reason, ", ".join(sorted(ids)))
+            self._notify_state()
+        return ended
 
     # ------------------------------------------------------------------
     # Outbound commands
@@ -840,6 +908,10 @@ class TranscribingServer(AudioServer):
         self._stt_tasks: dict[str, asyncio.Task[None]] = {}
         # Nodes currently playing TTS — used to decide whether to send STOP on wakeword.
         self._tts_active: set[str] = set()
+        # Pending intercom calls awaiting the receiver's spoken consent, keyed by the
+        # *receiver* node_id → (caller_node_id, caller_room, timeout_task). No audio is
+        # bridged while a call is pending.
+        self._pending_calls: dict[str, tuple[str, str, asyncio.Task[None]]] = {}
 
         scfg: dict[str, Any] = cfg.get("stt", {})
         self._stt_url: str | None = str(scfg["url"]) if scfg.get("url") else None
@@ -988,6 +1060,12 @@ class TranscribingServer(AudioServer):
 
             log.info("[%s] STT: %s | speaker: %s", node_id, text or "(none)", speaker)
 
+            # Intercom consent: if this node has a pending incoming call, the captured
+            # utterance is the accept/decline answer — not a command for the LLM.
+            if node_id in self._pending_calls:
+                await self._resolve_call(node_id, _is_affirmative(text))
+                return
+
             if not text:
                 await self.stop_node(node_id)
                 self._tts_active.discard(node_id)
@@ -1093,26 +1171,136 @@ class TranscribingServer(AudioServer):
         """
         for action in actions:
             atype = action.get("type")
-            if atype != "announce":
-                log.warning("[%s] unknown LLM action type: %r", source_node_id, atype)
-                continue
-            msg = str(action.get("text", "")).strip()
-            if not msg:
-                continue
-            names = action.get("rooms")
-            if names:
-                wanted = {str(n).strip().lower() for n in names}
-                targets = [
-                    nid
-                    for nid, s in self._nodes.items()
-                    if s.room_id.lower() in wanted and nid != source_node_id
-                ]
+            if atype == "announce":
+                msg = str(action.get("text", "")).strip()
+                if not msg:
+                    continue
+                names = action.get("rooms")
+                if names:
+                    wanted = {str(n).strip().lower() for n in names}
+                    targets = [
+                        nid
+                        for nid, s in self._nodes.items()
+                        if s.room_id.lower() in wanted and nid != source_node_id
+                    ]
+                else:
+                    targets = [nid for nid in self._nodes if nid != source_node_id]
+                if not targets:
+                    continue
+                count = await self.announce(msg, targets)
+                log.info("[%s] announced to %d node(s): %s", source_node_id, count, msg)
+            elif atype == "start_intercom":
+                await self.start_intercom(source_node_id, source_room, str(action.get("room", "")))
             else:
-                targets = [nid for nid in self._nodes if nid != source_node_id]
-            if not targets:
-                continue
-            count = await self.announce(msg, targets)
-            log.info("[%s] announced to %d node(s): %s", source_node_id, count, msg)
+                log.warning("[%s] unknown LLM action type: %r", source_node_id, atype)
+
+    # ------------------------------------------------------------------
+    # Intercom call setup + consent gate
+    # ------------------------------------------------------------------
+
+    def _resolve_room_node(self, name: str, exclude: str | None = None) -> str | None:
+        """Return the node_id of a connected room by name (case-insensitive)."""
+        wanted = name.strip().lower()
+        for nid, s in self._nodes.items():
+            if nid != exclude and s.room_id.lower() == wanted:
+                return nid
+        return None
+
+    async def _say(self, node_id: str, room: str, text: str) -> None:
+        """Speak a short line to one node (call status feedback)."""
+        await self._run_tts(node_id, room, str(uuid.uuid4()), text, _INTERCOM_VOICE_PROMPT)
+
+    async def start_intercom(self, caller_id: str, caller_room: str, target_room: str) -> None:
+        """Ring a target room for an intercom call (consent required before bridging)."""
+        target_room = (target_room or "").strip()
+        if not target_room:
+            return
+        receiver_id = self._resolve_room_node(target_room, exclude=caller_id)
+        if receiver_id is None:
+            await self._say(caller_id, caller_room, f"I couldn't reach the {target_room}.")
+            return
+        receiver = self._nodes[receiver_id]
+        caller = self._nodes.get(caller_id)
+        busy = (
+            receiver_id in self._pending_calls
+            or receiver.intercom_peer is not None
+            or (caller is not None and caller.intercom_peer is not None)
+        )
+        if busy:
+            await self._say(caller_id, caller_room, f"The {receiver.room_id} is busy.")
+            return
+        try:
+            await receiver.ws.send(protocol.call_request(caller_room))
+        except Exception:
+            await self._say(caller_id, caller_room, f"I couldn't reach the {receiver.room_id}.")
+            return
+        timeout = asyncio.create_task(
+            self._call_timeout(receiver_id), name=f"call-timeout-{receiver_id}"
+        )
+        self._pending_calls[receiver_id] = (caller_id, caller_room, timeout)
+        log.info("Intercom ring: %s → %s", caller_room, receiver.room_id)
+        # Spoken consent prompt; the receiver auto-captures the answer once it finishes.
+        prompt = (
+            f"The {caller_room} would like to start a voice chat. "
+            "Say yes to accept, or no to decline."
+        )
+        await self._run_tts(
+            receiver_id, receiver.room_id, str(uuid.uuid4()), prompt, _INTERCOM_VOICE_PROMPT
+        )
+
+    async def _call_timeout(self, receiver_id: str) -> None:
+        try:
+            await asyncio.sleep(_CALL_TIMEOUT_SEC)
+        except asyncio.CancelledError:
+            return
+        pending = self._pending_calls.pop(receiver_id, None)
+        if pending is None:
+            return
+        caller_id, caller_room, _ = pending
+        receiver = self._nodes.get(receiver_id)
+        rname = receiver.room_id if receiver else "the other room"
+        if receiver is not None:
+            try:
+                await receiver.ws.send(protocol.call_cancel())
+            except Exception:
+                pass
+        await self._say(caller_id, caller_room, f"No answer from the {rname}.")
+
+    async def _resolve_call(self, receiver_id: str, accepted: bool) -> None:
+        """Apply the receiver's consent decision: connect on yes, notify caller on no."""
+        pending = self._pending_calls.pop(receiver_id, None)
+        if pending is None:
+            return
+        caller_id, caller_room, timeout = pending
+        timeout.cancel()
+        receiver = self._nodes.get(receiver_id)
+        rname = receiver.room_id if receiver else "the other room"
+        if not accepted:
+            await self._say(caller_id, caller_room, f"The {rname} declined.")
+            return
+        await self._connect_call(caller_id, receiver_id)
+
+    async def _connect_call(self, caller_id: str, receiver_id: str) -> None:
+        caller = self._nodes.get(caller_id)
+        receiver = self._nodes.get(receiver_id)
+        if caller is None or receiver is None:
+            if caller is not None:
+                await self._say(caller_id, caller.room_id, "The call couldn't connect.")
+            return
+        caller.intercom_peer = receiver_id
+        receiver.intercom_peer = caller_id
+        # NOTE: do not cancel STT here — this runs *inside* the receiver's own
+        # consent-capture _transcribe task, so cancelling it would abort this very
+        # method partway and leave one intercom_start unsent (a one-way call). Both
+        # nodes' pipelines are already finished by the time we connect.
+        try:
+            await caller.ws.send(protocol.intercom_start(receiver.room_id))
+            await receiver.ws.send(protocol.intercom_start(caller.room_id))
+        except Exception:
+            await self.end_intercom(caller_id, reason="connect_failed")
+            return
+        log.info("Intercom connected: %s ↔ %s", caller.room_id, receiver.room_id)
+        self._notify_state()
 
     async def _run_tts(
         self, node_id: str, room_name: str, session_id: str | None, text: str, voice_prompt: str
