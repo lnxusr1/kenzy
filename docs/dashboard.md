@@ -56,7 +56,9 @@ polling if that drops.
 
 When `controls` is on, an **announce** composer lets you type a message and speak it
 aloud on every connected node at once (synthesised once via kenzy-tts, streamed to all
-rooms — an intercom).
+rooms — a one-way public-address broadcast). You can also trigger this by voice
+("tell everyone dinner's ready"); for a live *two-way* call between rooms, see the
+intercom skill in [Built-in Skills](skills/builtin.md#intercom-builtin_skillsintercompy).
 
 ## Configuring a node
 

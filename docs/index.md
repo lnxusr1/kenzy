@@ -7,6 +7,7 @@ Kenzy is a distributed home voice assistant built as six independently deployabl
 - **Distributed** — each service runs independently; deploy only what you need on each host
 - **Wake-word activation** — always-on local detection with no cloud dependency for the trigger
 - **Speaker identification** — knows who is speaking; used for personalization and access control
+- **Multi-room voice** — broadcast announcements to every room by voice ("tell everyone dinner's ready"), or place a live two-way **intercom** call between rooms (the receiving room must verbally accept)
 - **Extensible skills** — add new capabilities by dropping a Python file in `skills/`; no registration required
 - **LLM-agnostic** — works with OpenAI, Anthropic, Ollama, LM Studio, and any provider supported by LiteLLM
 - **Conversation history** — per-room rolling context window so follow-up questions resolve naturally
