@@ -72,8 +72,10 @@ _kokoro_speed: float = 1.0
 
 
 @app.get("/health")
-async def health() -> dict[str, str]:
-    return {"status": "ok"}
+async def health() -> dict[str, object]:
+    if _provider == "kokoro":
+        return {"status": "ok", "provider": "kokoro", "voice": _kokoro_voice}
+    return {"status": "ok", "provider": "openai", "model": _model, "voice": _voice}
 
 
 @app.post("/speak")

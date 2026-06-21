@@ -66,8 +66,11 @@ _ALLOWED_OVERRIDE_KEYS = frozenset(
         "wakeword_models",
         "sound_ready",
         "sound_waiting",
+        "sound_connect",
+        "sound_disconnect",
         "log_level",
         "log_capture_level",
+        "volume",
     }
 )
 # Server-owned keys stored in the per-node override file and pushed via config-pull,
@@ -407,26 +410,59 @@ class AudioServer:
             status, "OK" if status == 200 else "ERR", headers, json.dumps(payload).encode()
         )
 
+    def _check_service_token(self, request: Request) -> bool:
+        """True if the service-to-service bearer is satisfied (or none is configured)."""
+        if not self._service_token:
+            return True
+        return check_bearer(request.headers.get("authorization"), self._service_token)
+
     async def _process_config_request(
         self, connection: ServerConnection, request: Request
     ) -> Response | None:
-        """websockets ``process_request`` hook: serve ``GET /config/<service>``.
+        """websockets ``process_request`` hook: always-on HTTP on the node WS port.
 
-        Always-on (runs whenever the server runs, independent of the dashboard)
-        and token-gated by the service-to-service bearer. Returns ``None`` for any
-        other path so the WebSocket handshake (node connections) proceeds normally.
+        Runs whenever the server runs (independent of the dashboard), token-gated by
+        the service-to-service bearer:
+          - ``GET /config/<service>`` → that service's effective config.
+          - ``GET|POST /announce?text=…&rooms=…`` → speak a message in rooms (for
+            Home Assistant / scripts). Params are in the query string because the
+            ``websockets`` request hook exposes no HTTP body.
+        Returns ``None`` for any other path so the WebSocket handshake proceeds.
         """
         path = request.path.split("?", 1)[0]
+        if path == "/announce":
+            return await self._http_announce(request)
         if not path.startswith("/config/"):
             return None
+        if not self._check_service_token(request):
+            return self._http_json(401, {"error": "invalid service token"})
         service = path[len("/config/") :]
         if service not in SERVICES or service == "node":
             return self._http_json(404, {"error": "unknown service"})
-        if self._service_token and not check_bearer(
-            request.headers.get("authorization"), self._service_token
-        ):
-            return self._http_json(401, {"error": "invalid service token"})
         return self._http_json(200, self._effective_service_config(service))
+
+    async def _http_announce(self, request: Request) -> Response:
+        """Handle ``/announce?text=…&rooms=…`` — speak a message aloud in rooms.
+
+        ``rooms`` is a comma-separated list of room names (empty = every room).
+        Token-gated like the other always-on endpoints.
+        """
+        from urllib.parse import parse_qs, urlsplit
+
+        if not self._check_service_token(request):
+            return self._http_json(401, {"error": "invalid service token"})
+        qs = parse_qs(urlsplit(request.path).query)
+        text = (qs.get("text") or [""])[0].strip()
+        if not text:
+            return self._http_json(400, {"error": "missing 'text' query parameter"})
+        rooms_raw = (qs.get("rooms") or [""])[0].strip()
+        if rooms_raw:
+            wanted = {r.strip().lower() for r in rooms_raw.split(",") if r.strip()}
+            targets = [nid for nid, s in self._nodes.items() if s.room_id.lower() in wanted]
+        else:
+            targets = list(self._nodes)
+        count = await self.announce(text, targets or None)
+        return self._http_json(200, {"announced": count, "text": text})
 
     async def boost_node_trace(self, node_id: str, seconds: int = 30) -> bool:
         """Temporarily capture TRACE-level logs on a node, auto-reverting later.
@@ -441,7 +477,7 @@ class AudioServer:
         old = self._boost_tasks.pop(node_id, None)
         if old:
             old.cancel()
-        self._transient_node_cfg[node_id] = {"log_capture_level": "trace"}
+        self._transient_node_cfg.setdefault(node_id, {})["log_capture_level"] = "trace"
         await self.push_config(node_id)
         self._boost_tasks[node_id] = asyncio.create_task(
             self._revert_trace(node_id, seconds), name=f"trace-revert-{node_id}"
@@ -454,7 +490,11 @@ class AudioServer:
             await asyncio.sleep(seconds)
         except asyncio.CancelledError:
             return  # superseded by a newer boost, which owns the revert
-        self._transient_node_cfg.pop(node_id, None)
+        transient = self._transient_node_cfg.get(node_id)
+        if transient:
+            transient.pop("log_capture_level", None)
+            if not transient:
+                self._transient_node_cfg.pop(node_id, None)
         self._boost_tasks.pop(node_id, None)
         await self.push_config(node_id)
         log.info("[%s] TRACE log capture reverted", node_id)
@@ -776,6 +816,44 @@ class AudioServer:
         except Exception as exc:
             log.warning("restart_node: %s send failed: %s", node_id, exc)
             return False
+
+    async def set_node_volume(
+        self, node_id: str, level: int | None = None, delta: int | None = None
+    ) -> int | None:
+        """Set a node's playback volume (0–100). Persisted to the override + live push.
+
+        Pass an absolute ``level`` or a relative ``delta``. Returns the new level
+        (clamped 0–100), or None if neither was given. Works for an offline node
+        (persisted now, pulled on connect).
+        """
+        override = self.read_node_override(node_id)
+        current = int(override.get("volume", self._node_defaults.get("volume", 100)))
+        if level is not None:
+            new = int(level)
+        elif delta is not None:
+            new = current + int(delta)
+        else:
+            return None
+        new = max(0, min(100, new))
+        override["volume"] = new
+        self._write_override_file(node_id, override)
+        await self.push_config(node_id)  # live re-push if connected
+        log.info("[%s] volume → %d", node_id, new)
+        return new
+
+    async def set_node_muted(self, node_id: str, muted: bool) -> bool:
+        """Mute/unmute a connected node (transient — not persisted across restart).
+
+        Mute rides the transient overlay (like the TRACE boost) so a node comes
+        back un-muted after a restart; the ready chime stays audible while muted.
+        Returns False if the node isn't connected.
+        """
+        if node_id not in self._nodes:
+            return False
+        self._transient_node_cfg.setdefault(node_id, {})["muted"] = bool(muted)
+        await self.push_config(node_id)
+        log.info("[%s] %s", node_id, "muted" if muted else "unmuted")
+        return True
 
     async def set_room(self, node_id: str, room_name: str) -> bool:
         """Set a node's room name. Server-owned: persisted + pulled on connect.
@@ -1191,6 +1269,17 @@ class TranscribingServer(AudioServer):
                 log.info("[%s] announced to %d node(s): %s", source_node_id, count, msg)
             elif atype == "start_intercom":
                 await self.start_intercom(source_node_id, source_room, str(action.get("room", "")))
+            elif atype == "set_volume":
+                # Volume/mute change targeting the asking node (room context the
+                # server already holds — no room resolution needed).
+                if "muted" in action:
+                    await self.set_node_muted(source_node_id, bool(action["muted"]))
+                else:
+                    await self.set_node_volume(
+                        source_node_id,
+                        level=action.get("level"),
+                        delta=action.get("delta"),
+                    )
             else:
                 log.warning("[%s] unknown LLM action type: %r", source_node_id, atype)
 

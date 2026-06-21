@@ -11,6 +11,7 @@ const TYPES = {
   speech_min_ms: "num",
   no_speech_timeout_ms: "num",
   hard_cap_ms: "num",
+  volume: "num",
   capture_sample_rate: "num",
   playback_sample_rate: "num",
   vad_enabled: "bool",
@@ -18,6 +19,8 @@ const TYPES = {
   audio_device: "str",
   sound_ready: "str",
   sound_waiting: "str",
+  sound_connect: "str",
+  sound_disconnect: "str",
 };
 
 // Keys that re-init audio hardware: a change is pulled on the node's next boot,
@@ -30,6 +33,8 @@ const RESTART_KEYS = new Set([
   "wakeword_vad_threshold",
   "sound_ready",
   "sound_waiting",
+  "sound_connect",
+  "sound_disconnect",
 ]);
 
 export function ConfigView({ node, onBack }) {
@@ -99,6 +104,17 @@ export function ConfigView({ node, onBack }) {
   async function ctl(type) {
     const res = await send(type, { node });
     notify(res.ok ? `${cap(type)} sent.` : res.error || `${type} failed`, res.ok ? "ok" : "err");
+  }
+
+  async function toggleMute() {
+    const next = !info.config.muted;
+    const res = await send("set_muted", { node, muted: next });
+    if (res.ok) {
+      notify(next ? "Muted — the ready chime still plays." : "Unmuted.");
+      load();
+    } else {
+      notify(res.error || "Could not change mute.", "err");
+    }
   }
 
   const row = (k) => {
@@ -199,8 +215,12 @@ export function ConfigView({ node, onBack }) {
         <div class="ctl-row">
           <button class="btn-ghost" disabled=${!info.controls} onClick=${() => ctl("trigger")}>Trigger</button>
           <button class="btn-ghost" disabled=${!info.controls} onClick=${() => ctl("stop")}>Stop</button>
+          <button class="btn-ghost" disabled=${!info.controls || !info.connected}
+                  title=${info.connected ? "" : "Node must be connected"}
+                  onClick=${toggleMute}>${info.config.muted ? "Unmute" : "Mute"}</button>
           <button class="btn-ghost danger" disabled=${!info.controls} onClick=${() => ctl("restart")}>Restart</button>
         </div>
+        <p class="micro">Volume is in the settings above (0–100, applies live). Mute is temporary — a node comes back un-muted after a restart, and the wake-word chime stays audible while muted.</p>
       </div>
     </div>`;
 }

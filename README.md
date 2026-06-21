@@ -70,15 +70,17 @@ cp .env.example .env
 
 ## Running
 
-Each service reads its config from `configs/<service>.yaml`. Start them in any order:
+The config-path argument is optional — each service resolves its config from the config home automatically. **Start the server first**: the backend services and nodes pull their config from it on startup and block until it answers.
 
 ```bash
+# Server host first
 kenzy-server  [configs/server.yaml]
 kenzy-stt     [configs/stt.yaml]
 kenzy-tts     [configs/tts.yaml]
 kenzy-llm     [configs/llm.yaml]
 kenzy-speaker [configs/speaker.yaml]
-kenzy-node    [configs/node.yaml]     # on each room device
+
+kenzy-node    [configs/node.yaml]     # then each room device (discovers + pulls from the server)
 ```
 
 ### Speaker enrollment

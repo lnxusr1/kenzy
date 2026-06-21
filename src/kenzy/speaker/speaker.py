@@ -83,6 +83,7 @@ _embeddings_dir: Path = Path("data/speakers")
 _identify_threshold: float = 0.25
 _unknown_speaker: str = "unknown"
 _sem: asyncio.Semaphore | None = None
+_model_name: str = ""  # surfaced on /health for the dashboard
 
 
 # ---------------------------------------------------------------------------
@@ -125,8 +126,8 @@ def _load_embeddings() -> dict[str, np.ndarray[Any, Any]]:
 
 
 @app.get("/health")
-async def health() -> dict[str, str]:
-    return {"status": "ok"}
+async def health() -> dict[str, object]:
+    return {"status": "ok", "model": _model_name, "threshold": _identify_threshold}
 
 
 @app.post("/identify", response_model=IdentifyResponse)
@@ -202,7 +203,7 @@ async def delete_speaker(name: str) -> StatusResponse:
 
 
 def main() -> None:
-    global _classifier, _embeddings_dir, _identify_threshold, _unknown_speaker, _sem
+    global _classifier, _embeddings_dir, _identify_threshold, _unknown_speaker, _sem, _model_name
 
     import uvicorn  # type: ignore[import-untyped]
 
@@ -235,6 +236,7 @@ def main() -> None:
         raise RuntimeError("speechbrain is not installed – run: pip install speechbrain") from exc
 
     model_source = cfg.get("model_source", "speechbrain/spkrec-ecapa-voxceleb")
+    _model_name = str(model_source).rstrip("/").split("/")[-1]
     model_save_dir = cfg.get("model_save_dir", "models/speaker")
     log.info("Loading speaker model from %s…", model_save_dir)
     _classifier = EncoderClassifier.from_hparams(

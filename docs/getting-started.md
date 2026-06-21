@@ -51,7 +51,44 @@ curl -fsSL https://kenzy.dev/install.sh | bash -s -- --profile node --yes
 
 ## Manual installation
 
-Prefer to do it by hand? Clone the repo, create a virtual environment, and install the extras for the services you intend to run on this host:
+Prefer to do it by hand? Kenzy installs from PyPI into a per-user virtualenv — no source checkout required. **Set up the server host first, then add room nodes**: a node discovers the server over mDNS and pulls its configuration on connect, so the server it talks to needs to exist first.
+
+### 1. Server host
+
+Create a virtualenv and install the extras for the backend services this host runs:
+
+```bash
+python3 -m venv ~/.local/share/kenzy/venv
+source ~/.local/share/kenzy/venv/bin/activate
+
+pip install 'kenzy[server,stt,tts,llm,speaker]'   # full backend stack
+```
+
+You can split the backends across machines — install only the extras a given host runs (e.g. `kenzy[server]` on one box and `kenzy[stt,tts,llm,speaker]` on a beefier one). Then scaffold a config home:
+
+```bash
+kenzy-init        # writes configs/, skills/, data/, and .env to ~/.config/kenzy
+```
+
+### 2. Room node
+
+On each room device, install just the node extra:
+
+```bash
+python3 -m venv ~/.local/share/kenzy/venv
+source ~/.local/share/kenzy/venv/bin/activate
+
+pip install 'kenzy[node]'
+```
+
+A room node needs **no** config home — it discovers the server and pulls its tuning on connect. Set `server_url` (to pin a specific server, e.g. across VLANs) or `audio_device` (non-default hardware) in `node.yaml` only if needed.
+
+!!! note "Requires Kenzy ≥ 3.0 on PyPI"
+    `pip install kenzy` resolves the package once the 3.x release is published. To trial an unreleased build, install from a locally built wheel (`pip install ./dist/kenzy-*.whl`) or from source (below).
+
+### Develop from source
+
+To work on Kenzy itself, clone the repo and install it **editable** instead of from PyPI:
 
 ```bash
 git clone https://github.com/lnxusr1/kenzy.git
@@ -59,15 +96,11 @@ cd kenzy
 python3 -m venv .venv
 source .venv/bin/activate
 
-# Room node only (Orange Pi Zero 3/3W, Raspberry Pi 3/4/5)
-pip install -e ".[node]"
-
-# Full server stack (STT, TTS, LLM, speaker ID)
-pip install -e ".[server,stt,tts,llm,speaker]"
-
-# Everything including dev tools
 pip install -e ".[node,server,stt,tts,llm,speaker,dev]"
 ```
+
+!!! warning "Source installs don't self-upgrade"
+    An editable (`-e`) source install is for development. The per-user PyPI install is the supported path for production hosts and is what the dashboard / `pip install -U` upgrade flow expects.
 
 ## Download models
 
@@ -107,11 +140,7 @@ Kenzy captures at 16 kHz and plays TTS at 24 kHz. If a device does not natively 
 
 ## Configure API keys
 
-```bash
-cp .env.example .env
-```
-
-Edit `.env` and fill in your credentials:
+`kenzy-init` creates a `.env` in your config home (`~/.config/kenzy/.env`) from the bundled example. (In a source checkout, copy it yourself with `cp .env.example .env`.) Edit it and fill in your credentials:
 
 ```bash
 OPENAI_API_KEY="sk-..."       # Required for TTS; also for LLM if using OpenAI models
@@ -133,18 +162,18 @@ See the [Configuration](configuration/index.md) section for a full reference.
 
 ## Run the services
 
-Start each service in a separate terminal (or as a systemd unit — see [Deployment](deployment.md)):
+Start the server host first, then each room node (or run them as systemd units — see [Deployment](deployment.md)). The config-path argument is optional: each service finds its config in your config home automatically; pass an explicit path (e.g. `kenzy-server configs/server.yaml`) only to override.
 
 ```bash
-# On the server host
-kenzy-server  configs/server.yaml
-kenzy-stt     configs/stt.yaml
-kenzy-tts     configs/tts.yaml
-kenzy-llm     configs/llm.yaml
-kenzy-speaker configs/speaker.yaml
+# On the server host (start these first)
+kenzy-server
+kenzy-stt
+kenzy-tts
+kenzy-llm
+kenzy-speaker
 
-# On each room node
-kenzy-node    configs/node.yaml
+# On each room node (discovers the server and pulls its config)
+kenzy-node
 ```
 
 Say your wake word ("Hey Kenzie") and start talking.

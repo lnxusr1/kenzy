@@ -32,6 +32,19 @@ At boot, `kenzy-stt`/`kenzy-tts`/`kenzy-llm`/`kenzy-speaker` discover the server
 
 Edit it all from the dashboard's **Services** tab: it reads each service's secret-stripped effective config, writes your changes to `configs/services/<service>.yaml` on the server, and restarts the service to apply. Secrets stay in the service host's environment and are never shown or stored.
 
+### Announce endpoint
+
+The server exposes an **always-on** `GET /announce` on the node WebSocket port so external automations (e.g. Home Assistant) and scripts can make Kenzy speak in your rooms:
+
+```
+GET http://<server>:8765/announce?text=Dinner%20is%20ready&rooms=kitchen,office
+Authorization: Bearer <discovery.token / KENZY_SERVICE_TOKEN>
+```
+
+`text` is required; `rooms` is an optional comma-separated list of room names (omit for **every** room). Returns `{"announced": <node count>, …}`. It must be a **GET** with query parameters (the `websockets` HTTP hook only accepts GET and exposes no request body), gated by the service-to-service bearer when one is configured.
+
+For a ready-to-use Home Assistant `rest_command`, see [Home Assistant Integration → Calling Kenzy from Home Assistant](../skills/home-assistant.md#calling-kenzy-from-home-assistant).
+
 ### Dashboard
 
 Opt-in web fleet manager served by `kenzy-server`. **Off by default**; when disabled nothing is wired up (no route, no overhead). When enabled it provides a live fleet/health view, a per-node config editor (with room rename), node controls (trigger/stop/restart), TTS announcements, a log viewer, and a settings page. See the [Dashboard guide](../dashboard.md) for the full walkthrough.

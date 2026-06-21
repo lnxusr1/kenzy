@@ -45,8 +45,11 @@ node_id: "c130ef9c-2a66-4306-9ac4-0a4c80c979ce"
 # audio_device: null
 # capture_sample_rate: 16000      # mic open rate; resampled to 16000 internally
 # playback_sample_rate: 24000     # speaker open rate; TTS (24000) resampled to it
+# volume: 100                     # playback volume 0-100 (server-owned, applies live)
 # sound_ready: null               # activation chime (path, or null = bundled)
 # sound_waiting: null             # processing sound (path, or null = silent)
+# sound_connect: connect.wav      # chime when an intercom call connects (null = off)
+# sound_disconnect: disconnect.wav # chime when an intercom call ends (null = off)
 # wakeword_models: []             # paths to .tflite/.onnx; empty = bundled
 # wakeword_threshold: 0.5         # confidence [0-1] to fire the wake word
 # wakeword_vad_threshold: 0.0     # Silero VAD gate [0-1]; 0 disables

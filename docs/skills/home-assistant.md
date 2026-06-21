@@ -1,5 +1,10 @@
 # Home Assistant Integration
 
+Kenzy integrates with Home Assistant in **both directions**:
+
+- **Kenzy → HA** — the Home Assistant skill lets Kenzy control and query your smart home devices using natural language (lights, switches, fans, covers, locks, thermostats). This is the bulk of this page.
+- **HA → Kenzy** — Home Assistant automations can make Kenzy speak in your rooms via the server's announce webhook. See [Calling Kenzy from Home Assistant](#calling-kenzy-from-home-assistant) at the end.
+
 The Home Assistant skill lets Kenzy control and query your smart home devices using natural language. It supports lights, switches, fans, covers (blinds/garage doors), locks, and thermostats.
 
 ## How it works
@@ -166,3 +171,29 @@ skills:
 - *"Lock the front door"* → **(fast)** requires an enrolled speaker; refused for unknown
 - *"Make it a bit warmer"* → **(LLM)** reads current setpoint via `get_status`, then sets +2°F
 - *"What's the temperature in the living room?"* → **(LLM)** returns current state from HA
+
+## Calling Kenzy from Home Assistant
+
+Integration runs the other way too: Home Assistant can make **Kenzy speak** in your rooms by calling the server's always-on `GET /announce` endpoint (see [Server → Announce endpoint](../configuration/server.md#announce-endpoint)). This is the same intercom/broadcast path the dashboard's announce composer and the voice "tell everyone…" command use.
+
+Add a `rest_command` to your HA configuration:
+
+```yaml
+rest_command:
+  kenzy_announce:
+    url: "http://kenzy-server.local:8765/announce?text={{ message | urlencode }}&rooms={{ rooms | default('') | urlencode }}"
+    method: GET
+    headers:
+      Authorization: "Bearer !secret kenzy_service_token"
+```
+
+Then call it from an automation or script:
+
+```yaml
+- service: rest_command.kenzy_announce
+  data:
+    message: "The laundry is done"
+    rooms: "kitchen"        # comma-separated room names; omit for every room
+```
+
+The bearer token must match the server's `discovery.token` / `KENZY_SERVICE_TOKEN`; drop the `headers` block if no service token is configured. `rooms` is optional — leave it empty to announce in the whole house. The endpoint must be a **GET** with query parameters (the `websockets` HTTP hook accepts GET only and exposes no request body).

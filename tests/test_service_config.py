@@ -12,8 +12,13 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import pytest
 
-from kenzy.server.server import AudioServer
+from kenzy.server.server import AudioServer, NodeSession, TranscribingServer
 from kenzy.serviceboot import _http_base, bootstrap_config
+
+
+class _StubWS:
+    async def send(self, m):  # noqa: ANN001, ANN201
+        pass
 
 # ---------------------------------------------------------------------------
 # Server: effective service config = packaged default ← stored override
@@ -116,6 +121,65 @@ async def test_config_endpoint_token_gated(tmp_path, monkeypatch):
             _http_get, "http://127.0.0.1:8794/config/stt", "s3cret"
         )
         assert status == 200 and body["port"] == 8767
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+# ---------------------------------------------------------------------------
+# Always-on /announce endpoint (Home Assistant / scripts → Kenzy speaks)
+# ---------------------------------------------------------------------------
+
+
+async def test_announce_endpoint(tmp_path, monkeypatch):
+    monkeypatch.delenv("KENZY_SERVICE_TOKEN", raising=False)
+    monkeypatch.setenv("KENZY_HOME", str(tmp_path))
+    (tmp_path / "configs").mkdir(parents=True)
+    server = TranscribingServer({"host": "127.0.0.1", "port": 8793})
+    server._nodes["k"] = NodeSession(ws=_StubWS(), node_id="k", room_id="kitchen")
+    calls: list[tuple[str, list[str] | None]] = []
+
+    async def rec(text, rooms=None):
+        calls.append((text, rooms))
+        return len(rooms or [])
+
+    monkeypatch.setattr(server, "announce", rec)
+    task = await _serve(server)
+    try:
+        status, body = await asyncio.to_thread(
+            _http_get, "http://127.0.0.1:8793/announce?text=hi&rooms=kitchen"
+        )
+        assert status == 200 and body["announced"] == 1
+        assert calls == [("hi", ["k"])]  # room name resolved to node_id
+        # Missing text → 400.
+        status, _ = await asyncio.to_thread(_http_get, "http://127.0.0.1:8793/announce")
+        assert status == 400
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+async def test_announce_endpoint_token_gated(tmp_path, monkeypatch):
+    monkeypatch.delenv("KENZY_SERVICE_TOKEN", raising=False)
+    monkeypatch.setenv("KENZY_HOME", str(tmp_path))
+    (tmp_path / "configs").mkdir(parents=True)
+    server = TranscribingServer(
+        {"host": "127.0.0.1", "port": 8792, "discovery": {"token": "s3cret"}}
+    )
+    server._nodes["k"] = NodeSession(ws=_StubWS(), node_id="k", room_id="kitchen")
+
+    async def rec(text, rooms=None):
+        return 1
+
+    monkeypatch.setattr(server, "announce", rec)
+    task = await _serve(server)
+    try:
+        status, _ = await asyncio.to_thread(_http_get, "http://127.0.0.1:8792/announce?text=hi")
+        assert status == 401  # no bearer
+        status, body = await asyncio.to_thread(
+            _http_get, "http://127.0.0.1:8792/announce?text=hi", "s3cret"
+        )
+        assert status == 200
     finally:
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)

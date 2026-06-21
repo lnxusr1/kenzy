@@ -69,6 +69,19 @@ _STATE_INTERCOM = "intercom"  # live two-way call: stream mic out, play peer aud
 # Rate at which the server sends TTS PCM (fixed by the TTS service).
 _TTS_SERVER_RATE = 24_000
 
+# When muted, alert audio (the wake-word ready chime) still plays at this floor gain
+# so the user can hear the device acknowledge a wake word and knowingly unmute.
+_MUTED_ALERT_FLOOR = 0.4
+
+
+def _volume_to_gain(value: Any) -> float:
+    """Convert a 0–100 volume config value to a 0.0–1.0 gain (clamped)."""
+    try:
+        pct = float(value)
+    except (TypeError, ValueError):
+        pct = 100.0
+    return max(0.0, min(1.0, pct / 100.0))
+
 
 def _set_yaml_scalar(text: str, key: str, value: str) -> str:
     """Update or append a top-level scalar ``key: value`` in a YAML document.
@@ -275,6 +288,8 @@ class _SoundPlayer:
         chime_rate: int,
         device: str | int | None = None,
         sample_rate: int = _TTS_SERVER_RATE,
+        volume: float = 1.0,
+        muted: bool = False,
     ) -> None:
         self._sample_rate = sample_rate
         # Convert to mono then resample to the playback rate if needed.
@@ -286,6 +301,14 @@ class _SoundPlayer:
         self._pending: np.ndarray[Any, Any] = self._chime  # audio to switch to on restart
         self._pos: int = len(self._audio)  # past end → silent
         self._restart: bool = False
+        # "alert" audio (the ready chime) stays audible when muted; TTS/stream do not.
+        self._alert: bool = True
+        self._pending_alert: bool = True
+
+        # Output gain (0.0–1.0) and mute, set from the main thread and read in the RT
+        # callback (GIL-atomic scalar reads, no mutex — same discipline as _restart).
+        self._volume: float = max(0.0, min(1.0, volume))
+        self._muted: bool = muted
 
         # Live streaming mode (intercom / media): when on, the callback drains a
         # ring buffer instead of the one-shot _audio array. Off by default.
@@ -310,10 +333,12 @@ class _SoundPlayer:
     ) -> None:
         if self._streaming:
             outdata[:, 0] = self._ring.read(frames)
+            self._apply_gain(outdata, alert=False)
             return
         if self._restart and self._pos >= len(self._audio):
             self._restart = False
             self._audio = self._pending
+            self._alert = self._pending_alert
             self._pos = 0
         remaining = len(self._audio) - self._pos
         if remaining <= 0:
@@ -325,16 +350,44 @@ class _SoundPlayer:
             outdata[n:] = 0
             self._restart = False  # discard restart queued while audio was playing
         self._pos += n
+        self._apply_gain(outdata, alert=self._alert)
+
+    def _apply_gain(self, outdata: np.ndarray[Any, Any], alert: bool) -> None:
+        """Scale ``outdata`` in place by the current volume / mute.
+
+        Alert audio (the ready chime) ignores mute and plays at an audible floor so
+        a muted node still acknowledges the wake word; everything else is silenced.
+        """
+        if self._muted:
+            gain = _MUTED_ALERT_FLOOR if alert else 0.0
+        else:
+            gain = self._volume
+        if gain == 1.0:
+            return
+        if gain == 0.0:
+            outdata[:] = 0
+            return
+        outdata[:] = (outdata * gain).astype(np.int16)
 
     def play(self) -> None:
-        """Play the chime."""
+        """Play the chime (alert audio — stays audible when muted)."""
         self._pending = self._chime
+        self._pending_alert = True
         self._restart = True
 
     def play_pcm(self, audio: np.ndarray[Any, Any]) -> None:
-        """Play arbitrary int16 mono PCM at _TTS_SAMPLE_RATE."""
+        """Play arbitrary int16 mono PCM at _TTS_SAMPLE_RATE (honors mute)."""
         self._pending = audio.reshape(-1, 1)
+        self._pending_alert = False
         self._restart = True
+
+    def set_volume(self, volume: float) -> None:
+        """Set output gain (0.0–1.0); clamped."""
+        self._volume = max(0.0, min(1.0, float(volume)))
+
+    def set_muted(self, muted: bool) -> None:
+        """Mute/unmute all non-alert audio (the ready chime stays audible)."""
+        self._muted = bool(muted)
 
     def abort(self) -> None:
         """Stop playback immediately."""
@@ -404,8 +457,18 @@ class NodeClient:
         self._sound_ready: str = str(cfg.get("sound_ready") or "ready.wav")
         _sw = cfg.get("sound_waiting", "waiting.wav")
         self._sound_waiting: str | None = str(_sw) if _sw else None
+        # Intercom call chimes (null/empty disables). Bundled defaults.
+        _sc = cfg.get("sound_connect", "connect.wav")
+        self._sound_connect: str | None = str(_sc) if _sc else None
+        _sd = cfg.get("sound_disconnect", "disconnect.wav")
+        self._sound_disconnect: str | None = str(_sd) if _sd else None
         self._capture_rate: int = int(cfg.get("capture_sample_rate", protocol.SAMPLE_RATE))
         self._playback_rate: int = int(cfg.get("playback_sample_rate", _TTS_SERVER_RATE))
+        # Playback volume (config key is 0–100; stored internally as 0.0–1.0) and mute.
+        # Volume persists via config-pull; mute is a transient runtime toggle (the node
+        # comes back un-muted after a restart since it isn't written to the override).
+        self._volume: float = _volume_to_gain(cfg.get("volume", 100))
+        self._muted: bool = bool(cfg.get("muted", False))
 
         # Timing thresholds, all stored as frame counts (min 1 to avoid ≥0 always-true).
         self._vad_enabled: bool = bool(cfg.get("vad_enabled", True))
@@ -458,6 +521,8 @@ class NodeClient:
         self._log_level: int = level_value(cfg.get("log_level"), logging.INFO)
         self._log_capture_level: int = level_value(cfg.get("log_capture_level"), logging.DEBUG)
         self._waiting_audio: np.ndarray[Any, Any] | None = None
+        self._connect_audio: np.ndarray[Any, Any] | None = None
+        self._disconnect_audio: np.ndarray[Any, Any] | None = None
 
         self._silence_count: int = 0
         self._speech_frames: int = 0
@@ -647,6 +712,9 @@ class NodeClient:
         if self._player is not None:
             self._player.abort()  # cut any residual one-shot audio
             self._player.start_stream()  # switch to live streaming playback
+            if self._connect_audio is not None:
+                # Play the connect chime first by feeding it ahead of the live stream.
+                self._player.feed(self._connect_audio)
         log.info("Intercom connected with '%s'", peer_room)
 
     async def _end_intercom(self, reason: str = "ended") -> None:
@@ -655,7 +723,9 @@ class NodeClient:
         self._state = _STATE_IDLE
         self._session_id = None
         if self._player is not None:
-            self._player.stop_stream()
+            self._player.stop_stream()  # back to one-shot playback
+            if self._disconnect_audio is not None:
+                self._player.play_pcm(self._disconnect_audio)
         log.info("Intercom ended (%s)", reason)
 
     # ------------------------------------------------------------------
@@ -737,6 +807,17 @@ class NodeClient:
             self._hard_cap_frames = max(int(patch["hard_cap_ms"]) // fm, 1)
             applied.append("hard_cap_ms")
 
+        if "volume" in patch:
+            self._volume = _volume_to_gain(patch["volume"])
+            if self._player is not None:
+                self._player.set_volume(self._volume)
+            applied.append("volume")
+        if "muted" in patch:
+            self._muted = bool(patch["muted"])
+            if self._player is not None:
+                self._player.set_muted(self._muted)
+            applied.append("muted")
+
         if "log_level" in patch:
             from kenzy.logutil import level_value, set_display_level
 
@@ -766,6 +847,8 @@ class NodeClient:
             "wakeword_vad_threshold",
             "sound_ready",
             "sound_waiting",
+            "sound_connect",
+            "sound_disconnect",
         }
 
         if initial:
@@ -793,6 +876,14 @@ class NodeClient:
                 sw = patch["sound_waiting"]
                 self._sound_waiting = str(sw) if sw else None
                 applied.append("sound_waiting")
+            if "sound_connect" in patch:
+                sc = patch["sound_connect"]
+                self._sound_connect = str(sc) if sc else None
+                applied.append("sound_connect")
+            if "sound_disconnect" in patch:
+                sd = patch["sound_disconnect"]
+                self._sound_disconnect = str(sd) if sd else None
+                applied.append("sound_disconnect")
             deferred: list[str] = []
         else:
             deferred = sorted(restart_keys & patch.keys())
@@ -1077,7 +1168,12 @@ class NodeClient:
 
         sound_audio, sound_rate = _load_sound(self._sound_ready)
         self._player = _SoundPlayer(
-            sound_audio, sound_rate, self._audio_device, self._playback_rate
+            sound_audio,
+            sound_rate,
+            self._audio_device,
+            self._playback_rate,
+            volume=self._volume,
+            muted=self._muted,
         )
         log.info(
             "Sound: %s (%d Hz → %d Hz stream)", self._sound_ready, sound_rate, self._playback_rate
@@ -1102,6 +1198,25 @@ class NodeClient:
                 log.info("Waiting sound not loaded (%s) — silence during processing", exc)
         else:
             log.info("Waiting sound disabled — silence during processing")
+
+        def _chime(name: str | None) -> np.ndarray[Any, Any] | None:
+            if not name:
+                return None
+            try:
+                a, r = _load_sound(name)
+                mono = a.mean(axis=1).astype(np.int16) if a.ndim > 1 else a.astype(np.int16)
+                return _resample(mono, r, self._playback_rate)
+            except Exception as exc:
+                log.info("Chime %s not loaded (%s)", name, exc)
+                return None
+
+        self._connect_audio = _chime(self._sound_connect)
+        self._disconnect_audio = _chime(self._sound_disconnect)
+        log.info(
+            "Intercom chimes: connect=%s disconnect=%s",
+            self._sound_connect or "off",
+            self._sound_disconnect or "off",
+        )
 
         # Scale the blocksize so each callback still delivers ~80 ms of audio
         # regardless of the capture rate (e.g. 3840 samples at 48 kHz).

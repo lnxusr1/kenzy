@@ -545,6 +545,13 @@ class Dashboard:
             }[mtype]
             ok = await action(node)
             await ack(ok, None if ok else "node not connected")
+        elif mtype == "set_muted":
+            if not self._dcfg.controls:
+                return await ack(False, "controls are disabled (set dashboard.controls: true)")
+            ok = await self._server.set_node_muted(str(msg.get("node", "")), bool(msg.get("muted")))
+            await ack(ok, None if ok else "node not connected")
+            if ok:
+                await self._broadcast_state()
         elif mtype == "announce":
             if not self._dcfg.controls:
                 return await ack(False, "controls are disabled (set dashboard.controls: true)")

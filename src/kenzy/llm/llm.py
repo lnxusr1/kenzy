@@ -170,8 +170,8 @@ Example (output this format exactly):
 
 
 @app.get("/health")
-async def health() -> dict[str, str]:
-    return {"status": "ok"}
+async def health() -> dict[str, object]:
+    return {"status": "ok", "model": _model}
 
 
 @app.post("/process", response_model=ProcessResponse)

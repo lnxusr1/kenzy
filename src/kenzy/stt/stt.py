@@ -53,11 +53,12 @@ app = FastAPI(title="Kenzy STT Service", version="0.1.0")
 _whisper: Any = None
 _language: str | None = None
 _sem: asyncio.Semaphore | None = None
+_model_size: str = ""  # surfaced on /health for the dashboard
 
 
 @app.get("/health")
-async def health() -> dict[str, str]:
-    return {"status": "ok"}
+async def health() -> dict[str, object]:
+    return {"status": "ok", "model": _model_size, "language": _language or "auto"}
 
 
 @app.post("/transcribe", response_model=TranscribeResponse)
@@ -88,7 +89,7 @@ def _run_whisper(pcm: bytes) -> str:
 
 
 def main() -> None:
-    global _whisper, _language, _sem
+    global _whisper, _language, _sem, _model_size
 
     import uvicorn  # type: ignore[import-untyped]
 
@@ -117,7 +118,7 @@ def main() -> None:
         ) from exc
 
     wcfg: dict[str, Any] = cfg.get("whisper", {})
-    model_size = str(wcfg.get("model", "base"))
+    model_size = _model_size = str(wcfg.get("model", "base"))
     device = str(wcfg.get("device", "cpu"))
     compute_type = str(wcfg.get("compute_type", "int8"))
     _language = wcfg.get("language") or None
