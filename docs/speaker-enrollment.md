@@ -30,6 +30,28 @@ The CLI will:
 
 The default prompts are phonetically diverse sentences chosen to capture a broad range of sounds. You can customize them in `configs/speaker.yaml` under `enroll_prompts`.
 
+## Enrolling by voice (from a node)
+
+You can also enroll without the CLI by speaking to a room node — say something like **"Hey Kenzy, enroll me as Alice"**. Kenzy then prompts you to say a few sentences and records them through that node's microphone, so the samples come from the device and room you actually use.
+
+This is **off by default**. Enable it from the **dashboard** (Services → **speaker** →
+toggle `allow_voice_enroll` on, Save) or by setting it in the speaker config:
+
+```yaml
+allow_voice_enroll: true
+```
+
+The server reads this live, so a dashboard toggle takes effect without a restart.
+
+How it flows once enabled:
+
+1. You ask Kenzy to enroll a name; it replies "Okay, enrolling Alice…".
+2. After each prompt tone, say a sentence. Kenzy collects a few samples and POSTs them to `kenzy-speaker`.
+3. It confirms "All done — I've enrolled Alice." (or cancels after several unclear captures, or times out if abandoned).
+
+!!! warning "Why it's off by default"
+    When voice enrollment is on, **anyone within earshot of a node can enroll** — including under an *existing* name. Because speaker identity gates sensitive actions (e.g. unlocking doors), that could let someone register their voice as a trusted person and bypass the gate. Leave it off unless you trust everyone with microphone access, and prefer the `kenzy-enroll` CLI for the people who can unlock things. Speaker ID is a convenience gate, not strong authentication (see [Security implications](#security-implications)).
+
 ## Re-enrolling a speaker
 
 Run `kenzy-enroll` again with the same name. The existing embedding file is overwritten.

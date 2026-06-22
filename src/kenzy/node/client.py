@@ -546,9 +546,9 @@ class NodeClient:
 
         self._state: str = _STATE_IDLE
         self._session_id: str | None = None
-        # Set when an incoming call is ringing; after the consent prompt finishes
-        # playing, the node auto-captures the spoken yes/no answer.
-        self._awaiting_consent: bool = False
+        # Set when the server wants one utterance captured after the next TTS prompt
+        # finishes (intercom consent answer, or a voice-enrollment sample).
+        self._capture_after_prompt: bool = False
         self._ws: ClientConnection | None = None
         self._oww: Any = None  # openwakeword Model
         self._player: _SoundPlayer | None = None
@@ -744,11 +744,11 @@ class NodeClient:
             self._session_id = None
             self._tts_task = None
             log.info("TTS playback complete")
-        # If this was an incoming-call consent prompt, capture the yes/no answer now
-        # that it has finished playing.
-        if completed and self._awaiting_consent:
-            self._awaiting_consent = False
-            log.info("Consent prompt finished — capturing answer")
+        # If a prompt asked us to capture one utterance (intercom consent or voice
+        # enrollment), start capturing now that the prompt has finished playing.
+        if completed and self._capture_after_prompt:
+            self._capture_after_prompt = False
+            log.info("Prompt finished — capturing the spoken reply")
             await self._begin_streaming(str(uuid.uuid4()))
 
     async def _stop_tts_playback(self) -> None:
@@ -771,7 +771,7 @@ class NodeClient:
 
     async def _begin_intercom(self, peer_room: str) -> None:
         """Enter a live call: stream mic out continuously, play peer audio live."""
-        self._awaiting_consent = False
+        self._capture_after_prompt = False
         # Stop whatever we were doing (likely playing the "calling…" reply or idle).
         if self._state == _STATE_TTS:
             await self._stop_tts_playback()
@@ -1029,11 +1029,11 @@ class NodeClient:
                 # Incoming call rings: arm consent capture. The server streams the
                 # spoken prompt next; when it finishes playing, _tts_wait_done opens a
                 # capture window for the yes/no answer. No audio is bridged yet.
-                self._awaiting_consent = True
+                self._capture_after_prompt = True
                 log.info("Incoming call from '%s' — prompting for consent", msg.get("from_room"))
 
             elif mtype == protocol.MSG_CALL_CANCEL:
-                self._awaiting_consent = False
+                self._capture_after_prompt = False
                 if self._state == _STATE_TTS:
                     await self._stop_tts_playback()
                 elif self._state == _STATE_STREAMING:
@@ -1078,6 +1078,11 @@ class NodeClient:
 
             elif mtype == protocol.MSG_TUNE_STOP:
                 self._stop_tuning()
+
+            elif mtype == protocol.MSG_EXPECT_UTTERANCE:
+                # Arm one-shot capture: the next TTS prompt's completion opens a
+                # capture window (used by voice enrollment, like the consent gate).
+                self._capture_after_prompt = True
 
     # ------------------------------------------------------------------
     # Audio loop – always running, routes frames by current state

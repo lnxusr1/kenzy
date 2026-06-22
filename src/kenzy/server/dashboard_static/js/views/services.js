@@ -26,7 +26,14 @@ function setPath(obj, path, value) {
 }
 
 const eq = (a, b) => JSON.stringify(a) === JSON.stringify(b);
-const typeOf = (v) => (typeof v === "boolean" ? "bool" : typeof v === "number" ? "num" : "str");
+const typeOf = (v) =>
+  Array.isArray(v)
+    ? "list"
+    : typeof v === "boolean"
+      ? "bool"
+      : typeof v === "number"
+        ? "num"
+        : "str";
 
 function ServiceEditor({ name, onBack }) {
   const [info, setInfo] = useState(null);
@@ -69,6 +76,9 @@ function ServiceEditor({ name, onBack }) {
         const num = Number(v);
         if (Number.isNaN(num)) continue;
         val = num;
+      } else if (Array.isArray(v)) {
+        // Drop blank rows; trim string items.
+        val = v.map((s) => (typeof s === "string" ? s.trim() : s)).filter((s) => s !== "" && s != null);
       }
       if (!eq(val, orig[k])) setPath(override, k, val);
     }
@@ -111,6 +121,23 @@ function ServiceEditor({ name, onBack }) {
       const step = Number.isInteger(orig[k]) ? "1" : "any";
       input = html`<input type="number" step=${step} inputmode="decimal" disabled=${!info.controls}
         value=${v ?? ""} onInput=${(e) => setKey(k, e.target.value)} />`;
+    } else if (t === "list") {
+      const items = Array.isArray(v) ? v : [];
+      const update = (next) => setKey(k, next);
+      input = html`<div class="list-edit">
+        ${items.map(
+          (item, i) => html`
+            <div class="list-item" key=${i}>
+              <input disabled=${!info.controls} value=${item}
+                onInput=${(e) => update(items.map((x, j) => (j === i ? e.target.value : x)))} />
+              <button class="list-x btn-ghost" disabled=${!info.controls} title="Remove"
+                onClick=${() => update(items.filter((_, j) => j !== i))}>×</button>
+            </div>
+          `,
+        )}
+        <button class="list-add btn-ghost" disabled=${!info.controls}
+          onClick=${() => update([...items, ""])}>+ Add</button>
+      </div>`;
     } else {
       input = html`<input disabled=${!info.controls} value=${v ?? ""}
         placeholder=${orig[k] === null ? "null" : ""}
@@ -176,11 +203,13 @@ export function ServicesView({ selected = null, onSelect }) {
       ${list.map((svc) => {
         const up = health[svc.name];
         return html`
-          <div key=${svc.name} class="chip" onClick=${() => onSelect(svc.name)}
+          <div key=${svc.name} class="chip svc-chip" onClick=${() => onSelect(svc.name)}
                role="button" tabindex="0">
             <span class=${"led " + (up ? "up" : "down")}></span>
-            <span class="name">${svc.name}</span>
-            <span class="detail">${svc.url}</span>
+            <div class="svc-meta">
+              <span class="name">${svc.name}</span>
+              <span class="detail" title=${svc.url}>${svc.url}</span>
+            </div>
           </div>`;
       })}
     </div>`;

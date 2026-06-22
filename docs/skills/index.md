@@ -34,12 +34,11 @@ Per-skill settings live under `skills.<skill_name>` in `llm.yaml`:
 
 ```yaml
 skills:
-  weather:
-    units: imperial
-    default_location: "New York, NY"
-
   home_assistant:
     url: "http://homeassistant.local:8123"
+
+  news:
+    max_headlines: 5
 ```
 
 Skills read these values at runtime via `get_config(section, key, default)`:
@@ -47,7 +46,7 @@ Skills read these values at runtime via `get_config(section, key, default)`:
 ```python
 from kenzy.llm.skills import get_config
 
-units = get_config("weather", "units", "imperial")
+url = get_config("home_assistant", "url", "http://homeassistant.local:8123")
 ```
 
 ## Disabling skills

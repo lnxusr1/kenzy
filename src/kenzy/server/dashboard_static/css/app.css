@@ -156,6 +156,10 @@ button { font: inherit; cursor: pointer; }
 .chip[role="button"]:hover { border-color: var(--accent); }
 .chip .name { font-weight: 700; text-transform: uppercase; font-size: 12px; letter-spacing: .08em; }
 .chip .detail { margin-left: auto; font-family: var(--font-mono); font-size: 11px; color: var(--text-faint); }
+/* Services list: stack the URL under the name and let it wrap inside the chip. */
+.svc-chip { align-items: center; }
+.svc-chip .svc-meta { display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1; }
+.svc-chip .detail { margin-left: 0; max-width: 100%; overflow-wrap: anywhere; }
 
 .empty { color: var(--text-faint); font-style: italic; padding: var(--s5); border: 1px dashed var(--border); border-radius: var(--radius-lg); text-align: center; }
 

@@ -104,6 +104,27 @@ def bootstrap_config(service: str, *, timeout: float = 5.0) -> dict[str, Any]:
             delay = min(delay * 2, 60)
 
 
+def fetch_service_config(service: str, *, timeout: float = 3.0) -> dict[str, Any] | None:
+    """Best-effort single fetch of ``service``'s effective config from the server.
+
+    Unlike :func:`bootstrap_config` this does **not** retry, block, or write a local
+    copy — it returns ``None`` on any failure. For tools (e.g. ``kenzy-enroll``) that
+    want server-provided values (like an auto-wired peer URL) but must stay responsive
+    when the server is unreachable.
+    """
+    token = os.environ.get("KENZY_SERVICE_TOKEN")
+    try:
+        base = _resolve_server_http(timeout)
+        req = urllib.request.Request(f"{base}/config/{service}")  # noqa: S310 (http only)
+        if token:
+            req.add_header("Authorization", f"Bearer {token}")
+        with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310
+            cfg = json.loads(resp.read().decode())
+        return cfg if isinstance(cfg, dict) else None
+    except Exception:
+        return None
+
+
 def load_service_config(service: str, argv: list[str] | None = None) -> dict[str, Any]:
     """Resolve a service's config: explicit path arg → local file; else pull from server.
 

@@ -68,9 +68,8 @@ skills:
   disabled: []
 
   # Per-skill configuration
-  weather:
-    default_location: "New York, NY"
-    units: imperial        # imperial | metric | standard
+  # weather: no per-skill keys — the default location is the top-level `location:`
+  # block above (city/state, with optional latitude/longitude). Output is in °F.
 
   news:
     # Maximum headlines returned per request (keep low — output goes to TTS).

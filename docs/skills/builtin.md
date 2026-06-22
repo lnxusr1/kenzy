@@ -11,12 +11,12 @@ Provides current conditions and multi-day forecasts using the [National Weather 
 | `get_current_weather(location)` | Current temperature, conditions, humidity, wind |
 | `get_forecast(location, days)` | Multi-day forecast; `days` defaults to 3 |
 
-### Configuration (`skills.weather` in `llm.yaml`)
+### Configuration
 
-| Key | Default | Description |
-|---|---|---|
-| `default_location` | *(from `location` block)* | Used when the user does not specify a location |
-| `units` | `"imperial"` | `imperial` (°F) or `metric` (°C) |
+The weather skill has **no per-skill keys**. When the user doesn't name a location it
+uses the top-level **`location:`** block in `llm.yaml` (`city` + `state`; optional
+`latitude`/`longitude` skip a geocoding step and are otherwise derived from city/state).
+Output is in °F.
 
 ---
 

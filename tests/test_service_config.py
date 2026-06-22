@@ -230,3 +230,64 @@ def test_bootstrap_config_pulls_and_saves(tmp_path, monkeypatch):
 
     saved = yaml.safe_load((tmp_path / "configs" / "stt.yaml").read_text())
     assert saved["whisper"]["model"] == "base"
+
+
+# ---------------------------------------------------------------------------
+# Auto-wired peer endpoints (server injects e.g. tts.url into speaker config)
+# ---------------------------------------------------------------------------
+
+
+def test_effective_config_injects_peer_url(tmp_path, monkeypatch):
+    monkeypatch.setenv("KENZY_HOME", str(tmp_path))
+    (tmp_path / "configs").mkdir(parents=True)
+    srv = AudioServer({"tts": {"url": "http://tts:8769/speak"}})
+    # speaker depends on tts → auto-wired from the server's configured tts.url.
+    assert srv._effective_service_config("speaker")["tts"]["url"] == "http://tts:8769/speak"
+    # A service with no declared peer deps doesn't get it.
+    assert "tts" not in srv._effective_service_config("stt")
+
+
+def test_peer_url_override_wins(tmp_path, monkeypatch):
+    monkeypatch.setenv("KENZY_HOME", str(tmp_path))
+    services = tmp_path / "configs" / "services"
+    services.mkdir(parents=True)
+    (services / "speaker.yaml").write_text("tts:\n  url: http://local-tts:9/speak\n")
+    srv = AudioServer({"tts": {"url": "http://server-tts:8769/speak"}})
+    # An explicit value in the service's own config (override) wins (multi-host escape).
+    assert srv._effective_service_config("speaker")["tts"]["url"] == "http://local-tts:9/speak"
+
+
+def test_no_injection_without_configured_peer(tmp_path, monkeypatch):
+    monkeypatch.setenv("KENZY_HOME", str(tmp_path))
+    (tmp_path / "configs").mkdir(parents=True)
+    srv = AudioServer({})  # server has no tts.url configured
+    assert "tts" not in srv._effective_service_config("speaker")
+
+
+def test_fetch_service_config_best_effort(tmp_path, monkeypatch):
+    monkeypatch.delenv("KENZY_SERVICE_TOKEN", raising=False)
+    from kenzy.serviceboot import fetch_service_config
+
+    served = {"tts": {"url": "http://tts:8769/speak"}}
+
+    class _Handler(BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps(served).encode())
+
+        def log_message(self, *a):
+            pass
+
+    httpd = HTTPServer(("127.0.0.1", 0), _Handler)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    monkeypatch.setenv("KENZY_SERVER_URL", f"http://127.0.0.1:{httpd.server_address[1]}")
+    try:
+        assert fetch_service_config("speaker", timeout=2.0) == served
+    finally:
+        httpd.shutdown()
+
+    # Unreachable server → None, no retry/block (dead port).
+    monkeypatch.setenv("KENZY_SERVER_URL", "http://127.0.0.1:1")
+    assert fetch_service_config("speaker", timeout=0.5) is None

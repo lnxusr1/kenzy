@@ -32,6 +32,7 @@ MSG_STATUS = "status"  # node→server: report node health (e.g. audio init fail
 MSG_TUNE_START = "tune_start"  # server→node: begin a bounded calibration window
 MSG_TUNE_STOP = "tune_stop"  # server→node: end calibration early
 MSG_TUNE_SAMPLE = "tune_sample"  # node→server: one calibration sample (rms/wake/vad)
+MSG_EXPECT_UTTERANCE = "expect_utterance"  # server→node: capture one utterance after the next TTS
 # Intercom (live two-way call between two rooms; gated by the receiver's consent).
 MSG_CALL_REQUEST = "call_request"  # server→node: ring the receiver (no audio yet)
 MSG_CALL_CANCEL = "call_cancel"  # server→node: caller hung up before accept
@@ -153,6 +154,12 @@ def tune_start(seconds: float = 20.0) -> str:
 
 def tune_stop() -> str:
     return json.dumps({"type": MSG_TUNE_STOP})
+
+
+def expect_utterance() -> str:
+    """Tell the node to auto-capture one utterance after the next TTS prompt finishes
+    (used by the consent gate and voice enrollment)."""
+    return json.dumps({"type": MSG_EXPECT_UTTERANCE})
 
 
 def tune_sample(

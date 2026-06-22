@@ -207,6 +207,17 @@ def main() -> None:
     base_url = args.url or f"http://{cfg.get('host', '127.0.0.1')}:{cfg.get('port', 8768)}"
     enroll_url = base_url.rstrip("/") + "/enroll"
 
+    # TTS endpoint for voice guidance: a local tts.url wins (multi-host override);
+    # otherwise pull it from the server (single source of truth), best-effort.
+    if not (cfg.get("tts") or {}).get("url"):
+        from kenzy.serviceboot import fetch_service_config
+
+        server_cfg = fetch_service_config("speaker")
+        server_tts = (server_cfg or {}).get("tts") or {}
+        if server_tts.get("url"):
+            cfg.setdefault("tts", {})["url"] = server_tts["url"]
+            log.info("Using TTS endpoint auto-wired from the server: %s", server_tts["url"])
+
     sample_rate = int(cfg.get("enroll_sample_rate", 16_000))
     silence_rms = float(cfg.get("enroll_silence_rms", 300))
     silence_ms = int(cfg.get("enroll_silence_ms", 800))

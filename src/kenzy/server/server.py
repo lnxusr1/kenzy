@@ -83,6 +83,16 @@ _ANNOUNCE_VOICE_PROMPT = "Read this aloud as a clear, calm public announcement."
 _INTERCOM_VOICE_PROMPT = "Read this aloud as a brief, friendly spoken notification."
 # How long to wait for the receiver's spoken consent before declining (no answer).
 _CALL_TIMEOUT_SEC = 25.0
+# Voice enrollment: samples to collect, min bytes for a usable sample, max tries, and
+# how long an idle enrollment session lives before it's abandoned.
+_ENROLL_SAMPLES = 3
+_ENROLL_MIN_PCM_BYTES = 16000  # ~0.5 s of 16 kHz int16 — shorter captures are retried
+_ENROLL_MAX_ATTEMPTS = 8
+_ENROLL_TIMEOUT_SEC = 120.0
+# Peer service URLs the server injects into a dependent service's served config so they
+# aren't duplicated in two places (an override in the service's own config still wins).
+# Only speaker (its kenzy-enroll CLI) needs TTS today.
+_SERVICE_PEERS: dict[str, tuple[str, ...]] = {"speaker": ("tts",)}
 # Words that count as accepting an incoming call. Default-deny: anything else declines.
 _AFFIRM_WORDS = frozenset(
     {"yes", "yeah", "yep", "yup", "sure", "ok", "okay", "accept", "accepted", "affirmative"}
@@ -170,6 +180,13 @@ class AudioServer:
 
         # Central node tuning defaults pushed to nodes on connect (config-pull).
         self._node_defaults: dict[str, Any] = cfg.get("node_defaults", {}) or {}
+        # Backend service URLs the server is configured with, injected into dependent
+        # services' served config (see _SERVICE_PEERS) so they aren't duplicated.
+        self._peer_service_urls: dict[str, str] = {
+            s: str((cfg.get(s) or {}).get("url"))
+            for s in ("stt", "tts", "llm", "speaker")
+            if isinstance(cfg.get(s), dict) and (cfg.get(s) or {}).get("url")
+        }
         # Optional shared-secret required in the node's hello (discovery.token).
         self._join_token: str | None = (cfg.get("discovery", {}) or {}).get("token") or None
         # Shared service-to-service bearer for outbound calls to stt/tts/llm/speaker.
@@ -404,6 +421,18 @@ class AudioServer:
         dropped = _strip_secrets(base)
         if dropped:
             log.warning("[%s] dropped secret-like keys from served config: %s", service, dropped)
+        # Auto-wire peer endpoints from the server's own config so dependent services
+        # don't duplicate them. setdefault ⇒ an explicit value in the service's config
+        # (its override) wins, preserving the multi-host escape hatch.
+        for peer in _SERVICE_PEERS.get(service, ()):
+            url = self._peer_service_urls.get(peer)
+            if not url:
+                continue
+            section = base.get(peer)
+            if not isinstance(section, dict):
+                section = {}
+                base[peer] = section
+            section.setdefault("url", url)
         return base
 
     def _service_override_path(self, service: str) -> Path:
@@ -682,6 +711,7 @@ class AudioServer:
         # If it was in a call, tear the call down on the peer.
         if peer_id:
             await self.end_intercom(peer_id, reason="peer_disconnected")
+        self._cleanup_on_disconnect(session.node_id)
         log.info(
             "Node %s (room '%s') disconnected – %d node(s) remaining",
             session.node_id,
@@ -689,6 +719,9 @@ class AudioServer:
             len(self._nodes),
         )
         self._notify_state()
+
+    def _cleanup_on_disconnect(self, node_id: str) -> None:
+        """Hook for subclasses to release per-node session state on disconnect."""
 
     # ------------------------------------------------------------------
     # Per-node message loop
@@ -1089,6 +1122,11 @@ class TranscribingServer(AudioServer):
         self._speaker_url: str | None = str(spcfg["url"]) if spcfg.get("url") else None
         self._speaker_timeout: float = float(spcfg.get("timeout", 10.0))
         self._unknown_speaker: str = str(spcfg.get("unknown_speaker", "unknown"))
+        # Voice enrollment ("enroll me as Alice") is gated by `allow_voice_enroll` in the
+        # speaker *service* config (read live via _voice_enroll_allowed, so it's editable
+        # from the dashboard's Services tab). Active sessions keyed by node_id
+        # (prompt → capture → POST /enroll loop).
+        self._enroll_sessions: dict[str, dict[str, Any]] = {}
         if self._speaker_url:
             log.info(
                 "Speaker service: %s (timeout=%.0fs)", self._speaker_url, self._speaker_timeout
@@ -1191,6 +1229,12 @@ class TranscribingServer(AudioServer):
         # node_id addresses the node (state + control); room_name is the semantic
         # label the backends see (STT/speaker/LLM/TTS `room_id`).
         try:
+            # Voice enrollment: this capture is an enrollment sample, not a command —
+            # route it to /enroll instead of the STT→LLM pipeline.
+            if node_id in self._enroll_sessions:
+                await self._handle_enroll_capture(node_id, room_name, pcm)
+                return
+
             if not self._stt_url:
                 return
 
@@ -1338,6 +1382,10 @@ class TranscribingServer(AudioServer):
                 log.info("[%s] announced to %d node(s): %s", source_node_id, count, msg)
             elif atype == "start_intercom":
                 await self.start_intercom(source_node_id, source_room, str(action.get("room", "")))
+            elif atype == "start_enrollment":
+                await self.start_enrollment(
+                    source_node_id, source_room, str(action.get("name", ""))
+                )
             elif atype == "set_volume":
                 # Volume/mute change targeting the asking node (room context the
                 # server already holds — no room resolution needed).
@@ -1367,6 +1415,134 @@ class TranscribingServer(AudioServer):
     async def _say(self, node_id: str, room: str, text: str) -> None:
         """Speak a short line to one node (call status feedback)."""
         await self._run_tts(node_id, room, str(uuid.uuid4()), text, _INTERCOM_VOICE_PROMPT)
+
+    # ------------------------------------------------------------------
+    # Voice speaker enrollment (prompt → capture one utterance → POST /enroll)
+    # ------------------------------------------------------------------
+
+    def _voice_enroll_allowed(self) -> bool:
+        """Whether voice enrollment is enabled — read live from the speaker service
+        config so a dashboard toggle takes effect without a server restart."""
+        try:
+            return bool(self._effective_service_config("speaker").get("allow_voice_enroll", False))
+        except Exception:
+            return False
+
+    async def start_enrollment(self, node_id: str, room: str, name: str) -> None:
+        """Begin a voice-enrollment session for ``name`` on the asking node."""
+        if not self._voice_enroll_allowed():
+            await self._say(node_id, room, "Voice enrollment is turned off.")
+            return
+        name = name.strip()
+        if not name:
+            await self._say(node_id, room, "I didn't catch the name to enroll.")
+            return
+        if not self._speaker_url:
+            await self._say(
+                node_id, room, "Speaker identification isn't set up, so I can't enroll."
+            )
+            return
+        if node_id in self._enroll_sessions:
+            return  # already enrolling on this node
+        timeout = asyncio.create_task(
+            self._enroll_timeout(node_id), name=f"enroll-timeout-{node_id}"
+        )
+        self._enroll_sessions[node_id] = {
+            "name": name,
+            "room": room,
+            "collected": 0,
+            "attempts": 0,
+            "timeout": timeout,
+        }
+        log.info("[%s] voice enrollment started for '%s'", node_id, name)
+        await self._enroll_prompt(
+            node_id, room, f"Okay, enrolling {name}. After the tone, please say a sentence."
+        )
+
+    async def _enroll_prompt(self, node_id: str, room: str, text: str) -> None:
+        """Arm one-shot capture on the node, then speak the prompt."""
+        node = self._nodes.get(node_id)
+        if node is None:
+            self._end_enroll_session(node_id)
+            return
+        try:
+            await node.ws.send(protocol.expect_utterance())
+        except Exception:
+            self._end_enroll_session(node_id)
+            return
+        await self._run_tts(node_id, room, str(uuid.uuid4()), text, _INTERCOM_VOICE_PROMPT)
+
+    async def _handle_enroll_capture(self, node_id: str, room: str, pcm: bytes) -> None:
+        """Route one captured utterance to /enroll, then prompt for the next or finish."""
+        session = self._enroll_sessions.get(node_id)
+        if session is None:
+            return
+        session["attempts"] += 1
+        ok = len(pcm) >= _ENROLL_MIN_PCM_BYTES and await self._call_enroll(pcm, session["name"])
+        if ok:
+            session["collected"] += 1
+
+        if session["collected"] >= _ENROLL_SAMPLES:
+            name = session["name"]
+            self._end_enroll_session(node_id)
+            await self._say(node_id, room, f"All done — I've enrolled {name}.")
+            return
+        if session["attempts"] >= _ENROLL_MAX_ATTEMPTS:
+            self._end_enroll_session(node_id)
+            await self._say(
+                node_id, room, "I couldn't get enough clear audio. Enrollment cancelled."
+            )
+            return
+        prompt = (
+            "I didn't catch that — please say a sentence."
+            if not ok
+            else "Got it. Say another sentence."
+        )
+        await self._enroll_prompt(node_id, room, prompt)
+
+    def _end_enroll_session(self, node_id: str) -> None:
+        session = self._enroll_sessions.pop(node_id, None)
+        if session is not None:
+            t = session.get("timeout")
+            if t is not None:
+                t.cancel()
+
+    def _cleanup_on_disconnect(self, node_id: str) -> None:
+        self._end_enroll_session(node_id)
+
+    async def _enroll_timeout(self, node_id: str) -> None:
+        try:
+            await asyncio.sleep(_ENROLL_TIMEOUT_SEC)
+        except asyncio.CancelledError:
+            return
+        session = self._enroll_sessions.pop(node_id, None)
+        if session is not None:
+            log.info("[%s] enrollment timed out", node_id)
+            await self._say(node_id, session["room"], "Enrollment timed out.")
+
+    async def _call_enroll(self, pcm: bytes, name: str) -> bool:
+        """POST one PCM sample to the speaker service's /enroll. Returns success."""
+        if not self._speaker_url:
+            return False
+        import base64
+
+        import httpx  # type: ignore[import-untyped]
+
+        enroll_url = self._speaker_url.rsplit("/", 1)[0] + "/enroll"
+        payload = {"audio_b64": base64.b64encode(pcm).decode(), "name": name}
+        try:
+            async with httpx.AsyncClient() as client:
+                resp = await client.post(
+                    enroll_url,
+                    json=payload,
+                    timeout=self._speaker_timeout,
+                    headers=self._service_headers(),
+                )
+                resp.raise_for_status()
+            return True
+        except Exception as exc:
+            log.warning("enroll call failed: %s", exc)
+            return False
 
     async def start_intercom(self, caller_id: str, caller_room: str, target_room: str) -> None:
         """Ring a target room for an intercom call (consent required before bridging)."""
