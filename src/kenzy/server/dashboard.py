@@ -20,6 +20,7 @@ import importlib.metadata
 import json
 import logging
 import secrets
+from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -58,7 +59,6 @@ class DashboardConfig:
     auth_username: str | None = None
     auth_password_hash: str | None = None
     logs: bool = False
-    tuning: bool = False
     controls: bool = False
 
     @classmethod
@@ -73,7 +73,6 @@ class DashboardConfig:
             auth_username=auth.get("username") or None,
             auth_password_hash=auth.get("password_hash") or None,
             logs=bool(d.get("logs", False)),
-            tuning=bool(d.get("tuning", False)),
             controls=bool(d.get("controls", False)),
         )
 
@@ -91,6 +90,39 @@ def _service_targets(cfg: dict[str, Any]) -> dict[str, str]:
     return targets
 
 
+_MISSING = object()
+
+
+def _dotted_get(d: dict[str, Any], key: str) -> Any:
+    """Return the value at a dotted path, or _MISSING if any segment is absent."""
+    cur: Any = d
+    for part in key.split("."):
+        if not isinstance(cur, dict) or part not in cur:
+            return _MISSING
+        cur = cur[part]
+    return cur
+
+
+def _dotted_set(d: dict[str, Any], key: str, value: Any) -> None:
+    cur = d
+    parts = key.split(".")
+    for part in parts[:-1]:
+        nxt = cur.get(part)
+        if not isinstance(nxt, dict):
+            nxt = {}
+            cur[part] = nxt
+        cur = nxt
+    cur[parts[-1]] = value
+
+
+def _coerce_server_value(raw: Any, typ: str) -> Any:
+    if typ == "bool":
+        return bool(raw)
+    if typ == "num":
+        return float(raw)
+    return str(raw)
+
+
 class Dashboard:
     """Serves the read-only fleet/health dashboard over HTTP."""
 
@@ -105,6 +137,7 @@ class Dashboard:
         self._dcfg = dcfg
         self._service_urls = _service_targets(cfg)
         self._discovery = cfg.get("discovery", {}) or {}
+        self._cfg = cfg  # effective server config (server.yaml ← server.local.yaml)
         # Path to server.yaml, so the Settings page can persist a password change
         # (None when the server was started without a resolvable config file).
         self._config_path = Path(config_path) if config_path else None
@@ -128,6 +161,12 @@ class Dashboard:
         server._capture_node_logs = dcfg.logs
         capture = level_value(cfg.get("log_capture_level"), logging.DEBUG)
         self._server_logs = install_ring_handler("kenzy", level=capture) if dcfg.logs else None
+        # Pipeline observability (Activity tab): a bounded ring of recent completed
+        # pipelines. Recorded only when the `logs` flag is on (the records carry
+        # transcripts), so it's off/zero-overhead otherwise.
+        self._sessions: deque[dict[str, Any]] = deque(maxlen=200)
+        if dcfg.logs:
+            server.add_session_listener(self._on_session)
 
     # ------------------------------------------------------------------
     # Auth — read-only GETs are LAN-open; mutations need a login cookie
@@ -242,10 +281,69 @@ class Dashboard:
             "services": await self._services_state(),
             "flags": {
                 "logs": self._dcfg.logs,
-                "tuning": self._dcfg.tuning,
                 "controls": self._dcfg.controls,
             },
         }
+
+    # ------------------------------------------------------------------
+    # Server self-config editor (safe subset; written to server.local.yaml)
+    # ------------------------------------------------------------------
+
+    def _read_server_override(self) -> dict[str, Any]:
+        import yaml  # type: ignore[import-untyped]
+
+        from kenzy.server.server import _server_override_path
+
+        if self._config_path is None:
+            return {}
+        path = _server_override_path(self._config_path)
+        if not path.is_file():
+            return {}
+        try:
+            data = yaml.safe_load(path.read_text()) or {}
+            return data if isinstance(data, dict) else {}
+        except Exception:
+            return {}
+
+    def _server_config_state(self) -> dict[str, Any]:
+        from kenzy.server.server import _SERVER_EDITABLE
+
+        override = self._read_server_override()
+        fields = []
+        for key, typ in _SERVER_EDITABLE.items():
+            value = _dotted_get(self._cfg, key)
+            fields.append(
+                {
+                    "key": key,
+                    "type": typ,
+                    "value": None if value is _MISSING else value,
+                    "overridden": _dotted_get(override, key) is not _MISSING,
+                }
+            )
+        return {"fields": fields, "writable": self._config_path is not None}
+
+    def _write_server_override(self, patch: dict[str, Any]) -> None:
+        """Validate + persist dashboard-edited server settings to server.local.yaml."""
+        import yaml
+
+        from kenzy.server.server import _SERVER_EDITABLE, _server_override_path
+
+        if self._config_path is None:
+            raise ValueError("server config file location is unknown")
+        if not isinstance(patch, dict):
+            raise ValueError("config must be a mapping")
+        unknown = sorted(k for k in patch if k not in _SERVER_EDITABLE)
+        if unknown:
+            raise ValueError("unsupported keys: " + ", ".join(unknown))
+        override = self._read_server_override()
+        for key, raw in patch.items():
+            try:
+                _dotted_set(override, key, _coerce_server_value(raw, _SERVER_EDITABLE[key]))
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"invalid value for {key}: {exc}") from exc
+        path = _server_override_path(self._config_path)
+        path.write_text(yaml.safe_dump(override, default_flow_style=False, sort_keys=True))
+        log.info("Wrote server override %s (%d key(s))", path, len(patch))
 
     def _settings_state(self) -> dict[str, Any]:
         """Read-only server/dashboard info shown on the Settings page."""
@@ -269,7 +367,6 @@ class Dashboard:
             "flags": {
                 "controls": self._dcfg.controls,
                 "logs": self._dcfg.logs,
-                "tuning": self._dcfg.tuning,
             },
             # The Settings password form is only offered when we can persist it.
             "can_set_password": self._config_path is not None and self._config_path.is_file(),
@@ -381,6 +478,22 @@ class Dashboard:
         if path == "/api/logs":
             return self._json(200, {"logs": self._tail_server_logs(request)})
 
+        if path == "/api/sessions":
+            # Recent completed pipelines (most recent first); gated by the logs flag
+            # since records carry transcripts.
+            sessions = list(reversed(self._sessions)) if self._dcfg.logs else []
+            return self._json(200, {"sessions": sessions})
+
+        if path == "/api/server/config":
+            if not self._authorized_mutation(request):
+                return self._json(401, {"error": "auth required"})
+            return self._json(200, self._server_config_state())
+
+        if path == "/api/skills":
+            if not self._authorized_mutation(request):
+                return self._json(401, {"error": "auth required"})
+            return self._json(200, await self._skills_state())
+
         if path.startswith("/api/services/") and path.endswith("/config"):
             if not self._authorized_mutation(request):
                 return self._json(401, {"error": "auth required"})
@@ -469,6 +582,73 @@ class Dashboard:
         except Exception:
             return False
 
+    # ------------------------------------------------------------------
+    # Skill registry (kenzy-llm): read the loaded skills + live-toggle disables
+    # ------------------------------------------------------------------
+
+    async def _llm_skills_request(
+        self, method: str, payload: dict[str, Any] | None = None
+    ) -> dict[str, Any] | None:
+        """GET/POST the LLM service's /skills endpoint; None if unreachable."""
+        health_url = self._service_urls.get("llm")
+        if not health_url:
+            return None
+        base = health_url[: -len("/health")]
+        import httpx
+
+        try:
+            async with httpx.AsyncClient(timeout=4.0) as client:
+                if method == "POST":
+                    r = await client.post(
+                        f"{base}/skills",
+                        json=payload or {},
+                        headers=self._server._service_headers(),
+                    )
+                else:
+                    r = await client.get(f"{base}/skills", headers=self._server._service_headers())
+                r.raise_for_status()
+            data = r.json()
+            return data if isinstance(data, dict) else None
+        except Exception:
+            return None
+
+    async def _skills_state(self) -> dict[str, Any]:
+        info = await self._llm_skills_request("GET")
+        return {
+            "reachable": info is not None,
+            "controls": self._dcfg.controls,
+            "skills": (info or {}).get("skills", []),
+            "fast_intents": (info or {}).get("fast_intents", []),
+        }
+
+    async def _set_skill_disabled(self, name: str, disabled: bool) -> tuple[bool, str | None]:
+        """Toggle one skill: persist to the llm override and live-apply (no restart)."""
+        info = await self._llm_skills_request("GET")
+        if info is None:
+            return False, "LLM service not reachable"
+        current = {
+            s["name"]
+            for s in info.get("skills", []) + info.get("fast_intents", [])
+            if s.get("disabled")
+        }
+        if disabled:
+            current.add(name)
+        else:
+            current.discard(name)
+        new_list = sorted(current)
+        # Persist into configs/services/llm.yaml (survives restart) without clobbering
+        # other override keys, then live-apply via the LLM's /skills endpoint.
+        override = self._server.read_service_override("llm")
+        override.setdefault("skills", {})["disabled"] = new_list
+        try:
+            self._server.write_service_override("llm", override)
+        except (ValueError, OSError) as exc:
+            return False, str(exc)
+        applied = await self._llm_skills_request("POST", {"disabled": new_list})
+        if applied is None:
+            return False, "saved, but live-apply failed (will take effect on restart)"
+        return True, None
+
     async def _node_logs(self, node_id: str, request: Request) -> dict[str, Any]:
         if not self._dcfg.logs:
             return {"logs": [], "reachable": False}
@@ -507,6 +687,20 @@ class Dashboard:
                 await ws.send(payload)
             except Exception:
                 self._tune_subs.pop(ws, None)
+
+    def _on_session(self, record: dict[str, Any]) -> None:
+        """Store a completed-pipeline record and push it to connected browsers."""
+        self._sessions.append(record)
+        if self._clients:
+            payload = json.dumps({"type": "session", "data": record})
+            asyncio.create_task(self._broadcast_raw(payload))
+
+    async def _broadcast_raw(self, payload: str) -> None:
+        for ws in list(self._clients):
+            try:
+                await ws.send(payload)
+            except Exception:
+                self._clients.discard(ws)
 
     async def _ws_handler(self, connection: ServerConnection) -> None:
         # Auth was checked in process_request before the upgrade was allowed.
@@ -629,6 +823,14 @@ class Dashboard:
                 return await ack(False, "controls are disabled (set dashboard.controls: true)")
             ok = await self._restart_service(str(msg.get("service", "")))
             await ack(ok, None if ok else "service not reachable")
+        elif mtype == "set_skill_disabled":
+            if not self._dcfg.controls:
+                return await ack(False, "controls are disabled (set dashboard.controls: true)")
+            name = str(msg.get("name", "")).strip()
+            if not name:
+                return await ack(False, "skill name is required")
+            ok, err = await self._set_skill_disabled(name, bool(msg.get("disabled")))
+            await ack(ok, err)
         elif mtype == "boost_trace":
             if not self._dcfg.controls:
                 return await ack(False, "controls are disabled (set dashboard.controls: true)")
@@ -654,6 +856,18 @@ class Dashboard:
             except (ValueError, OSError) as exc:
                 return await ack(False, str(exc))
             await ack(True)
+        elif mtype == "set_server_config":
+            # Admin-level (any signed-in user, like set_password) — not gated by
+            # `controls`, so logs/controls themselves can be enabled from a fresh
+            # dashboard. Writes the safe-key override, then re-execs the server.
+            try:
+                self._write_server_override(msg.get("config") or {})
+            except (ValueError, OSError) as exc:
+                return await ack(False, str(exc))
+            await ack(True)
+            await connection.send(json.dumps({"type": "server_restarting"}))
+            # Let the ack flush, then re-exec the server to apply (it re-reads config).
+            asyncio.get_running_loop().call_later(0.5, self._server.restart_server)
         else:
             await ack(False, f"unknown message type: {mtype!r}")
 

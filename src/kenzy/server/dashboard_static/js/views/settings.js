@@ -2,14 +2,90 @@ import { html, useState, useEffect } from "../html.js";
 import { getSettings } from "../api.js";
 import { send, notify } from "../store.js";
 
-function Flag({ on, label, note }) {
+// Editable server settings (the safe subset; written to server.local.yaml and applied
+// by restarting the server). Lockout/secret-risky keys stay file/CLI-managed.
+function ServerSettings() {
+  const [data, setData] = useState(null);
+  const [vals, setVals] = useState({});
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    fetch("/api/server/config")
+      .then((r) => (r.ok ? r.json() : { error: true }))
+      .then((d) => {
+        setData(d);
+        if (d.fields) {
+          const v = {};
+          for (const f of d.fields) v[f.key] = f.value;
+          setVals(v);
+        }
+      })
+      .catch(() => setData({ error: true }));
+  }, []);
+
+  if (!data) return html`<div class="empty">Loading…</div>`;
+  if (data.error) return html`<div class="banner">Could not load server settings.</div>`;
+  if (!data.writable)
+    return html`<div class="banner">server.yaml location is unknown, so settings can't be
+      edited here. Edit server.yaml on the host instead.</div>`;
+
+  const set = (k, v) => setVals((cur) => ({ ...cur, [k]: v }));
+
+  async function save() {
+    const patch = {};
+    for (const f of data.fields) {
+      let v = vals[f.key];
+      if (f.type === "num") {
+        if (v === "" || v == null) continue;
+        const num = Number(v);
+        if (Number.isNaN(num)) continue;
+        v = num;
+      } else if (f.type === "bool") v = !!v;
+      else v = v ?? "";
+      if (JSON.stringify(v) !== JSON.stringify(f.value)) patch[f.key] = v;
+    }
+    if (!Object.keys(patch).length) {
+      notify("No changes to save.");
+      return;
+    }
+    if (!window.confirm("Save and restart the server now? The dashboard will briefly disconnect."))
+      return;
+    setBusy(true);
+    const res = await send("set_server_config", { config: patch });
+    setBusy(false);
+    notify(
+      res.ok ? "Saved — server restarting; the dashboard will reconnect." : res.error || "Save failed.",
+      res.ok ? "ok" : "err",
+    );
+  }
+
+  const row = (f) => {
+    const v = vals[f.key];
+    let input;
+    if (f.type === "bool")
+      input = html`<select onChange=${(e) => set(f.key, e.target.value === "true")}>
+        <option value="true" selected=${v === true}>on</option>
+        <option value="false" selected=${v !== true}>off</option></select>`;
+    else if (f.type === "num")
+      input = html`<input type="number" step="any" inputmode="decimal" value=${v ?? ""}
+        onInput=${(e) => set(f.key, e.target.value)} />`;
+    else
+      input = html`<input value=${v ?? ""} placeholder=${f.value == null ? "unset" : ""}
+        onInput=${(e) => set(f.key, e.target.value)} />`;
+    return html`<div class=${"cfg-row" + (f.overridden ? " overridden" : "")}>
+      <div class="cfg-key"><span class="mono">${f.key}</span>
+        <span class="micro">${f.overridden ? "overridden" : "server.yaml"}</span></div>
+      <div class="cfg-input">${input}</div></div>`;
+  };
+
   return html`
-    <div class=${"flagrow " + (on ? "on" : "off")}>
-      <span class=${"led " + (on ? "up" : "down")}></span>
-      <div class="flagtext">
-        <b>${label}</b>
-        <span class="micro">${on ? "enabled" : "disabled"} — ${note}</span>
-      </div>
+    <p class="micro">Written to <span class="mono">server.local.yaml</span> (layered over
+      server.yaml) and applied by <b>restarting the server</b>. Bind/port, login, and the
+      discovery token stay file/CLI-managed for safety.</p>
+    <div class="cfg-grid">${data.fields.map(row)}</div>
+    <div class="cfg-actions">
+      <button class="btn-primary" disabled=${busy} onClick=${save}>
+        ${busy ? "Saving…" : "Save & restart server"}</button>
     </div>`;
 }
 
@@ -120,30 +196,8 @@ export function SettingsView({ onLogout }) {
       </section>
 
       <section class="section">
-        <header><h2>Feature flags</h2><span class="rule"></span></header>
-        <div class="card pad flags">
-          <${Flag} on=${s.flags.controls} label="Controls"
-            note="config edits, rename, trigger/stop/restart, announce" />
-          <${Flag} on=${s.flags.logs} label="Logs"
-            note="pull node/service log buffers into the Logs tab" />
-          <${Flag} on=${s.flags.tuning} label="Tuning"
-            note="reserved for future live-tuning controls" />
-          <p class="micro">
-            Flags are set under <span class="mono">dashboard</span> in server.yaml and require a
-            server restart to change.
-          </p>
-        </div>
-      </section>
-
-      <section class="section">
-        <header><h2>Backend services</h2><span class="rule"></span></header>
-        ${s.services.length
-          ? html`<div class="card pad">
-              <dl class="kv">
-                ${s.services.map((svc) => kv(svc.name, html`<span class="mono">${svc.url}</span>`))}
-              </dl>
-            </div>`
-          : html`<div class="empty">No backend services configured.</div>`}
+        <header><h2>Server configuration</h2><span class="rule"></span></header>
+        <div class="card pad"><${ServerSettings} /></div>
       </section>
     </div>`;
 }

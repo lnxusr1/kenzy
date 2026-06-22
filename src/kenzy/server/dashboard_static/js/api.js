@@ -37,3 +37,9 @@ export async function getSettings() {
   if (!r.ok) throw new Error(`settings ${r.status}`);
   return await r.json();
 }
+
+export async function getSkills() {
+  const r = await fetch("/api/skills");
+  if (!r.ok) throw new Error(`skills ${r.status}`);
+  return await r.json();
+}

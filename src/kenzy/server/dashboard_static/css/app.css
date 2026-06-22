@@ -473,4 +473,45 @@ button { font: inherit; cursor: pointer; }
   .toasts { left: var(--s4); right: var(--s4); top: var(--s4); max-width: none; }
 }
 
+/* ============================ ACTIVITY ============================ */
+.badge.fast { color: var(--led-up); border-color: color-mix(in srgb, var(--led-up) 50%, transparent); }
+.leg { display: flex; gap: var(--s4); margin-bottom: var(--s3); font-size: 11px; color: var(--text-dim); }
+.leg span { display: inline-flex; align-items: center; gap: 6px; }
+.leg .tg { position: static; display: inline-block; width: 14px; height: 10px; border-radius: 2px; }
+.sessions { display: flex; flex-direction: column; gap: var(--s3); }
+.sess {
+  background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: var(--s3) var(--s4); display: flex; flex-direction: column; gap: 6px;
+}
+.sess-head { display: flex; align-items: center; gap: var(--s3); }
+.sess-head .spacer { flex: 1; }
+.sess-total { font-size: 12px; color: var(--text-dim); }
+.sess-line { font-size: 13px; line-height: 1.35; }
+.sess-line.you { color: var(--text); }
+.sess-line.reply { color: var(--text-dim); }
+.timeline {
+  display: flex; height: 8px; border-radius: 4px; overflow: hidden;
+  background: var(--bg); border: 1px solid var(--border); margin-top: 2px;
+}
+.tg { height: 100%; min-width: 1px; }
+.tg.cap { background: var(--text-faint); }
+.tg.llm { background: var(--accent); }
+.tg.tts { background: var(--led-up); }
+
+/* ---- Skill registry ---- */
+.badge.off { color: var(--text-faint); border-color: var(--border); }
+.sk-list { display: flex; flex-direction: column; }
+.sk-row {
+  display: flex; align-items: center; gap: var(--s4);
+  padding: var(--s3) var(--s4); border-bottom: 1px solid var(--border);
+}
+.sk-row:last-child { border-bottom: 0; }
+.sk-row.disabled { opacity: .55; }
+.sk-main { min-width: 0; flex: 1; }
+.sk-name { display: flex; align-items: center; gap: var(--s3); }
+.sk-name .badge { margin-left: 0; }
+.sk-desc { margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sk-meta { display: flex; align-items: center; gap: var(--s4); flex-shrink: 0; }
+.sk-toggle.off { color: var(--led-up); border-color: color-mix(in srgb, var(--led-up) 50%, transparent); }
+
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }

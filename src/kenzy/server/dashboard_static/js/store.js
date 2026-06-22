@@ -22,6 +22,13 @@ export function subscribeTune(fn) {
   return () => _tuneSubs.delete(fn);
 }
 
+// Live pipeline-session records (Activity tab).
+const _sessionSubs = new Set();
+export function subscribeSession(fn) {
+  _sessionSubs.add(fn);
+  return () => _sessionSubs.delete(fn);
+}
+
 // Send a mutation over the WS and resolve with the server's {ok,error} ack.
 export function send(type, payload = {}) {
   return new Promise((resolve) => {
@@ -88,6 +95,8 @@ function connectWS() {
         emit({ data: m.data, loading: false, error: null, live: true, updatedAt: Date.now() });
       } else if (m.type === "tune") {
         _tuneSubs.forEach((fn) => fn(m));
+      } else if (m.type === "session") {
+        _sessionSubs.forEach((fn) => fn(m.data));
       }
     } catch {
       /* ignore */

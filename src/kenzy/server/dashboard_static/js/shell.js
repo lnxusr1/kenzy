@@ -3,6 +3,8 @@ import { useFleet, useToasts, dismiss } from "./store.js";
 import { FleetView } from "./views/fleet.js";
 import { ConfigView } from "./views/config.js";
 import { ServicesView } from "./views/services.js";
+import { SkillsView } from "./views/skills.js";
+import { ActivityView } from "./views/activity.js";
 import { LogsView } from "./views/logs.js";
 import { SettingsView } from "./views/settings.js";
 
@@ -23,6 +25,8 @@ function Toasts() {
 const NAV = [
   { id: "fleet", label: "Fleet", ico: "▣" },
   { id: "services", label: "Services", ico: "❏" },
+  { id: "skills", label: "Skills", ico: "✦" },
+  { id: "activity", label: "Activity", ico: "↗" },
   { id: "logs", label: "Logs", ico: "≡" },
   { id: "settings", label: "Settings", ico: "⚙" },
 ];
@@ -100,9 +104,9 @@ export function Shell({ user, onLogout }) {
         <div class="brand"><span class="wordmark"><span class="glyph"></span><span class="name">Kenzy</span></span></div>
         <nav class="nav">
           ${NAV.map((n) => {
-            // The Logs view is the only nav item that can be unavailable — it's
-            // gated by the server's `dashboard.logs` flag.
-            const disabled = n.id === "logs" && !logsOn;
+            // Logs and Activity are gated by the server's `dashboard.logs` flag
+            // (Activity records carry transcripts, like logs).
+            const disabled = (n.id === "logs" || n.id === "activity") && !logsOn;
             return html`
               <a key=${n.id} href="#" aria-disabled=${disabled ? "true" : "false"}
                  class=${n.id === view || (view === "config" && n.id === "fleet") ? "active" : ""}
@@ -140,12 +144,16 @@ export function Shell({ user, onLogout }) {
             ? html`<${ConfigView} node=${node} onBack=${() => go("fleet")} />`
             : view === "services"
               ? html`<${ServicesView} selected=${svc} onSelect=${setSvc} />`
-              : view === "logs"
-                ? html`<${LogsView} />`
-                : view === "settings"
-                  ? html`<${SettingsView} onLogout=${onLogout} />`
-                  : html`<${FleetView} onConfigure=${configure}
-                      onConfigureService=${configureService} />`}
+              : view === "skills"
+                ? html`<${SkillsView} />`
+                : view === "activity"
+                  ? html`<${ActivityView} />`
+                  : view === "logs"
+                    ? html`<${LogsView} />`
+                    : view === "settings"
+                      ? html`<${SettingsView} onLogout=${onLogout} />`
+                      : html`<${FleetView} onConfigure=${configure}
+                          onConfigureService=${configureService} />`}
         </main>
       </div>
     </div>

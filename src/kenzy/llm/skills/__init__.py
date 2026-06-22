@@ -80,6 +80,17 @@ _CONFIG: dict[str, Any] = {}
 # runs first.  Kept sorted descending so dispatch is a simple in-order scan.
 _FAST_REGISTRY: list[tuple[int, str, Callable[..., Any]]] = []
 
+# Names disabled at runtime. Everything stays loaded in the registries above; the
+# runtime paths (get_tools / execute / dispatch_fast) simply skip a disabled name.
+# Keeping skills loaded-but-gated lets the dashboard toggle them live (no restart);
+# the same set is seeded from skills.disabled at load.  A name disables both the
+# @skill and any same-named @fast_intent.
+_DISABLED: set[str] = set()
+
+# Per-name invocation counts (skill executes + fast-intent handles), for the
+# dashboard's skill-registry view.  Best-effort, in-memory, reset on restart.
+_COUNTS: dict[str, int] = {}
+
 
 def set_config(cfg: dict[str, Any]) -> None:
     """Called at startup with the skills section of llm.yaml."""
@@ -243,6 +254,8 @@ async def dispatch_fast(
     pipeline.
     """
     for _priority, name, func in _FAST_REGISTRY:
+        if name in _DISABLED:
+            continue
         try:
             result: FastResult | None = await func(utterance, room_id, speaker)
         except Exception as exc:
@@ -252,6 +265,7 @@ async def dispatch_fast(
             continue
         if result.is_handled:
             log.info("Fast intent %r handled: %s", name, result.text[:80])
+            _COUNTS[name] = _COUNTS.get(name, 0) + 1
             return result
     return None
 
@@ -315,16 +329,55 @@ def load_skills(user_dir: Path | None, disabled: list[str]) -> None:
 
     _dedupe_fast_registry()
 
-    for name in disabled:
-        removed = _REGISTRY.pop(name, None) is not None
-        before = len(_FAST_REGISTRY)
-        _FAST_REGISTRY[:] = [t for t in _FAST_REGISTRY if t[1] != name]
-        if removed or len(_FAST_REGISTRY) != before:
-            log.info("Skill disabled: %s", name)
+    # Everything stays loaded; disabling is a runtime gate so the dashboard can
+    # toggle it live. Seed the gate from skills.disabled (names that don't match
+    # anything are kept anyway — harmless, and tolerant of typos / future skills).
+    set_disabled(disabled)
 
-    log.info("Skills active: %s", sorted(_REGISTRY))
-    if _FAST_REGISTRY:
-        log.info("Fast intents active: %s", [t[1] for t in _FAST_REGISTRY])
+    log.info("Skills active: %s", sorted(_active_skill_names()))
+    fast_active = [t[1] for t in _FAST_REGISTRY if t[1] not in _DISABLED]
+    if fast_active:
+        log.info("Fast intents active: %s", fast_active)
+    if _DISABLED:
+        log.info("Skills disabled: %s", sorted(_DISABLED))
+
+
+def _active_skill_names() -> list[str]:
+    return [name for name in _REGISTRY if name not in _DISABLED]
+
+
+def set_disabled(names: list[str]) -> None:
+    """Replace the runtime-disabled set (live, no reload). Idempotent."""
+    global _DISABLED
+    _DISABLED = {str(n) for n in names}
+
+
+def registry_info() -> dict[str, Any]:
+    """Snapshot of loaded skills + fast intents for the dashboard registry view."""
+    skills = []
+    for name in sorted(_REGISTRY):
+        _, schema = _REGISTRY[name]
+        desc = schema.get("function", {}).get("description", "") or ""
+        skills.append(
+            {
+                "name": name,
+                "description": desc.strip().split("\n")[0][:200],
+                "disabled": name in _DISABLED,
+                "calls": _COUNTS.get(name, 0),
+                "fast": any(t[1] == name for t in _FAST_REGISTRY),
+            }
+        )
+    fast = [
+        {
+            "name": name,
+            "priority": priority,
+            "disabled": name in _DISABLED,
+            "calls": _COUNTS.get(name, 0),
+            "skill": name in _REGISTRY,
+        }
+        for priority, name, _ in _FAST_REGISTRY
+    ]
+    return {"skills": skills, "fast_intents": fast}
 
 
 # ---------------------------------------------------------------------------
@@ -333,17 +386,20 @@ def load_skills(user_dir: Path | None, disabled: list[str]) -> None:
 
 
 def get_tools() -> list[dict[str, Any]]:
-    """Return the tool definitions to pass to LiteLLM."""
-    return [schema for _, schema in _REGISTRY.values()]
+    """Return the tool definitions to pass to LiteLLM (disabled skills excluded)."""
+    return [schema for name, (_, schema) in _REGISTRY.items() if name not in _DISABLED]
 
 
 async def execute(name: str, arguments: dict[str, Any]) -> str:
     """Call a registered skill and return its string result."""
     if name not in _REGISTRY:
         return f"Unknown skill: {name!r}"
+    if name in _DISABLED:  # not advertised in get_tools(), but guard anyway
+        return f"Skill {name!r} is disabled."
     func, _ = _REGISTRY[name]
     try:
         result = await func(**arguments)
+        _COUNTS[name] = _COUNTS.get(name, 0) + 1
         return str(result)
     except Exception as exc:
         log.warning("Skill %r raised: %s", name, exc)

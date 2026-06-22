@@ -27,6 +27,7 @@ import logging
 import os
 import re
 import sys
+import time
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -116,6 +117,52 @@ def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any
         else:
             out[k] = v
     return out
+
+
+# Server settings the dashboard may edit (dotted path → type). Deliberately excludes
+# lockout/secret-risky keys — server/dashboard bind+port, dashboard.auth.*, and
+# discovery.token stay file/CLI-managed (see design/centralized-config.md M4).
+_SERVER_EDITABLE: dict[str, str] = {
+    "dashboard.logs": "bool",
+    "dashboard.controls": "bool",
+    "stt.url": "str",
+    "stt.timeout": "num",
+    "tts.url": "str",
+    "tts.timeout": "num",
+    "llm.url": "str",
+    "llm.timeout": "num",
+    "speaker.url": "str",
+    "speaker.timeout": "num",
+    "speaker.unknown_speaker": "str",
+    "discovery.enabled": "bool",
+    "discovery.instance": "str",
+}
+
+
+def _server_override_path(config_path: str | Path) -> Path:
+    """Dashboard-written server settings live beside server.yaml, layered over it
+    (keeps the hand-edited server.yaml + its comments untouched)."""
+    return Path(config_path).parent / "server.local.yaml"
+
+
+def load_server_config(config_path: str | Path) -> dict[str, Any]:
+    """Load server.yaml deep-merged with its ``server.local.yaml`` override (if any)."""
+    import yaml  # type: ignore[import-untyped]
+
+    with open(config_path) as fh:
+        cfg = yaml.safe_load(fh) or {}
+    if not isinstance(cfg, dict):
+        cfg = {}
+    ov = _server_override_path(config_path)
+    if ov.is_file():
+        try:
+            data = yaml.safe_load(ov.read_text()) or {}
+            if isinstance(data, dict):
+                cfg = _deep_merge(cfg, data)
+                log.info("Applied server override %s", ov)
+        except Exception as exc:
+            log.warning("failed to read server override %s: %s", ov, exc)
+    return cfg
 
 
 def _strip_secrets(data: dict[str, Any]) -> list[str]:
@@ -211,6 +258,9 @@ class AudioServer:
         # Calibration telemetry relay: the dashboard registers a listener and the
         # node's per-frame tune samples are forwarded to it. Empty ⇒ zero overhead.
         self._tune_listeners: list[Callable[[str, dict[str, Any]], None]] = []
+        # Pipeline observability: the dashboard registers a listener fed a record per
+        # completed command pipeline. Empty ⇒ no record is built (no transcript kept).
+        self._session_listeners: list[Callable[[dict[str, Any]], None]] = []
 
     def add_state_listener(self, fn: Callable[[], None]) -> None:
         """Register a callback fired (in-loop) when the node registry/state changes."""
@@ -226,6 +276,17 @@ class AudioServer:
     def add_tune_listener(self, fn: Callable[[str, dict[str, Any]], None]) -> None:
         """Register a callback fired with ``(node_id, sample)`` for each tune sample."""
         self._tune_listeners.append(fn)
+
+    def add_session_listener(self, fn: Callable[[dict[str, Any]], None]) -> None:
+        """Register a callback fired with a completed-pipeline record (observability)."""
+        self._session_listeners.append(fn)
+
+    def _notify_session(self, record: dict[str, Any]) -> None:
+        for fn in self._session_listeners:
+            try:
+                fn(record)
+            except Exception:
+                log.debug("session listener error", exc_info=True)
 
     def _notify_tune(self, node_id: str, sample: dict[str, Any]) -> None:
         for fn in self._tune_listeners:
@@ -906,6 +967,12 @@ class AudioServer:
                 log.warning("broadcast_trigger failed for '%s': %s", session.room_id, exc)
         return count
 
+    def restart_server(self) -> None:
+        """Re-exec the server process (re-reads server.yaml + override). Used by the
+        dashboard to apply server-config changes that wire up at startup."""
+        log.warning("Restarting server (re-exec)")
+        os.execv(sys.executable, [sys.executable, *sys.argv])
+
     async def restart_node(self, node_id: str) -> bool:
         """Ask a connected node to re-exec itself."""
         session = self._nodes.get(node_id)
@@ -1238,16 +1305,23 @@ class TranscribingServer(AudioServer):
             if not self._stt_url:
                 return
 
+            # Per-stage timings for the dashboard's pipeline observability.
+            async def _timed(coro: Any) -> tuple[Any, float]:
+                t = time.monotonic()
+                result = await coro
+                return result, (time.monotonic() - t) * 1000.0
+
+            t0 = time.monotonic()
+
             # STT and speaker ID run in parallel on the same PCM buffer.
-            stt_coro = self._call_stt(pcm, room_name, session_id)
             if self._speaker_url:
-                (text, speaker) = await asyncio.gather(
-                    stt_coro,
-                    self._call_speaker(pcm, room_name),
+                (text, stt_ms), (speaker, spk_ms) = await asyncio.gather(
+                    _timed(self._call_stt(pcm, room_name, session_id)),
+                    _timed(self._call_speaker(pcm, room_name)),
                 )
             else:
-                text = await stt_coro
-                speaker = self._unknown_speaker
+                text, stt_ms = await _timed(self._call_stt(pcm, room_name, session_id))
+                speaker, spk_ms = self._unknown_speaker, 0.0
 
             log.info("[%s] STT: %s | speaker: %s", node_id, text or "(none)", speaker)
 
@@ -1270,12 +1344,36 @@ class TranscribingServer(AudioServer):
                 return
 
             if self._llm_url:
-                response_text, voice_prompt, actions = await self._call_llm(
+                _t = time.monotonic()
+                response_text, voice_prompt, actions, fast = await self._call_llm(
                     text, room_name, session_id, speaker
                 )
-                log.info("[%s] LLM: %s", node_id, response_text)
+                llm_ms = (time.monotonic() - _t) * 1000.0
+                log.info("[%s] LLM%s: %s", node_id, " (fast)" if fast else "", response_text)
                 log.debug("[%s] voice_prompt: %s", node_id, voice_prompt)
+                _t = time.monotonic()
                 await self._run_tts(node_id, room_name, session_id, response_text, voice_prompt)
+                tts_ms = (time.monotonic() - _t) * 1000.0
+
+                # Record the completed pipeline for the dashboard (only when something
+                # is listening, so no transcript is kept when observability is off).
+                if self._session_listeners:
+                    self._notify_session(
+                        {
+                            "ts": time.time(),
+                            "node_id": node_id,
+                            "room": room_name,
+                            "speaker": speaker,
+                            "transcript": text,
+                            "response": response_text,
+                            "fast": fast,
+                            "stt_ms": round(stt_ms),
+                            "speaker_ms": round(spk_ms),
+                            "llm_ms": round(llm_ms),
+                            "tts_ms": round(tts_ms),
+                            "total_ms": round((time.monotonic() - t0) * 1000.0),
+                        }
+                    )
                 if actions:
                     await self._dispatch_actions(actions, node_id, room_name)
 
@@ -1328,7 +1426,7 @@ class TranscribingServer(AudioServer):
 
     async def _call_llm(
         self, text: str, room_id: str, session_id: str | None, speaker: str | None = None
-    ) -> tuple[str, str, list[dict[str, Any]]]:
+    ) -> tuple[str, str, list[dict[str, Any]], bool]:
         import httpx  # type: ignore[import-untyped]
 
         payload = {
@@ -1349,7 +1447,7 @@ class TranscribingServer(AudioServer):
             resp.raise_for_status()
             data = resp.json()
         actions = data.get("actions") or []
-        return str(data["text"]), str(data["voice_prompt"]), actions
+        return str(data["text"]), str(data["voice_prompt"]), actions, bool(data.get("fast", False))
 
     async def _dispatch_actions(
         self, actions: list[dict[str, Any]], source_node_id: str, source_room: str
@@ -1725,7 +1823,6 @@ class TranscribingServer(AudioServer):
 
 
 def main() -> None:
-    import yaml
     from dotenv import load_dotenv  # type: ignore[import-untyped]
 
     load_dotenv()
@@ -1733,8 +1830,8 @@ def main() -> None:
     from kenzy.config import resolve_config
 
     config_path = resolve_config("server", sys.argv[1] if len(sys.argv) > 1 else None)
-    with open(config_path) as fh:
-        cfg = yaml.safe_load(fh)
+    # server.yaml deep-merged with any dashboard-written server.local.yaml override.
+    cfg = load_server_config(config_path)
 
     from kenzy.logutil import configure_logging, level_value
 

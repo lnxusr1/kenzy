@@ -67,6 +67,9 @@ class ProcessResponse(BaseModel):
     # Server-side actions a skill asked for (e.g. broadcast an announcement) that the
     # LLM service can't perform itself. The server actuates each after speaking `text`.
     actions: list[dict[str, Any]] = []
+    # True when the deterministic fast path handled this (no LLM call) — surfaced for
+    # the dashboard's fast-path hit-rate metric.
+    fast: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -174,6 +177,25 @@ async def health() -> dict[str, object]:
     return {"status": "ok", "model": _model}
 
 
+class SkillToggle(BaseModel):
+    # Full replacement set of disabled skill names (live, no restart).
+    disabled: list[str] = []
+
+
+@app.get("/skills")
+async def list_skills() -> dict[str, Any]:
+    """Loaded skills + fast intents with disabled state and invocation counts."""
+    return skill_registry.registry_info()
+
+
+@app.post("/skills")
+async def set_skills(body: SkillToggle) -> dict[str, Any]:
+    """Replace the runtime-disabled set live (the server persists it separately)."""
+    skill_registry.set_disabled(body.disabled)
+    log.info("Skills disabled set updated: %s", sorted(body.disabled))
+    return skill_registry.registry_info()
+
+
 @app.post("/process", response_model=ProcessResponse)
 async def process(req: ProcessRequest) -> ProcessResponse:
     # Preserve raw speaker for history; derive display name for logging.
@@ -194,13 +216,14 @@ async def process(req: ProcessRequest) -> ProcessResponse:
             voice_prompt=vp,
             expect_response=fast.expect_response,
             actions=skill_registry.take_actions(),
+            fast=True,
         )
 
     text, voice_prompt = await _run_llm(
         req.text, raw_speaker, req.room_id, available_rooms=req.rooms
     )
     return ProcessResponse(
-        text=text, voice_prompt=voice_prompt, actions=skill_registry.take_actions()
+        text=text, voice_prompt=voice_prompt, actions=skill_registry.take_actions(), fast=False
     )
 
 

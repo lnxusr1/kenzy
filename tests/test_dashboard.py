@@ -86,7 +86,7 @@ async def test_dashboard_http_surfaces():
             assert state["nodes"][0]["room"] == "den"
             assert state["nodes"][0]["streaming"] is True
             assert state["services"] == []  # none configured
-            assert state["flags"] == {"logs": False, "tuning": False, "controls": False}
+            assert state["flags"] == {"logs": False, "controls": False}
 
             # per-node effective config (read-only)
             r = await c.get("/api/nodes/den/config")

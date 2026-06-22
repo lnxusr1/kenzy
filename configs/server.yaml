@@ -23,10 +23,9 @@ discovery:
 # sounds) are reported but take effect on node restart. Per-room overrides go in
 # configs/nodes/<room_id>.yaml and shallow-merge over these defaults.
 # Web dashboard — opt-in, off by default. When disabled nothing is wired up
-# (no route, buffers, or node-side overhead). Read-only fleet/health for now;
-# sub-flags reserve logs/tuning/controls for later phases. Bind to localhost or
-# the LAN; do not port-forward it. Set auth_token to require a bearer token on
-# (future) mutating actions.
+# (no route, buffers, or node-side overhead). Read-only fleet/health by default;
+# sub-flags enable logs and controls. Bind to localhost or the LAN; do not
+# port-forward it. Set auth_token to require a bearer token on mutating actions.
 dashboard:
   enabled: true
   bind: "127.0.0.1"
@@ -40,7 +39,6 @@ dashboard:
   # Optional bearer token for API/CLI clients (curl/scripts); humans use the login above.
   auth_token: null
   logs: true
-  tuning: true
   controls: true
 
 # Config-pull defaults (see below)

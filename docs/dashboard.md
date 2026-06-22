@@ -140,6 +140,35 @@ config takes effect (the service re-pulls on boot); a separate **Restart** butto
 restarts without editing. Secrets (API keys) are read from the service host's
 environment and are never shown or stored here. Requires `dashboard.controls: true`.
 
+## Skills
+
+The **Skills** tab lists the skills and deterministic fast intents loaded by
+`kenzy-llm`, each with a one-line description and an **invocation count** (how often it
+has run since the service started). With `dashboard.controls: true`, each skill has an
+**Enable / Disable** toggle: disabling one takes effect **immediately, without restarting
+the service** (the skill stays loaded but is gated out of the tool list, `execute`, and
+the fast path), and is **persisted** to `configs/services/llm.yaml` (`skills.disabled`)
+so it survives a restart. Disabling a skill also disables any same-named fast intent.
+Without `controls`, the tab is read-only.
+
+## Activity
+
+With `dashboard.logs: true`, the **Activity** tab shows the recent voice interactions
+the server has handled, so you can see what Kenzy heard, how it answered, and where the
+time went. Each entry shows:
+
+- the **transcript** (what was heard), the identified **speaker** and **room**, and the
+  spoken **response**;
+- a **fast / LLM** tag — whether the deterministic fast path handled it or it went to the
+  language model;
+- a **latency breakdown** (capture = STT + speaker ID in parallel, then LLM, then TTS)
+  and the total response time.
+
+The header summarises the **fast-path hit rate** and **average response time** across the
+recent window. It's a bounded in-memory ring (no disk, ~200 entries) that updates live;
+because entries include transcripts it's gated by the same `dashboard.logs` flag as the
+log viewer, and nothing is recorded when that's off.
+
 ## Logs
 
 With `dashboard.logs: true`, the **Logs** tab pulls a bounded in-memory buffer from a
@@ -162,9 +191,19 @@ persisted. Refresh during/after the window to view the captured detail. Requires
 
 ## Settings
 
-The **Settings** page shows read-only system info (Kenzy version, server and dashboard
-binds, mDNS discovery, configured backends, feature-flag state) and lets you **change
-the dashboard password**.
+The **Settings** page shows system info (Kenzy version, server and dashboard binds, mDNS
+discovery) and lets you **change the dashboard password** and edit a **scoped subset of
+the server's own configuration**.
+
+The **Server configuration** editor exposes the safe-to-change keys: the dashboard
+sub-flags (`logs`, `controls`), each backend service's `url`/`timeout`, the unknown-speaker
+label, and mDNS `discovery.enabled`/`instance`. Saving writes a `server.local.yaml`
+override layered over your hand-edited `server.yaml` (so comments are preserved) and
+**restarts the server** to apply it — the dashboard briefly disconnects and reconnects.
+For safety, lockout/secret-sensitive keys (server host/port, the dashboard bind/port,
+the login credentials, and the `discovery.token`) are **not** editable here and stay
+file- or CLI-managed. Because this editor is the way to turn `controls` on in the first
+place, it requires login but not `controls`.
 
 ## Permissions & security
 

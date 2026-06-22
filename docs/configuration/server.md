@@ -57,8 +57,7 @@ Opt-in web fleet manager served by `kenzy-server`. **Off by default**; when disa
 | `dashboard.auth.username` / `dashboard.auth.password_hash` | `admin` / *(hash of `password`)* | Browser login. Change it with the server-only **`kenzy-passwd`** CLI (or the dashboard's Settings page); never edit the hash by hand. |
 | `dashboard.auth_token` | `null` | Optional bearer token for API/CLI clients (the browser uses the login cookie, not this) |
 | `dashboard.controls` | `false` | Enable mutating actions — config edits, room rename, trigger/stop/restart, announcements. `false` ⇒ read-only. |
-| `dashboard.logs` | `false` | Enable the pull-based log viewer (server, services, and per-node buffers) |
-| `dashboard.tuning` | `false` | Reserved sub-flag for a later phase |
+| `dashboard.logs` | `false` | Enable the pull-based log viewer (server, services, and per-node buffers) and the Activity tab |
 
 !!! warning "Keep the dashboard off the public internet"
     Login runs over plaintext HTTP on a LAN bind and defaults to `admin` / `password`. Bind it to localhost or the LAN only, change the password with `kenzy-passwd`, and do **not** port-forward the dashboard port.
