@@ -12,6 +12,15 @@ let _poll = null;
 let _retry = null;
 let _seq = 0;
 const _pending = new Map();
+// Live calibration samples ({type:"tune", node, sample}) are pushed to subscribers
+// (the calibration panel), not into the fleet state.
+const _tuneSubs = new Set();
+
+// Subscribe to live tune samples; returns an unsubscribe function.
+export function subscribeTune(fn) {
+  _tuneSubs.add(fn);
+  return () => _tuneSubs.delete(fn);
+}
 
 // Send a mutation over the WS and resolve with the server's {ok,error} ack.
 export function send(type, payload = {}) {
@@ -77,6 +86,8 @@ function connectWS() {
         }
       } else if (m.type === "state") {
         emit({ data: m.data, loading: false, error: null, live: true, updatedAt: Date.now() });
+      } else if (m.type === "tune") {
+        _tuneSubs.forEach((fn) => fn(m));
       }
     } catch {
       /* ignore */

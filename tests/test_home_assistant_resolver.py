@@ -23,13 +23,15 @@ ROOT = Path(__file__).resolve().parents[1]
 def ha():
     """Load the bundled home_assistant skill by path with the index from real files."""
     # Resolve paths relative to project root regardless of cwd.
-    reg.set_config({
-        "home_assistant": {
-            "device_ids_yaml": str(ROOT / "data/home_assistant/device_ids.yaml"),
-            "device_ids_json": str(ROOT / "data/home_assistant/device_ids.json"),
-            "device_overlay":  str(ROOT / "data/home_assistant/device_overlay.yaml"),
+    reg.set_config(
+        {
+            "home_assistant": {
+                "device_ids_yaml": str(ROOT / "data/home_assistant/device_ids.yaml"),
+                "device_ids_json": str(ROOT / "data/home_assistant/device_ids.json"),
+                "device_overlay": str(ROOT / "data/home_assistant/device_overlay.yaml"),
+            }
         }
-    })
+    )
     path = ROOT / "src" / "kenzy" / "llm" / "builtin_skills" / "home_assistant.py"
     spec = importlib.util.spec_from_file_location("home_assistant", path)
     assert spec and spec.loader
@@ -55,17 +57,21 @@ def _intent(ha, utterance):
 # Intent parsing (padacioso)
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("utterance,name", [
-    ("turn on the office lights", "turn_on"),
-    ("please turn off the kitchen lights", "turn_off"),
-    ("switch on the floor lamp", "turn_on"),
-    ("toggle the office fan", "toggle"),
-    ("lock the front door", "lock"),
-    ("unlock the front door", "unlock"),
-    ("open the garage door", "open_cover"),
-    ("close the garage door", "close_cover"),
-    ("set the thermostat to 72 degrees", "set_temperature"),
-])
+
+@pytest.mark.parametrize(
+    "utterance,name",
+    [
+        ("turn on the office lights", "turn_on"),
+        ("please turn off the kitchen lights", "turn_off"),
+        ("switch on the floor lamp", "turn_on"),
+        ("toggle the office fan", "toggle"),
+        ("lock the front door", "lock"),
+        ("unlock the front door", "unlock"),
+        ("open the garage door", "open_cover"),
+        ("close the garage door", "close_cover"),
+        ("set the thermostat to 72 degrees", "set_temperature"),
+    ],
+)
 def test_intent_parsing(ha, utterance, name):
     assert _intent(ha, utterance)["name"] == name
 
@@ -77,6 +83,7 @@ def test_non_command_is_not_parsed(ha):
 # ---------------------------------------------------------------------------
 # Group resolution + on/off asymmetry
 # ---------------------------------------------------------------------------
+
 
 def test_turn_on_lights_uses_room_default(ha):
     # living_room default = [lr_floor_lamp, lr_decorative_table_lamp]
@@ -117,6 +124,7 @@ def test_lock_bare_group_allowed(ha):
 # Specific device resolution (rapidfuzz)
 # ---------------------------------------------------------------------------
 
+
 def test_specific_device_fuzzy_in_room(ha):
     codes = ha._resolve_target(ha._get_index(), "turn_on", "floor lamp", "office")
     assert codes == ["of_floor_lamps"]
@@ -129,9 +137,7 @@ def test_unknown_device_defers(ha):
 def test_explicit_room_in_phrase_scopes_specific_device(ha):
     # Regression: "the lamps in the living room" from the office node must act on
     # the LIVING ROOM lamps, never wander to the office's similarly-named device.
-    codes = ha._resolve_target(
-        ha._get_index(), "turn_on", "lamps in the living room", "office"
-    )
+    codes = ha._resolve_target(ha._get_index(), "turn_on", "lamps in the living room", "office")
     assert set(codes) == {"lr_floor_lamp", "lr_decorative_table_lamp"}
 
 
@@ -143,22 +149,22 @@ def test_plural_stem_group_in_origin_room(ha):
 
 def test_explicit_room_no_match_does_not_wander(ha):
     # Named room + no in-room match → defer (None), not a house-wide guess.
-    assert ha._resolve_target(
-        ha._get_index(), "turn_on", "disco ball in the kitchen", "office"
-    ) is None
+    assert (
+        ha._resolve_target(ha._get_index(), "turn_on", "disco ball in the kitchen", "office")
+        is None
+    )
 
 
 def test_cross_room_device_without_named_room_uses_house_wide(ha):
     # No room named → house-wide fallback is allowed (device lives elsewhere).
-    codes = ha._resolve_target(
-        ha._get_index(), "turn_on", "christmas tree", "master_bedroom"
-    )
+    codes = ha._resolve_target(ha._get_index(), "turn_on", "christmas tree", "master_bedroom")
     assert codes == ["lr_christmas_tree_light"]
 
 
 # ---------------------------------------------------------------------------
 # Overlay (aliases + exclude)
 # ---------------------------------------------------------------------------
+
 
 def test_overlay_bare_singular_alias(ha):
     # "lamp" in the bedroom resolves to the chair lamp via the overlay.
@@ -188,6 +194,7 @@ def test_excluded_device_still_addressable_directly(ha):
 # Climate
 # ---------------------------------------------------------------------------
 
+
 def test_climate_resolves_room_thermostat(ha):
     codes = ha._resolve_climate(ha._get_index(), "thermostat", "living_room")
     assert codes == ["lr_thermostat"]
@@ -196,6 +203,7 @@ def test_climate_resolves_room_thermostat(ha):
 # ---------------------------------------------------------------------------
 # End-to-end fast intent (HA boundary mocked)
 # ---------------------------------------------------------------------------
+
 
 async def test_fast_intent_turn_on_handles(ha, monkeypatch):
     applied = {}
@@ -242,15 +250,19 @@ async def test_fast_intent_misses_non_home_request(ha):
 # Confirmation phrasing
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("action,target,origin,expected", [
-    # Room rendered first, never "...the lamps in living room". Past tense:
-    # the device is already changed before the confirmation is spoken.
-    ("turn_off", "lamps in the living room", "office", "Turned off the living room lamps."),
-    ("turn_off", "kitchen lights", "office", "Turned off the kitchen lights."),
-    ("turn_on", "all the lights", "living_room", "Turned on the lights."),
-    ("turn_off", "lights", "living_room", "Turned off the lights."),
-    ("turn_on", "lamp", "master_bedroom", "Turned on the chair lamp."),
-])
+
+@pytest.mark.parametrize(
+    "action,target,origin,expected",
+    [
+        # Room rendered first, never "...the lamps in living room". Past tense:
+        # the device is already changed before the confirmation is spoken.
+        ("turn_off", "lamps in the living room", "office", "Turned off the living room lamps."),
+        ("turn_off", "kitchen lights", "office", "Turned off the kitchen lights."),
+        ("turn_on", "all the lights", "living_room", "Turned on the lights."),
+        ("turn_off", "lights", "living_room", "Turned off the lights."),
+        ("turn_on", "lamp", "master_bedroom", "Turned on the chair lamp."),
+    ],
+)
 def test_confirmation_phrasing(ha, action, target, origin, expected):
     idx = ha._get_index()
     codes = ha._resolve_target(idx, action, target, origin)

@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 import socket
 import threading
+import time
 from typing import Any
 
 log = logging.getLogger(__name__)
@@ -97,11 +98,16 @@ class ServerAdvertiser:
             self._info = None
 
 
-def discover_server(timeout: float = 5.0) -> str | None:
+def discover_server(
+    timeout: float = 5.0, cancel_event: threading.Event | None = None
+) -> str | None:
     """Browse for a Kenzy server; return a ``ws://host:port`` URL or ``None``.
 
     Blocking — call it from a thread (e.g. ``asyncio.to_thread``) inside async
-    code. Returns the first responder; IPv4 is preferred.
+    code. Returns the first responder; IPv4 is preferred. Pass ``cancel_event``
+    so the wait returns promptly on shutdown (otherwise a Ctrl+C while browsing
+    is delayed until the full ``timeout`` elapses — the worker thread is joined
+    at interpreter exit).
     """
     try:
         from zeroconf import ServiceBrowser, ServiceListener, Zeroconf
@@ -137,7 +143,18 @@ def discover_server(timeout: float = 5.0) -> str | None:
     zc = Zeroconf()
     try:
         ServiceBrowser(zc, SERVICE_TYPE, _Listener())
-        done.wait(timeout)
+        if cancel_event is None:
+            done.wait(timeout)
+        else:
+            # Poll so a shutdown (cancel_event set) returns within ~0.25s instead
+            # of blocking the worker thread — and thus interpreter exit — for the
+            # whole timeout.
+            deadline = time.monotonic() + timeout
+            while not done.is_set() and not cancel_event.is_set():
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                done.wait(min(0.25, remaining))
     finally:
         zc.close()
 

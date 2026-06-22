@@ -40,6 +40,7 @@ def clean_fast_registry():
 # FastResult contract
 # ---------------------------------------------------------------------------
 
+
 def test_fastresult_handled():
     r = reg.FastResult.handled("hello")
     assert r.status == "handled"
@@ -71,6 +72,7 @@ def test_fastresult_handled_with_expect_response():
 # ---------------------------------------------------------------------------
 # Registry + dispatch
 # ---------------------------------------------------------------------------
+
 
 def test_fast_intent_requires_async():
     with pytest.raises(TypeError):
@@ -129,6 +131,7 @@ async def test_dispatch_skips_raising_matcher(clean_fast_registry):
 # ---------------------------------------------------------------------------
 # datetime Stage-0 intent
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.parametrize(
     "utterance,expected",

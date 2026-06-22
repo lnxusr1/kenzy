@@ -33,13 +33,16 @@ function shortId(id) {
 
 function NodeCard({ node, onConfigure }) {
   const streaming = node.streaming;
+  const audioFailed = node.audio_ok === false;
   const title = node.room || node.node_id;
+  const led = audioFailed ? "down" : streaming ? "busy" : "up";
   return html`
     <div class="card">
       <div class="top">
-        <span class=${"led " + (streaming ? "busy" : "up")}></span>
+        <span class=${"led " + led}></span>
         <span class="room">${title}</span>
-        <span class=${"badge" + (streaming ? " streaming" : "")}>${streaming ? "streaming" : "idle"}</span>
+        <span class=${"badge" + (streaming ? " streaming" : "")}>
+          ${audioFailed ? "audio error" : streaming ? "streaming" : "idle"}</span>
       </div>
       <dl>
         <dt>node</dt><dd title=${node.node_id}>${shortId(node.node_id)}</dd>
@@ -47,6 +50,9 @@ function NodeCard({ node, onConfigure }) {
         <dt>session</dt><dd>${node.session_id || "—"}</dd>
         <dt>link</dt><dd>${node.connected ? "connected" : "down"}</dd>
       </dl>
+      ${audioFailed
+        ? html`<div class="unclaimed" title=${node.audio_error || ""}>⚠ audio failed — check the device, then Restart</div>`
+        : null}
       ${!node.configured ? html`<div class="unclaimed">⚑ unconfigured</div>` : null}
       <button class="btn-ghost card-cfg" onClick=${() => onConfigure(node.node_id)}>Configure</button>
     </div>

@@ -139,6 +139,13 @@ class NodeSession:
     streaming: bool = field(default=False)
     # node_id of the peer this node is in a live intercom call with (None = not in a call).
     intercom_peer: str | None = field(default=None)
+    # Node health: False once a node reports audio init failed (it stays connected so
+    # it can be fixed + restarted from the dashboard). Defaults True (healthy).
+    audio_ok: bool = field(default=True)
+    audio_error: str | None = field(default=None)
+    # Capabilities announced in `hello` (audio device + the device probe used by the
+    # dashboard's device picker). Not persisted; refreshed on each connect.
+    capabilities: dict[str, Any] = field(default_factory=dict)
 
     async def send_json(self, payload: dict[str, Any]) -> None:
         await self.ws.send(json.dumps(payload))
@@ -184,6 +191,9 @@ class AudioServer:
         # used by the dashboard's temporary TRACE log boost.
         self._transient_node_cfg: dict[str, dict[str, Any]] = {}
         self._boost_tasks: dict[str, asyncio.Task[None]] = {}
+        # Calibration telemetry relay: the dashboard registers a listener and the
+        # node's per-frame tune samples are forwarded to it. Empty ⇒ zero overhead.
+        self._tune_listeners: list[Callable[[str, dict[str, Any]], None]] = []
 
     def add_state_listener(self, fn: Callable[[], None]) -> None:
         """Register a callback fired (in-loop) when the node registry/state changes."""
@@ -195,6 +205,40 @@ class AudioServer:
                 fn()
             except Exception:  # a listener must never break the pipeline
                 log.debug("state listener error", exc_info=True)
+
+    def add_tune_listener(self, fn: Callable[[str, dict[str, Any]], None]) -> None:
+        """Register a callback fired with ``(node_id, sample)`` for each tune sample."""
+        self._tune_listeners.append(fn)
+
+    def _notify_tune(self, node_id: str, sample: dict[str, Any]) -> None:
+        for fn in self._tune_listeners:
+            try:
+                fn(node_id, sample)
+            except Exception:
+                log.debug("tune listener error", exc_info=True)
+
+    async def start_node_tuning(self, node_id: str, seconds: float = 20.0) -> bool:
+        """Ask a connected node to begin a bounded calibration window."""
+        session = self._nodes.get(node_id)
+        if session is None:
+            return False
+        try:
+            await session.ws.send(protocol.tune_start(seconds))
+            return True
+        except Exception as exc:
+            log.warning("start_node_tuning: %s send failed: %s", node_id, exc)
+            return False
+
+    async def stop_node_tuning(self, node_id: str) -> bool:
+        """Ask a connected node to end calibration early."""
+        session = self._nodes.get(node_id)
+        if session is None:
+            return False
+        try:
+            await session.ws.send(protocol.tune_stop())
+            return True
+        except Exception:
+            return False
 
     def _service_headers(self) -> dict[str, str]:
         """Bearer header for outbound backend calls (empty when no token set)."""
@@ -598,7 +642,7 @@ class AudioServer:
         if effective.get("room_id"):
             room_id = str(effective["room_id"])
 
-        session = NodeSession(ws=ws, node_id=node_id, room_id=room_id)
+        session = NodeSession(ws=ws, node_id=node_id, room_id=room_id, capabilities=caps)
 
         async with self._lock:
             old = self._nodes.get(node_id)
@@ -706,6 +750,31 @@ class AudioServer:
         elif mtype == protocol.MSG_INTERCOM_END:
             # Node-initiated end (e.g. its wake word fired during the call).
             await self.end_intercom(session.node_id, reason=str(msg.get("reason", "peer")))
+
+        elif mtype == protocol.MSG_STATUS:
+            session.audio_ok = bool(msg.get("audio_ok", True))
+            session.audio_error = msg.get("audio_error") or None
+            if msg.get("devices") is not None:
+                session.capabilities = {**session.capabilities, "devices": msg["devices"]}
+            if not session.audio_ok:
+                log.warning(
+                    "[%s] reports audio init FAILED: %s — fix device + restart",
+                    session.node_id,
+                    session.audio_error,
+                )
+            self._notify_state()
+
+        elif mtype == protocol.MSG_TUNE_SAMPLE:
+            self._notify_tune(
+                session.node_id,
+                {
+                    "rms": msg.get("rms", 0.0),
+                    "wake": msg.get("wake", 0.0),
+                    "vad": msg.get("vad", 0.0),
+                    "seq": msg.get("seq", 0),
+                    "stopped": bool(msg.get("stopped", False)),
+                },
+            )
 
         elif mtype == protocol.MSG_LOGS:
             fut = self._log_waiters.get(str(msg.get("request_id", "")))

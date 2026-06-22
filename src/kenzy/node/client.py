@@ -37,8 +37,11 @@ import logging
 import os
 import queue
 import re
+import signal
 import socket
 import sys
+import threading
+import time
 import uuid
 import wave
 from importlib.resources import as_file, files
@@ -81,6 +84,46 @@ def _volume_to_gain(value: Any) -> float:
     except (TypeError, ValueError):
         pct = 100.0
     return max(0.0, min(1.0, pct / 100.0))
+
+
+# --- Calibration suggestion heuristics (mirror dashboard_static/js/views/calibrate.js)
+
+
+def _percentile(values: list[float], q: float) -> float:
+    if not values:
+        return 0.0
+    s = sorted(values)
+    return s[min(len(s) - 1, max(0, int(q * (len(s) - 1))))]
+
+
+def _suggest_silence_rms(rms: list[float]) -> int | None:
+    """silence_rms_threshold just above the ambient floor (p90)."""
+    if not rms:
+        return None
+    floor = _percentile(rms, 0.9)
+    return int(max(5, min(5000, round(max(floor * 1.5, floor + 15)))))
+
+
+def _suggest_wake_threshold(wake: list[float]) -> float | None:
+    """wakeword_threshold in the gap between ambient (p75) and the utterance peak."""
+    if not wake:
+        return None
+    ambient = _percentile(wake, 0.75)
+    gap = max(wake) - ambient
+    if gap < 0.15:  # no clear wake-word utterance was heard
+        return None
+    return round(max(0.05, min(0.95, ambient + gap * 0.4)), 2)
+
+
+def _suggest_vad_threshold(vad: list[float]) -> float | None:
+    """wakeword_vad_threshold below speech VAD, above the silence floor."""
+    if not vad:
+        return None
+    ambient = _percentile(vad, 0.75)
+    gap = max(vad) - ambient
+    if gap < 0.15:
+        return None
+    return round(max(0.0, min(0.9, ambient + gap * 0.3)), 2)
 
 
 def _set_yaml_scalar(text: str, key: str, value: str) -> str:
@@ -414,7 +457,12 @@ class _SoundPlayer:
         return self._streaming or self._pos < len(self._audio) or self._restart
 
     def close(self) -> None:
-        self._stream.stop()
+        # abort() (discard buffered audio) is more decisive than stop() (drain) and
+        # less likely to block during shutdown.
+        try:
+            self._stream.abort()
+        except Exception:
+            pass
         self._stream.close()
 
 
@@ -508,6 +556,18 @@ class NodeClient:
         # arrives (zero-config nodes pull all hardware keys from the server). Until
         # then the node blocks: no mic, no wakeword, no playback.
         self._audio_ready: bool = False
+        # Set when _init_audio fails (e.g. a bad audio_device). The node stays
+        # connected and controllable so the device can be fixed + the node
+        # restarted from the dashboard; audio is retried on the next restart.
+        self._audio_failed: bool = False
+        self._audio_error: str | None = None
+        # Calibration: while tuning, the audio loop streams per-frame RMS/wake/VAD
+        # scalars to the server (relayed to the dashboard) and does NOT act on wake
+        # words, so the operator can repeat the wake word to measure scores.
+        self._tuning: bool = False
+        self._tune_deadline: float = 0.0
+        self._tune_seq: int = 0
+        self._tune_vad: Any = None  # standalone openwakeword.VAD for the window
         self._input_stream: sd.InputStream | None = None
         self._audio_task: asyncio.Task[None] | None = None
         # Opt-in log ring buffer for the dashboard log viewer; attached only when
@@ -527,6 +587,16 @@ class NodeClient:
         self._silence_count: int = 0
         self._speech_frames: int = 0
         self._frame_count: int = 0
+        # Set on shutdown so a blocking mDNS browse returns promptly (otherwise the
+        # worker thread is joined at interpreter exit, delaying Ctrl+C by ~5s).
+        self._discovery_cancel = threading.Event()
+        self._force_exit_armed = False  # guards the one-shot shutdown watchdog
+        # Cached audio-device probe, reported to the server so the dashboard can offer
+        # a device picker. Probing touches PortAudio and can be slow/block, so it runs
+        # in a daemon thread (never on the event loop); the result is pushed via a
+        # `status` update when ready. None = not yet probed.
+        self._device_probe: list[dict[str, Any]] | None = None
+        self._device_probe_started = False
 
     # ------------------------------------------------------------------
     # Audio capture (sounddevice callback – runs in a C thread)
@@ -995,6 +1065,20 @@ class NodeClient:
                 entries = self._log_buffer.tail(lv, limit) if self._log_buffer else []
                 await self._ws.send(protocol.node_logs(str(msg.get("request_id", "")), entries))
 
+            elif mtype == protocol.MSG_TUNE_START:
+                # Calibration only runs on an idle node with working audio.
+                if self._state == _STATE_IDLE and self._oww is not None:
+                    self._start_tuning(float(msg.get("seconds", 20.0)))
+                else:
+                    log.info(
+                        "Ignoring tune_start (state=%s, audio_ready=%s)",
+                        self._state,
+                        self._oww is not None,
+                    )
+
+            elif mtype == protocol.MSG_TUNE_STOP:
+                self._stop_tuning()
+
     # ------------------------------------------------------------------
     # Audio loop – always running, routes frames by current state
     # ------------------------------------------------------------------
@@ -1019,6 +1103,12 @@ class NodeClient:
             # mid-stream activations are forwarded to the server.
             if self._oww is not None:
                 scores: dict[str, float] = await loop.run_in_executor(None, self._oww.predict, flat)
+                # Calibration window: stream measurement scalars and DON'T act on
+                # wake words (so the operator can repeat the wake word to gather
+                # scores without starting sessions). Always IDLE while tuning.
+                if self._tuning:
+                    await self._emit_tune_sample(flat, scores, loop)
+                    continue
                 for name, score in scores.items():
                     if score >= self._wakeword_threshold:
                         log.info("Wake word '%s' score=%.3f", name, score)
@@ -1126,7 +1216,7 @@ class NodeClient:
         from kenzy.discovery import discover_server
 
         log.info("Discovering Kenzy server over mDNS…")
-        url = await asyncio.to_thread(discover_server, 5.0)
+        url = await asyncio.to_thread(discover_server, 5.0, self._discovery_cancel)
         if url is None:
             raise OSError("no Kenzy server found on the network (mDNS)")
         log.info("Discovered server at %s", url)
@@ -1234,6 +1324,181 @@ class NodeClient:
         self._audio_ready = True
         log.info("Audio initialized from server config — node is live")
 
+    def _teardown_audio(self) -> None:
+        """Close any partially-initialized audio resources after a failed init."""
+        if self._audio_task is not None:
+            self._audio_task.cancel()
+            self._audio_task = None
+        if self._input_stream is not None:
+            try:
+                self._input_stream.abort()
+                self._input_stream.close()
+            except Exception:
+                pass
+            self._input_stream = None
+        if self._player is not None:
+            try:
+                self._player.close()
+            except Exception:
+                pass
+            self._player = None
+        self._oww = None
+
+    def _close_audio_hardware(self, timeout: float = 1.5) -> None:
+        """Abort/close the audio streams off the main thread, bounded by ``timeout``.
+
+        Some PortAudio/ALSA stacks block inside stream close; doing it in a daemon
+        thread with a bounded join keeps shutdown prompt — if the close doesn't
+        finish, the OS reclaims the device on process exit.
+        """
+        input_stream = self._input_stream
+        player = self._player
+        self._input_stream = None
+        self._player = None
+        if input_stream is None and player is None:
+            return
+
+        def _close() -> None:
+            if input_stream is not None:
+                try:
+                    input_stream.abort()
+                    input_stream.close()
+                except Exception:
+                    pass
+            if player is not None:
+                try:
+                    player.close()
+                except Exception:
+                    pass
+
+        t = threading.Thread(target=_close, daemon=True, name="audio-close")
+        t.start()
+        t.join(timeout)
+        if t.is_alive():
+            log.warning("Audio device close is slow — leaving it to process exit")
+
+    def _device_capabilities(self) -> list[dict[str, Any]]:
+        """Return the cached device probe (kicking it off if needed); never blocks.
+
+        The probe runs in a daemon thread because PortAudio enumeration can be slow
+        or hang. Until it finishes this returns ``[]``; the result is then pushed to
+        the server via :meth:`_send_device_status` so a node that connected before the
+        probe completed still gets its device list to the dashboard.
+        """
+        self._kick_device_probe()
+        return self._device_probe or []
+
+    def _kick_device_probe(self) -> None:
+        if self._device_probe is not None or self._device_probe_started:
+            return
+        self._device_probe_started = True
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+
+        def _probe() -> None:
+            try:
+                from kenzy.node.devices import probe_devices
+
+                result = probe_devices()
+            except Exception as exc:
+                log.warning("audio device probe failed: %s", exc)
+                result = []
+            self._device_probe = result
+            if loop is not None:
+                try:
+                    loop.call_soon_threadsafe(self._on_device_probe_ready)
+                except RuntimeError:
+                    pass  # loop already closed (e.g. shutting down)
+
+        threading.Thread(target=_probe, daemon=True, name="device-probe").start()
+
+    def _on_device_probe_ready(self) -> None:
+        # The first hello may have gone out before the probe finished; push the list.
+        if self._ws is not None:
+            asyncio.create_task(self._send_device_status())
+
+    async def _send_device_status(self) -> None:
+        if self._ws is None:
+            return
+        try:
+            await self._ws.send(
+                protocol.status(
+                    audio_ok=not self._audio_failed,
+                    audio_error=self._audio_error,
+                    devices=self._device_capabilities(),
+                )
+            )
+        except Exception:
+            pass
+
+    # ------------------------------------------------------------------
+    # Calibration telemetry (on-demand, time-boxed)
+    # ------------------------------------------------------------------
+
+    def _start_tuning(self, seconds: float) -> None:
+        """Begin a bounded calibration window: stream RMS/wake/VAD scalars per frame.
+
+        A standalone Silero VAD is spun up for the window because the live wakeword
+        model only computes VAD when ``wakeword_vad_threshold > 0`` (default 0).
+        """
+        seconds = max(1.0, min(float(seconds), 120.0))
+        if self._tune_vad is None:
+            try:
+                import openwakeword  # type: ignore[import-untyped]
+
+                self._tune_vad = openwakeword.VAD()
+            except Exception as exc:
+                log.warning("VAD model unavailable for tuning (%s) — vad scores will be 0", exc)
+                self._tune_vad = None
+        self._tune_deadline = asyncio.get_running_loop().time() + seconds
+        self._tune_seq = 0
+        self._tuning = True
+        log.info("Calibration window started (%.0fs)", seconds)
+
+    def _stop_tuning(self) -> None:
+        if not self._tuning:
+            return
+        self._tuning = False
+        self._tune_vad = None
+        log.info("Calibration window stopped")
+
+    def _vad_score(self, flat: np.ndarray[Any, Any]) -> float:
+        vad = self._tune_vad
+        if vad is None:
+            return 0.0
+        try:
+            vad(flat)
+            return float(vad.prediction_buffer[-1]) if vad.prediction_buffer else 0.0
+        except Exception:
+            return 0.0
+
+    async def _emit_tune_sample(
+        self, flat: np.ndarray[Any, Any], scores: dict[str, float], loop: asyncio.AbstractEventLoop
+    ) -> None:
+        """Send one calibration sample; auto-stop (and tell the server) when expired."""
+        if loop.time() >= self._tune_deadline:
+            self._stop_tuning()
+            if self._ws is not None:
+                try:
+                    await self._ws.send(protocol.tune_sample(stopped=True))
+                except Exception:
+                    pass
+            return
+        rms = float(np.sqrt(np.mean(flat.astype(np.float32) ** 2)))
+        wake = float(max(scores.values())) if scores else 0.0
+        vad = await loop.run_in_executor(None, self._vad_score, flat)
+        self._tune_seq += 1
+        if self._ws is not None:
+            try:
+                await self._ws.send(
+                    protocol.tune_sample(rms=rms, wake=wake, vad=vad, seq=self._tune_seq)
+                )
+            except Exception as exc:
+                log.warning("tune_sample send failed: %s", exc)
+                self._stop_tuning()
+
     # ------------------------------------------------------------------
     # Per-connection session
     # ------------------------------------------------------------------
@@ -1252,6 +1517,7 @@ class NodeClient:
             "audio_device": self._audio_device,
             "capture_sample_rate": self._capture_rate,
             "playback_sample_rate": self._playback_rate,
+            "devices": self._device_capabilities(),
         }
         await ws.send(
             protocol.hello(
@@ -1271,7 +1537,29 @@ class NodeClient:
             log.info("Waiting for server config before initializing audio…")
             cfg = await asyncio.wait_for(self._read_initial_config(ws), timeout=20.0)
             self._apply_pulled_config(cfg, initial=True)
-            await self._init_audio()
+            try:
+                await self._init_audio()
+                self._audio_failed = False
+                self._audio_error = None
+            except Exception as exc:
+                # Non-fatal: audio hardware couldn't start (e.g. a bad audio_device).
+                # Stay connected so the device can be corrected and the node
+                # restarted from the dashboard; audio is retried on that restart (or
+                # the next reconnect). Without this the node would die before its
+                # command loop ran, leaving it unreachable exactly when it needs
+                # fixing.
+                self._audio_failed = True
+                self._audio_error = str(exc)
+                self._teardown_audio()
+                log.error(
+                    "Audio init failed (%s) — node stays connected for remote fix/restart",
+                    exc,
+                    exc_info=True,
+                )
+                try:
+                    await ws.send(protocol.status(audio_ok=False, audio_error=str(exc)))
+                except Exception:
+                    pass
 
         recv_task = asyncio.create_task(self._recv_loop(ws), name="recv")
         cmd_task = asyncio.create_task(self._cmd_loop(), name="cmd")
@@ -1301,6 +1589,46 @@ class NodeClient:
         # config from the server, and only then initializes audio (in
         # _init_audio, on the first connection). Until the server is reachable
         # and answers, the node blocks in this reconnect/backoff loop.
+
+        # Handle SIGINT/SIGTERM via the loop so Ctrl+C cancels promptly: cancel the
+        # run task AND signal any in-flight mDNS browse to return at once (its worker
+        # thread is joined at interpreter exit, so a blocking browse would otherwise
+        # delay shutdown by the full discovery timeout).
+        loop = asyncio.get_running_loop()
+        main_task = asyncio.current_task()
+
+        def _request_stop() -> None:
+            log.info("Shutdown signal received — stopping node")
+            self._discovery_cancel.set()
+            if main_task is not None:
+                main_task.cancel()
+            # Safety net: if graceful shutdown wedges in a blocking C call (PortAudio /
+            # ALSA stream close, a stuck thread join) the main thread can't process
+            # further signals, so Ctrl+C would appear dead. A daemon timer force-exits
+            # if we haven't stopped in time. (No-op if we exit cleanly first — daemon
+            # threads don't keep the process alive.)
+            if not self._force_exit_armed:
+                self._force_exit_armed = True
+
+                def _force_exit() -> None:
+                    time.sleep(4.0)
+                    log.warning("Graceful shutdown timed out — forcing exit")
+                    os._exit(0)
+
+                threading.Thread(target=_force_exit, daemon=True, name="force-exit").start()
+
+        installed: list[Any] = []
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            try:
+                loop.add_signal_handler(sig, _request_stop)
+                installed.append(sig)
+            except (NotImplementedError, RuntimeError, ValueError):
+                pass  # unsupported (Windows / non-main thread) — fall back to KeyboardInterrupt
+
+        # Start the (off-thread) audio-device probe now so its result is usually ready
+        # by the time we send hello; if not, it's pushed via a status update.
+        self._kick_device_probe()
+
         try:
             delay = 1
             while True:
@@ -1321,7 +1649,7 @@ class NodeClient:
                     log.warning("Connection error: %s", exc)
 
                 except asyncio.CancelledError:
-                    raise  # propagate; outer finally handles cleanup
+                    raise  # propagate to the graceful-shutdown handler below
 
                 except Exception as exc:
                     log.error("Unexpected error: %s", exc, exc_info=True)
@@ -1335,7 +1663,15 @@ class NodeClient:
                 await asyncio.sleep(delay)
                 delay = min(delay * 2, 60)
 
+        except asyncio.CancelledError:
+            log.info("Node shutting down…")  # graceful exit on signal/cancel
+
         finally:
+            for sig in installed:
+                try:
+                    loop.remove_signal_handler(sig)
+                except Exception:
+                    pass
             # Guaranteed cleanup regardless of how we exit (normal return,
             # CancelledError from connect or sleep, unexpected exception).
             if self._audio_task is not None:
@@ -1350,16 +1686,7 @@ class NodeClient:
                     await self._tts_task
                 except asyncio.CancelledError:
                     pass
-            if self._input_stream is not None:
-                try:
-                    self._input_stream.stop()
-                    self._input_stream.close()
-                except Exception:
-                    pass
-                self._input_stream = None
-            if self._player:
-                self._player.close()
-                self._player = None
+            self._close_audio_hardware()
             log.info("Node client stopped.")
 
 
@@ -1379,6 +1706,135 @@ def setup() -> None:
     log.info("Setup complete.")
 
 
+def run_calibration(cfg: dict[str, Any], node_id: str) -> None:
+    """Headless audio calibration: measure RMS / wake / VAD locally and print
+    suggested thresholds. The values are **server-owned** (the node pulls config),
+    so they're printed for the operator to apply via the dashboard or the server's
+    per-node override — not written to the node's local file.
+    """
+    import time
+
+    import sounddevice as sd  # type: ignore[import-untyped]
+
+    capture_rate = int(cfg.get("capture_sample_rate", protocol.SAMPLE_RATE))
+    audio_device = cfg.get("audio_device")
+    models = list(cfg.get("wakeword_models") or []) or _bundled_model_paths()
+
+    print("\nKenzy audio calibration")
+    print("=" * 60)
+    dev_label = audio_device if audio_device is not None else "system default"
+    print(f"device: {dev_label}  |  capture: {capture_rate} Hz")
+
+    oww: Any = None
+    vad: Any = None
+    try:
+        import openwakeword  # type: ignore[import-untyped]
+        from openwakeword.model import Model  # type: ignore[import-untyped]
+
+        _ensure_oww_resources()
+        oww = Model(
+            wakeword_models=models, inference_framework=_infer_framework(models), vad_threshold=0.0
+        )
+        vad = openwakeword.VAD()
+    except Exception as exc:
+        print(f"\nWake-word/VAD models unavailable ({exc}); measuring RMS only.")
+
+    q: queue.Queue[Any] = queue.Queue(maxsize=200)
+
+    def _cb(indata: Any, frames: int, t: Any, status: Any) -> None:
+        try:
+            q.put_nowait(indata.copy())
+        except queue.Full:
+            pass
+
+    blocksize = int(protocol.FRAME_SAMPLES * capture_rate // protocol.SAMPLE_RATE)
+    try:
+        stream = sd.InputStream(
+            samplerate=capture_rate,
+            channels=1,
+            dtype="int16",
+            blocksize=blocksize,
+            device=audio_device,
+            callback=_cb,
+        )
+    except Exception as exc:
+        print(f"\nERROR: could not open the audio device ({exc}).")
+        print("Run 'kenzy-devices' to find a working device, then set audio_device.")
+        return
+
+    def _collect(seconds: float) -> tuple[list[float], list[float], list[float]]:
+        rms: list[float] = []
+        wake: list[float] = []
+        vadv: list[float] = []
+        while not q.empty():  # drop anything buffered before the phase
+            try:
+                q.get_nowait()
+            except queue.Empty:
+                break
+        end = time.monotonic() + seconds
+        while time.monotonic() < end:
+            try:
+                frame = q.get(timeout=0.3)
+            except queue.Empty:
+                continue
+            flat = frame.flatten()
+            if capture_rate != protocol.SAMPLE_RATE:
+                flat = _resample(flat, capture_rate, protocol.SAMPLE_RATE)
+            rms.append(float(np.sqrt(np.mean(flat.astype(np.float32) ** 2))))
+            if oww is not None:
+                scores = oww.predict(flat)
+                wake.append(float(max(scores.values())) if scores else 0.0)
+            if vad is not None:
+                vad(flat)
+                vadv.append(float(vad.prediction_buffer[-1]) if vad.prediction_buffer else 0.0)
+        return rms, wake, vadv
+
+    def _countdown(msg: str, n: int = 3) -> None:
+        print(f"\n{msg}")
+        for i in range(n, 0, -1):
+            print(f"  starting in {i}…", end="\r", flush=True)
+            time.sleep(1)
+        print("  measuring…          ")
+
+    stream.start()
+    try:
+        _countdown("Phase 1/2 — stay QUIET to measure the room's noise floor (5s).")
+        rms1, _, _ = _collect(5.0)
+        sil = _suggest_silence_rms(rms1)
+
+        wake_all: list[float] = []
+        vad_all: list[float] = []
+        if oww is not None:
+            _countdown("Phase 2/2 — say the wake word ('Hey Kenzy') a few times (12s).")
+            _, wake_all, vad_all = _collect(12.0)
+        wk = _suggest_wake_threshold(wake_all)
+        vd = _suggest_vad_threshold(vad_all)
+    finally:
+        try:
+            stream.abort()
+            stream.close()
+        except Exception:
+            pass
+
+    print("\n" + "=" * 60)
+    print("Suggested thresholds")
+    print("=" * 60)
+    if sil is not None:
+        print(f"  silence_rms_threshold:  {sil}")
+    if wk is not None:
+        print(f"  wakeword_threshold:     {wk}")
+    elif oww is not None:
+        print("  wakeword_threshold:     (no clear wake word heard — re-run and speak up)")
+    if vd is not None:
+        print(f"  wakeword_vad_threshold: {vd}   # needs a node restart to apply")
+    print()
+    print("These are server-owned (the node pulls its config). Apply them from the")
+    print("dashboard's Calibration panel, or add them on the SERVER to one of:")
+    print(f"  - configs/nodes/{node_id}.yaml   (this node only)")
+    print("  - server.yaml  ->  node_defaults:   (default for all nodes)")
+    print("Editing this node's local node.yaml has no lasting effect.")
+
+
 def main() -> None:
     import sys
 
@@ -1387,20 +1843,27 @@ def main() -> None:
     from kenzy.config import resolve_config, writable_config_path
     from kenzy.logutil import configure_logging, level_value
 
-    config_path = resolve_config("node", sys.argv[1] if len(sys.argv) > 1 else None)
+    args = sys.argv[1:]
+    do_calibrate = "--calibrate" in args
+    positional = [a for a in args if not a.startswith("-")]
+    config_path = resolve_config("node", positional[0] if positional else None)
     with open(config_path) as fh:
         cfg = yaml.safe_load(fh) or {}
 
     # Console follows log_level (default info); the dashboard log buffer can go
     # deeper (log_capture_level) once the server enables capture (config-pull).
-    configure_logging(
-        level_value(cfg.get("log_level"), logging.INFO), bool(cfg.get("verbose", False))
-    )
+    # Calibration is quieter so its prompts/results stand out.
+    display = logging.WARNING if do_calibrate else level_value(cfg.get("log_level"), logging.INFO)
+    configure_logging(display, bool(cfg.get("verbose", False)))
 
     # Ensure a stable node_id, persisting a generated one to a writable config
     # file (redirected out of the packaged read-only default if needed).
     write_path = writable_config_path("node", config_path)
-    _ensure_node_id(cfg, write_path)
+    node_id = _ensure_node_id(cfg, write_path)
+
+    if do_calibrate:
+        run_calibration(cfg, node_id)
+        return
 
     try:
         asyncio.run(NodeClient(cfg, config_path=write_path).run())

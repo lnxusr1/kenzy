@@ -117,6 +117,11 @@ class Dashboard:
         self._clients: set[ServerConnection] = set()
         self._svc_cache: tuple[float, list[dict[str, Any]]] | None = None
         server.add_state_listener(self._on_state_change)
+        # Calibration: which connected browser is tuning which node (connection → node_id).
+        # Tune samples are relayed only to the subscribed client, not all clients, and
+        # never through the heavy state snapshot.
+        self._tune_subs: dict[ServerConnection, str] = {}
+        server.add_tune_listener(self._on_tune_sample)
         # Pull-based logs (only when the `logs` sub-flag is on): tell nodes to keep a
         # buffer, and capture the server's own logs for the viewer down to the
         # configured capture depth (default debug).
@@ -199,6 +204,8 @@ class Dashboard:
                     "connected": True,
                     "streaming": bool(session.streaming),
                     "session_id": session.session_id,
+                    "audio_ok": bool(session.audio_ok),
+                    "audio_error": session.audio_error,
                 }
             )
         return nodes
@@ -365,6 +372,9 @@ class Dashboard:
                     "override": override,
                     "editable": self._server.allowed_override_keys(),
                     "controls": self._dcfg.controls,
+                    # Audio devices the node reported (for the device picker); empty
+                    # when offline or not yet probed.
+                    "devices": (session.capabilities.get("devices") or []) if session else [],
                 },
             )
 
@@ -483,6 +493,21 @@ class Dashboard:
             except Exception:
                 self._clients.discard(ws)
 
+    def _on_tune_sample(self, node_id: str, sample: dict[str, Any]) -> None:
+        """Relay one calibration sample to the client(s) tuning this node only."""
+        targets = [c for c, n in self._tune_subs.items() if n == node_id]
+        if not targets:
+            return
+        payload = json.dumps({"type": "tune", "node": node_id, "sample": sample})
+        asyncio.create_task(self._send_tune(targets, payload))
+
+    async def _send_tune(self, targets: list[ServerConnection], payload: str) -> None:
+        for ws in targets:
+            try:
+                await ws.send(payload)
+            except Exception:
+                self._tune_subs.pop(ws, None)
+
     async def _ws_handler(self, connection: ServerConnection) -> None:
         # Auth was checked in process_request before the upgrade was allowed.
         self._clients.add(connection)
@@ -494,6 +519,11 @@ class Dashboard:
             pass
         finally:
             self._clients.discard(connection)
+            # If this client was calibrating a node, stop it (unless another client
+            # is still tuning the same node).
+            node = self._tune_subs.pop(connection, "")
+            if node and node not in self._tune_subs.values():
+                asyncio.create_task(self._server.stop_node_tuning(node))
 
     async def _handle_ws_message(self, connection: ServerConnection, raw: str | bytes) -> None:
         try:
@@ -552,6 +582,23 @@ class Dashboard:
             await ack(ok, None if ok else "node not connected")
             if ok:
                 await self._broadcast_state()
+        elif mtype == "tune_start":
+            if not self._dcfg.controls:
+                return await ack(False, "controls are disabled (set dashboard.controls: true)")
+            node = str(msg.get("node", ""))
+            try:
+                seconds = float(msg.get("seconds", 20.0))
+            except (TypeError, ValueError):
+                seconds = 20.0
+            ok = await self._server.start_node_tuning(node, seconds)
+            if ok:
+                self._tune_subs[connection] = node
+            await ack(ok, None if ok else "node not connected")
+        elif mtype == "tune_stop":
+            node = self._tune_subs.pop(connection, "") or str(msg.get("node", ""))
+            if node and node not in self._tune_subs.values():
+                await self._server.stop_node_tuning(node)
+            await ack(True)
         elif mtype == "announce":
             if not self._dcfg.controls:
                 return await ack(False, "controls are disabled (set dashboard.controls: true)")

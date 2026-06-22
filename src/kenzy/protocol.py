@@ -28,6 +28,10 @@ MSG_RESTART = "restart"
 MSG_SET_ROOM = "set_room"
 MSG_REQUEST_LOGS = "request_logs"
 MSG_LOGS = "logs"
+MSG_STATUS = "status"  # node→server: report node health (e.g. audio init failed)
+MSG_TUNE_START = "tune_start"  # server→node: begin a bounded calibration window
+MSG_TUNE_STOP = "tune_stop"  # server→node: end calibration early
+MSG_TUNE_SAMPLE = "tune_sample"  # node→server: one calibration sample (rms/wake/vad)
 # Intercom (live two-way call between two rooms; gated by the receiver's consent).
 MSG_CALL_REQUEST = "call_request"  # server→node: ring the receiver (no audio yet)
 MSG_CALL_CANCEL = "call_cancel"  # server→node: caller hung up before accept
@@ -127,6 +131,44 @@ def request_logs(request_id: str, level: str = "", limit: int = 200) -> str:
 
 def node_logs(request_id: str, entries: list[dict[str, Any]]) -> str:
     return json.dumps({"type": MSG_LOGS, "request_id": request_id, "logs": entries})
+
+
+def status(
+    audio_ok: bool,
+    audio_error: str | None = None,
+    devices: list[dict[str, Any]] | None = None,
+) -> str:
+    """Node→server health update: sent when audio init fails (so the node can be
+    fixed/restarted remotely while staying connected) and when the audio-device
+    probe finishes (to deliver the device list for the dashboard picker)."""
+    payload: dict[str, Any] = {"type": MSG_STATUS, "audio_ok": audio_ok, "audio_error": audio_error}
+    if devices is not None:
+        payload["devices"] = devices
+    return json.dumps(payload)
+
+
+def tune_start(seconds: float = 20.0) -> str:
+    return json.dumps({"type": MSG_TUNE_START, "seconds": seconds})
+
+
+def tune_stop() -> str:
+    return json.dumps({"type": MSG_TUNE_STOP})
+
+
+def tune_sample(
+    rms: float = 0.0, wake: float = 0.0, vad: float = 0.0, seq: int = 0, stopped: bool = False
+) -> str:
+    """One calibration measurement frame (or a final ``stopped`` marker)."""
+    return json.dumps(
+        {
+            "type": MSG_TUNE_SAMPLE,
+            "rms": rms,
+            "wake": wake,
+            "vad": vad,
+            "seq": seq,
+            "stopped": stopped,
+        }
+    )
 
 
 def ack(session_id: str) -> str:

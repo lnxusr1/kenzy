@@ -1,6 +1,7 @@
 import { html, useState, useEffect } from "../html.js";
 import { send, notify } from "../store.js";
 import { nodeEnum } from "../schema.js";
+import { AudioWizard } from "./audio-wizard.js";
 
 // Editor field types per key (the server's allow-list).
 const TYPES = {
@@ -11,7 +12,7 @@ const TYPES = {
   speech_min_ms: "num",
   no_speech_timeout_ms: "num",
   hard_cap_ms: "num",
-  volume: "num",
+  volume: "range",
   capture_sample_rate: "num",
   playback_sample_rate: "num",
   vad_enabled: "bool",
@@ -37,11 +38,15 @@ const RESTART_KEYS = new Set([
   "sound_disconnect",
 ]);
 
+// Bounds for "range" (slider) fields (default = the node's value when unset).
+const RANGES = { volume: { min: 0, max: 100, step: 1, default: 100 } };
+
 export function ConfigView({ node, onBack }) {
   const [info, setInfo] = useState(null);
   const [over, setOver] = useState({});
   const [room, setRoom] = useState("");
   const [saving, setSaving] = useState(false);
+  const [showWizard, setShowWizard] = useState(false);
 
   async function load() {
     const r = await fetch(`/api/nodes/${encodeURIComponent(node)}/config`);
@@ -63,18 +68,18 @@ export function ConfigView({ node, onBack }) {
     setOver(next);
   };
 
-  async function save() {
+  async function save(extra = {}) {
     setSaving(true);
     // Drop blank rows from list fields; omit a key entirely if it ends up empty.
     const config = {};
-    for (const [key, val] of Object.entries(over)) {
+    for (const [key, val] of Object.entries({ ...over, ...extra })) {
       if (key === "room_id") continue; // server-managed, set via the room field
       if (TYPES[key] === "list") {
         const arr = (val || []).map((s) => s.trim()).filter(Boolean);
         if (arr.length) config[key] = arr;
-      } else if (TYPES[key] === "num") {
-        // Number fields hold a raw string while editing (so decimals like "0.5"
-        // aren't collapsed mid-type); coerce here, dropping blank/invalid entries.
+      } else if (TYPES[key] === "num" || TYPES[key] === "range") {
+        // Number/range fields hold a raw string while editing (so decimals like
+        // "0.5" aren't collapsed mid-type); coerce here, dropping blank/invalid.
         const num = Number(val);
         if (val !== "" && val != null && !Number.isNaN(num)) config[key] = num;
       } else {
@@ -104,6 +109,17 @@ export function ConfigView({ node, onBack }) {
   async function ctl(type) {
     const res = await send(type, { node });
     notify(res.ok ? `${cap(type)} sent.` : res.error || `${type} failed`, res.ok ? "ok" : "err");
+  }
+
+  // Guided audio setup/calibration; the raw audio keys stay in the settings grid below.
+  function audioSection() {
+    return html`
+      <div class="audio-row">
+        <span class="micro">Guided setup measures your mic and suggests the device + thresholds.</span>
+        <button class="btn-ghost" disabled=${!info.controls || !info.connected}
+          title=${info.connected ? "" : "Node must be connected"}
+          onClick=${() => setShowWizard(true)}>Set up / calibrate audio…</button>
+      </div>`;
   }
 
   async function toggleMute() {
@@ -154,6 +170,14 @@ export function ConfigView({ node, onBack }) {
         <button class="list-add btn-ghost" disabled=${!info.controls}
           onClick=${() => setKey(k, [...items, ""])}>+ Add model</button>
       </div>`;
+    } else if (t === "range") {
+      const r = RANGES[k];
+      const val = set ? cur : inherited != null ? inherited : (r.default ?? r.min);
+      input = html`<div class="range-edit">
+        <input type="range" min=${r.min} max=${r.max} step=${r.step} disabled=${!info.controls}
+          value=${val} onInput=${(e) => setKey(k, e.target.value)} />
+        <span class="range-val mono">${val}</span>
+      </div>`;
     } else if (t === "num") {
       // Keep the raw string while typing — coercing to Number() per keystroke turns
       // "0." into 0 and snaps the field back, making decimals impossible to enter.
@@ -203,9 +227,10 @@ export function ConfigView({ node, onBack }) {
           : null}
         <p class="micro">Badges: <span class="applies live">live</span> applies on save ·
           <span class="applies restart">restart</span> audio keys apply on the node's next boot or via Restart below.</p>
+        ${audioSection()}
         <div class="cfg-grid">${info.editable.map(row)}</div>
         <div class="cfg-actions">
-          <button class="btn-primary" disabled=${!info.controls || saving} onClick=${save}>
+          <button class="btn-primary" disabled=${!info.controls || saving} onClick=${() => save()}>
             ${saving ? "Saving…" : "Save & apply"}</button>
         </div>
       </div>
@@ -222,6 +247,14 @@ export function ConfigView({ node, onBack }) {
         </div>
         <p class="micro">Volume is in the settings above (0–100, applies live). Mute is temporary — a node comes back un-muted after a restart, and the wake-word chime stays audible while muted.</p>
       </div>
+
+      ${showWizard
+        ? html`<${AudioWizard} node=${node} info=${info}
+            onApplied=${load} onClose=${() => {
+              setShowWizard(false);
+              load();
+            }} />`
+        : null}
     </div>`;
 }
 

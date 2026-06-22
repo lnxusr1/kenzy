@@ -199,6 +199,96 @@ button { font: inherit; cursor: pointer; }
 .name-input .btn-ghost { flex: none; width: auto; padding-inline: var(--s4); }
 @media (max-width: 520px) { .name-row { grid-template-columns: 1fr; gap: var(--s2); } }
 
+.audio-select {
+  background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius);
+  color: var(--text); font: inherit; padding: 8px var(--s3); max-width: 360px;
+}
+.audio-select:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent); }
+.audio-select:disabled { opacity: .55; }
+.audio-current { margin: 0; font-size: 12px; color: var(--text-dim); }
+.audio-row { display: flex; align-items: center; justify-content: space-between; gap: var(--s4); padding: var(--s2) 0; }
+.audio-row .btn-ghost { width: auto; flex: none; padding-inline: var(--s4); }
+@media (max-width: 520px) { .audio-row { flex-direction: column; align-items: stretch; } }
+
+/* RMS calibration meter */
+.calib { display: flex; flex-direction: column; gap: var(--s2); }
+.meter {
+  position: relative; height: 16px; border-radius: 8px; overflow: hidden;
+  background: var(--bg); border: 1px solid var(--border);
+}
+.meter-fill {
+  position: absolute; left: 0; top: 0; bottom: 0; min-width: 1px;
+  background: var(--accent); transition: width 80ms linear;
+}
+.meter-mark { position: absolute; top: -2px; bottom: -2px; width: 2px; }
+.meter-mark.sug { background: var(--led-up); }
+.meter-mark.cur { background: var(--text-faint); }
+.calib-read { margin: 0; font-size: 12px; color: var(--text-dim); }
+.calib-actions { display: flex; gap: var(--s2); margin-top: var(--s2); flex-wrap: wrap; }
+.calib-actions .btn-ghost, .calib-actions .btn-primary { width: auto; padding-inline: var(--s4); }
+.calib-run { display: flex; align-items: center; gap: var(--s3); }
+.calib-run .btn-ghost { width: auto; padding-inline: var(--s4); }
+.calib-grp { display: flex; flex-direction: column; gap: var(--s1); margin-top: var(--s2); }
+.seg { display: inline-flex; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+.seg-btn {
+  background: var(--bg); color: var(--text-dim); border: none; cursor: pointer;
+  font: inherit; padding: 6px var(--s4);
+}
+.seg-btn.on { background: var(--accent); color: var(--accent-ink); }
+.seg-btn:not(.on):hover { color: var(--text); }
+
+/* ============================ MODAL / WIZARD ============================ */
+.modal-backdrop {
+  position: fixed; inset: 0; background: color-mix(in srgb, #000 55%, transparent);
+  display: grid; place-items: center; padding: var(--s4); z-index: 100;
+}
+.modal {
+  background: var(--surface, var(--bg)); border: 1px solid var(--border);
+  border-radius: var(--radius); width: min(560px, 100%); max-height: 88vh; overflow: auto;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, .4);
+}
+.modal-head {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--s3);
+  padding: var(--s4); border-bottom: 1px solid var(--border);
+}
+.modal-head h3 { margin: 0; font-size: 15px; }
+.modal-x {
+  width: auto; flex: none; border: none; background: none; color: var(--text-dim);
+  font-size: 22px; line-height: 1; cursor: pointer; padding: 0 var(--s2);
+}
+.modal-x:hover { color: var(--text); }
+.modal-body { padding: var(--s4); display: flex; flex-direction: column; gap: var(--s3); }
+.wiz-cur { display: grid; grid-template-columns: auto 1fr; gap: var(--s1) var(--s4); margin: 0; }
+.wiz-cur dt { color: var(--text-dim); font-size: 12px; }
+.wiz-cur dd { margin: 0; }
+.wiz-hint {
+  margin: 0; font-size: 13px; color: var(--text);
+  padding: var(--s2) var(--s3); border-left: 3px solid var(--accent); border-radius: 4px;
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+.wiz-actions { display: flex; flex-wrap: wrap; gap: var(--s2); align-items: stretch; }
+.wiz-footer {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--s3);
+  margin-top: var(--s2); padding-top: var(--s3); border-top: 1px solid var(--border);
+}
+.wiz-footer-actions { display: flex; gap: var(--s2); align-items: stretch; }
+/* Normalize ghost + primary so they're the same height/baseline side by side
+   (the base classes use different padding/border/margin for stand-alone use). */
+.wiz-actions .btn-ghost, .wiz-actions .btn-primary,
+.wiz-footer .btn-ghost, .wiz-footer .btn-primary,
+.wiz-footer-actions .btn-ghost, .wiz-footer-actions .btn-primary {
+  width: auto; flex: none; margin: 0; padding: 9px var(--s4);
+  font-size: 12px; line-height: 1.2; border: 1px solid transparent;
+}
+.wiz-actions .btn-ghost, .wiz-footer .btn-ghost, .wiz-footer-actions .btn-ghost {
+  border-color: var(--border);
+}
+.spinner {
+  width: 18px; height: 18px; border-radius: 50%; border: 2px solid var(--border);
+  border-top-color: var(--accent); animation: spin 0.8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
 /* ============================ CONFIG EDITOR ============================ */
 .cfg .back { display: inline-flex; width: auto; margin-bottom: var(--s4); }
 .cfg .node-sub { margin: -8px 0 var(--s4); color: var(--text-faint); word-break: break-all; }
@@ -233,6 +323,13 @@ button { font: inherit; cursor: pointer; }
   outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
 }
 .cfg-input input:disabled, .cfg-input select:disabled { opacity: .55; }
+.range-edit { display: flex; align-items: center; gap: var(--s3); }
+.range-edit input[type="range"] {
+  flex: 1; width: auto; padding: 0; border: none; background: none; box-shadow: none;
+  accent-color: var(--accent); cursor: pointer;
+}
+.range-edit input[type="range"]:focus { box-shadow: none; }
+.range-val { min-width: 2.5em; text-align: right; color: var(--text-dim); font-size: 13px; }
 .cfg-row:has(.list-edit) { align-items: start; }
 .list-edit { display: flex; flex-direction: column; gap: var(--s2); }
 .list-item { display: flex; gap: var(--s2); }

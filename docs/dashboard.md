@@ -69,17 +69,66 @@ Open a node's **Configure** page to:
   `configs/nodes/<node_id>.yaml`, applied live if the node is connected and otherwise
   pulled on its next connect (so you can name a node before it's ever booted). Identity
   is the stable `node_id`, so renaming a room never orphans its config.
-- **Edit per-node settings** — wake-word threshold/VAD, silence/VAD timing, audio
-  device, sample rates, wake-word models, sound files, and the node's `log_level` /
-  `log_capture_level`. Saved values are written to `configs/nodes/<node_id>.yaml` and
-  **live-re-pushed** to the connected node. Each key shows a **live** or **restart**
-  badge: live keys apply immediately on save; hardware keys are applied on the node's
-  next boot or via the Restart button. Options with a fixed set of values (log levels,
-  on/off, etc.) are dropdown choosers; numeric fields are number inputs.
+- **Set up / calibrate audio** — the **Set up / calibrate audio…** button opens a guided
+  wizard (device → silence → wake word). See [Calibrating a node's audio](#calibrating-a-nodes-audio)
+  below. The raw audio keys (`audio_device`, sample rates) also remain in the settings
+  list for direct editing / pre-seeding an offline node.
+- **Edit per-node settings** — audio device + sample rates, wake-word threshold/VAD,
+  silence/VAD timing, wake-word models, sound files, volume (a slider), and the node's
+  `log_level` / `log_capture_level`. Saved
+  values are written to `configs/nodes/<node_id>.yaml` and **live-re-pushed** to the
+  connected node. Each key shows a **live** or **restart** badge: live keys apply
+  immediately on save; hardware keys are applied on the node's next boot or via the
+  Restart button. Options with a fixed set of values (log levels, on/off, etc.) are
+  dropdown choosers; numeric fields are number inputs.
 - **Control the node** — **Trigger** (start a session), **Stop**, or **Restart** (the
   node re-execs itself, with or without systemd).
 
 Secrets (API keys) are never served to a node and never editable here.
+
+## Calibrating a node's audio
+
+The right `audio_device`, `silence_rms_threshold`, `wakeword_threshold`, and
+`wakeword_vad_threshold` depend on each room's hardware and noise level, so the defaults
+are rarely ideal. The **Set up / calibrate audio…** button on a node's Configure page
+opens a guided wizard that measures live audio and applies suggested values — no
+trial-and-error YAML edits. (Requires the node connected and `dashboard.controls: true`.)
+
+The wizard opens on an **overview** showing current values; from there run the full
+setup or jump straight to one step to recalibrate it:
+
+1. **Audio device** — choose the room's mic/speaker from the list the node reported (no
+   need to run `kenzy-devices` on the box). Because the device is a hardware key, the
+   wizard **saves it, restarts the node, and waits for it to reconnect** before
+   continuing — so the next steps measure the right device. (Click **Keep current** to
+   skip if the device is already right.)
+2. **Silence threshold** — **Start**, keep the room quiet (auto-stops after ~30 s), then
+   **Apply** to set `silence_rms_threshold` just above the measured noise floor. Applies
+   **live**. Too low → it keeps listening into silence; too high → it cuts you off.
+3. **Wake word** — **Start** and say your wake word ("Hey Kenzy") a few times. Two meters
+   show the wake-word and voice-activity (VAD) scores, with your utterances as peaks.
+   **Apply wake** sets `wakeword_threshold` just below your utterances (live). **Queue
+   VAD** stages `wakeword_vad_threshold` (which suppresses near-silence false fires);
+   it's applied — and the node restarted — when you click **Finish**, since the VAD gate
+   is baked into the wake-word model at load.
+
+The suggestions assume you follow each step's prompt (quiet for silence, speaking for
+wake word); all measured values are shown, and you can still fine-tune the numbers
+directly in the settings grid afterward.
+
+### Headless calibration (no dashboard)
+
+On a node with no dashboard, run the same measurement locally:
+
+```bash
+kenzy-node --calibrate
+```
+
+It walks through the two phases and prints the suggested thresholds. Because node config
+is **server-owned** (pulled on connect), the values aren't written locally — apply them
+on the server, either from the dashboard's Calibration panel or by adding them to
+`configs/nodes/<node_id>.yaml` (this node) or `node_defaults` in `server.yaml` (all
+nodes).
 
 ## Configuring backend services
 

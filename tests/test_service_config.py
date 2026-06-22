@@ -20,6 +20,7 @@ class _StubWS:
     async def send(self, m):  # noqa: ANN001, ANN201
         pass
 
+
 # ---------------------------------------------------------------------------
 # Server: effective service config = packaged default ← stored override
 # ---------------------------------------------------------------------------

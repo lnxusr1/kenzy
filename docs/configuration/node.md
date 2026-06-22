@@ -24,6 +24,12 @@ The node service runs on each room device. It captures microphone audio, detects
 | `log_capture_level` | `"debug"` | **Server-owned.** How deep the dashboard log viewer can see for this node (`trace`/`debug`/…), independent of `log_level`. Captured only while the dashboard's logs flag is on (otherwise zero overhead). Set `trace` to include per-frame audio logs. |
 | `verbose` | `false` | Also enables debug output from websockets and asyncio internals |
 
+!!! tip "Let the dashboard tune these for you"
+    `wakeword_threshold`, `wakeword_vad_threshold`, and `silence_rms_threshold` are
+    mic- and room-specific. Rather than guessing, use the **Calibration** panel in the
+    dashboard (or `kenzy-node --calibrate` on a headless node) to measure your room and
+    apply suggested values. See [Calibrating a node's audio](../dashboard.md#calibrating-a-nodes-audio).
+
 ### Wake word
 
 | Key | Default | Description |
