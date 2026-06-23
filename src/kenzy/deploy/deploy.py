@@ -31,6 +31,7 @@ Usage
 from __future__ import annotations
 
 import argparse
+import shlex
 import subprocess
 import sys
 from dataclasses import dataclass, field
@@ -182,6 +183,7 @@ class HostConfig:
     pip_packages: list[str] = field(default_factory=list)  # extra pip installs after main
     install_mode: str = "source"  # "source" (rsync + pip -e) or "pypi" (pip install kenzy)
     version: str | None = None  # pin a PyPI version (pypi mode); None = latest >=3
+    constraints: str | None = None  # pip constraints file (rel. to config-root or abs)
 
 
 # ---------------------------------------------------------------------------
@@ -334,12 +336,12 @@ def _rsync_path(host: HostConfig, local_path: Path, subpath: str) -> bool:
     dst = f"{host.install_path}/{subpath}"
 
     if src.is_dir():
-        _run(host, f"mkdir -p {dst}", check=False)
+        _run(host, f"mkdir -p {shlex.quote(dst)}", check=False)
         cmd = ["rsync", "-az", "--delete", "--info=progress2", f"{src}/", f"{dst}/"]
     else:
         parent = str(Path(subpath).parent)
         if parent and parent != ".":
-            _run(host, f"mkdir -p {host.install_path}/{parent}", check=False)
+            _run(host, f"mkdir -p {shlex.quote(f'{host.install_path}/{parent}')}", check=False)
         cmd = ["rsync", "-az", "--info=progress2", str(src), dst]
 
     if not host.local:
@@ -396,13 +398,13 @@ def _write_units(host: HostConfig) -> bool:
         tmp = f"/tmp/{unit}"
 
         # Write to tmp via stdin, then sudo-move to systemd directory.
-        r = _ssh(host, f"cat > {tmp}", stdin=content, check=True)
+        r = _ssh(host, f"cat > {shlex.quote(tmp)}", stdin=content, check=True)
         if r.returncode != 0:
             _err(f"failed to write unit: {unit}")
             ok = False
             continue
 
-        r = _ssh(host, f"mv {tmp} /etc/systemd/system/{unit}", sudo=True)
+        r = _ssh(host, f"mv {shlex.quote(tmp)} /etc/systemd/system/{unit}", sudo=True)
         if r.returncode != 0:
             _err(f"failed to install unit: {unit}")
             ok = False
@@ -444,17 +446,23 @@ def _pip_extras(host: HostConfig, local_path: Path) -> str:
     return ",".join(extras)
 
 
-def _pip_target(host: HostConfig, extras: str, *, upgrade: bool) -> str:
+def _pip_target(
+    host: HostConfig, extras: str, *, upgrade: bool, constraints: str | None = None
+) -> str:
     """Build the pip install target for this host's install mode.
 
     - source: editable install of the rsynced tree (``-e '<path>[extras]'``).
     - pypi:   ``'kenzy[extras]'`` pinned to ``==version`` or floored at ``>=3.0.0``
               (so the legacy 2.x monolith is never resolved); ``-U`` on upgrade.
+
+    ``constraints`` is the remote path to a pip constraints file; when set it's passed
+    with ``-c`` so operator pins are honored on install and upgrade (both modes).
     """
+    c = f"-c '{constraints}' " if constraints else ""
     if host.install_mode == "pypi":
         spec = f"kenzy[{extras}]" + (f"=={host.version}" if host.version else ">=3.0.0")
-        return f"{'-U ' if upgrade else ''}'{spec}'"
-    return f"-e '{host.install_path}[{extras}]'"
+        return f"{c}{'-U ' if upgrade else ''}'{spec}'"
+    return f"{c}-e '{host.install_path}[{extras}]'"
 
 
 def _sync_tree(host: HostConfig, local_path: Path) -> bool:
@@ -480,6 +488,22 @@ def _sync_tree(host: HostConfig, local_path: Path) -> bool:
     return True
 
 
+def _push_file(host: HostConfig, content: str, remote_path: str) -> bool:
+    """Write ``content`` to ``remote_path`` on the host (local copy or over SSH)."""
+    _run(host, f"mkdir -p {shlex.quote(str(Path(remote_path).parent))}", check=False)
+    r = _ssh(host, f"cat > {shlex.quote(remote_path)}", stdin=content, check=True)
+    return r.returncode == 0
+
+
+def _resolve_constraints(host: HostConfig, local_path: Path) -> Path | None:
+    """The local constraints file for this host: an explicit ``constraints:`` in
+    deploy.yaml (relative to the config-root or absolute), else an auto-detected
+    ``constraints.txt`` at the config-root. None if neither exists."""
+    rel = host.constraints or "constraints.txt"
+    cfile = local_path / rel
+    return cfile if cfile.is_file() else None
+
+
 def _provision(host: HostConfig, local_path: Path, *, upgrade: bool) -> bool:
     """Shared install/upgrade body: sync, venv, pip, host pip packages."""
     if not _sync_tree(host, local_path):
@@ -490,9 +514,20 @@ def _provision(host: HostConfig, local_path: Path, *, upgrade: bool) -> bool:
     extras = _pip_extras(host, local_path)
     _maybe_install_cpu_torch(host, extras)
 
-    target = _pip_target(host, extras, upgrade=upgrade)
+    # Push the operator constraints file (version pins) and pass it with -c so an
+    # upgrade can't silently move a pin — same pattern as the per-user install path.
+    constraints_remote: str | None = None
+    cfile = _resolve_constraints(host, local_path)
+    if cfile is not None:
+        constraints_remote = f"{host.install_path}/constraints.txt"
+        if not _push_file(host, cfile.read_text(), constraints_remote):
+            _err("failed to push constraints file")
+            return False
+        _info(f"constraints: {cfile.name}")
+
+    target = _pip_target(host, extras, upgrade=upgrade, constraints=constraints_remote)
     _info(f"pip install {target}…")
-    r = _ssh(host, f"{host.venv_path}/bin/pip install -q {target}")
+    r = _ssh(host, f"{shlex.quote(host.venv_path)}/bin/pip install -q {target}")
     if r.returncode != 0:
         _err("pip install failed")
         return False
@@ -541,8 +576,8 @@ def _maybe_install_cpu_torch(host: HostConfig, extras: str) -> None:
 
     r = _run(
         host,
-        f"{host.venv_path}/bin/pip install -q --force-reinstall --no-deps "
-        f"torch torchaudio --index-url {index_url}",
+        f"{shlex.quote(host.venv_path)}/bin/pip install -q --force-reinstall --no-deps "
+        f"torch torchaudio --index-url {shlex.quote(index_url)}",
     )
     if r.returncode == 0:
         _ok("torch installed")
@@ -554,9 +589,9 @@ def _apply_pip_packages(host: HostConfig) -> None:
     """Install any host-specific pip packages listed under pip_packages in deploy.yaml."""
     if not host.pip_packages:
         return
-    packages = " ".join(f"'{p}'" for p in host.pip_packages)
+    packages = " ".join(shlex.quote(p) for p in host.pip_packages)
     _info(f"pip install (host-specific): {' '.join(host.pip_packages)}")
-    r = _run(host, f"{host.venv_path}/bin/pip install -q {packages}")
+    r = _run(host, f"{shlex.quote(host.venv_path)}/bin/pip install -q {packages}")
     if r.returncode == 0:
         _ok("host-specific packages installed")
     else:
@@ -566,11 +601,11 @@ def _apply_pip_packages(host: HostConfig) -> None:
 def _ensure_venv(host: HostConfig) -> bool:
     """Create the virtualenv if it doesn't already exist. Returns True on success."""
     pip = f"{host.venv_path}/bin/pip"
-    r = _ssh(host, f"test -x {pip}", check=False)
+    r = _ssh(host, f"test -x {shlex.quote(pip)}", check=False)
     if r.returncode == 0:
         return True  # already exists
     _info(f"virtualenv not found — creating with {host.python_bin}…")
-    r = _ssh(host, f"{host.python_bin} -m venv {host.venv_path}")
+    r = _ssh(host, f"{shlex.quote(host.python_bin)} -m venv {shlex.quote(host.venv_path)}")
     if r.returncode != 0:
         _err("virtualenv creation failed")
         return False
@@ -594,11 +629,16 @@ def cmd_init(hosts: list[HostConfig]) -> None:
             continue
         _ok("apt packages installed")
 
-        r = _ssh(host, f"mkdir -p {host.install_path}", sudo=True)
+        r = _ssh(host, f"mkdir -p {shlex.quote(host.install_path)}", sudo=True)
         if r.returncode != 0:
             _err("failed to create install directory")
             continue
-        r = _ssh(host, f"chown {host.ssh_user}:{host.ssh_user} {host.install_path}", sudo=True)
+        r = _ssh(
+            host,
+            f"chown {shlex.quote(host.ssh_user)}:{shlex.quote(host.ssh_user)} "
+            f"{shlex.quote(host.install_path)}",
+            sudo=True,
+        )
         if r.returncode == 0:
             _ok(f"install directory ready: {host.install_path}")
         else:
@@ -769,6 +809,7 @@ def _load_hosts(
                 pip_packages=pip_pkgs,
                 install_mode=mode,
                 version=str(ver) if ver else None,
+                constraints=(hcfg.get("constraints") or defaults.get("constraints") or None),
             )
         )
 

@@ -1,8 +1,0 @@
-# TTS service runtime dependencies
-# Install with:  pip install -r requirements-tts.txt
-
-fastapi>=0.100.0
-uvicorn>=0.23.0
-openai>=1.0.0
-python-dotenv>=1.0.0
-PyYAML>=6.0

@@ -334,7 +334,6 @@ class _SoundPlayer:
         volume: float = 1.0,
         muted: bool = False,
     ) -> None:
-        self._sample_rate = sample_rate
         # Convert to mono then resample to the playback rate if needed.
         chime_1d = chime.mean(axis=1).astype(np.int16) if chime.ndim > 1 else chime.astype(np.int16)
         chime_1d = _resample(chime_1d, chime_rate, sample_rate)
@@ -541,7 +540,6 @@ class NodeClient:
         # No maxsize — dropping frames causes truncated playback for long responses.
         self._tts_q: asyncio.Queue[bytes] = asyncio.Queue()
         self._tts_sample_rate: int = 24000
-        self._tts_channels: int = 1
         self._tts_task: asyncio.Task[None] | None = None
 
         self._state: str = _STATE_IDLE
@@ -692,7 +690,6 @@ class NodeClient:
             except asyncio.QueueEmpty:
                 break
         self._tts_sample_rate = sample_rate
-        self._tts_channels = channels
         self._state = _STATE_TTS
         self._session_id = session_id
         log.info("[%s] TTS started (rate=%d ch=%d)", session_id[:8], sample_rate, channels)
@@ -1698,17 +1695,6 @@ class NodeClient:
 # ---------------------------------------------------------------------------
 # CLI entry points
 # ---------------------------------------------------------------------------
-
-
-def setup() -> None:
-    """Download openwakeword infrastructure models (melspectrogram, embedding, VAD).
-    Run once after install, before starting the node for the first time."""
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    )
-    _ensure_oww_resources()
-    log.info("Setup complete.")
 
 
 def run_calibration(cfg: dict[str, Any], node_id: str) -> None:

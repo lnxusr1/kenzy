@@ -302,6 +302,16 @@ button { font: inherit; cursor: pointer; }
   border-radius: var(--radius); padding: var(--s3) var(--s4); margin-bottom: var(--s4); font-size: 13px;
 }
 .banner code { font-family: var(--font-mono); }
+.banner.warn {
+  background: color-mix(in srgb, var(--led-down) 14%, var(--panel));
+  border-color: color-mix(in srgb, var(--led-down) 50%, transparent);
+}
+.token-row { display: flex; gap: var(--s3); align-items: center; margin-top: var(--s2); }
+.token-val {
+  flex: 1; min-width: 0; overflow-x: auto; white-space: nowrap; padding: 6px var(--s3);
+  background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius);
+}
+.token-row .btn-ghost { flex: none; width: auto; padding-inline: var(--s4); margin: 0; }
 .cfg-grid {
   display: grid; gap: 1px; background: var(--border);
   border: 1px solid var(--border); border-radius: var(--radius-lg); overflow: hidden;
@@ -513,5 +523,26 @@ button { font: inherit; cursor: pointer; }
 .sk-desc { margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sk-meta { display: flex; align-items: center; gap: var(--s4); flex-shrink: 0; }
 .sk-toggle.off { color: var(--led-up); border-color: color-mix(in srgb, var(--led-up) 50%, transparent); }
+
+/* ---- Speaker profiles ---- */
+.inline-edit {
+  width: 100%; max-width: 240px; background: var(--bg); border: 1px solid var(--border);
+  border-radius: var(--radius); color: var(--text); font: inherit;
+  font-family: var(--font-mono); padding: 8px var(--s3);
+}
+.inline-edit:focus {
+  outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+.enroll-row { display: flex; gap: var(--s3); flex-wrap: wrap; align-items: center; margin-top: var(--s3); }
+.enroll-row input, .enroll-row select {
+  background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius);
+  color: var(--text); font: inherit; padding: 8px var(--s3);
+}
+.enroll-row input:focus, .enroll-row select:focus {
+  outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+.enroll-row input { flex: 1 1 180px; min-width: 0; }
+.enroll-row select { flex: 0 1 200px; }
+.enroll-row .btn-primary { width: auto; flex: none; margin: 0; padding: 10px var(--s5); }
 
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }

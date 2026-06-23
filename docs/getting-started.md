@@ -31,9 +31,16 @@ curl -fsSL https://kenzy.dev/install.sh | bash
 It prompts for what to install (room node, server stack, or everything). Pass flags after `bash -s --`, or use the matching environment variables, to drive it non-interactively:
 
 ```bash
-# A room node, unattended
-curl -fsSL https://kenzy.dev/install.sh | bash -s -- --profile node --yes
+# A room node, unattended (paste the join token from the server's dashboard → Settings)
+curl -fsSL https://kenzy.dev/install.sh | bash -s -- --profile node --token <token> --yes
 ```
+
+!!! tip "The join token"
+    A server/all install generates a `discovery.token` and prints it (it's also under
+    **Settings → Node provisioning** in the dashboard, with a copy button). Pass that value
+    to each room node via `--token` so it can register. Without a matching token the server
+    refuses the node — that's the secure default; clear `discovery.token` in `server.yaml`
+    only if you deliberately want open joins.
 
 | Flag | Variable | Default | Purpose |
 |---|---|---|---|
@@ -42,6 +49,8 @@ curl -fsSL https://kenzy.dev/install.sh | bash -s -- --profile node --yes
 | `--package` | `KENZY_PACKAGE` | *(PyPI)* | Install a local wheel/sdist/source dir instead of PyPI |
 | `--version` | `KENZY_VERSION` | *(latest ≥3)* | Pin a specific PyPI version |
 | `--node-id` | `KENZY_NODE_ID` | *(generated)* | Stable `node_id` for a node install (so its server-side config can be pre-seeded by that id). A generated id is printed when omitted. The room name is set later from the dashboard, not at install. |
+| `--token` | `KENZY_TOKEN` | *(generated for server/all)* | Shared join/service token. A server/all install **generates one** (printed, and shown in the dashboard under Settings); on a node install, paste that value so the node can join. Pass the same value to share a token across hosts. |
+| `--constraints` | `KENZY_CONSTRAINTS` | *(none)* | A pip constraints file of dependency pins to honor on install **and every future auto-upgrade** (seeds the config home's `constraints.txt`). |
 | `--yes` | `KENZY_YES` | `0` | Assume defaults / no prompts (CI) |
 | `--home` | `KENZY_HOME` | `~/.config/kenzy` | Config home (configs, skills, data, `.env`) |
 | `--venv` | `KENZY_VENV` | `~/.local/share/kenzy/venv` | Virtualenv location |

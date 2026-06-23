@@ -77,6 +77,11 @@ hosts:
 | `sync` | `[]` | Additional paths synced to this host specifically |
 | `install_mode` | *(from top-level, `source`)* | `source` or `pypi` for this host |
 | `version` | *(from top-level)* | PyPI version to install in `pypi` mode |
+| `constraints` | *(auto: `constraints.txt` at the config-root)* | pip constraints file (relative to the config-root or absolute) of dependency pins to honor on install **and upgrade** for this host |
+| `pip_packages` | `[]` | Extra packages to install after the main install (e.g. host-specific add-ons) |
+
+!!! tip "Pinning a dependency on a specific host"
+    Put version pins in a constraints file and point `constraints:` at it (or just drop a `constraints.txt` at the config-root for fleet-wide pins). `kenzy-deploy` pushes it to the host and passes it with `-c` on every install/upgrade — so a host that needs, say, a specific `transformers` keeps it across `kenzy-deploy upgrade` instead of having it moved. This mirrors the per-user install's `constraints.txt`.
 
 ### Path syncing
 

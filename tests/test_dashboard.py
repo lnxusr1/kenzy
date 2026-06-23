@@ -68,18 +68,26 @@ async def test_dashboard_http_surfaces():
     server._nodes["den"] = NodeSession(
         ws=_StubWS(), node_id="den", room_id="den", streaming=True, session_id="abcd1234ef"
     )
-    dash = Dashboard(server, {}, DashboardConfig(enabled=True, bind="127.0.0.1", port=8771))
+    dash = Dashboard(
+        server, {}, DashboardConfig(enabled=True, bind="127.0.0.1", port=8771, auth_token="t0ken")
+    )
+    auth = {"Authorization": "Bearer t0ken"}
     task = asyncio.create_task(dash.serve())
     await asyncio.sleep(0.25)
     try:
         async with httpx.AsyncClient(base_url="http://127.0.0.1:8771") as c:
-            # static index
+            # static index is public
             r = await c.get("/")
             assert r.status_code == 200
             assert "KENZY" in r.text
 
-            # fleet state
-            r = await c.get("/api/state")
+            # F-1: reads now require auth — without it, 401
+            assert (await c.get("/api/state")).status_code == 401
+            assert (await c.get("/api/sessions")).status_code == 401
+            assert (await c.get("/api/nodes/den/config")).status_code == 401
+
+            # fleet state (authed)
+            r = await c.get("/api/state", headers=auth)
             assert r.status_code == 200
             state = r.json()
             assert state["nodes"][0]["node_id"] == "den"
@@ -88,17 +96,20 @@ async def test_dashboard_http_surfaces():
             assert state["services"] == []  # none configured
             assert state["flags"] == {"logs": False, "controls": False}
 
-            # per-node effective config (read-only)
-            r = await c.get("/api/nodes/den/config")
+            # per-node effective config (read-only, authed)
+            r = await c.get("/api/nodes/den/config", headers=auth)
             assert r.json()["config"]["wakeword_threshold"] == 0.5
 
-            # unknown api endpoint
-            r = await c.get("/api/nope")
+            # unknown api endpoint (authed → 404, not 401)
+            r = await c.get("/api/nope", headers=auth)
             assert r.status_code == 404
 
-            # path traversal is contained
+            # path traversal is contained (public static path)
             r = await c.get("/../../etc/passwd")
             assert r.status_code == 404
+
+            # login/me/logout stay open without auth
+            assert (await c.get("/api/me")).status_code == 200
     finally:
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
@@ -123,6 +134,22 @@ def test_effective_config_strips_secrets():
     eff = s._effective_node_config("room")
     assert eff["wakeword_threshold"] == 0.5
     assert "openai_api_key" not in eff
+
+
+def test_default_password_is_flagged():
+    """F-9: the shipped default password is detected and surfaced."""
+    s = AudioServer({})
+    d = Dashboard(
+        s, {}, DashboardConfig(enabled=True, auth_password_hash=hash_password("password"))
+    )
+    assert d._default_password is True
+    assert d._settings_state()["default_password"] is True
+
+    d2 = Dashboard(
+        s, {}, DashboardConfig(enabled=True, auth_password_hash=hash_password("something-else"))
+    )
+    assert d2._default_password is False
+    assert d2._settings_state()["default_password"] is False
 
 
 def test_write_node_override_validation(tmp_path, monkeypatch):

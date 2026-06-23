@@ -89,14 +89,18 @@ def test_dashboard_records_only_when_logs_on(tmp_path, monkeypatch):
 async def test_sessions_endpoint(tmp_path, monkeypatch):
     monkeypatch.setenv("KENZY_HOME", str(tmp_path))
     srv = AudioServer({})
-    dash = Dashboard(srv, {}, DashboardConfig(enabled=True, logs=True, bind="127.0.0.1", port=8781))
+    dash = Dashboard(
+        srv,
+        {},
+        DashboardConfig(enabled=True, logs=True, bind="127.0.0.1", port=8781, auth_token="t0ken"),
+    )
     srv._notify_session({"transcript": "first", "response": "a", "fast": True})
     srv._notify_session({"transcript": "second", "response": "b", "fast": False})
     task = asyncio.create_task(dash.serve())
     await asyncio.sleep(0.25)
     try:
         async with httpx.AsyncClient(base_url="http://127.0.0.1:8781") as c:
-            r = await c.get("/api/sessions")
+            r = await c.get("/api/sessions", headers={"Authorization": "Bearer t0ken"})
             sessions = r.json()["sessions"]
             assert [s["transcript"] for s in sessions] == ["second", "first"]  # most recent first
     finally:

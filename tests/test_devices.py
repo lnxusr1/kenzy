@@ -141,12 +141,14 @@ async def test_node_config_api_surfaces_devices(tmp_path, monkeypatch):
             "devices": [{"index": 1, "name": "Anker", "suggested": {"audio_device": "Anker"}}]
         },
     )
-    dash = Dashboard(server, {}, DashboardConfig(enabled=True, bind="127.0.0.1", port=8779))
+    dash = Dashboard(
+        server, {}, DashboardConfig(enabled=True, bind="127.0.0.1", port=8779, auth_token="t0ken")
+    )
     task = asyncio.create_task(dash.serve())
     await asyncio.sleep(0.25)
     try:
         async with httpx.AsyncClient(base_url="http://127.0.0.1:8779") as c:
-            r = await c.get("/api/nodes/k/config")
+            r = await c.get("/api/nodes/k/config", headers={"Authorization": "Bearer t0ken"})
             devices = r.json()["devices"]
             assert devices and devices[0]["name"] == "Anker"
     finally:

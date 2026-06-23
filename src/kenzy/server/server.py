@@ -21,6 +21,7 @@ in without changing this file.
 from __future__ import annotations
 
 import asyncio
+import hmac
 import importlib.metadata
 import json
 import logging
@@ -29,6 +30,7 @@ import re
 import sys
 import time
 import uuid
+from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -44,6 +46,7 @@ from websockets.http11 import Request, Response
 from kenzy import protocol
 from kenzy.config import SERVICES
 from kenzy.serviceauth import check_bearer
+from kenzy.speaker import DEFAULT_ENROLL_PROMPTS
 
 log = logging.getLogger(__name__)
 
@@ -84,12 +87,20 @@ _ANNOUNCE_VOICE_PROMPT = "Read this aloud as a clear, calm public announcement."
 _INTERCOM_VOICE_PROMPT = "Read this aloud as a brief, friendly spoken notification."
 # How long to wait for the receiver's spoken consent before declining (no answer).
 _CALL_TIMEOUT_SEC = 25.0
-# Voice enrollment: samples to collect, min bytes for a usable sample, max tries, and
-# how long an idle enrollment session lives before it's abandoned.
-_ENROLL_SAMPLES = 3
+# Voice enrollment: one sample per configured prompt (see _enroll_prompts), min bytes
+# for a usable sample, extra retries allowed beyond the prompt count for unclear audio,
+# and how long an idle enrollment session lives before it's abandoned.
 _ENROLL_MIN_PCM_BYTES = 16000  # ~0.5 s of 16 kHz int16 — shorter captures are retried
-_ENROLL_MAX_ATTEMPTS = 8
+_ENROLL_MAX_RETRIES = 4
 _ENROLL_TIMEOUT_SEC = 120.0
+
+# Resource caps (F-10): bound a single capture buffer and inbound WS frame size, and
+# rate-limit new connections per source IP, so a hostile/buggy LAN peer can't exhaust
+# memory or hammer the listener.
+_MAX_SESSION_PCM_BYTES = 16_000 * 2 * 120  # ~2 min of 16 kHz int16 (~3.8 MB) per capture
+_MAX_WS_FRAME = 65_536  # node→server frames are tiny (2.5 KB audio / small JSON)
+_CONN_RATE_MAX = 30  # max new connections per source IP …
+_CONN_RATE_WINDOW = 60.0  # … within this many seconds
 # Peer service URLs the server injects into a dependent service's served config so they
 # aren't duplicated in two places (an override in the service's own config still wins).
 # Only speaker (its kenzy-enroll CLI) needs TTS today.
@@ -244,6 +255,8 @@ class AudioServer:
         # node_id → NodeSession  (guarded by _lock)
         self._nodes: dict[str, NodeSession] = {}
         self._lock = asyncio.Lock()
+        # Per-source-IP connection timestamps for the registration rate limit (F-10).
+        self._conn_log: dict[str, deque[float]] = {}
         # Observers notified when the node registry/state changes (the dashboard
         # registers one for live push). Empty by default ⇒ zero overhead.
         self._state_listeners: list[Callable[[], None]] = []
@@ -671,7 +684,26 @@ class AudioServer:
     # Connection handler
     # ------------------------------------------------------------------
 
+    def _allow_connection(self, ip: str) -> bool:
+        """Sliding-window per-IP connection rate limit (F-10)."""
+        now = time.monotonic()
+        dq = self._conn_log.setdefault(ip, deque())
+        while dq and now - dq[0] > _CONN_RATE_WINDOW:
+            dq.popleft()
+        if len(dq) >= _CONN_RATE_MAX:
+            return False
+        dq.append(now)
+        return True
+
     async def _handle(self, ws: ServerConnection) -> None:
+        ip = ws.remote_address[0] if ws.remote_address else "?"
+        if not self._allow_connection(ip):
+            log.warning("Connection rate limit hit for %s — rejecting", ip)
+            try:
+                await ws.close(1013, "rate limited")  # 1013 = try again later
+            except Exception:
+                pass
+            return
         session: NodeSession | None = None
         try:
             session = await self._register(ws)
@@ -706,7 +738,9 @@ class AudioServer:
             log.warning("Expected hello, got '%s' from %s", msg.get("type"), ws.remote_address)
             return None
 
-        if self._join_token is not None and msg.get("token") != self._join_token:
+        if self._join_token is not None and not hmac.compare_digest(
+            str(msg.get("token") or ""), self._join_token
+        ):
             log.warning("Rejected node from %s: bad/missing join token", ws.remote_address)
             try:
                 await ws.close(1008, "invalid join token")
@@ -714,10 +748,23 @@ class AudioServer:
                 pass
             return None
 
-        room_id: str = str(msg.get("room_id", "unknown"))
         # node_id is the stable primary key; legacy nodes that send only a room
-        # name fall back to keying by that name.
-        node_id: str = str(msg.get("node_id") or room_id)
+        # name fall back to keying by that name. Validate an explicitly-provided
+        # node_id so a crafted value can't become an unsafe registry key / override
+        # filename (F-3); the room-name fallback path already guards override writes.
+        explicit_node_id = msg.get("node_id")
+        if explicit_node_id is not None and (
+            str(explicit_node_id) in (".", "..") or not _SAFE_ID_RE.fullmatch(str(explicit_node_id))
+        ):
+            log.warning("Rejected node from %s: invalid node_id", ws.remote_address)
+            try:
+                await ws.close(1008, "invalid node id")
+            except Exception:
+                pass
+            return None
+
+        room_id: str = str(msg.get("room_id", "unknown"))
+        node_id: str = str(explicit_node_id or room_id)
         caps = msg.get("capabilities") or {}
         if caps:
             log.info("[%s] capabilities: %s", node_id, caps)
@@ -1072,6 +1119,7 @@ class AudioServer:
             self._host,
             self._port,
             process_request=self._process_config_request,
+            max_size=_MAX_WS_FRAME,
         ):
             await asyncio.Future()  # run until cancelled
 
@@ -1214,8 +1262,13 @@ class TranscribingServer(AudioServer):
 
     async def on_audio_frame(self, session: NodeSession, data: bytes) -> None:
         buf = self._buffers.get(session.node_id)
-        if buf is not None:
-            buf += data
+        if buf is None:
+            return
+        # Backstop cap (F-10): the node's hard_cap_ms normally bounds a session, but a
+        # buggy/hostile node could stream without VAD — don't grow a buffer unbounded.
+        if len(buf) >= _MAX_SESSION_PCM_BYTES:
+            return
+        buf += data
 
     async def on_session_end(self, session: NodeSession, reason: str) -> None:
         pcm = bytes(self._buffers.pop(session.node_id, b""))
@@ -1526,9 +1579,16 @@ class TranscribingServer(AudioServer):
         except Exception:
             return False
 
-    async def start_enrollment(self, node_id: str, room: str, name: str) -> None:
-        """Begin a voice-enrollment session for ``name`` on the asking node."""
-        if not self._voice_enroll_allowed():
+    async def start_enrollment(
+        self, node_id: str, room: str, name: str, *, operator: bool = False
+    ) -> None:
+        """Begin a voice-enrollment session for ``name`` on a node.
+
+        ``operator=True`` is for dashboard-initiated enrollment: it bypasses the
+        ``allow_voice_enroll`` earshot gate (the request is already authenticated and
+        ``controls``-gated, a stronger check than "anyone in the room").
+        """
+        if not operator and not self._voice_enroll_allowed():
             await self._say(node_id, room, "Voice enrollment is turned off.")
             return
         name = name.strip()
@@ -1542,6 +1602,7 @@ class TranscribingServer(AudioServer):
             return
         if node_id in self._enroll_sessions:
             return  # already enrolling on this node
+        prompts = self._enroll_prompts()
         timeout = asyncio.create_task(
             self._enroll_timeout(node_id), name=f"enroll-timeout-{node_id}"
         )
@@ -1550,12 +1611,30 @@ class TranscribingServer(AudioServer):
             "room": room,
             "collected": 0,
             "attempts": 0,
+            "prompts": prompts,
             "timeout": timeout,
         }
-        log.info("[%s] voice enrollment started for '%s'", node_id, name)
-        await self._enroll_prompt(
-            node_id, room, f"Okay, enrolling {name}. After the tone, please say a sentence."
+        log.info(
+            "[%s] voice enrollment started for '%s' (%d prompt(s))", node_id, name, len(prompts)
         )
+        await self._enroll_prompt(
+            node_id, room, f"Okay, enrolling {name}. After the tone, please say: {prompts[0]}"
+        )
+
+    def _enroll_prompts(self) -> list[str]:
+        """The enrollment sentences to read — the dashboard-editable speaker-service
+        ``enroll_prompts`` (single source of truth, shared with ``kenzy-enroll``),
+        falling back to the bundled defaults when unset."""
+        try:
+            configured = self._effective_service_config("speaker").get("enroll_prompts")
+        except Exception:
+            configured = None
+        prompts = (
+            [str(p).strip() for p in configured if str(p).strip()]
+            if isinstance(configured, list)
+            else []
+        )
+        return prompts or list(DEFAULT_ENROLL_PROMPTS)
 
     async def _enroll_prompt(self, node_id: str, room: str, text: str) -> None:
         """Arm one-shot capture on the node, then speak the prompt."""
@@ -1580,21 +1659,25 @@ class TranscribingServer(AudioServer):
         if ok:
             session["collected"] += 1
 
-        if session["collected"] >= _ENROLL_SAMPLES:
+        # One sample per configured prompt; `collected` doubles as the index of the
+        # next sentence to read, so a failed capture re-reads the same prompt.
+        prompts = session.get("prompts") or list(DEFAULT_ENROLL_PROMPTS)
+        if session["collected"] >= len(prompts):
             name = session["name"]
             self._end_enroll_session(node_id)
             await self._say(node_id, room, f"All done — I've enrolled {name}.")
             return
-        if session["attempts"] >= _ENROLL_MAX_ATTEMPTS:
+        if session["attempts"] >= len(prompts) + _ENROLL_MAX_RETRIES:
             self._end_enroll_session(node_id)
             await self._say(
                 node_id, room, "I couldn't get enough clear audio. Enrollment cancelled."
             )
             return
+        sentence = prompts[session["collected"]]
         prompt = (
-            "I didn't catch that — please say a sentence."
+            f"I didn't catch that. Please say: {sentence}"
             if not ok
-            else "Got it. Say another sentence."
+            else f"Got it. Next, please say: {sentence}"
         )
         await self._enroll_prompt(node_id, room, prompt)
 

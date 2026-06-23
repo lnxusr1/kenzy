@@ -71,6 +71,23 @@ async def test_voice_enroll_flag_from_service_config(tmp_path, monkeypatch):
     assert srv._voice_enroll_allowed() is True  # dashboard override enables it (live read)
 
 
+def test_enroll_prompts_from_service_config(monkeypatch):
+    from kenzy.speaker import DEFAULT_ENROLL_PROMPTS
+
+    srv = _server()
+    # The dashboard-editable speaker-service config is the single source of truth.
+    monkeypatch.setattr(
+        srv,
+        "_effective_service_config",
+        lambda svc: {"enroll_prompts": ["Read this.", "  ", "And this."]},
+    )
+    assert srv._enroll_prompts() == ["Read this.", "And this."]  # blanks dropped
+
+    # Falls back to the bundled defaults when unset/empty.
+    monkeypatch.setattr(srv, "_effective_service_config", lambda svc: {"enroll_prompts": []})
+    assert srv._enroll_prompts() == DEFAULT_ENROLL_PROMPTS
+
+
 async def test_enroll_starts_and_prompts(monkeypatch):
     srv = _server()
     monkeypatch.setattr(srv, "_voice_enroll_allowed", lambda: True)
@@ -118,13 +135,14 @@ async def test_enroll_capture_loop_collects_and_finishes(monkeypatch):
         "room": "kitchen",
         "collected": 0,
         "attempts": 0,
+        "prompts": ["one", "two", "three"],
         "timeout": asyncio.create_task(asyncio.sleep(0)),
     }
     pcm = b"\x01\x02" * 20000  # comfortably over the min-bytes threshold
     for _ in range(3):
         await srv._handle_enroll_capture("k", "kitchen", pcm)
 
-    assert len(enrolled) == 3  # three samples POSTed to /enroll
+    assert len(enrolled) == 3  # three samples POSTed to /enroll (one per prompt)
     assert len(prompts) == 2  # re-prompted between samples, not after the last
     assert "k" not in srv._enroll_sessions  # session ended
     assert any("enrolled alice" in d.lower() for d in done)
@@ -148,6 +166,7 @@ async def test_enroll_short_capture_is_retried(monkeypatch):
         "room": "r",
         "collected": 0,
         "attempts": 0,
+        "prompts": ["one", "two", "three"],
         "timeout": asyncio.create_task(asyncio.sleep(0)),
     }
     await srv._handle_enroll_capture("k", "r", b"\x00\x00")  # too short

@@ -25,15 +25,9 @@ from typing import Any
 import numpy as np
 import sounddevice as sd  # type: ignore[import-untyped]
 
-log = logging.getLogger(__name__)
+from kenzy.speaker import DEFAULT_ENROLL_PROMPTS
 
-DEFAULT_PROMPTS = [
-    "The weather outside is looking pretty good today.",
-    "Can you turn off the lights in the living room please.",
-    "What time does the movie start tonight?",
-    "I'd like to set a reminder for tomorrow morning at eight.",
-    "Please add milk and eggs to the shopping list.",
-]
+log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Audio helpers
@@ -222,7 +216,7 @@ def main() -> None:
     silence_rms = float(cfg.get("enroll_silence_rms", 300))
     silence_ms = int(cfg.get("enroll_silence_ms", 800))
     min_speech_ms = int(cfg.get("enroll_min_speech_ms", 1_500))
-    prompts: list[str] = cfg.get("enroll_prompts", DEFAULT_PROMPTS)
+    prompts: list[str] = cfg.get("enroll_prompts") or DEFAULT_ENROLL_PROMPTS
 
     tts_available = _init_tts(cfg)
     if not tts_available:

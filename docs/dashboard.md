@@ -151,6 +151,21 @@ the fast path), and is **persisted** to `configs/services/llm.yaml` (`skills.dis
 so it survives a restart. Disabling a skill also disables any same-named fast intent.
 Without `controls`, the tab is read-only.
 
+## Speakers
+
+The **Speakers** tab manages the enrolled voice profiles held by `kenzy-speaker`. It
+lists each enrolled voice with its **sample count** and the service's current
+**identify threshold**. With `dashboard.controls: true` you can **rename** or **delete**
+a profile. Deleting is permanent; renaming just relabels the stored embeddings.
+
+The dashboard does **not** record audio in the browser. To add a voice, either run
+`kenzy-enroll` on the server host, or use **Enroll from a room**: pick a connected room
+node and a name, and Kenzy prompts the person at that room to say a few sentences and
+enrolls them through the room's mic (enrolling an existing name adds more samples to it).
+Because this is an authenticated, `controls`-gated operator action, it works regardless
+of the speaker service's `allow_voice_enroll` setting (which only governs the hands-free
+"Hey Kenzy, enroll me as…" voice command). Requires `dashboard.controls: true`.
+
 ## Activity
 
 With `dashboard.logs: true`, the **Activity** tab shows the recent voice interactions
@@ -192,8 +207,16 @@ persisted. Refresh during/after the window to view the captured detail. Requires
 ## Settings
 
 The **Settings** page shows system info (Kenzy version, server and dashboard binds, mDNS
-discovery) and lets you **change the dashboard password** and edit a **scoped subset of
-the server's own configuration**.
+discovery), the **node join token**, and lets you **change the dashboard password** and
+edit a **scoped subset of the server's own configuration**.
+
+Under **Node provisioning** the page displays the `discovery.token` (the shared secret a
+node presents to join, also the service-to-service bearer) with a copy button, so you can
+paste it into a node install — `kenzy-init --profile node --token …` or the installer's
+`--token`. This is the one secret the dashboard surfaces, deliberately: it's a
+*provisioning* value an admin needs, shown only over the authenticated Settings page (not
+an upstream API key). If no token is set, the page warns that any device on the network
+can register as a node.
 
 The **Server configuration** editor exposes the safe-to-change keys: the dashboard
 sub-flags (`logs`, `controls`), each backend service's `url`/`timeout`, the unknown-speaker
@@ -207,9 +230,26 @@ place, it requires login but not `controls`.
 
 ## Permissions & security
 
-- All read views are open to anyone who can reach the bind address; **mutations**
-  (config edits, rename, controls, announce) require login and `dashboard.controls`.
+- **Both reads and mutations require login.** All `/api/*` endpoints (fleet state, node
+  config, logs, transcripts) need a valid session; only the login/logout/me endpoints and
+  the static assets are public. **Mutations** (config edits, rename, controls, announce)
+  additionally require `dashboard.controls`.
 - `dashboard.auth_token` is an optional bearer for API/CLI clients; browsers use a
   signed, HttpOnly session cookie from the login form.
+- Change the default password promptly — the dashboard warns (startup log + a Settings
+  banner) while it's still on `admin/password`.
 - The `discovery.token` (or `KENZY_SERVICE_TOKEN`) doubles as a service-to-service
   bearer the server uses for its backend calls and log proxying.
+- The `/ws` channel (which carries all mutations) rejects **cross-site** handshakes
+  (the browser `Origin` must match the `Host`). For extra **DNS-rebinding** protection
+  when you serve the dashboard under a fixed name, set `dashboard.allowed_hosts`.
+
+### HTTPS (optional)
+
+Login and traffic are **plaintext by default** — fine on a trusted wired LAN, weaker on
+Wi-Fi. To encrypt it, put the dashboard behind a **reverse proxy that terminates TLS**
+(Caddy gets you an automatic cert for a routable name; nginx/Traefik work with your own
+cert). Have the proxy forward `X-Forwarded-Proto: https` — the dashboard then marks its
+session cookie `Secure` automatically. Kenzy deliberately does **not** generate
+self-signed certs (the browser warnings train people to click through security prompts).
+Whatever you do, keep the dashboard off the public internet.

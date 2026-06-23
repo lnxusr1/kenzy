@@ -13,7 +13,8 @@ Endpoints
   GET  /health
   POST /identify   → speaker name + confidence
   POST /enroll     → add an utterance embedding for a named speaker
-  GET  /speakers   → list enrolled speaker names
+  GET  /speakers   → list enrolled speakers + sample counts
+  POST /speakers/{name}/rename → rename a speaker profile
   DELETE /speakers/{name} → remove a speaker profile
 """
 
@@ -64,8 +65,17 @@ class EnrollResponse(BaseModel):
     sample_count: int
 
 
+class SpeakerInfo(BaseModel):
+    name: str
+    samples: int  # number of enrolled utterance embeddings
+
+
 class SpeakersResponse(BaseModel):
-    speakers: list[str]
+    speakers: list[SpeakerInfo]
+
+
+class RenameRequest(BaseModel):
+    new_name: str
 
 
 class StatusResponse(BaseModel):
@@ -105,6 +115,24 @@ def _get_embedding(pcm: bytes) -> np.ndarray[Any, Any]:
 def _cosine_sim(a: np.ndarray[Any, Any], b: np.ndarray[Any, Any]) -> float:
     denom = np.linalg.norm(a) * np.linalg.norm(b)
     return float(np.dot(a, b) / (denom + 1e-8))
+
+
+def _safe_speaker_name(name: str) -> str:
+    """Validate a speaker name used to build a ``<name>.npy`` path (F-5).
+
+    Names map directly to filenames, so reject anything that could escape the
+    embeddings dir or be otherwise unsafe. Returns the trimmed name.
+    """
+    name = name.strip()
+    if (
+        not name
+        or "/" in name
+        or "\\" in name
+        or name in (".", "..")
+        or any(ord(c) < 32 for c in name)
+    ):
+        raise HTTPException(status_code=400, detail="invalid speaker name")
+    return name
 
 
 def _speaker_path(name: str) -> Path:
@@ -157,10 +185,8 @@ async def identify(req: IdentifyRequest) -> IdentifyResponse:
 
 @app.post("/enroll", response_model=EnrollResponse)
 async def enroll(req: EnrollRequest) -> EnrollResponse:
+    name = _safe_speaker_name(req.name)  # validate input before anything else
     assert _sem is not None
-    name = req.name.strip()
-    if not name:
-        raise HTTPException(status_code=400, detail="name must not be empty")
 
     pcm = base64.b64decode(req.audio_b64)
     loop = asyncio.get_running_loop()
@@ -183,18 +209,41 @@ async def enroll(req: EnrollRequest) -> EnrollResponse:
 
 @app.get("/speakers", response_model=SpeakersResponse)
 async def list_speakers() -> SpeakersResponse:
-    names = sorted(p.stem for p in _embeddings_dir.glob("*.npy"))
-    return SpeakersResponse(speakers=names)
+    speakers: list[SpeakerInfo] = []
+    for p in sorted(_embeddings_dir.glob("*.npy")):
+        try:
+            samples = int(np.load(p).shape[0])
+        except Exception:
+            samples = 0
+        speakers.append(SpeakerInfo(name=p.stem, samples=samples))
+    return SpeakersResponse(speakers=speakers)
 
 
 @app.delete("/speakers/{name}", response_model=StatusResponse)
 async def delete_speaker(name: str) -> StatusResponse:
+    name = _safe_speaker_name(name)
     path = _speaker_path(name)
     if not path.exists():
         raise HTTPException(status_code=404, detail=f"Speaker '{name}' not found")
     path.unlink()
     log.info("Deleted speaker profile: %s", name)
     return StatusResponse(status="ok")
+
+
+@app.post("/speakers/{name}/rename", response_model=EnrollResponse)
+async def rename_speaker(name: str, req: RenameRequest) -> EnrollResponse:
+    name = _safe_speaker_name(name)
+    new_name = _safe_speaker_name(req.new_name)
+    src = _speaker_path(name)
+    if not src.exists():
+        raise HTTPException(status_code=404, detail=f"Speaker '{name}' not found")
+    dst = _speaker_path(new_name)
+    if dst.exists():
+        raise HTTPException(status_code=409, detail=f"Speaker '{new_name}' already exists")
+    src.rename(dst)
+    count = int(np.load(dst).shape[0])
+    log.info("Renamed speaker profile: %s → %s", name, new_name)
+    return EnrollResponse(status="ok", name=new_name, sample_count=count)
 
 
 # ---------------------------------------------------------------------------

@@ -32,7 +32,7 @@ The default prompts are phonetically diverse sentences chosen to capture a broad
 
 ## Enrolling by voice (from a node)
 
-You can also enroll without the CLI by speaking to a room node — say something like **"Hey Kenzy, enroll me as Alice"**. Kenzy then prompts you to say a few sentences and records them through that node's microphone, so the samples come from the device and room you actually use.
+You can also enroll without the CLI by speaking to a room node — say something like **"Hey Kenzy, enroll me as Alice"**. Kenzy then reads out the `enroll_prompts` sentences (the same configurable list the CLI uses) and records your reply to each through that node's microphone, so the samples come from the device and room you actually use.
 
 This is **off by default**. Enable it from the **dashboard** (Services → **speaker** →
 toggle `allow_voice_enroll` on, Save) or by setting it in the speaker config:
@@ -46,7 +46,7 @@ The server reads this live, so a dashboard toggle takes effect without a restart
 How it flows once enabled:
 
 1. You ask Kenzy to enroll a name; it replies "Okay, enrolling Alice…".
-2. After each prompt tone, say a sentence. Kenzy collects a few samples and POSTs them to `kenzy-speaker`.
+2. After each prompt tone, read back the sentence Kenzy asks for (one sample per `enroll_prompts` entry) — it POSTs each to `kenzy-speaker`.
 3. It confirms "All done — I've enrolled Alice." (or cancels after several unclear captures, or times out if abandoned).
 
 !!! warning "Why it's off by default"

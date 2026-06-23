@@ -24,7 +24,7 @@ from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, quote, urlsplit
 
 import websockets
 from websockets.datastructures import Headers
@@ -60,6 +60,10 @@ class DashboardConfig:
     auth_password_hash: str | None = None
     logs: bool = False
     controls: bool = False
+    # Optional Host allow-list (hostnames, no port) for DNS-rebinding defense on the
+    # WS/mutation channel. Empty ⇒ no Host restriction (the Origin==Host check still
+    # applies); set it when serving under a fixed hostname (F-6).
+    allowed_hosts: tuple[str, ...] = ()
 
     @classmethod
     def from_cfg(cls, cfg: dict[str, Any]) -> DashboardConfig:
@@ -74,6 +78,7 @@ class DashboardConfig:
             auth_password_hash=auth.get("password_hash") or None,
             logs=bool(d.get("logs", False)),
             controls=bool(d.get("controls", False)),
+            allowed_hosts=tuple(str(h) for h in (d.get("allowed_hosts") or [])),
         )
 
 
@@ -145,6 +150,18 @@ class Dashboard:
         # sessions survive restarts and a password change invalidates them. Fall
         # back to a per-process random key when no password is configured.
         self._cookie_secret = dcfg.auth_password_hash or secrets.token_urlsafe(32)
+        # F-9: flag (and loudly warn about) the shipped default password.
+        self._default_password = bool(
+            dcfg.auth_password_hash
+            and serviceauth.verify_password("password", dcfg.auth_password_hash)
+        )
+        if dcfg.enabled and self._default_password:
+            log.warning(
+                "Dashboard is using the DEFAULT password (admin/password) — change it in "
+                "Settings or with `kenzy-passwd`. Anyone who can reach %s:%s can take control.",
+                dcfg.bind,
+                dcfg.port,
+            )
         # Live-push: connected browser WS clients + a short health-check cache so a
         # burst of node state changes can't hammer the backends.
         self._clients: set[ServerConnection] = set()
@@ -198,6 +215,28 @@ class Dashboard:
     def _authorized_mutation(self, request: Request) -> bool:
         return self._current_user(request) is not None
 
+    def _origin_host_ok(self, request: Request) -> bool:
+        """Cross-site / DNS-rebinding guard for the WS (mutation) channel (F-6).
+
+        A browser sends ``Origin`` on a WS handshake — require it to match the ``Host``
+        we were reached on (defeats cross-site WebSocket hijacking). Non-browser clients
+        (CLI/bearer) send no Origin and are allowed (they still need the auth token).
+        When ``allowed_hosts`` is set, also require the Host to be in it (defeats DNS
+        rebinding, where Origin==Host both carry the attacker's name).
+        """
+        host = request.headers.get("Host", "")
+        origin = request.headers.get("Origin")
+        if origin:
+            from urllib.parse import urlsplit
+
+            if urlsplit(origin).netloc != host:
+                return False
+        if self._dcfg.allowed_hosts:
+            hostname = host.rsplit(":", 1)[0].strip("[]")  # drop port; unbracket IPv6
+            if hostname not in self._dcfg.allowed_hosts:
+                return False
+        return True
+
     def _login(self, request: Request) -> Response:
         """Verify HTTP Basic credentials and issue a signed session cookie."""
         header = request.headers.get("Authorization", "")
@@ -216,14 +255,23 @@ class Dashboard:
         if not ok:
             return self._json(401, {"error": "invalid credentials"})
         token = serviceauth.sign_cookie(user, self._cookie_secret)
-        cookie = (
-            f"{serviceauth.COOKIE_NAME}={token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=43200"
-        )
+        cookie = self._cookie_header(token, request, max_age=43200)
         return self._json(200, {"ok": True, "username": user}, set_cookie=cookie)
 
-    def _logout(self) -> Response:
-        cookie = f"{serviceauth.COOKIE_NAME}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0"
+    def _logout(self, request: Request) -> Response:
+        cookie = self._cookie_header("", request, max_age=0)
         return self._json(200, {"ok": True}, set_cookie=cookie)
+
+    @staticmethod
+    def _cookie_header(value: str, request: Request, *, max_age: int) -> str:
+        """Build the session cookie. Adds ``Secure`` when the request arrived over TLS
+        (directly or via a reverse proxy that forwards the scheme), so the cookie isn't
+        sent in cleartext once HTTPS is in front (F-7). Plaintext stays the default."""
+        secure = request.headers.get("X-Forwarded-Proto", "").lower() == "https"
+        attrs = "HttpOnly; SameSite=Strict; Path=/"
+        if secure:
+            attrs += "; Secure"
+        return f"{serviceauth.COOKIE_NAME}={value}; {attrs}; Max-Age={max_age}"
 
     # ------------------------------------------------------------------
     # State surfaces
@@ -361,6 +409,13 @@ class Dashboard:
                 "instance": str(self._discovery.get("instance", "kenzy-server")),
                 "auth_required": bool(self._discovery.get("token")),
             },
+            # The join token is a *provisioning* secret (paste it into a node install:
+            # `kenzy-init --profile node --token …`). Surfaced only here, behind auth,
+            # so an operator never has to memorize it (F-2). Deliberate, narrow exception
+            # to "secrets never served": this endpoint is auth-gated and it's not an
+            # upstream API key.
+            "join_token": self._discovery.get("token") or None,
+            "api_token": self._dcfg.auth_token or None,
             "services": [
                 {"name": n, "url": u[: -len("/health")]} for n, u in self._service_urls.items()
             ],
@@ -370,6 +425,8 @@ class Dashboard:
             },
             # The Settings password form is only offered when we can persist it.
             "can_set_password": self._config_path is not None and self._config_path.is_file(),
+            # F-9: surface "still on the default password" so the SPA can nag.
+            "default_password": self._default_password,
         }
 
     def _set_password(self, new_password: str) -> None:
@@ -426,7 +483,10 @@ class Dashboard:
         path = request.path.split("?", 1)[0]
 
         if path == "/ws":
-            # Live update channel: require auth, then allow the WS upgrade.
+            # Live update + mutation channel. Reject cross-site / rebinding handshakes
+            # (F-6), then require auth, then allow the WS upgrade.
+            if not self._origin_host_ok(request):
+                return self._json(403, {"error": "bad origin/host"})
             if not self._authorized_mutation(request):
                 return self._json(401, {"error": "auth required"})
             return None
@@ -435,18 +495,22 @@ class Dashboard:
             return self._login(request)
 
         if path == "/api/logout":
-            return self._logout()
+            return self._logout(request)
 
         if path == "/api/me":
             user = self._current_user(request)
             return self._json(200, {"username": user, "authenticated": user is not None})
 
+        # Everything else under /api/* requires auth. The open endpoints are above
+        # (login/logout/me); static assets fall through below. This protects the
+        # read surfaces too — several carry transcripts/logs/topology (F-1).
+        if path.startswith("/api/") and not self._authorized_mutation(request):
+            return self._json(401, {"error": "auth required"})
+
         if path == "/api/state":
             return self._json(200, await self._state())
 
         if path == "/api/settings":
-            if not self._authorized_mutation(request):
-                return self._json(401, {"error": "auth required"})
             return self._json(200, self._settings_state())
 
         if path.startswith("/api/nodes/") and path.endswith("/config"):
@@ -485,18 +549,15 @@ class Dashboard:
             return self._json(200, {"sessions": sessions})
 
         if path == "/api/server/config":
-            if not self._authorized_mutation(request):
-                return self._json(401, {"error": "auth required"})
             return self._json(200, self._server_config_state())
 
         if path == "/api/skills":
-            if not self._authorized_mutation(request):
-                return self._json(401, {"error": "auth required"})
             return self._json(200, await self._skills_state())
 
+        if path == "/api/speakers":
+            return self._json(200, await self._speakers_state())
+
         if path.startswith("/api/services/") and path.endswith("/config"):
-            if not self._authorized_mutation(request):
-                return self._json(401, {"error": "auth required"})
             name = path[len("/api/services/") : -len("/config")]
             try:
                 cfg = self._server._effective_service_config(name)
@@ -648,6 +709,78 @@ class Dashboard:
         if applied is None:
             return False, "saved, but live-apply failed (will take effect on restart)"
         return True, None
+
+    # ------------------------------------------------------------------
+    # Speaker profiles (kenzy-speaker): manage the enrolled list
+    # ------------------------------------------------------------------
+
+    async def _speaker_request(
+        self, method: str, sub_path: str, payload: dict[str, Any] | None = None
+    ) -> tuple[int, Any] | None:
+        """Proxy a request to the speaker service; (status, json) or None if unreachable."""
+        health_url = self._service_urls.get("speaker")
+        if not health_url:
+            return None
+        base = health_url[: -len("/health")]
+        import httpx
+
+        try:
+            async with httpx.AsyncClient(timeout=8.0) as client:
+                r = await client.request(
+                    method,
+                    f"{base}{sub_path}",
+                    json=payload,
+                    headers=self._server._service_headers(),
+                )
+            try:
+                body = r.json()
+            except Exception:
+                body = None
+            return r.status_code, body
+        except Exception:
+            return None
+
+    async def _speakers_state(self) -> dict[str, Any]:
+        res = await self._speaker_request("GET", "/speakers")
+        speakers = []
+        if res and res[0] == 200 and isinstance(res[1], dict):
+            speakers = res[1].get("speakers", [])
+        try:
+            threshold = float(
+                self._server._effective_service_config("speaker").get("identify_threshold", 0.25)
+            )
+        except Exception:
+            threshold = 0.25
+        rooms = [
+            {"node_id": nid, "room": sess.room_id} for nid, sess in self._server._nodes.items()
+        ]
+        return {
+            "reachable": res is not None,
+            "controls": self._dcfg.controls,
+            "identify_threshold": threshold,
+            "speakers": speakers,
+            "rooms": rooms,
+        }
+
+    async def _delete_speaker(self, name: str) -> tuple[bool, str | None]:
+        res = await self._speaker_request("DELETE", f"/speakers/{quote(name, safe='')}")
+        if res is None:
+            return False, "speaker service not reachable"
+        if res[0] == 200:
+            return True, None
+        detail = res[1].get("detail") if isinstance(res[1], dict) else None
+        return False, detail or f"delete failed ({res[0]})"
+
+    async def _rename_speaker(self, name: str, new_name: str) -> tuple[bool, str | None]:
+        res = await self._speaker_request(
+            "POST", f"/speakers/{quote(name, safe='')}/rename", {"new_name": new_name}
+        )
+        if res is None:
+            return False, "speaker service not reachable"
+        if res[0] == 200:
+            return True, None
+        detail = res[1].get("detail") if isinstance(res[1], dict) else None
+        return False, detail or f"rename failed ({res[0]})"
 
     async def _node_logs(self, node_id: str, request: Request) -> dict[str, Any]:
         if not self._dcfg.logs:
@@ -831,6 +964,44 @@ class Dashboard:
                 return await ack(False, "skill name is required")
             ok, err = await self._set_skill_disabled(name, bool(msg.get("disabled")))
             await ack(ok, err)
+        elif mtype == "delete_speaker":
+            if not self._dcfg.controls:
+                return await ack(False, "controls are disabled (set dashboard.controls: true)")
+            name = str(msg.get("name", "")).strip()
+            if not name:
+                return await ack(False, "speaker name is required")
+            ok, err = await self._delete_speaker(name)
+            await ack(ok, err)
+            if ok:
+                await connection.send(json.dumps({"type": "speakers_changed"}))
+        elif mtype == "rename_speaker":
+            if not self._dcfg.controls:
+                return await ack(False, "controls are disabled (set dashboard.controls: true)")
+            name = str(msg.get("name", "")).strip()
+            new_name = str(msg.get("new_name", "")).strip()
+            if not name or not new_name:
+                return await ack(False, "both name and new_name are required")
+            ok, err = await self._rename_speaker(name, new_name)
+            await ack(ok, err)
+            if ok:
+                await connection.send(json.dumps({"type": "speakers_changed"}))
+        elif mtype == "enroll_speaker":
+            if not self._dcfg.controls:
+                return await ack(False, "controls are disabled (set dashboard.controls: true)")
+            from kenzy.server.server import TranscribingServer
+
+            name = str(msg.get("name", "")).strip()
+            node_id = str(msg.get("node", "")).strip()
+            server = self._server
+            sess = server._nodes.get(node_id)
+            if not name:
+                return await ack(False, "speaker name is required")
+            if sess is None:
+                return await ack(False, "pick a connected room node to enroll from")
+            if not isinstance(server, TranscribingServer):
+                return await ack(False, "enrollment is not available on this server")
+            await server.start_enrollment(node_id, sess.room_id, name, operator=True)
+            await ack(True)
         elif mtype == "boost_trace":
             if not self._dcfg.controls:
                 return await ack(False, "controls are disabled (set dashboard.controls: true)")
@@ -880,5 +1051,6 @@ class Dashboard:
             self._dcfg.bind,
             self._dcfg.port,
             process_request=self.process_request,
+            max_size=262_144,  # mutations are small JSON; bound inbound frame size (F-10)
         ):
             await asyncio.Future()

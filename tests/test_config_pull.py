@@ -228,3 +228,24 @@ async def test_join_token_rejects_bad_hello(tmp_path, monkeypatch):
     finally:
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
+
+
+async def test_invalid_node_id_is_rejected(tmp_path, monkeypatch):
+    """F-3: a crafted node_id (path-traversal-ish) is refused at registration."""
+    monkeypatch.setenv("KENZY_HOME", str(tmp_path))
+    (tmp_path / "configs").mkdir(parents=True)
+    server = AudioServer({"host": "127.0.0.1", "port": 8799})
+    task = await _serve(server)
+    try:
+        async with websockets.connect("ws://127.0.0.1:8799") as ws:
+            await ws.send(protocol.hello("den", node_id="../../etc/passwd"))
+            with pytest.raises(websockets.exceptions.ConnectionClosed):
+                await asyncio.wait_for(ws.recv(), timeout=2.0)
+        # A valid uuid-style node_id is accepted.
+        async with websockets.connect("ws://127.0.0.1:8799") as ws:
+            await ws.send(protocol.hello("den", node_id="abc-123_DEF.4"))
+            msg = json.loads(await asyncio.wait_for(ws.recv(), timeout=2.0))
+            assert msg["type"] == protocol.MSG_CONFIG
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)

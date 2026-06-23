@@ -48,7 +48,6 @@ CHANNELS: int = 1  # mono
 SAMPLE_WIDTH: int = 2  # bytes per sample (int16)
 FRAME_MS: int = 80  # milliseconds per frame
 FRAME_SAMPLES: int = SAMPLE_RATE * FRAME_MS // 1000  # 1 280 samples
-FRAME_BYTES: int = FRAME_SAMPLES * SAMPLE_WIDTH  # 2 560 bytes
 
 # ---------------------------------------------------------------------------
 # Message constructors

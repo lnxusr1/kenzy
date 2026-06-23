@@ -43,3 +43,9 @@ export async function getSkills() {
   if (!r.ok) throw new Error(`skills ${r.status}`);
   return await r.json();
 }
+
+export async function getSpeakers() {
+  const r = await fetch("/api/speakers");
+  if (!r.ok) throw new Error(`speakers ${r.status}`);
+  return await r.json();
+}

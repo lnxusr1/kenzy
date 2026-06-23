@@ -4,6 +4,7 @@ import { FleetView } from "./views/fleet.js";
 import { ConfigView } from "./views/config.js";
 import { ServicesView } from "./views/services.js";
 import { SkillsView } from "./views/skills.js";
+import { SpeakersView } from "./views/speakers.js";
 import { ActivityView } from "./views/activity.js";
 import { LogsView } from "./views/logs.js";
 import { SettingsView } from "./views/settings.js";
@@ -26,6 +27,7 @@ const NAV = [
   { id: "fleet", label: "Fleet", ico: "▣" },
   { id: "services", label: "Services", ico: "❏" },
   { id: "skills", label: "Skills", ico: "✦" },
+  { id: "speakers", label: "Speakers", ico: "☻" },
   { id: "activity", label: "Activity", ico: "↗" },
   { id: "logs", label: "Logs", ico: "≡" },
   { id: "settings", label: "Settings", ico: "⚙" },
@@ -146,14 +148,16 @@ export function Shell({ user, onLogout }) {
               ? html`<${ServicesView} selected=${svc} onSelect=${setSvc} />`
               : view === "skills"
                 ? html`<${SkillsView} />`
-                : view === "activity"
-                  ? html`<${ActivityView} />`
-                  : view === "logs"
-                    ? html`<${LogsView} />`
-                    : view === "settings"
-                      ? html`<${SettingsView} onLogout=${onLogout} />`
-                      : html`<${FleetView} onConfigure=${configure}
-                          onConfigureService=${configureService} />`}
+                : view === "speakers"
+                  ? html`<${SpeakersView} />`
+                  : view === "activity"
+                    ? html`<${ActivityView} />`
+                    : view === "logs"
+                      ? html`<${LogsView} />`
+                      : view === "settings"
+                        ? html`<${SettingsView} onLogout=${onLogout} />`
+                        : html`<${FleetView} onConfigure=${configure}
+                            onConfigureService=${configureService} />`}
         </main>
       </div>
     </div>

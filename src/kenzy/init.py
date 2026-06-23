@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import secrets
 import shutil
 import uuid
 from pathlib import Path
@@ -21,6 +22,20 @@ _PACKAGE_DATA = Path(__file__).parent / "data"
 
 #: Runtime data subdirectories created under the config home.
 _DATA_DIRS = ("speakers", "home_assistant")
+
+_CONSTRAINTS_TEMPLATE = (
+    "# Pip constraints for this Kenzy install.\n"
+    "#\n"
+    "# Pin any dependency that must stay at a specific version for THIS machine\n"
+    "# (e.g. GPU/driver or model compatibility). Kenzy honors this file on install\n"
+    "# and on every auto-upgrade, so an upgrade won't silently move a pinned package.\n"
+    "# If a future release truly can't satisfy a pin, the upgrade fails loudly instead\n"
+    "# of breaking the host — resolve the conflict here, then upgrade again.\n"
+    "#\n"
+    "# Standard pip constraints format, one per line, e.g.:\n"
+    "#   transformers==4.30.0\n"
+    "#   numpy<2.0\n"
+)
 
 _SKILLS_README = (
     "# Custom skills\n\n"
@@ -54,6 +69,29 @@ def _set_node_id(node_yaml: Path, node_id: str) -> None:
     node_yaml.write_text(new)
 
 
+def _set_discovery_token(yaml_path: Path, token: str) -> None:
+    """Set ``discovery.token`` in a scaffolded config (replacing the commented
+    template line, or inserting under ``discovery:`` if absent)."""
+    value = json.dumps(token)  # double-quoted scalar
+    text = yaml_path.read_text()
+    # The only ``token:`` key under discovery ships commented; auth_token: won't
+    # match (it isn't ``token:`` at a segment boundary).
+    new, n = re.subn(r"(?m)^(\s*)#?\s*token:.*$", rf"\1token: {value}", text, count=1)
+    if n == 0:
+        new, n = re.subn(r"(?m)^(discovery:\s*)$", rf"\1\n  token: {value}", text, count=1)
+    yaml_path.write_text(new)
+
+
+def _set_env_var(env_path: Path, key: str, value: str) -> None:
+    """Set ``KEY="value"`` in a .env file (replacing an existing line or appending)."""
+    line = f'{key}="{value}"'
+    text = env_path.read_text() if env_path.exists() else ""
+    new, n = re.subn(rf"(?m)^{re.escape(key)}=.*$", line, text)
+    if n == 0:
+        new = (text.rstrip("\n") + "\n" if text.strip() else "") + line + "\n"
+    env_path.write_text(new)
+
+
 def _enable_dashboard(server_yaml: Path) -> None:
     """Flip ``dashboard.enabled`` to true in the scaffolded server.yaml.
 
@@ -72,6 +110,8 @@ def scaffold(
     node_id: str | None = None,
     profile: str = "all",
     enable_dashboard: bool = False,
+    token: str | None = None,
+    constraints: str | None = None,
 ) -> None:
     home = home.expanduser()
     print(f"Scaffolding Kenzy config home: {home}  (profile: {profile})")
@@ -81,6 +121,15 @@ def scaffold(
     # the server on every boot. Other service configs/secrets live on the server.
     node_only = profile == "node"
     services = ["node"] if node_only else SERVICES
+
+    # The join token is the shared secret nodes present at `hello` AND the
+    # service-to-service bearer co-located backends use to pull their config. For a
+    # server/all scaffold, generate one (secure-by-default) unless --token was given,
+    # and apply the *same* value to server.yaml, the co-located node.yaml, and .env's
+    # KENZY_SERVICE_TOKEN so they all match. Only written into freshly-created files,
+    # so re-runs don't rotate it. A node-only scaffold sets it only when --token given.
+    gen_token = token if node_only else (token or secrets.token_urlsafe(24))
+    server_written = False
 
     for svc in services:
         action = _copy(packaged_config(svc), home / "configs" / f"{svc}.yaml", force)
@@ -93,21 +142,51 @@ def scaffold(
             nid = node_id or str(uuid.uuid4())
             _set_node_id(home / "configs" / "node.yaml", nid)
             print(f"  [edit ] configs/node.yaml (node_id: {nid})")
-        # Turn the dashboard on in a freshly written server.yaml (installer handoff).
-        if svc == "server" and enable_dashboard and action == "write":
-            _enable_dashboard(home / "configs" / "server.yaml")
-            print("  [edit ] configs/server.yaml (dashboard.enabled: true)")
+            if gen_token:
+                _set_discovery_token(home / "configs" / "node.yaml", gen_token)
+                print("  [edit ] configs/node.yaml (discovery.token set)")
+        if svc == "server" and action == "write":
+            # Secure-by-default join + service token.
+            if gen_token:
+                _set_discovery_token(home / "configs" / "server.yaml", gen_token)
+                server_written = True
+                print("  [edit ] configs/server.yaml (discovery.token set)")
+            # Turn the dashboard on in a freshly written server.yaml (installer handoff).
+            if enable_dashboard:
+                _enable_dashboard(home / "configs" / "server.yaml")
+                print("  [edit ] configs/server.yaml (dashboard.enabled: true)")
+
+    # Operator pip pins (honored on install + every upgrade) — applies to any venv,
+    # so it's scaffolded for every profile. Seed from --constraints if given, else a
+    # commented template the operator can fill in later.
+    constraints_dst = home / "constraints.txt"
+    if not constraints_dst.exists() or force:
+        if constraints and Path(constraints).is_file():
+            shutil.copyfile(constraints, constraints_dst)
+            print("  [write] constraints.txt (from --constraints)")
+        else:
+            constraints_dst.write_text(_CONSTRAINTS_TEMPLATE)
+            print("  [write] constraints.txt (template)")
 
     if node_only:
         # Nodes pull tuning from the server on connect (config-pull) and run no
         # skills, so they need no .env, skills/, data/, or per-room overrides.
-        print("Done. Node config ready — start it with: kenzy-node")
+        if gen_token:
+            print("Done. Node config ready (join token set) — start it with: kenzy-node")
+        else:
+            print("Done. Node config ready — start it with: kenzy-node")
+            print("Note: if the server requires a join token, re-run with --token <token>.")
         return
 
     env_src = _PACKAGE_DATA / ".env.example"
     if env_src.is_file():
         action = _copy(env_src, home / ".env", force)
         print(f"  [{action}] .env")
+        # Co-located backend services authenticate to the server's /config with this
+        # bearer; keep it in sync with the server's freshly-generated join token.
+        if gen_token and server_written:
+            _set_env_var(home / ".env", "KENZY_SERVICE_TOKEN", gen_token)
+            print("  [edit ] .env (KENZY_SERVICE_TOKEN)")
 
     skills_dir = home / "skills"
     skills_dir.mkdir(parents=True, exist_ok=True)
@@ -130,6 +209,11 @@ def scaffold(
         print(f"  [dir ] data/{sub}/")
 
     print("Done. Edit configs/*.yaml and .env, then start a service (e.g. kenzy-server).")
+    if gen_token and server_written:
+        print()
+        print(f"  Join token: {gen_token}")
+        print("  Add a node with:  kenzy-init --profile node --token <token>")
+        print("  (also shown in the dashboard under Settings, with a copy button)")
 
 
 def main() -> None:
@@ -170,6 +254,21 @@ def main() -> None:
         action="store_true",
         help="Set dashboard.enabled: true in a freshly scaffolded server.yaml.",
     )
+    parser.add_argument(
+        "--token",
+        default=None,
+        metavar="TOKEN",
+        help="Shared join/service token. For 'node', sets discovery.token (paste the "
+        "value the server printed / shows in the dashboard). For 'server'/'all', uses "
+        "this instead of a generated one (e.g. to share a token across hosts).",
+    )
+    parser.add_argument(
+        "--constraints",
+        default=None,
+        metavar="FILE",
+        help="Seed the config home's constraints.txt from this pip constraints file "
+        "(dependency pins honored on install and every auto-upgrade).",
+    )
     args = parser.parse_args()
 
     home = Path(args.home) if args.home else kenzy_home()
@@ -179,6 +278,8 @@ def main() -> None:
         node_id=args.node_id,
         profile=args.profile,
         enable_dashboard=args.enable_dashboard,
+        token=args.token,
+        constraints=args.constraints,
     )
 
 

@@ -2,6 +2,26 @@ import { html, useState, useEffect } from "../html.js";
 import { getSettings } from "../api.js";
 import { send, notify } from "../store.js";
 
+// A read-only secret with a copy button (join/API token). Shown only on the
+// auth-gated Settings page so the operator can copy it instead of memorizing it.
+function CopyField({ value }) {
+  const [copied, setCopied] = useState(false);
+  if (!value) return null;
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      notify("Copy failed — select the value and copy manually.", "err");
+    }
+  };
+  return html`<div class="token-row">
+    <code class="mono token-val">${value}</code>
+    <button class="btn-ghost" onClick=${copy}>${copied ? "Copied ✓" : "Copy"}</button>
+  </div>`;
+}
+
 // Editable server settings (the safe subset; written to server.local.yaml and applied
 // by restarting the server). Lockout/secret-risky keys stay file/CLI-managed.
 function ServerSettings() {
@@ -165,6 +185,13 @@ export function SettingsView({ onLogout }) {
     <div class="settings">
       <section class="section">
         <header><h2>Account</h2><span class="rule"></span></header>
+        ${s.default_password
+          ? html`<div class="banner warn">
+              ⚠ This dashboard is still using the <b>default password</b>
+              (<code class="mono">admin/password</code>). Anyone who can reach it can take
+              control — change it below.
+            </div>`
+          : null}
         <div class="card pad">
           ${s.can_set_password
             ? html`<${ChangePassword} username=${s.username} onChanged=${onLogout} />`
@@ -192,6 +219,26 @@ export function SettingsView({ onLogout }) {
                 : "off",
             )}
           </dl>
+        </div>
+      </section>
+
+      <section class="section">
+        <header><h2>Node provisioning</h2><span class="rule"></span></header>
+        <div class="card pad">
+          ${s.join_token
+            ? html`<p class="micro">Join token — add a new room node with it:
+                  <code class="mono">kenzy-init --profile node --token …</code> (or the
+                  installer's <code class="mono">--token</code>). It must match on every node.</p>
+                <${CopyField} value=${s.join_token} />`
+            : html`<p class="micro">⚠ No join token is set, so any device on the network can
+                register as a node and read service config. Set
+                <code class="mono">discovery.token</code> in server.yaml (or re-run
+                <code class="mono">kenzy-init</code>) to require one.</p>`}
+          ${s.api_token
+            ? html`<p class="micro" style="margin-top:var(--s4)">API/CLI bearer
+                  (<code class="mono">dashboard.auth_token</code>):</p>
+                <${CopyField} value=${s.api_token} />`
+            : null}
         </div>
       </section>
 

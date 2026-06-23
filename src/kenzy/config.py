@@ -44,6 +44,25 @@ def kenzy_data_root() -> Path:
     return Path.home() / ".config" / "kenzy"
 
 
+def constraints_path(home: Path | None = None) -> Path:
+    """Path to the operator's pip constraints file in the config home.
+
+    Pins recorded here (e.g. ``transformers==4.30.0`` for a host that needs a
+    specific version) are honored on install AND on every auto-upgrade, so an
+    upgrade can't silently move a pinned dependency. Standard pip constraints
+    format (``pip install -c <file>``).
+    """
+    return (home or kenzy_home()) / "constraints.txt"
+
+
+def pip_constraint_args(home: Path | None = None) -> list[str]:
+    """Return ``["-c", <constraints>]`` if the operator has a constraints file,
+    else ``[]``. Used by every Kenzy-driven ``pip install`` (install + upgrade) so
+    pins survive upgrades. An all-comment file is fine (pip treats it as empty)."""
+    path = constraints_path(home)
+    return ["-c", str(path)] if path.is_file() else []
+
+
 def packaged_config(service: str) -> Path:
     """Path to the default config bundled in the package for ``service``."""
     return _PACKAGED_CONFIGS / f"{service}.yaml"

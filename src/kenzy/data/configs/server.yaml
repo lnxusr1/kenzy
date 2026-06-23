@@ -11,11 +11,15 @@ port: 8765
 
 # mDNS discovery — advertise this server as _kenzy._tcp so nodes find it without
 # a hardcoded server_url. Set enabled: false on networks where you'd rather pin
-# server_url on each node. (token is reserved for the shared-secret join check.)
+# server_url on each node. `token` is the shared join secret nodes must present
+# AND the bearer co-located backend services use to pull config: `kenzy-init`
+# generates one here by default (and matches it in node.yaml + .env's
+# KENZY_SERVICE_TOKEN). It's shown in the dashboard under Settings for copy-paste
+# when adding nodes. Clear it to allow unauthenticated joins (not recommended).
 discovery:
   enabled: true
   instance: "kenzy-server"
-  # token: "change-me"
+  # token: "change-me"   # set by kenzy-init; the dashboard Settings page shows it
 
 # Config-pull: defaults pushed to every node on connect, so a node needs no
 # local config file. Live-tunable keys (thresholds, VAD timing) apply
