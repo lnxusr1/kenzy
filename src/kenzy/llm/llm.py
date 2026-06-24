@@ -37,6 +37,7 @@ from kenzy.fastapi_auth import (
     install_logs_endpoint,
     install_restart_endpoint,
     install_service_auth,
+    install_upgrade_endpoint,
 )
 from kenzy.llm import skills as skill_registry
 from kenzy.logutil import quiet_health_access_log
@@ -418,6 +419,7 @@ def main() -> None:
         app, capture_level=level_value(cfg.get("log_capture_level"), logging.DEBUG)
     )
     install_restart_endpoint(app)
+    install_upgrade_endpoint(app, "llm")
 
     global \
         _model, \

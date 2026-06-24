@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [3.2.0]
+
+### Added
+
+- **Update check in the dashboard.** The Settings page now shows the installed version, the latest `kenzy` release on PyPI, and an "update available" indicator. Read-only and lazy (only queries PyPI when the page is opened, ~1 h cache, degrades gracefully offline).
+- **One-click server upgrade.** When an update is available, the Settings page offers (with `dashboard.controls`) an **Upgrade server** button that runs `pip install -U "kenzy[server]"` in the server's venv — honoring your `constraints.txt` pins and pinned to the target version — then re-execs the server. The install runs in the background (it can take minutes) and reports success/failure; on success the server restarts and the dashboard reconnects to the new version.
+- **One-click backend-service upgrade.** Each backend service (`stt`/`tts`/`llm`/`speaker`) now exposes a token-gated `POST /upgrade` that pip-upgrades **its own** extra (honoring `constraints.txt` + an optional version pin) and re-execs. The dashboard's Services tab has an **Upgrade** button per service (with `dashboard.controls`); the install runs in the background and reports success/failure. The upgrade helpers are shared (`kenzy.upgrade`) across the server, services, and nodes — each component upgrades only its own extra, so a shared venv converges to the full set without any host pulling another's heavy deps.
+- **One-click node upgrade.** A node's Configure page has an **Upgrade** button (with `dashboard.controls`): the server sends an `upgrade` message, the node pip-upgrades `kenzy[node]` (honoring `constraints.txt`) and re-execs, reconnecting on the new version — which shows on its fleet card. Together these complete the **dashboard upgrade feature**: see what's installed and what's available, then upgrade the server, each backend service, and each node from the browser.
+
+### Fixed
+
+- **Dashboard inline code spacing.** Inline `code`/term spans that wrapped to a new line in the source (Activity, Settings, Speakers, and the calibration wizard) lost the space before them, so text ran together mid-sentence. They now render with the proper spacing.
+
 ## [3.1.0]
 
 ### Added

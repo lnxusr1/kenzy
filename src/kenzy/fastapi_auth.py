@@ -14,12 +14,19 @@ from collections.abc import Awaitable, Callable
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 from starlette.responses import Response
 
 from kenzy.logutil import install_ring_handler
 from kenzy.serviceauth import check_bearer
 
 log = logging.getLogger(__name__)
+
+
+class UpgradeRequest(BaseModel):
+    # Optional exact version to pin; None → latest (floored >=3.0.0). Module-level so
+    # FastAPI recognizes it as the request body (a local class is read as a query param).
+    version: str | None = None
 
 
 def install_service_auth(app: FastAPI) -> None:
@@ -82,3 +89,27 @@ def install_restart_endpoint(app: FastAPI) -> None:
         return {"status": "restarting"}
 
     app.add_api_route("/restart", restart, methods=["POST"])
+
+
+def install_upgrade_endpoint(app: FastAPI, extra: str) -> None:
+    """Expose ``POST /upgrade`` that pip-upgrades ``kenzy[extra]`` then re-execs.
+
+    The pip run is awaited (it can take minutes — the server's fan-out call uses a long
+    timeout), and on success the service re-execs *after* the response flushes so the
+    caller sees the result. Protected by the service-token middleware like /restart.
+    """
+    from kenzy.upgrade import run_pip_upgrade
+
+    async def upgrade(body: UpgradeRequest) -> dict[str, object]:
+        ok, output = await run_pip_upgrade(extra, body.version)
+        if ok:
+
+            async def _exec() -> None:
+                await asyncio.sleep(0.3)  # let the response flush first
+                log.warning("Upgrade applied — re-executing service")
+                os.execv(sys.executable, [sys.executable, *sys.argv])
+
+            asyncio.create_task(_exec())
+        return {"ok": ok, "output": output}
+
+    app.add_api_route("/upgrade", upgrade, methods=["POST"])

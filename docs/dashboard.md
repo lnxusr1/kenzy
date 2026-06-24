@@ -82,8 +82,10 @@ Open a node's **Configure** page to:
   immediately on save; hardware keys are applied on the node's next boot or via the
   Restart button. Options with a fixed set of values (log levels, on/off, etc.) are
   dropdown choosers; numeric fields are number inputs.
-- **Control the node** — **Trigger** (start a session), **Stop**, or **Restart** (the
-  node re-execs itself, with or without systemd).
+- **Control the node** — **Trigger** (start a session), **Stop**, **Restart** (the
+  node re-execs itself, with or without systemd), or **Upgrade** (the node pip-upgrades
+  `kenzy[node]`, honoring `constraints.txt`, and reconnects on the new version — watch the
+  version on its fleet card to confirm).
 
 Secrets (API keys) are never served to a node and never editable here.
 
@@ -138,7 +140,9 @@ with live health. Open one to edit its **effective config** in a generic editor 
 each field is the packaged default or your stored override. Saving writes
 `configs/services/<service>.yaml` on the server and **restarts the service** so the new
 config takes effect (the service re-pulls on boot); a separate **Restart** button
-restarts without editing. Secrets (API keys) are read from the service host's
+restarts without editing, and an **Upgrade** button pip-upgrades that service to the
+latest release (honoring `constraints.txt`) and restarts it — the install runs in the
+background and reports the result. Secrets (API keys) are read from the service host's
 environment and are never shown or stored here. Requires `dashboard.controls: true`.
 
 ## Skills
@@ -208,8 +212,19 @@ persisted. Refresh during/after the window to view the captured detail. Requires
 ## Settings
 
 The **Settings** page shows system info (Kenzy version, server and dashboard binds, mDNS
-discovery), the **node join token**, and lets you **change the dashboard password** and
-edit a **scoped subset of the server's own configuration**.
+discovery), an **update check**, the **node join token**, and lets you **change the
+dashboard password** and edit a **scoped subset of the server's own configuration**.
+
+The **Updates** section compares the installed version against the latest `kenzy` release
+on PyPI and flags when one is available. It's checked lazily (only when you open Settings,
+cached ~1 hour) and degrades gracefully on an offline/air-gapped host. When an update is
+available and `dashboard.controls` is on, an **Upgrade server** button runs
+`pip install -U "kenzy[server]"` in the server's venv (honoring your `constraints.txt`
+pins, pinned to the target version) and then restarts the server. The install runs in the
+background — the dashboard disconnects while it works (a few minutes) and reconnects when
+the server is back on the new version; a failed install is reported and leaves the server
+running as-is. This upgrades the **server host only**; backend services and room nodes are
+upgraded separately.
 
 Under **Node provisioning** the page displays the `discovery.token` (the shared secret a
 node presents to join, also the service-to-service bearer) with a copy button, so you can

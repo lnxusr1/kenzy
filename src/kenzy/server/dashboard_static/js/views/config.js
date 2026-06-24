@@ -111,6 +111,22 @@ export function ConfigView({ node, onBack }) {
     notify(res.ok ? `${cap(type)} sent.` : res.error || `${type} failed`, res.ok ? "ok" : "err");
   }
 
+  async function upgradeNode() {
+    if (
+      !window.confirm(
+        "Upgrade this node to the latest release and restart it? It installs in the " +
+          "background; the node disconnects and reconnects on the new version (watch the " +
+          "version on its fleet card). Your constraints.txt pins are honored.",
+      )
+    )
+      return;
+    const res = await send("upgrade_node", { node });
+    notify(
+      res.ok ? "Upgrade sent — the node reconnects on the new version." : res.error || "Upgrade failed.",
+      res.ok ? "ok" : "err",
+    );
+  }
+
   // Guided audio setup/calibration; the raw audio keys stay in the settings grid below.
   function audioSection() {
     return html`
@@ -243,6 +259,9 @@ export function ConfigView({ node, onBack }) {
           <button class="btn-ghost" disabled=${!info.controls || !info.connected}
                   title=${info.connected ? "" : "Node must be connected"}
                   onClick=${toggleMute}>${info.config.muted ? "Unmute" : "Mute"}</button>
+          <button class="btn-ghost" disabled=${!info.controls || !info.connected}
+                  title=${info.connected ? "" : "Node must be connected"}
+                  onClick=${upgradeNode}>Upgrade</button>
           <button class="btn-ghost danger" disabled=${!info.controls} onClick=${() => ctl("restart")}>Restart</button>
         </div>
         <p class="micro">Volume is in the settings above (0–100, applies live). Mute is temporary — a node comes back un-muted after a restart, and the wake-word chime stays audible while muted.</p>

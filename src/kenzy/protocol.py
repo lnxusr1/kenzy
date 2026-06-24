@@ -25,6 +25,7 @@ MSG_ACK = "ack"
 MSG_TTS_START = "tts_start"
 MSG_TTS_END = "tts_end"
 MSG_RESTART = "restart"
+MSG_UPGRADE = "upgrade"
 MSG_SET_ROOM = "set_room"
 MSG_REQUEST_LOGS = "request_logs"
 MSG_LOGS = "logs"
@@ -121,6 +122,14 @@ def stop() -> str:
 
 def restart() -> str:
     return json.dumps({"type": MSG_RESTART})
+
+
+def upgrade(version: str | None = None) -> str:
+    """Server→node: pip-upgrade ``kenzy[node]`` (to ``version`` or latest) and re-exec."""
+    payload: dict[str, Any] = {"type": MSG_UPGRADE}
+    if version is not None:
+        payload["version"] = version
+    return json.dumps(payload)
 
 
 def set_room(room_id: str) -> str:

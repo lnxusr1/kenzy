@@ -97,6 +97,15 @@ function connectWS() {
         _tuneSubs.forEach((fn) => fn(m));
       } else if (m.type === "session") {
         _sessionSubs.forEach((fn) => fn(m.data));
+      } else if (m.type === "upgrade_progress") {
+        notify("Upgrade: installing… this can take a few minutes.");
+      } else if (m.type === "upgrade_result") {
+        notify(
+          m.ok
+            ? "Upgrade installed — the server is restarting; the dashboard will reconnect."
+            : "Upgrade failed: " + ((m.output || "").trim().split("\n").pop() || "see server logs"),
+          m.ok ? "ok" : "err",
+        );
       }
     } catch {
       /* ignore */

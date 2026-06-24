@@ -1028,6 +1028,15 @@ class AudioServer:
         log.warning("Restarting server (re-exec)")
         os.execv(sys.executable, [sys.executable, *sys.argv])
 
+    async def run_self_upgrade(
+        self, extra: str = "server", version: str | None = None
+    ) -> tuple[bool, str]:
+        """Upgrade this process's venv (``kenzy[extra]``) and return ``(ok, output_tail)``.
+        Does **not** re-exec — the caller re-execs on success so the new code loads."""
+        from kenzy.upgrade import run_pip_upgrade
+
+        return await run_pip_upgrade(extra, version)
+
     async def restart_node(self, node_id: str) -> bool:
         """Ask a connected node to re-exec itself."""
         session = self._nodes.get(node_id)
@@ -1039,6 +1048,20 @@ class AudioServer:
             return True
         except Exception as exc:
             log.warning("restart_node: %s send failed: %s", node_id, exc)
+            return False
+
+    async def upgrade_node(self, node_id: str, version: str | None = None) -> bool:
+        """Ask a connected node to pip-upgrade kenzy[node] and re-exec. Fire-and-watch:
+        the node reconnects with its new version on success (visible in the fleet view)."""
+        session = self._nodes.get(node_id)
+        if session is None:
+            log.warning("upgrade_node: %s is not connected", node_id)
+            return False
+        try:
+            await session.ws.send(protocol.upgrade(version))
+            return True
+        except Exception as exc:
+            log.warning("upgrade_node: %s send failed: %s", node_id, exc)
             return False
 
     async def set_node_volume(

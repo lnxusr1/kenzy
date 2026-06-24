@@ -1056,6 +1056,21 @@ class NodeClient:
                 log.warning("Server requested restart — re-executing node")
                 os.execv(sys.executable, [sys.executable, *sys.argv])
 
+            elif mtype == protocol.MSG_UPGRADE:
+                # pip-upgrade kenzy[node] (honoring constraints + the version pin), then
+                # re-exec to load the new code. On failure we stay on the old version.
+                from kenzy.upgrade import run_pip_upgrade
+
+                version = msg.get("version") or None
+                log.warning("Server requested upgrade (%s) — installing…", version or "latest")
+                ok, output = await run_pip_upgrade("node", version)
+                if ok:
+                    log.warning("Upgrade installed — re-executing node")
+                    os.execv(sys.executable, [sys.executable, *sys.argv])
+                else:
+                    tail = output.splitlines()[-1] if output else "see logs"
+                    log.error("Node upgrade failed: %s", tail)
+
             elif mtype == protocol.MSG_REQUEST_LOGS and self._ws is not None:
                 lv = logging.getLevelNamesMapping().get(str(msg.get("level", "")).upper(), 0)
                 limit = int(msg.get("limit", 200))
