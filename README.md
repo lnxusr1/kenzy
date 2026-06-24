@@ -1,4 +1,4 @@
-# KENZY &middot; [![GitHub license](https://img.shields.io/github/license/lnxusr1/kenzy.svg)](https://github.com/lnxusr1/kenzy/blob/main/LICENSE) ![Python Versions](https://img.shields.io/pypi/pyversions/yt2mp3.svg) ![Read the Docs](https://img.shields.io/readthedocs/kenzy) ![GitHub release (latest by date)](https://img.shields.io/github/v/release/lnxusr1/kenzy.svg)
+# KENZY &middot; [![GitHub license](https://img.shields.io/github/license/lnxusr1/kenzy.svg)](https://github.com/lnxusr1/kenzy/blob/main/LICENSE) ![Python Versions](https://img.shields.io/pypi/pyversions/kenzy.svg) ![Read the Docs](https://img.shields.io/readthedocs/kenzy) ![GitHub release (latest by date)](https://img.shields.io/github/v/release/lnxusr1/kenzy.svg)
 
 
 A distributed home voice assistant built as six independently deployable microservices. Kenzy runs wake-word detection locally on room nodes (Orange Pi Zero 3 / 3W or Raspberry Pi 3 / 4 / 5), streams audio to a central server for transcription, runs it through an LLM with tool-calling skills, and streams synthesized speech back to the room.
@@ -27,7 +27,7 @@ Node (mic) ──PCM over WebSocket──► Server
 | **node** | `kenzy-node` | — | Wake word + audio capture, TTS playback |
 | **server** | `kenzy-server` | 8765 | WebSocket hub, pipeline orchestrator |
 | **stt** | `kenzy-stt` | 8767 | Speech-to-text via faster-whisper |
-| **tts** | `kenzy-tts` | 8769 | Text-to-speech via OpenAI TTS |
+| **tts** | `kenzy-tts` | 8769 | Text-to-speech via OpenAI or local Kokoro |
 | **llm** | `kenzy-llm` | 8766 | LLM + skill tool-calling via LiteLLM |
 | **speaker** | `kenzy-speaker` | 8768 | Speaker identification via SpeechBrain |
 
@@ -65,7 +65,7 @@ kenzy-setup
 
 # Configure API keys
 cp .env.example .env
-# Edit .env and fill in OPENAI_API_KEY, WEATHER_API_KEY, HA_API_KEY
+# Edit .env and fill in OPENAI_API_KEY, HA_API_KEY (as needed)
 ```
 
 ## Running
@@ -103,8 +103,8 @@ kenzy-devices
 
 ```bash
 kenzy-deploy init       # one-time OS setup on all hosts
-kenzy-deploy install    # first full deployment
-kenzy-deploy upgrade    # push source + skills + .env updates
+kenzy-deploy install    # first full deployment (source or PyPI mode)
+kenzy-deploy upgrade    # install updates and restart services
 kenzy-deploy status     # check service health
 ```
 
@@ -116,14 +116,19 @@ Prerequisites on each remote host: SSH key auth and passwordless sudo.
 `server.yaml` (`dashboard.enabled: true`, `controls: true`, `logs: true`) and open
 `http://127.0.0.1:8770/dashboard`. It gives you one place to:
 
-- See live node + backend-service health
-- Configure each node and **rename its room** (pushed to the node and saved)
+- See live node + backend-service health and each host's installed version
+- Configure each node, **rename its room**, and run a guided **audio-calibration wizard**
+- Manage **skills** (enable/disable live) and **speaker profiles** (rename / delete / enroll from a room)
+- Watch **pipeline activity** (transcripts, latency, fast-path hit rate) and read server / service / node **logs**
 - Trigger / stop / restart nodes and send TTS **announcements** to every room
-- Read server, service, and per-node **logs**
+- **Upgrade** the server, backend services, and nodes in place — one click, with an "update available" check against PyPI
+- Edit a safe subset of the server's own config and change the dashboard password
 
-Login defaults to `admin` / `password` — change it with `kenzy-passwd` (server host
-only). It is plaintext HTTP on a LAN bind, so **do not port-forward it**. See the
-[Dashboard guide](https://docs.kenzy.dev/dashboard/).
+All `/api` reads and actions require login; mutating actions also need `controls`. Login
+defaults to `admin` / `password` — change it with `kenzy-passwd` (server host only) or
+from the Settings page. It is plaintext HTTP on a LAN bind, so **do not port-forward it**.
+The Settings page also shows the **node join token** to copy when provisioning new nodes.
+See the [Dashboard guide](https://docs.kenzy.dev/dashboard/).
 
 ## Configuration
 
@@ -151,7 +156,12 @@ Included skills:
 | `weather.py` | Current conditions and forecast via NWS |
 | `news.py` | RSS headlines and article summaries |
 | `stocks.py` | Stock quotes via yfinance |
-| `home_assistant.py` | Smart home control via Home Assistant REST API |
+| `home_assistant.py` | Smart home control via Home Assistant REST API (secure actions require a recognized speaker) |
+| `datetime_skill.py` | Current date and time (with a deterministic fast path) |
+| `announce.py` | Speak a message in every room (broadcast) |
+| `intercom.py` | Start a live two-way voice call between two rooms |
+| `volume.py` | Set / adjust a room's playback volume or mute |
+| `enroll.py` | Voice speaker enrollment ("enroll me as Alice") |
 | `random_tools.py` | Coin flip, dice, random number, pick from list |
 | `about.py` | Reports the installed Kenzy version |
 
@@ -195,5 +205,4 @@ See `.env.example` for the full list. Required variables:
 | Variable | Used by |
 |---|---|
 | `OPENAI_API_KEY` | TTS service, LLM service (if using OpenAI models) |
-| `WEATHER_API_KEY` | Reserved for alternative weather providers (not used by the default NWS skill) |
 | `HA_API_KEY` | Home Assistant skill |
