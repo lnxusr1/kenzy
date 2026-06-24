@@ -1,4 +1,4 @@
-# KENZY &middot; [![GitHub license](https://img.shields.io/github/license/lnxusr1/kenzy.svg)](https://github.com/lnxusr1/kenzy/blob/main/LICENSE) ![Python Versions](https://img.shields.io/pypi/pyversions/kenzy.svg) ![Read the Docs](https://img.shields.io/readthedocs/kenzy) ![GitHub release (latest by date)](https://img.shields.io/github/v/release/lnxusr1/kenzy.svg)
+# KENZY &middot; [![GitHub license](https://img.shields.io/github/license/lnxusr1/kenzy.svg)](https://github.com/lnxusr1/kenzy/blob/main/LICENSE) ![Python Versions](https://img.shields.io/pypi/pyversions/kenzy.svg) ![GitHub release (latest by date)](https://img.shields.io/github/v/release/lnxusr1/kenzy.svg)
 
 
 A distributed home voice assistant built as six independently deployable microservices. Kenzy runs wake-word detection locally on room nodes (Orange Pi Zero 3 / 3W or Raspberry Pi 3 / 4 / 5), streams audio to a central server for transcription, runs it through an LLM with tool-calling skills, and streams synthesized speech back to the room.
