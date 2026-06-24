@@ -1,11 +1,11 @@
 # Writing Skills
 
-A skill is an async Python function decorated with `@skill`. Drop the file in the `skills/` directory and it is loaded automatically at startup.
+A skill is an async Python function decorated with `@skill`. Drop the file in your skills overlay directory — `~/.config/kenzy/skills/` (or `skills/` in a dev checkout), set by `skills.dir` in `llm.yaml` — and it is loaded automatically at startup, alongside the built-in skills. A file that defines a skill of the same name as a built-in overrides it.
 
 ## Minimal example
 
 ```python
-# skills/my_skill.py
+# ~/.config/kenzy/skills/my_skill.py
 from kenzy.llm.skills import skill
 
 @skill

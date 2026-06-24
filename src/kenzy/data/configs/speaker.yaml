@@ -1,0 +1,62 @@
+# Kenzy speaker identification configuration
+# Used by: kenzy-speaker, kenzy-enroll, kenzy-setup
+
+# --- Service ---
+host: "127.0.0.1"
+port: 8768
+log_level: "info"
+log_capture_level: "debug"  # how deep the dashboard log viewer can see (debug/trace); set via the dashboard
+
+# --- Model ---
+# SpeechBrain ECAPA-TDNN model (downloaded once by kenzy-setup).
+model_source: "speechbrain/spkrec-ecapa-voxceleb"
+model_save_dir: "models/speaker"
+
+# --- Speaker profiles ---
+# Directory where per-speaker .npy embedding files are stored.
+embeddings_dir: "data/speakers"
+
+# --- Identification ---
+# Cosine similarity threshold [0.0–1.0].
+# Below this value the utterance is attributed to unknown_speaker.
+# Typical range: 0.20 (permissive) – 0.35 (strict).
+identify_threshold: 0.25
+
+# Name returned when no enrolled speaker exceeds the threshold.
+unknown_speaker: "unknown"
+
+# Allow voice enrollment ("enroll me as Alice") from a node (the server reads this).
+# Off by default: when on, ANYONE in earshot can enroll — including under an existing
+# name — which can bypass speaker-gated actions. Leave off unless you trust everyone
+# with microphone access; prefer the kenzy-enroll CLI for people who can unlock things.
+allow_voice_enroll: false
+
+# --- Enrollment (kenzy-enroll) ---
+# Sample rate for microphone capture during enrollment.
+enroll_sample_rate: 16000
+
+# RMS amplitude above which a frame is considered speech (0–32767).
+enroll_silence_rms: 300
+
+# Milliseconds of consecutive silence that ends a recording.
+enroll_silence_ms: 800
+
+# Minimum milliseconds of speech required for a valid sample.
+enroll_min_speech_ms: 1500
+
+# kenzy-tts service used for enrollment voice guidance (kenzy-enroll / voice enroll).
+# Auto-wired from the server by default (it serves its own tts.url), so you don't
+# need to set it here. Uncomment to override per host (e.g. a multi-host setup where
+# this machine reaches TTS at a different address than the server does).
+# tts:
+#   url: "http://127.0.0.1:8769/speak"
+#   timeout: 30.0
+
+# Prompts read aloud by the user during enrollment.
+# Use phonetically diverse sentences for best embedding quality.
+enroll_prompts:
+  - "The weather outside is looking pretty good today."
+  - "Can you turn off the lights in the living room please."
+  - "What time does the movie start tonight?"
+  - "I'd like to set a reminder for tomorrow morning at eight."
+  - "Please add milk and eggs to the shopping list."

@@ -4,9 +4,34 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "kenzy"
-version = "3.0.0"
+version = "3.1.0"
 description = "Distributed home voice-assistant: kenzy-node, kenzy-server, kenzy-stt, kenzy-tts, kenzy-llm, kenzy-speaker"
 requires-python = ">=3.11"
+readme = "README.md"
+license = { file = "LICENSE" }
+authors = [{ name = "lnxusr1" }]
+keywords = [
+    "voice-assistant",
+    "home-automation",
+    "speech-recognition",
+    "text-to-speech",
+    "llm",
+    "wakeword",
+    "raspberry-pi",
+    "self-hosted",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Home Automation",
+    "Topic :: Multimedia :: Sound/Audio :: Speech",
+]
 
 # Core dependencies shared by both node and server
 dependencies = [
@@ -20,12 +45,14 @@ dependencies = [
 node = [
     "sounddevice>=0.4.6",
     "openwakeword>=0.6.0",
+    "zeroconf>=0.130",
 ]
 
 # Install on the server host
 server = [
     "httpx>=0.27.0",
     "python-dotenv>=1.0.0",
+    "zeroconf>=0.130",
 ]
 
 # Install on the STT service host
@@ -33,6 +60,7 @@ stt = [
     "fastapi>=0.100.0",
     "uvicorn>=0.23.0",
     "faster-whisper>=1.0.0",
+    "zeroconf>=0.130",
 ]
 
 # Install on the TTS service host
@@ -41,6 +69,7 @@ tts = [
     "uvicorn>=0.23.0",
     "openai>=1.0.0",
     "python-dotenv>=1.0.0",
+    "zeroconf>=0.130",
 ]
 
 # Install on the speaker identification host
@@ -52,6 +81,7 @@ speaker = [
     "torchaudio>=2.0.0",
     "sounddevice>=0.4.6",
     "httpx>=0.27.0",
+    "zeroconf>=0.130",
 ]
 
 # Install on the LLM service host
@@ -66,6 +96,7 @@ llm = [
     "trafilatura>=1.6.0",
     "padacioso>=1.0.0",
     "rapidfuzz>=3.0.0",
+    "zeroconf>=0.130",
 ]
 
 # Local TTS using Kokoro (PyTorch) — also requires: sudo apt-get install espeak-ng
@@ -92,15 +123,31 @@ kenzy-tts     = "kenzy.tts.tts:main"
 kenzy-llm     = "kenzy.llm.llm:main"
 kenzy-speaker = "kenzy.speaker.speaker:main"
 kenzy-enroll  = "kenzy.speaker.enroll:main"
+kenzy-passwd  = "kenzy.passwd:main"
 kenzy-setup   = "kenzy.setup:main"
+kenzy-init    = "kenzy.init:main"
+
+[project.urls]
+Homepage = "https://kenzy.dev"
+Documentation = "https://docs.kenzy.dev"
+Repository = "https://github.com/lnxusr1/kenzy"
+Changelog = "https://github.com/lnxusr1/kenzy/blob/main/CHANGELOG.md"
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.setuptools.package-data]
+"kenzy" = [
+    "data/configs/*.yaml",
+    "data/.env.example",
+]
 "kenzy.node" = [
     "models/*.tflite",
     "sounds/*.wav",
+]
+"kenzy.server" = [
+    "dashboard_static/*",
+    "dashboard_static/**/*",
 ]
 
 # ---------------------------------------------------------------------------
@@ -114,6 +161,9 @@ testpaths   = ["tests"]
 [tool.ruff]
 line-length = 100
 src = ["src"]
+# Built-in skills are author-facing example code (like user overlay skills); they
+# are bundled in the package but kept out of the strict lint/type gate.
+extend-exclude = ["src/kenzy/llm/builtin_skills"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP"]
@@ -122,3 +172,7 @@ select = ["E", "F", "I", "UP"]
 python_version = "3.11"
 strict         = true
 mypy_path      = "src"
+
+[[tool.mypy.overrides]]
+module = "kenzy.llm.builtin_skills.*"
+ignore_errors = true

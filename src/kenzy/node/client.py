@@ -31,9 +31,17 @@ send STOP (interrupting TTS) followed by TRIGGER (starting a new session).
 from __future__ import annotations
 
 import asyncio
+import collections
 import json
 import logging
+import os
 import queue
+import re
+import signal
+import socket
+import sys
+import threading
+import time
 import uuid
 import wave
 from importlib.resources import as_file, files
@@ -46,7 +54,8 @@ import websockets
 import websockets.exceptions
 from websockets.asyncio.client import ClientConnection
 
-from kenzy import protocol
+from kenzy import kenzy_version, protocol
+from kenzy.logutil import TRACE
 
 log = logging.getLogger(__name__)
 
@@ -58,9 +67,100 @@ log = logging.getLogger(__name__)
 _STATE_IDLE = "idle"
 _STATE_STREAMING = "streaming"
 _STATE_TTS = "tts"
+_STATE_INTERCOM = "intercom"  # live two-way call: stream mic out, play peer audio live
 
 # Rate at which the server sends TTS PCM (fixed by the TTS service).
 _TTS_SERVER_RATE = 24_000
+
+# When muted, alert audio (the wake-word ready chime) still plays at this floor gain
+# so the user can hear the device acknowledge a wake word and knowingly unmute.
+_MUTED_ALERT_FLOOR = 0.4
+
+
+def _volume_to_gain(value: Any) -> float:
+    """Convert a 0–100 volume config value to a 0.0–1.0 gain (clamped)."""
+    try:
+        pct = float(value)
+    except (TypeError, ValueError):
+        pct = 100.0
+    return max(0.0, min(1.0, pct / 100.0))
+
+
+# --- Calibration suggestion heuristics (mirror dashboard_static/js/views/calibrate.js)
+
+
+def _percentile(values: list[float], q: float) -> float:
+    if not values:
+        return 0.0
+    s = sorted(values)
+    return s[min(len(s) - 1, max(0, int(q * (len(s) - 1))))]
+
+
+def _suggest_silence_rms(rms: list[float]) -> int | None:
+    """silence_rms_threshold just above the ambient floor (p90)."""
+    if not rms:
+        return None
+    floor = _percentile(rms, 0.9)
+    return int(max(5, min(5000, round(max(floor * 1.5, floor + 15)))))
+
+
+def _suggest_wake_threshold(wake: list[float]) -> float | None:
+    """wakeword_threshold in the gap between ambient (p75) and the utterance peak."""
+    if not wake:
+        return None
+    ambient = _percentile(wake, 0.75)
+    gap = max(wake) - ambient
+    if gap < 0.15:  # no clear wake-word utterance was heard
+        return None
+    return round(max(0.05, min(0.95, ambient + gap * 0.4)), 2)
+
+
+def _suggest_vad_threshold(vad: list[float]) -> float | None:
+    """wakeword_vad_threshold below speech VAD, above the silence floor."""
+    if not vad:
+        return None
+    ambient = _percentile(vad, 0.75)
+    gap = max(vad) - ambient
+    if gap < 0.15:
+        return None
+    return round(max(0.0, min(0.9, ambient + gap * 0.3)), 2)
+
+
+def _set_yaml_scalar(text: str, key: str, value: str) -> str:
+    """Update or append a top-level scalar ``key: value`` in a YAML document.
+
+    Preserves the rest of the file (comments and layout) — a regex edit, not a
+    redump. ``value`` is JSON-quoted, which is valid YAML.
+    """
+    quoted = json.dumps(value)
+    pattern = re.compile(rf"(?m)^{re.escape(key)}:.*$")
+    if pattern.search(text):
+        return pattern.sub(f"{key}: {quoted}", text, count=1)
+    sep = "" if text == "" or text.endswith("\n") else "\n"
+    return f"{text}{sep}{key}: {quoted}\n"
+
+
+def _ensure_node_id(cfg: dict[str, Any], config_path: Path | None) -> str:
+    """Return the node's stable ``node_id``, generating + persisting one if absent.
+
+    A generated id is written back into ``config_path`` (``node.yaml``) so the
+    node keeps the same identity across restarts even though its room name may
+    change.
+    """
+    existing = cfg.get("node_id")
+    if existing:
+        return str(existing)
+    node_id = str(uuid.uuid4())
+    cfg["node_id"] = node_id
+    if config_path is not None:
+        try:
+            text = config_path.read_text() if config_path.is_file() else ""
+            config_path.parent.mkdir(parents=True, exist_ok=True)
+            config_path.write_text(_set_yaml_scalar(text, "node_id", node_id))
+            log.info("Generated node_id %s (saved to %s)", node_id, config_path)
+        except OSError as exc:
+            log.warning("Generated node_id %s but could not save it (%s)", node_id, exc)
+    return node_id
 
 
 def _resample(audio: np.ndarray[Any, Any], from_rate: int, to_rate: int) -> np.ndarray[Any, Any]:
@@ -74,14 +174,16 @@ def _resample(audio: np.ndarray[Any, Any], from_rate: int, to_rate: int) -> np.n
         audio.astype(np.float64),
     ).astype(np.int16)
 
+
 # ---------------------------------------------------------------------------
 # Bundled resource helpers
 # ---------------------------------------------------------------------------
 
+
 def _bundled_model_paths() -> list[str]:
-    """Return real filesystem path to the bundled hey_kenzie.tflite wake-word model."""
+    """Return real filesystem path to the bundled hey_ken_zee.tflite wake-word model."""
     model_dir = files("kenzy.node").joinpath("models")
-    return [str(model_dir.joinpath("hey_kenzie.tflite"))]
+    return [str(model_dir.joinpath("hey_ken_zee.tflite"))]
 
 
 def _infer_framework(model_paths: list[str]) -> str:
@@ -160,6 +262,56 @@ def _load_sound(name_or_path: str) -> tuple[np.ndarray[Any, Any], int]:
         return _read(wav_file)  # type: ignore[arg-type]
 
 
+class _StreamBuffer:
+    """Thread-safe FIFO of int16 mono PCM for live streaming playback.
+
+    The producer (asyncio thread — incoming intercom/media frames) calls
+    :meth:`feed`; the real-time audio callback calls :meth:`read`. A
+    ``collections.deque`` of numpy chunks is the only shared state; ``append`` and
+    ``popleft`` are individually atomic under the GIL, and the read cursor
+    (``_cur``/``_pos``) is touched only by the callback thread — so no mutex is
+    needed in the RT path. Underflow returns silence (zero-padding) rather than
+    blocking, so a late frame just produces a brief gap, never a glitchy stall.
+    """
+
+    def __init__(self) -> None:
+        self._q: collections.deque[np.ndarray[Any, np.dtype[np.int16]]] = collections.deque()
+        self._cur: np.ndarray[Any, np.dtype[np.int16]] | None = None
+        self._pos: int = 0
+
+    def feed(self, pcm: np.ndarray[Any, Any]) -> None:
+        """Append int16 mono PCM (at the player's sample rate) to the queue."""
+        chunk = np.ascontiguousarray(pcm, dtype=np.int16).reshape(-1)
+        if chunk.size:
+            self._q.append(chunk)
+
+    def read(self, frames: int) -> np.ndarray[Any, np.dtype[np.int16]]:
+        """Return exactly ``frames`` samples, zero-padded if the buffer underflows."""
+        out = np.zeros(frames, dtype=np.int16)
+        n = 0
+        while n < frames:
+            if self._cur is None or self._pos >= self._cur.size:
+                try:
+                    self._cur = self._q.popleft()
+                    self._pos = 0
+                except IndexError:
+                    break  # underflow → leave the rest as silence
+            take = min(frames - n, self._cur.size - self._pos)
+            out[n : n + take] = self._cur[self._pos : self._pos + take]
+            self._pos += take
+            n += take
+        return out
+
+    def clear(self) -> None:
+        self._q.clear()
+        self._cur = None
+        self._pos = 0
+
+    @property
+    def empty(self) -> bool:
+        return self._cur is None and not self._q
+
+
 class _SoundPlayer:
     """
     Single persistent output stream for all audio output (chime + TTS).
@@ -179,17 +331,31 @@ class _SoundPlayer:
         chime_rate: int,
         device: str | int | None = None,
         sample_rate: int = _TTS_SERVER_RATE,
+        volume: float = 1.0,
+        muted: bool = False,
     ) -> None:
-        self._sample_rate = sample_rate
         # Convert to mono then resample to the playback rate if needed.
         chime_1d = chime.mean(axis=1).astype(np.int16) if chime.ndim > 1 else chime.astype(np.int16)
         chime_1d = _resample(chime_1d, chime_rate, sample_rate)
 
         self._chime: np.ndarray[Any, Any] = chime_1d.reshape(-1, 1)
-        self._audio: np.ndarray[Any, Any] = self._chime   # currently queued audio
-        self._pending: np.ndarray[Any, Any] = self._chime # audio to switch to on restart
-        self._pos: int = len(self._audio)                 # past end → silent
+        self._audio: np.ndarray[Any, Any] = self._chime  # currently queued audio
+        self._pending: np.ndarray[Any, Any] = self._chime  # audio to switch to on restart
+        self._pos: int = len(self._audio)  # past end → silent
         self._restart: bool = False
+        # "alert" audio (the ready chime) stays audible when muted; TTS/stream do not.
+        self._alert: bool = True
+        self._pending_alert: bool = True
+
+        # Output gain (0.0–1.0) and mute, set from the main thread and read in the RT
+        # callback (GIL-atomic scalar reads, no mutex — same discipline as _restart).
+        self._volume: float = max(0.0, min(1.0, volume))
+        self._muted: bool = muted
+
+        # Live streaming mode (intercom / media): when on, the callback drains a
+        # ring buffer instead of the one-shot _audio array. Off by default.
+        self._streaming: bool = False
+        self._ring = _StreamBuffer()
 
         self._stream = sd.OutputStream(
             samplerate=sample_rate,
@@ -207,9 +373,14 @@ class _SoundPlayer:
         time_info: Any,
         status: sd.CallbackFlags,
     ) -> None:
+        if self._streaming:
+            outdata[:, 0] = self._ring.read(frames)
+            self._apply_gain(outdata, alert=False)
+            return
         if self._restart and self._pos >= len(self._audio):
             self._restart = False
             self._audio = self._pending
+            self._alert = self._pending_alert
             self._pos = 0
         remaining = len(self._audio) - self._pos
         if remaining <= 0:
@@ -221,28 +392,76 @@ class _SoundPlayer:
             outdata[n:] = 0
             self._restart = False  # discard restart queued while audio was playing
         self._pos += n
+        self._apply_gain(outdata, alert=self._alert)
+
+    def _apply_gain(self, outdata: np.ndarray[Any, Any], alert: bool) -> None:
+        """Scale ``outdata`` in place by the current volume / mute.
+
+        Alert audio (the ready chime) ignores mute and plays at an audible floor so
+        a muted node still acknowledges the wake word; everything else is silenced.
+        """
+        if self._muted:
+            gain = _MUTED_ALERT_FLOOR if alert else 0.0
+        else:
+            gain = self._volume
+        if gain == 1.0:
+            return
+        if gain == 0.0:
+            outdata[:] = 0
+            return
+        outdata[:] = (outdata * gain).astype(np.int16)
 
     def play(self) -> None:
-        """Play the chime."""
+        """Play the chime (alert audio — stays audible when muted)."""
         self._pending = self._chime
+        self._pending_alert = True
         self._restart = True
 
     def play_pcm(self, audio: np.ndarray[Any, Any]) -> None:
-        """Play arbitrary int16 mono PCM at _TTS_SAMPLE_RATE."""
+        """Play arbitrary int16 mono PCM at _TTS_SAMPLE_RATE (honors mute)."""
         self._pending = audio.reshape(-1, 1)
+        self._pending_alert = False
         self._restart = True
+
+    def set_volume(self, volume: float) -> None:
+        """Set output gain (0.0–1.0); clamped."""
+        self._volume = max(0.0, min(1.0, float(volume)))
+
+    def set_muted(self, muted: bool) -> None:
+        """Mute/unmute all non-alert audio (the ready chime stays audible)."""
+        self._muted = bool(muted)
 
     def abort(self) -> None:
         """Stop playback immediately."""
         self._restart = False
         self._pos = len(self._audio)
 
+    def start_stream(self) -> None:
+        """Switch to live streaming mode (a fresh, empty ring buffer)."""
+        self._restart = False
+        self._ring.clear()
+        self._streaming = True
+
+    def feed(self, pcm: np.ndarray[Any, Any]) -> None:
+        """Append int16 mono PCM (at the player's sample rate) for live playback."""
+        self._ring.feed(pcm)
+
+    def stop_stream(self) -> None:
+        """Leave streaming mode and fall back to silence."""
+        self._streaming = False
+        self._ring.clear()
+
     @property
     def active(self) -> bool:
-        return self._pos < len(self._audio) or self._restart
+        return self._streaming or self._pos < len(self._audio) or self._restart
 
     def close(self) -> None:
-        self._stream.stop()
+        # abort() (discard buffered audio) is more decisive than stop() (drain) and
+        # less likely to block during shutdown.
+        try:
+            self._stream.abort()
+        except Exception:
+            pass
         self._stream.close()
 
 
@@ -257,9 +476,23 @@ class NodeClient:
     forever with exponential-backoff reconnection.
     """
 
-    def __init__(self, cfg: dict[str, Any]) -> None:
-        self._server_url: str = cfg["server_url"]
-        self._room_id: str = cfg["room_id"]
+    def __init__(self, cfg: dict[str, Any], config_path: Path | None = None) -> None:
+        # Path to this node's writable config file, for persisting identity
+        # (node_id) and a server-pushed room name. None ⇒ no write-back.
+        self._config_path: Path | None = config_path
+        # server_url is optional: when unset (or empty), the node discovers the
+        # server over mDNS. An explicit value short-circuits discovery.
+        self._server_url: str | None = cfg.get("server_url") or None
+        _disc = cfg.get("discovery") or {}
+        self._discovery_enabled: bool = bool(_disc.get("enabled", True))
+        # Shared-secret presented in hello; must match the server's discovery.token.
+        self._join_token: str | None = _disc.get("token") or None
+        # Room name defaults to the hostname so a fresh node needs no config; it is
+        # the human label sent to the backends and is editable from the dashboard.
+        self._room_id: str = str(cfg.get("room_id") or socket.gethostname())
+        # Stable primary identifier (generated/persisted in main()); falls back to
+        # the room name if a caller constructs the client without ensuring one.
+        self._node_id: str = str(cfg.get("node_id") or self._room_id)
         self._wakeword_models: list[str] = cfg.get("wakeword_models", [])
         self._wakeword_threshold: float = float(cfg.get("wakeword_threshold", 0.5))
         # openwakeword Silero VAD gate: predictions are suppressed unless the VAD
@@ -268,18 +501,34 @@ class NodeClient:
         self._wakeword_vad_threshold: float = float(cfg.get("wakeword_vad_threshold", 0.0))
         self._silence_rms: float = float(cfg.get("silence_rms_threshold", 50.0))
         self._audio_device: str | int | None = cfg.get("audio_device", None)
-        self._sound_ready:   str = str(cfg.get("sound_ready")   or "ready.wav")
+        self._sound_ready: str = str(cfg.get("sound_ready") or "ready.wav")
         _sw = cfg.get("sound_waiting", "waiting.wav")
         self._sound_waiting: str | None = str(_sw) if _sw else None
-        self._capture_rate:  int = int(cfg.get("capture_sample_rate",  protocol.SAMPLE_RATE))
+        # Intercom call chimes (null/empty disables). Bundled defaults.
+        _sc = cfg.get("sound_connect", "connect.wav")
+        self._sound_connect: str | None = str(_sc) if _sc else None
+        _sd = cfg.get("sound_disconnect", "disconnect.wav")
+        self._sound_disconnect: str | None = str(_sd) if _sd else None
+        self._capture_rate: int = int(cfg.get("capture_sample_rate", protocol.SAMPLE_RATE))
         self._playback_rate: int = int(cfg.get("playback_sample_rate", _TTS_SERVER_RATE))
+        # Playback volume (config key is 0–100; stored internally as 0.0–1.0) and mute.
+        # Volume persists via config-pull; mute is a transient runtime toggle (the node
+        # comes back un-muted after a restart since it isn't written to the override).
+        self._volume: float = _volume_to_gain(cfg.get("volume", 100))
+        self._muted: bool = bool(cfg.get("muted", False))
 
         # Timing thresholds, all stored as frame counts (min 1 to avoid ≥0 always-true).
         self._vad_enabled: bool = bool(cfg.get("vad_enabled", True))
         self._silence_frames: int = max(int(cfg.get("silence_ms", 400)) // protocol.FRAME_MS, 1)
-        self._speech_min_frames: int = max(int(cfg.get("speech_min_ms", 500)) // protocol.FRAME_MS, 1)
-        self._no_speech_timeout_frames: int = max(int(cfg.get("no_speech_timeout_ms", 15_000)) // protocol.FRAME_MS, 1)
-        self._hard_cap_frames: int = max(int(cfg.get("hard_cap_ms", 30_000)) // protocol.FRAME_MS, 1)
+        self._speech_min_frames: int = max(
+            int(cfg.get("speech_min_ms", 500)) // protocol.FRAME_MS, 1
+        )
+        self._no_speech_timeout_frames: int = max(
+            int(cfg.get("no_speech_timeout_ms", 15_000)) // protocol.FRAME_MS, 1
+        )
+        self._hard_cap_frames: int = max(
+            int(cfg.get("hard_cap_ms", 30_000)) // protocol.FRAME_MS, 1
+        )
 
         # Thread-safe audio queue filled by the sounddevice callback.
         self._raw_q: queue.Queue[np.ndarray[Any, np.dtype[np.int16]]] = queue.Queue(maxsize=200)
@@ -291,19 +540,61 @@ class NodeClient:
         # No maxsize — dropping frames causes truncated playback for long responses.
         self._tts_q: asyncio.Queue[bytes] = asyncio.Queue()
         self._tts_sample_rate: int = 24000
-        self._tts_channels: int = 1
         self._tts_task: asyncio.Task[None] | None = None
 
         self._state: str = _STATE_IDLE
         self._session_id: str | None = None
+        # Set when the server wants one utterance captured after the next TTS prompt
+        # finishes (intercom consent answer, or a voice-enrollment sample).
+        self._capture_after_prompt: bool = False
         self._ws: ClientConnection | None = None
         self._oww: Any = None  # openwakeword Model
         self._player: _SoundPlayer | None = None
+        # Audio hardware is built lazily, only after the first server config frame
+        # arrives (zero-config nodes pull all hardware keys from the server). Until
+        # then the node blocks: no mic, no wakeword, no playback.
+        self._audio_ready: bool = False
+        # Set when _init_audio fails (e.g. a bad audio_device). The node stays
+        # connected and controllable so the device can be fixed + the node
+        # restarted from the dashboard; audio is retried on the next restart.
+        self._audio_failed: bool = False
+        self._audio_error: str | None = None
+        # Calibration: while tuning, the audio loop streams per-frame RMS/wake/VAD
+        # scalars to the server (relayed to the dashboard) and does NOT act on wake
+        # words, so the operator can repeat the wake word to measure scores.
+        self._tuning: bool = False
+        self._tune_deadline: float = 0.0
+        self._tune_seq: int = 0
+        self._tune_vad: Any = None  # standalone openwakeword.VAD for the window
+        self._input_stream: sd.InputStream | None = None
+        self._audio_task: asyncio.Task[None] | None = None
+        # Opt-in log ring buffer for the dashboard log viewer; attached only when
+        # the server asks (config `keep_logs: true`), so a dashboard-less server
+        # induces no node-side overhead.
+        self._log_buffer: Any = None
+        # Console (display) level vs how deep the dashboard buffer captures. Both
+        # are live-tunable from the dashboard via config-pull.
+        from kenzy.logutil import level_value
+
+        self._log_level: int = level_value(cfg.get("log_level"), logging.INFO)
+        self._log_capture_level: int = level_value(cfg.get("log_capture_level"), logging.DEBUG)
         self._waiting_audio: np.ndarray[Any, Any] | None = None
+        self._connect_audio: np.ndarray[Any, Any] | None = None
+        self._disconnect_audio: np.ndarray[Any, Any] | None = None
 
         self._silence_count: int = 0
         self._speech_frames: int = 0
         self._frame_count: int = 0
+        # Set on shutdown so a blocking mDNS browse returns promptly (otherwise the
+        # worker thread is joined at interpreter exit, delaying Ctrl+C by ~5s).
+        self._discovery_cancel = threading.Event()
+        self._force_exit_armed = False  # guards the one-shot shutdown watchdog
+        # Cached audio-device probe, reported to the server so the dashboard can offer
+        # a device picker. Probing touches PortAudio and can be slow/block, so it runs
+        # in a daemon thread (never on the event loop); the result is pushed via a
+        # `status` update when ready. None = not yet probed.
+        self._device_probe: list[dict[str, Any]] | None = None
+        self._device_probe_started = False
 
     # ------------------------------------------------------------------
     # Audio capture (sounddevice callback – runs in a C thread)
@@ -399,7 +690,6 @@ class NodeClient:
             except asyncio.QueueEmpty:
                 break
         self._tts_sample_rate = sample_rate
-        self._tts_channels = channels
         self._state = _STATE_TTS
         self._session_id = session_id
         log.info("[%s] TTS started (rate=%d ch=%d)", session_id[:8], sample_rate, channels)
@@ -437,9 +727,11 @@ class NodeClient:
         run_in_executor(sd.wait), which blocks a thread that cannot be
         interrupted once started.
         """
+        completed = False
         try:
             while self._player is not None and self._player.active:
                 await asyncio.sleep(0.05)
+            completed = True
         except asyncio.CancelledError:
             if self._player is not None:
                 self._player.abort()
@@ -449,6 +741,12 @@ class NodeClient:
             self._session_id = None
             self._tts_task = None
             log.info("TTS playback complete")
+        # If a prompt asked us to capture one utterance (intercom consent or voice
+        # enrollment), start capturing now that the prompt has finished playing.
+        if completed and self._capture_after_prompt:
+            self._capture_after_prompt = False
+            log.info("Prompt finished — capturing the spoken reply")
+            await self._begin_streaming(str(uuid.uuid4()))
 
     async def _stop_tts_playback(self) -> None:
         """Cancel any in-progress TTS playback and return to IDLE."""
@@ -465,8 +763,204 @@ class NodeClient:
         self._session_id = None
 
     # ------------------------------------------------------------------
+    # Intercom (live two-way call)
+    # ------------------------------------------------------------------
+
+    async def _begin_intercom(self, peer_room: str) -> None:
+        """Enter a live call: stream mic out continuously, play peer audio live."""
+        self._capture_after_prompt = False
+        # Stop whatever we were doing (likely playing the "calling…" reply or idle).
+        if self._state == _STATE_TTS:
+            await self._stop_tts_playback()
+        elif self._state == _STATE_STREAMING:
+            await self._end_streaming(reason="intercom")
+        self._state = _STATE_INTERCOM
+        self._session_id = str(uuid.uuid4())
+        if self._player is not None:
+            self._player.abort()  # cut any residual one-shot audio
+            self._player.start_stream()  # switch to live streaming playback
+            if self._connect_audio is not None:
+                # Play the connect chime first by feeding it ahead of the live stream.
+                self._player.feed(self._connect_audio)
+        log.info("Intercom connected with '%s'", peer_room)
+
+    async def _end_intercom(self, reason: str = "ended") -> None:
+        if self._state != _STATE_INTERCOM:
+            return
+        self._state = _STATE_IDLE
+        self._session_id = None
+        if self._player is not None:
+            self._player.stop_stream()  # back to one-shot playback
+            if self._disconnect_audio is not None:
+                self._player.play_pcm(self._disconnect_audio)
+        log.info("Intercom ended (%s)", reason)
+
+    # ------------------------------------------------------------------
     # Receive loop – inbound server messages → _cmd_q / _tts_q
     # ------------------------------------------------------------------
+
+    def _persist_config_key(self, key: str, value: str) -> None:
+        """Write a top-level scalar back into this node's config file (best effort)."""
+        path = self._config_path
+        if path is None:
+            return
+        try:
+            text = path.read_text() if path.is_file() else ""
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(_set_yaml_scalar(text, key, value))
+        except OSError as exc:
+            log.warning("Could not persist %s to %s: %s", key, path, exc)
+
+    def _set_log_capture(self, on: bool) -> None:
+        """Attach/detach the dashboard log ring buffer (idempotent).
+
+        When attached the buffer captures down to ``log_capture_level`` (default
+        debug) and the logger is lowered to match; when detached the logger is
+        restored to the console ``log_level`` so an idle node carries no extra
+        logging overhead.
+        """
+        from kenzy.logutil import install_ring_handler, remove_ring_handler
+
+        if on and self._log_buffer is None:
+            self._log_buffer = install_ring_handler(
+                "kenzy", capacity=500, level=self._log_capture_level
+            )
+        elif not on and self._log_buffer is not None:
+            remove_ring_handler(self._log_buffer, "kenzy", display_level=self._log_level)
+            self._log_buffer = None
+
+    def _apply_pulled_config(self, patch: dict[str, Any], initial: bool = False) -> None:
+        """Apply server-pushed config to the running node.
+
+        Live-tunable parameters (thresholds and VAD timing) always take effect
+        immediately. Hardware/identity keys (audio_device, sample rates, wakeword
+        models/VAD gate, sounds) are applied **only on the initial pull** — the
+        node now initializes audio *after* this first config arrives, so those
+        keys must be in place before ``_init_audio`` runs. A later live change to
+        a hardware key is reported as needing a restart, not applied in place.
+        """
+        applied: list[str] = []
+        fm = protocol.FRAME_MS
+
+        # Room name is server-owned: adopt + persist it whenever the server pushes
+        # a new one (on connect or via a live rename).
+        if "room_id" in patch:
+            new_room = str(patch["room_id"] or "").strip()
+            if new_room and new_room != self._room_id:
+                log.info("Server set room name: '%s' → '%s'", self._room_id, new_room)
+                self._room_id = new_room
+                self._persist_config_key("room_id", new_room)
+                applied.append("room_id")
+
+        if "wakeword_threshold" in patch:
+            self._wakeword_threshold = float(patch["wakeword_threshold"])
+            applied.append("wakeword_threshold")
+        if "silence_rms_threshold" in patch:
+            self._silence_rms = float(patch["silence_rms_threshold"])
+            applied.append("silence_rms_threshold")
+        if "vad_enabled" in patch:
+            self._vad_enabled = bool(patch["vad_enabled"])
+            applied.append("vad_enabled")
+        if "silence_ms" in patch:
+            self._silence_frames = max(int(patch["silence_ms"]) // fm, 1)
+            applied.append("silence_ms")
+        if "speech_min_ms" in patch:
+            self._speech_min_frames = max(int(patch["speech_min_ms"]) // fm, 1)
+            applied.append("speech_min_ms")
+        if "no_speech_timeout_ms" in patch:
+            self._no_speech_timeout_frames = max(int(patch["no_speech_timeout_ms"]) // fm, 1)
+            applied.append("no_speech_timeout_ms")
+        if "hard_cap_ms" in patch:
+            self._hard_cap_frames = max(int(patch["hard_cap_ms"]) // fm, 1)
+            applied.append("hard_cap_ms")
+
+        if "volume" in patch:
+            self._volume = _volume_to_gain(patch["volume"])
+            if self._player is not None:
+                self._player.set_volume(self._volume)
+            applied.append("volume")
+        if "muted" in patch:
+            self._muted = bool(patch["muted"])
+            if self._player is not None:
+                self._player.set_muted(self._muted)
+            applied.append("muted")
+
+        if "log_level" in patch:
+            from kenzy.logutil import level_value, set_display_level
+
+            self._log_level = level_value(patch["log_level"], self._log_level)
+            set_display_level(self._log_level)
+            applied.append("log_level")
+        if "log_capture_level" in patch:
+            from kenzy.logutil import level_value
+
+            self._log_capture_level = level_value(
+                patch["log_capture_level"], self._log_capture_level
+            )
+            if self._log_buffer is not None:  # update the live capture depth
+                self._log_buffer.setLevel(self._log_capture_level)
+                logging.getLogger("kenzy").setLevel(min(self._log_level, self._log_capture_level))
+            applied.append("log_capture_level")
+
+        if "keep_logs" in patch:
+            self._set_log_capture(bool(patch["keep_logs"]))
+            applied.append("keep_logs")
+
+        restart_keys = {
+            "audio_device",
+            "capture_sample_rate",
+            "playback_sample_rate",
+            "wakeword_models",
+            "wakeword_vad_threshold",
+            "sound_ready",
+            "sound_waiting",
+            "sound_connect",
+            "sound_disconnect",
+        }
+
+        if initial:
+            # First pull, before audio is built: apply hardware/identity keys to
+            # the instance so _init_audio constructs the stream from them.
+            if "audio_device" in patch:
+                self._audio_device = patch["audio_device"]
+                applied.append("audio_device")
+            if "capture_sample_rate" in patch:
+                self._capture_rate = int(patch["capture_sample_rate"])
+                applied.append("capture_sample_rate")
+            if "playback_sample_rate" in patch:
+                self._playback_rate = int(patch["playback_sample_rate"])
+                applied.append("playback_sample_rate")
+            if "wakeword_models" in patch:
+                self._wakeword_models = list(patch["wakeword_models"] or [])
+                applied.append("wakeword_models")
+            if "wakeword_vad_threshold" in patch:
+                self._wakeword_vad_threshold = float(patch["wakeword_vad_threshold"])
+                applied.append("wakeword_vad_threshold")
+            if "sound_ready" in patch:
+                self._sound_ready = str(patch["sound_ready"] or "ready.wav")
+                applied.append("sound_ready")
+            if "sound_waiting" in patch:
+                sw = patch["sound_waiting"]
+                self._sound_waiting = str(sw) if sw else None
+                applied.append("sound_waiting")
+            if "sound_connect" in patch:
+                sc = patch["sound_connect"]
+                self._sound_connect = str(sc) if sc else None
+                applied.append("sound_connect")
+            if "sound_disconnect" in patch:
+                sd = patch["sound_disconnect"]
+                self._sound_disconnect = str(sd) if sd else None
+                applied.append("sound_disconnect")
+            deferred: list[str] = []
+        else:
+            deferred = sorted(restart_keys & patch.keys())
+
+        if applied:
+            log.info("Applied server config: %s", ", ".join(applied))
+        if deferred:
+            log.info("Server config needs restart (not applied live): %s", ", ".join(deferred))
+        if not applied and not deferred:
+            log.debug("Server config had no applicable keys")
 
     async def _recv_loop(self, ws: ClientConnection) -> None:
         # Explicit recv() instead of `async for` so that task cancellation
@@ -478,6 +972,12 @@ class NodeClient:
             except websockets.exceptions.ConnectionClosed:
                 break
             if isinstance(raw, bytes):
+                if self._state == _STATE_INTERCOM and self._player is not None:
+                    # Live peer audio (16 kHz mono) → resample to the playback rate and
+                    # feed the streaming buffer.
+                    audio = np.frombuffer(raw, dtype=np.int16)
+                    self._player.feed(_resample(audio, protocol.SAMPLE_RATE, self._playback_rate))
+                    continue
                 try:
                     self._tts_q.put_nowait(raw)
                 except asyncio.QueueFull:
@@ -497,7 +997,10 @@ class NodeClient:
             msg = await self._cmd_q.get()
             mtype = msg.get("type")
 
-            if mtype == protocol.MSG_TRIGGER and self._state == _STATE_IDLE:
+            if mtype == protocol.MSG_CONFIG:
+                self._apply_pulled_config(msg.get("config") or {})
+
+            elif mtype == protocol.MSG_TRIGGER and self._state == _STATE_IDLE:
                 sid = msg.get("session_id") or str(uuid.uuid4())
                 log.info("Server trigger → session %s", sid[:8])
                 await self._begin_streaming(sid)
@@ -518,6 +1021,65 @@ class NodeClient:
 
             elif mtype == protocol.MSG_TTS_END:
                 await self._end_tts(reason="complete")
+
+            elif mtype == protocol.MSG_CALL_REQUEST:
+                # Incoming call rings: arm consent capture. The server streams the
+                # spoken prompt next; when it finishes playing, _tts_wait_done opens a
+                # capture window for the yes/no answer. No audio is bridged yet.
+                self._capture_after_prompt = True
+                log.info("Incoming call from '%s' — prompting for consent", msg.get("from_room"))
+
+            elif mtype == protocol.MSG_CALL_CANCEL:
+                self._capture_after_prompt = False
+                if self._state == _STATE_TTS:
+                    await self._stop_tts_playback()
+                elif self._state == _STATE_STREAMING:
+                    await self._end_streaming(reason="call_cancelled")
+                log.info("Call cancelled")
+
+            elif mtype == protocol.MSG_INTERCOM_START:
+                await self._begin_intercom(str(msg.get("peer_room", "")))
+
+            elif mtype == protocol.MSG_INTERCOM_END:
+                await self._end_intercom(reason=str(msg.get("reason", "ended")))
+
+            elif mtype == protocol.MSG_SET_ROOM:
+                new_room = str(msg.get("room_id", "")).strip()
+                if new_room and new_room != self._room_id:
+                    log.info("Server set room name: '%s' → '%s'", self._room_id, new_room)
+                    self._room_id = new_room
+                    self._persist_config_key("room_id", new_room)
+
+            elif mtype == protocol.MSG_RESTART:
+                # Re-exec ourselves: re-reads config and re-inits audio, with no
+                # dependence on a service manager's restart policy.
+                log.warning("Server requested restart — re-executing node")
+                os.execv(sys.executable, [sys.executable, *sys.argv])
+
+            elif mtype == protocol.MSG_REQUEST_LOGS and self._ws is not None:
+                lv = logging.getLevelNamesMapping().get(str(msg.get("level", "")).upper(), 0)
+                limit = int(msg.get("limit", 200))
+                entries = self._log_buffer.tail(lv, limit) if self._log_buffer else []
+                await self._ws.send(protocol.node_logs(str(msg.get("request_id", "")), entries))
+
+            elif mtype == protocol.MSG_TUNE_START:
+                # Calibration only runs on an idle node with working audio.
+                if self._state == _STATE_IDLE and self._oww is not None:
+                    self._start_tuning(float(msg.get("seconds", 20.0)))
+                else:
+                    log.info(
+                        "Ignoring tune_start (state=%s, audio_ready=%s)",
+                        self._state,
+                        self._oww is not None,
+                    )
+
+            elif mtype == protocol.MSG_TUNE_STOP:
+                self._stop_tuning()
+
+            elif mtype == protocol.MSG_EXPECT_UTTERANCE:
+                # Arm one-shot capture: the next TTS prompt's completion opens a
+                # capture window (used by voice enrollment, like the consent gate).
+                self._capture_after_prompt = True
 
     # ------------------------------------------------------------------
     # Audio loop – always running, routes frames by current state
@@ -542,9 +1104,13 @@ class NodeClient:
             # openwakeword runs on every frame regardless of state so that
             # mid-stream activations are forwarded to the server.
             if self._oww is not None:
-                scores: dict[str, float] = await loop.run_in_executor(
-                    None, self._oww.predict, flat
-                )
+                scores: dict[str, float] = await loop.run_in_executor(None, self._oww.predict, flat)
+                # Calibration window: stream measurement scalars and DON'T act on
+                # wake words (so the operator can repeat the wake word to gather
+                # scores without starting sessions). Always IDLE while tuning.
+                if self._tuning:
+                    await self._emit_tune_sample(flat, scores, loop)
+                    continue
                 for name, score in scores.items():
                     if score >= self._wakeword_threshold:
                         log.info("Wake word '%s' score=%.3f", name, score)
@@ -565,7 +1131,28 @@ class NodeClient:
                             # pipeline so no STOP round-trip is needed.
                             await self._stop_tts_playback()
                             await self._begin_streaming(str(uuid.uuid4()))
+                        elif self._state == _STATE_INTERCOM:
+                            # Wake word ends the call immediately (no command needed),
+                            # then opens a fresh command session on this node.
+                            if self._ws is not None:
+                                try:
+                                    await self._ws.send(protocol.intercom_end("wakeword"))
+                                except Exception:
+                                    pass
+                            await self._end_intercom(reason="wakeword")
+                            await self._begin_streaming(str(uuid.uuid4()))
                         break
+
+            if self._state == _STATE_INTERCOM:
+                if self._ws is None:
+                    await self._end_intercom(reason="connection_lost")
+                    continue
+                try:
+                    await self._ws.send(flat.tobytes())  # live mic → server relays to peer
+                except Exception as exc:
+                    log.warning("Intercom audio send failed: %s", exc)
+                    await self._end_intercom(reason="connection_error")
+                continue
 
             if self._state == _STATE_STREAMING:
                 if self._ws is None:
@@ -585,7 +1172,15 @@ class NodeClient:
 
                 if self._vad_enabled:
                     rms = float(np.sqrt(np.mean(flat.astype(np.float32) ** 2)))
-                    log.debug("Frame %d: RMS=%.1f speech=%d", self._frame_count, rms, self._speech_frames)
+                    # Per-frame hot path → TRACE (below DEBUG) so default debug
+                    # capture isn't flooded; opt in with log_capture_level: trace.
+                    log.log(
+                        TRACE,
+                        "Frame %d: RMS=%.1f speech=%d",
+                        self._frame_count,
+                        rms,
+                        self._speech_frames,
+                    )
 
                     if rms >= self._silence_rms:
                         self._speech_frames += 1
@@ -595,12 +1190,316 @@ class NodeClient:
 
                     if self._frame_count >= self._hard_cap_frames:
                         await self._end_streaming(reason="hard_cap")
-                    elif self._speech_frames < self._speech_min_frames and self._frame_count >= self._no_speech_timeout_frames:
+                    elif (
+                        self._speech_frames < self._speech_min_frames
+                        and self._frame_count >= self._no_speech_timeout_frames
+                    ):
                         await self._end_streaming(reason="no_speech")
                     elif self._silence_count >= self._silence_frames:
                         await self._end_streaming(reason="silence")
                 else:
                     pass  # stream until server sends STOP
+
+    # ------------------------------------------------------------------
+    # Server resolution (explicit config or mDNS discovery)
+    # ------------------------------------------------------------------
+
+    async def _resolve_server_url(self) -> str:
+        """Return the WebSocket URL: the configured value, else mDNS discovery.
+
+        Raises OSError when discovery is enabled but finds nothing, so the
+        caller's reconnect/backoff loop retries.
+        """
+        if self._server_url:
+            return self._server_url
+        if not self._discovery_enabled:
+            raise OSError("no server_url configured and discovery is disabled")
+
+        from kenzy.discovery import discover_server
+
+        log.info("Discovering Kenzy server over mDNS…")
+        url = await asyncio.to_thread(discover_server, 5.0, self._discovery_cancel)
+        if url is None:
+            raise OSError("no Kenzy server found on the network (mDNS)")
+        log.info("Discovered server at %s", url)
+        return url
+
+    # ------------------------------------------------------------------
+    # Audio hardware (built lazily after the first config pull)
+    # ------------------------------------------------------------------
+
+    async def _read_initial_config(self, ws: ClientConnection) -> dict[str, Any]:
+        """Read inbound frames until the first ``config`` frame, returning its body.
+
+        Any other control messages that arrive first are buffered onto ``_cmd_q``
+        so the command loop sees them once it starts; binary frames (TTS) are
+        ignored — none should precede config on a fresh connection.
+        """
+        while True:
+            raw = await ws.recv()
+            if isinstance(raw, bytes):
+                continue
+            try:
+                msg = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+            if msg.get("type") == protocol.MSG_CONFIG:
+                return msg.get("config") or {}
+            try:
+                self._cmd_q.put_nowait(msg)
+            except asyncio.QueueFull:
+                pass
+
+    async def _init_audio(self) -> None:
+        """Build wakeword model, sounds, output player, and mic input stream.
+
+        Called once, after the first server config has been applied. Subsequent
+        hardware-key changes require a restart (which re-runs this from scratch).
+        """
+        self._load_wakeword()
+
+        sound_audio, sound_rate = _load_sound(self._sound_ready)
+        self._player = _SoundPlayer(
+            sound_audio,
+            sound_rate,
+            self._audio_device,
+            self._playback_rate,
+            volume=self._volume,
+            muted=self._muted,
+        )
+        log.info(
+            "Sound: %s (%d Hz → %d Hz stream)", self._sound_ready, sound_rate, self._playback_rate
+        )
+
+        if self._sound_waiting:
+            try:
+                wait_audio, wait_rate = _load_sound(self._sound_waiting)
+                wait_1d = (
+                    wait_audio.mean(axis=1).astype(np.int16)
+                    if wait_audio.ndim > 1
+                    else wait_audio.astype(np.int16)
+                )
+                self._waiting_audio = _resample(wait_1d, wait_rate, self._playback_rate)
+                log.info(
+                    "Waiting sound: %s (%d Hz → %d Hz)",
+                    self._sound_waiting,
+                    wait_rate,
+                    self._playback_rate,
+                )
+            except Exception as exc:
+                log.info("Waiting sound not loaded (%s) — silence during processing", exc)
+        else:
+            log.info("Waiting sound disabled — silence during processing")
+
+        def _chime(name: str | None) -> np.ndarray[Any, Any] | None:
+            if not name:
+                return None
+            try:
+                a, r = _load_sound(name)
+                mono = a.mean(axis=1).astype(np.int16) if a.ndim > 1 else a.astype(np.int16)
+                return _resample(mono, r, self._playback_rate)
+            except Exception as exc:
+                log.info("Chime %s not loaded (%s)", name, exc)
+                return None
+
+        self._connect_audio = _chime(self._sound_connect)
+        self._disconnect_audio = _chime(self._sound_disconnect)
+        log.info(
+            "Intercom chimes: connect=%s disconnect=%s",
+            self._sound_connect or "off",
+            self._sound_disconnect or "off",
+        )
+
+        # Scale the blocksize so each callback still delivers ~80 ms of audio
+        # regardless of the capture rate (e.g. 3840 samples at 48 kHz).
+        capture_blocksize = int(protocol.FRAME_SAMPLES * self._capture_rate // protocol.SAMPLE_RATE)
+        self._input_stream = sd.InputStream(
+            samplerate=self._capture_rate,
+            channels=protocol.CHANNELS,
+            dtype="int16",
+            blocksize=capture_blocksize,
+            device=self._audio_device,
+            callback=self._audio_callback,
+        )
+        self._input_stream.start()
+        self._audio_task = asyncio.create_task(self._audio_loop(), name="audio")
+        self._audio_ready = True
+        log.info("Audio initialized from server config — node is live")
+
+    def _teardown_audio(self) -> None:
+        """Close any partially-initialized audio resources after a failed init."""
+        if self._audio_task is not None:
+            self._audio_task.cancel()
+            self._audio_task = None
+        if self._input_stream is not None:
+            try:
+                self._input_stream.abort()
+                self._input_stream.close()
+            except Exception:
+                pass
+            self._input_stream = None
+        if self._player is not None:
+            try:
+                self._player.close()
+            except Exception:
+                pass
+            self._player = None
+        self._oww = None
+
+    def _close_audio_hardware(self, timeout: float = 1.5) -> None:
+        """Abort/close the audio streams off the main thread, bounded by ``timeout``.
+
+        Some PortAudio/ALSA stacks block inside stream close; doing it in a daemon
+        thread with a bounded join keeps shutdown prompt — if the close doesn't
+        finish, the OS reclaims the device on process exit.
+        """
+        input_stream = self._input_stream
+        player = self._player
+        self._input_stream = None
+        self._player = None
+        if input_stream is None and player is None:
+            return
+
+        def _close() -> None:
+            if input_stream is not None:
+                try:
+                    input_stream.abort()
+                    input_stream.close()
+                except Exception:
+                    pass
+            if player is not None:
+                try:
+                    player.close()
+                except Exception:
+                    pass
+
+        t = threading.Thread(target=_close, daemon=True, name="audio-close")
+        t.start()
+        t.join(timeout)
+        if t.is_alive():
+            log.warning("Audio device close is slow — leaving it to process exit")
+
+    def _device_capabilities(self) -> list[dict[str, Any]]:
+        """Return the cached device probe (kicking it off if needed); never blocks.
+
+        The probe runs in a daemon thread because PortAudio enumeration can be slow
+        or hang. Until it finishes this returns ``[]``; the result is then pushed to
+        the server via :meth:`_send_device_status` so a node that connected before the
+        probe completed still gets its device list to the dashboard.
+        """
+        self._kick_device_probe()
+        return self._device_probe or []
+
+    def _kick_device_probe(self) -> None:
+        if self._device_probe is not None or self._device_probe_started:
+            return
+        self._device_probe_started = True
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+
+        def _probe() -> None:
+            try:
+                from kenzy.node.devices import probe_devices
+
+                result = probe_devices()
+            except Exception as exc:
+                log.warning("audio device probe failed: %s", exc)
+                result = []
+            self._device_probe = result
+            if loop is not None:
+                try:
+                    loop.call_soon_threadsafe(self._on_device_probe_ready)
+                except RuntimeError:
+                    pass  # loop already closed (e.g. shutting down)
+
+        threading.Thread(target=_probe, daemon=True, name="device-probe").start()
+
+    def _on_device_probe_ready(self) -> None:
+        # The first hello may have gone out before the probe finished; push the list.
+        if self._ws is not None:
+            asyncio.create_task(self._send_device_status())
+
+    async def _send_device_status(self) -> None:
+        if self._ws is None:
+            return
+        try:
+            await self._ws.send(
+                protocol.status(
+                    audio_ok=not self._audio_failed,
+                    audio_error=self._audio_error,
+                    devices=self._device_capabilities(),
+                )
+            )
+        except Exception:
+            pass
+
+    # ------------------------------------------------------------------
+    # Calibration telemetry (on-demand, time-boxed)
+    # ------------------------------------------------------------------
+
+    def _start_tuning(self, seconds: float) -> None:
+        """Begin a bounded calibration window: stream RMS/wake/VAD scalars per frame.
+
+        A standalone Silero VAD is spun up for the window because the live wakeword
+        model only computes VAD when ``wakeword_vad_threshold > 0`` (default 0).
+        """
+        seconds = max(1.0, min(float(seconds), 120.0))
+        if self._tune_vad is None:
+            try:
+                import openwakeword  # type: ignore[import-untyped]
+
+                self._tune_vad = openwakeword.VAD()
+            except Exception as exc:
+                log.warning("VAD model unavailable for tuning (%s) — vad scores will be 0", exc)
+                self._tune_vad = None
+        self._tune_deadline = asyncio.get_running_loop().time() + seconds
+        self._tune_seq = 0
+        self._tuning = True
+        log.info("Calibration window started (%.0fs)", seconds)
+
+    def _stop_tuning(self) -> None:
+        if not self._tuning:
+            return
+        self._tuning = False
+        self._tune_vad = None
+        log.info("Calibration window stopped")
+
+    def _vad_score(self, flat: np.ndarray[Any, Any]) -> float:
+        vad = self._tune_vad
+        if vad is None:
+            return 0.0
+        try:
+            vad(flat)
+            return float(vad.prediction_buffer[-1]) if vad.prediction_buffer else 0.0
+        except Exception:
+            return 0.0
+
+    async def _emit_tune_sample(
+        self, flat: np.ndarray[Any, Any], scores: dict[str, float], loop: asyncio.AbstractEventLoop
+    ) -> None:
+        """Send one calibration sample; auto-stop (and tell the server) when expired."""
+        if loop.time() >= self._tune_deadline:
+            self._stop_tuning()
+            if self._ws is not None:
+                try:
+                    await self._ws.send(protocol.tune_sample(stopped=True))
+                except Exception:
+                    pass
+            return
+        rms = float(np.sqrt(np.mean(flat.astype(np.float32) ** 2)))
+        wake = float(max(scores.values())) if scores else 0.0
+        vad = await loop.run_in_executor(None, self._vad_score, flat)
+        self._tune_seq += 1
+        if self._ws is not None:
+            try:
+                await self._ws.send(
+                    protocol.tune_sample(rms=rms, wake=wake, vad=vad, seq=self._tune_seq)
+                )
+            except Exception as exc:
+                log.warning("tune_sample send failed: %s", exc)
+                self._stop_tuning()
 
     # ------------------------------------------------------------------
     # Per-connection session
@@ -616,8 +1515,54 @@ class NodeClient:
             except asyncio.QueueEmpty:
                 break
 
-        await ws.send(protocol.hello(self._room_id))
-        log.info("Connected; sent hello as room '%s'", self._room_id)
+        capabilities = {
+            "audio_device": self._audio_device,
+            "capture_sample_rate": self._capture_rate,
+            "playback_sample_rate": self._playback_rate,
+            "devices": self._device_capabilities(),
+        }
+        await ws.send(
+            protocol.hello(
+                self._room_id,
+                node_id=self._node_id,
+                capabilities=capabilities,
+                token=self._join_token,
+                kenzy_version=kenzy_version(),
+            )
+        )
+        log.info("Connected; sent hello as room '%s' (node %s)", self._room_id, self._node_id)
+
+        # Zero-config bootstrap: on the very first connection, block until the
+        # server pushes our config, then build the audio hardware from it. On
+        # later reconnects audio already exists; the fresh config frame arrives
+        # via the normal recv/cmd path and is applied live (hardware deferred).
+        if not self._audio_ready:
+            log.info("Waiting for server config before initializing audio…")
+            cfg = await asyncio.wait_for(self._read_initial_config(ws), timeout=20.0)
+            self._apply_pulled_config(cfg, initial=True)
+            try:
+                await self._init_audio()
+                self._audio_failed = False
+                self._audio_error = None
+            except Exception as exc:
+                # Non-fatal: audio hardware couldn't start (e.g. a bad audio_device).
+                # Stay connected so the device can be corrected and the node
+                # restarted from the dashboard; audio is retried on that restart (or
+                # the next reconnect). Without this the node would die before its
+                # command loop ran, leaving it unreachable exactly when it needs
+                # fixing.
+                self._audio_failed = True
+                self._audio_error = str(exc)
+                self._teardown_audio()
+                log.error(
+                    "Audio init failed (%s) — node stays connected for remote fix/restart",
+                    exc,
+                    exc_info=True,
+                )
+                try:
+                    await ws.send(protocol.status(audio_ok=False, audio_error=str(exc)))
+                except Exception:
+                    pass
 
         recv_task = asyncio.create_task(self._recv_loop(ws), name="recv")
         cmd_task = asyncio.create_task(self._cmd_loop(), name="cmd")
@@ -643,84 +1588,108 @@ class NodeClient:
     # ------------------------------------------------------------------
 
     async def run(self) -> None:
-        self._load_wakeword()
-        sound_audio, sound_rate = _load_sound(self._sound_ready)
-        self._player = _SoundPlayer(sound_audio, sound_rate, self._audio_device, self._playback_rate)
-        log.info("Sound: %s (%d Hz → %d Hz stream)", self._sound_ready, sound_rate, self._playback_rate)
+        # Audio hardware is NOT built here. The node connects first, pulls its
+        # config from the server, and only then initializes audio (in
+        # _init_audio, on the first connection). Until the server is reachable
+        # and answers, the node blocks in this reconnect/backoff loop.
 
-        if self._sound_waiting:
+        # Handle SIGINT/SIGTERM via the loop so Ctrl+C cancels promptly: cancel the
+        # run task AND signal any in-flight mDNS browse to return at once (its worker
+        # thread is joined at interpreter exit, so a blocking browse would otherwise
+        # delay shutdown by the full discovery timeout).
+        loop = asyncio.get_running_loop()
+        main_task = asyncio.current_task()
+
+        def _request_stop() -> None:
+            log.info("Shutdown signal received — stopping node")
+            self._discovery_cancel.set()
+            if main_task is not None:
+                main_task.cancel()
+            # Safety net: if graceful shutdown wedges in a blocking C call (PortAudio /
+            # ALSA stream close, a stuck thread join) the main thread can't process
+            # further signals, so Ctrl+C would appear dead. A daemon timer force-exits
+            # if we haven't stopped in time. (No-op if we exit cleanly first — daemon
+            # threads don't keep the process alive.)
+            if not self._force_exit_armed:
+                self._force_exit_armed = True
+
+                def _force_exit() -> None:
+                    time.sleep(4.0)
+                    log.warning("Graceful shutdown timed out — forcing exit")
+                    os._exit(0)
+
+                threading.Thread(target=_force_exit, daemon=True, name="force-exit").start()
+
+        installed: list[Any] = []
+        for sig in (signal.SIGINT, signal.SIGTERM):
             try:
-                wait_audio, wait_rate = _load_sound(self._sound_waiting)
-                wait_1d = wait_audio.mean(axis=1).astype(np.int16) if wait_audio.ndim > 1 else wait_audio.astype(np.int16)
-                self._waiting_audio = _resample(wait_1d, wait_rate, self._playback_rate)
-                log.info("Waiting sound: %s (%d Hz → %d Hz)", self._sound_waiting, wait_rate, self._playback_rate)
-            except Exception as exc:
-                log.info("Waiting sound not loaded (%s) — silence during processing", exc)
-        else:
-            log.info("Waiting sound disabled — silence during processing")
+                loop.add_signal_handler(sig, _request_stop)
+                installed.append(sig)
+            except (NotImplementedError, RuntimeError, ValueError):
+                pass  # unsupported (Windows / non-main thread) — fall back to KeyboardInterrupt
 
-        audio_task = asyncio.create_task(self._audio_loop(), name="audio")
+        # Start the (off-thread) audio-device probe now so its result is usually ready
+        # by the time we send hello; if not, it's pushed via a status update.
+        self._kick_device_probe()
 
         try:
-            # Scale the blocksize so each callback still delivers ~80 ms of audio
-            # regardless of the capture rate (e.g. 3840 samples at 48 kHz).
-            capture_blocksize = int(
-                protocol.FRAME_SAMPLES * self._capture_rate // protocol.SAMPLE_RATE
-            )
-            with sd.InputStream(
-                samplerate=self._capture_rate,
-                channels=protocol.CHANNELS,
-                dtype="int16",
-                blocksize=capture_blocksize,
-                device=self._audio_device,
-                callback=self._audio_callback,
-            ):
-                delay = 1
-                while True:
-                    try:
-                        ws = await websockets.connect(self._server_url)
-                        delay = 1
-                        await self._run_session(ws)
+            delay = 1
+            while True:
+                try:
+                    server_url = await self._resolve_server_url()
+                    ws = await websockets.connect(server_url)
+                    delay = 1
+                    await self._run_session(ws)
 
-                    except (
-                        websockets.exceptions.WebSocketException,
-                        OSError,
-                        ConnectionRefusedError,
-                    ) as exc:
-                        log.warning("Connection error: %s", exc)
+                except TimeoutError:
+                    log.warning("Timed out waiting for server config; retrying")
 
-                    except asyncio.CancelledError:
-                        raise  # propagate; outer finally handles cleanup
+                except (
+                    websockets.exceptions.WebSocketException,
+                    OSError,
+                    ConnectionRefusedError,
+                ) as exc:
+                    log.warning("Connection error: %s", exc)
 
-                    except Exception as exc:
-                        log.error("Unexpected error: %s", exc, exc_info=True)
+                except asyncio.CancelledError:
+                    raise  # propagate to the graceful-shutdown handler below
 
-                    finally:
-                        if self._state == _STATE_STREAMING:
-                            self._state = _STATE_IDLE
-                            self._session_id = None
+                except Exception as exc:
+                    log.error("Unexpected error: %s", exc, exc_info=True)
 
-                    log.info("Reconnecting in %d s…", delay)
-                    await asyncio.sleep(delay)
-                    delay = min(delay * 2, 60)
+                finally:
+                    if self._state == _STATE_STREAMING:
+                        self._state = _STATE_IDLE
+                        self._session_id = None
+
+                log.info("Reconnecting in %d s…", delay)
+                await asyncio.sleep(delay)
+                delay = min(delay * 2, 60)
+
+        except asyncio.CancelledError:
+            log.info("Node shutting down…")  # graceful exit on signal/cancel
 
         finally:
+            for sig in installed:
+                try:
+                    loop.remove_signal_handler(sig)
+                except Exception:
+                    pass
             # Guaranteed cleanup regardless of how we exit (normal return,
             # CancelledError from connect or sleep, unexpected exception).
-            audio_task.cancel()
-            try:
-                await asyncio.gather(audio_task, return_exceptions=True)
-            except asyncio.CancelledError:
-                pass
+            if self._audio_task is not None:
+                self._audio_task.cancel()
+                try:
+                    await asyncio.gather(self._audio_task, return_exceptions=True)
+                except asyncio.CancelledError:
+                    pass
             if self._tts_task and not self._tts_task.done():
                 self._tts_task.cancel()
                 try:
                     await self._tts_task
                 except asyncio.CancelledError:
                     pass
-            if self._player:
-                self._player.close()
-                self._player = None
+            self._close_audio_hardware()
             log.info("Node client stopped.")
 
 
@@ -729,15 +1698,133 @@ class NodeClient:
 # ---------------------------------------------------------------------------
 
 
-def setup() -> None:
-    """Download openwakeword infrastructure models (melspectrogram, embedding, VAD).
-    Run once after install, before starting the node for the first time."""
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    )
-    _ensure_oww_resources()
-    log.info("Setup complete.")
+def run_calibration(cfg: dict[str, Any], node_id: str) -> None:
+    """Headless audio calibration: measure RMS / wake / VAD locally and print
+    suggested thresholds. The values are **server-owned** (the node pulls config),
+    so they're printed for the operator to apply via the dashboard or the server's
+    per-node override — not written to the node's local file.
+    """
+    import time
+
+    import sounddevice as sd  # type: ignore[import-untyped]
+
+    capture_rate = int(cfg.get("capture_sample_rate", protocol.SAMPLE_RATE))
+    audio_device = cfg.get("audio_device")
+    models = list(cfg.get("wakeword_models") or []) or _bundled_model_paths()
+
+    print("\nKenzy audio calibration")
+    print("=" * 60)
+    dev_label = audio_device if audio_device is not None else "system default"
+    print(f"device: {dev_label}  |  capture: {capture_rate} Hz")
+
+    oww: Any = None
+    vad: Any = None
+    try:
+        import openwakeword  # type: ignore[import-untyped]
+        from openwakeword.model import Model  # type: ignore[import-untyped]
+
+        _ensure_oww_resources()
+        oww = Model(
+            wakeword_models=models, inference_framework=_infer_framework(models), vad_threshold=0.0
+        )
+        vad = openwakeword.VAD()
+    except Exception as exc:
+        print(f"\nWake-word/VAD models unavailable ({exc}); measuring RMS only.")
+
+    q: queue.Queue[Any] = queue.Queue(maxsize=200)
+
+    def _cb(indata: Any, frames: int, t: Any, status: Any) -> None:
+        try:
+            q.put_nowait(indata.copy())
+        except queue.Full:
+            pass
+
+    blocksize = int(protocol.FRAME_SAMPLES * capture_rate // protocol.SAMPLE_RATE)
+    try:
+        stream = sd.InputStream(
+            samplerate=capture_rate,
+            channels=1,
+            dtype="int16",
+            blocksize=blocksize,
+            device=audio_device,
+            callback=_cb,
+        )
+    except Exception as exc:
+        print(f"\nERROR: could not open the audio device ({exc}).")
+        print("Run 'kenzy-devices' to find a working device, then set audio_device.")
+        return
+
+    def _collect(seconds: float) -> tuple[list[float], list[float], list[float]]:
+        rms: list[float] = []
+        wake: list[float] = []
+        vadv: list[float] = []
+        while not q.empty():  # drop anything buffered before the phase
+            try:
+                q.get_nowait()
+            except queue.Empty:
+                break
+        end = time.monotonic() + seconds
+        while time.monotonic() < end:
+            try:
+                frame = q.get(timeout=0.3)
+            except queue.Empty:
+                continue
+            flat = frame.flatten()
+            if capture_rate != protocol.SAMPLE_RATE:
+                flat = _resample(flat, capture_rate, protocol.SAMPLE_RATE)
+            rms.append(float(np.sqrt(np.mean(flat.astype(np.float32) ** 2))))
+            if oww is not None:
+                scores = oww.predict(flat)
+                wake.append(float(max(scores.values())) if scores else 0.0)
+            if vad is not None:
+                vad(flat)
+                vadv.append(float(vad.prediction_buffer[-1]) if vad.prediction_buffer else 0.0)
+        return rms, wake, vadv
+
+    def _countdown(msg: str, n: int = 3) -> None:
+        print(f"\n{msg}")
+        for i in range(n, 0, -1):
+            print(f"  starting in {i}…", end="\r", flush=True)
+            time.sleep(1)
+        print("  measuring…          ")
+
+    stream.start()
+    try:
+        _countdown("Phase 1/2 — stay QUIET to measure the room's noise floor (5s).")
+        rms1, _, _ = _collect(5.0)
+        sil = _suggest_silence_rms(rms1)
+
+        wake_all: list[float] = []
+        vad_all: list[float] = []
+        if oww is not None:
+            _countdown("Phase 2/2 — say the wake word ('Hey Kenzy') a few times (12s).")
+            _, wake_all, vad_all = _collect(12.0)
+        wk = _suggest_wake_threshold(wake_all)
+        vd = _suggest_vad_threshold(vad_all)
+    finally:
+        try:
+            stream.abort()
+            stream.close()
+        except Exception:
+            pass
+
+    print("\n" + "=" * 60)
+    print("Suggested thresholds")
+    print("=" * 60)
+    if sil is not None:
+        print(f"  silence_rms_threshold:  {sil}")
+    if wk is not None:
+        print(f"  wakeword_threshold:     {wk}")
+    elif oww is not None:
+        print("  wakeword_threshold:     (no clear wake word heard — re-run and speak up)")
+    if vd is not None:
+        print(f"  wakeword_vad_threshold: {vd}   # needs a node restart to apply")
+    print()
+    print("These are server-owned (the node pulls its config). Apply them from the")
+    print("dashboard's Calibration panel, or add them on the SERVER to one of:")
+    print(f"  - configs/nodes/{node_id}.yaml   (this node only)")
+    print("  - server.yaml  ->  node_defaults:   (default for all nodes)")
+    print("Editing this node's local node.yaml has no lasting effect.")
 
 
 def main() -> None:
@@ -745,21 +1832,33 @@ def main() -> None:
 
     import yaml  # type: ignore[import-untyped]
 
-    config_path = sys.argv[1] if len(sys.argv) > 1 else "configs/node.yaml"
+    from kenzy.config import resolve_config, writable_config_path
+    from kenzy.logutil import configure_logging, level_value
+
+    args = sys.argv[1:]
+    do_calibrate = "--calibrate" in args
+    positional = [a for a in args if not a.startswith("-")]
+    config_path = resolve_config("node", positional[0] if positional else None)
     with open(config_path) as fh:
-        cfg = yaml.safe_load(fh)
+        cfg = yaml.safe_load(fh) or {}
 
-    log_level: int = getattr(logging, str(cfg.get("log_level", "info")).upper(), logging.INFO)
-    verbose: bool = bool(cfg.get("verbose", False))
-    fmt = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+    # Console follows log_level (default info); the dashboard log buffer can go
+    # deeper (log_capture_level) once the server enables capture (config-pull).
+    # Calibration is quieter so its prompts/results stand out.
+    display = logging.WARNING if do_calibrate else level_value(cfg.get("log_level"), logging.INFO)
+    configure_logging(display, bool(cfg.get("verbose", False)))
 
-    # Root logger: verbose passes everything through; otherwise suppress
-    # noisy third-party loggers (websockets, asyncio, sounddevice).
-    logging.basicConfig(level=log_level if verbose else logging.WARNING, format=fmt)
-    logging.getLogger("kenzy").setLevel(log_level)
+    # Ensure a stable node_id, persisting a generated one to a writable config
+    # file (redirected out of the packaged read-only default if needed).
+    write_path = writable_config_path("node", config_path)
+    node_id = _ensure_node_id(cfg, write_path)
+
+    if do_calibrate:
+        run_calibration(cfg, node_id)
+        return
 
     try:
-        asyncio.run(NodeClient(cfg).run())
+        asyncio.run(NodeClient(cfg, config_path=write_path).run())
     except KeyboardInterrupt:
         pass
 

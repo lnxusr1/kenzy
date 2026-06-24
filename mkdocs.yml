@@ -14,6 +14,9 @@ theme:
   collapse_navigation: false
   logo: https://kenzy.dev/assets/img/logo.png
 
+#extra_css:
+#  - css/extra.css
+
 plugins:
   - search
 
@@ -29,6 +32,7 @@ nav:
   - Home: index.md
   - Getting Started: getting-started.md
   - Architecture: architecture.md
+  - Dashboard: dashboard.md
   - Configuration:
     - Overview: configuration/index.md
     - Node: configuration/node.md

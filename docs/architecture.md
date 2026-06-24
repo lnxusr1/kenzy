@@ -27,7 +27,9 @@ Control messages are JSON text frames. Audio is raw int16 PCM binary frames at 1
 
 | Message | Direction | Purpose |
 |---|---|---|
-| `hello` | node → server | Registration with `room_id` on connect |
+| `hello` | node → server | Registration on connect; carries the stable `node_id` (primary key) + `room_id` (room name), optional audio `capabilities` and a join `token` |
+| `config` | server → node | Effective node config pushed right after `hello` (config-pull) |
+| `set_room` | server → node | Dashboard renames the node's (server-owned) room; the node persists it to `node.yaml` and applies it live |
 | `audio_start` | node → server | Begins a capture session |
 | `audio_end` | node → server | Ends a capture session, includes `reason` |
 | `wakeword` | node → server | Wake word fired mid-stream |
@@ -36,8 +38,26 @@ Control messages are JSON text frames. Audio is raw int16 PCM binary frames at 1
 | `ack` | server → node | Confirms `audio_start` was received |
 | `tts_start` | server → node | Begins TTS playback; includes `sample_rate` and `channels` |
 | `tts_end` | server → node | Ends TTS playback |
+| `call_request` | server → node | Ring the node for an incoming intercom call (no audio bridged yet) |
+| `call_cancel` | server → node | Caller cancelled before the receiver accepted |
+| `intercom_start` | server → node | Consent accepted — begin a live two-way call with the peer room |
+| `intercom_end` | server ↔ node | End the call (sent to both ends; a node sends it when its wake word fires mid-call) |
 
-Binary frames sent server → node between `tts_start` and `tts_end` are raw int16 PCM at 24 kHz mono.
+Binary frames sent server → node between `tts_start` and `tts_end` are raw int16 PCM at 24 kHz mono. During an intercom call, raw mic PCM is relayed node ↔ server ↔ peer node.
+
+## Discovery & config-pull
+
+The server advertises itself as `_kenzy._tcp` over **mDNS**, so a node with no `server_url` finds it automatically; an explicit `server_url` skips discovery. On connect, the node's `hello` carries its **identity** — a stable `node_id` (generated and persisted in `node.yaml` on first run, or assigned at install with `kenzy-init --node-id`) plus its `room_id` (room name) — its audio `capabilities`, and an optional join `token`. The server validates the token and replies with a `config` frame holding the node's **effective config** — the server's `node_defaults` merged with the per-node override `configs/nodes/<node_id>.yaml`.
+
+`node.yaml` is **bootstrap-only**: a node does **not** initialize audio until this first `config` frame arrives (it blocks in the reconnect loop until the server answers — no boot-from-cache). Hardware values (audio device, sample rates, wakeword models, sounds) are applied as the audio stack is built on that first pull; a *later* change to a hardware value takes effect on restart, while live-tunable values (thresholds, VAD timing, log levels) and the room name apply immediately on every push. The server keys its registry, per-node config, and all controls on `node_id`, so a node keeps its identity and config even when its room is renamed; the **room name is server-owned** — stored in the per-node override, pushed on connect, and editable from the dashboard. The result: room devices carry only their identity and how to reach the server; everything operational is centralised on the server.
+
+### Central config for backend services
+
+The server is also the config authority for the backend HTTP services. It serves an **always-on**, token-gated `GET /config/<service>` on the node WebSocket port (independent of the dashboard), returning that service's effective config (packaged default deep-merged with the server-owned `configs/services/<service>.yaml`, secrets stripped). At boot, `kenzy-stt`/`kenzy-tts`/`kenzy-llm`/`kenzy-speaker` discover the server like a node does (mDNS, or `KENZY_SERVER_URL`), pull their config, and **block with retry/backoff until the server answers** — so the server must come up first (`After=kenzy-server`). Each also exposes a token-gated `POST /restart` (re-exec) so a dashboard config edit can apply by restarting the service. The dashboard's **Services** tab edits this central store.
+
+## Dashboard
+
+`kenzy-server` can serve an **opt-in** web fleet manager (`dashboard.enabled`, off by default) on its own bind/port. When disabled it is wired up nowhere and adds zero overhead. When enabled it serves a no-build SPA over the `websockets` HTTP hook (no new dependency): username/password login, a live fleet/health view, a per-node config editor with room rename, a **Services** editor for the backend services' central config (with restart), node controls (trigger/stop/restart), TTS announcements, a pull-based log viewer (with on-demand TRACE capture for a node), and a settings page (system info, feature flags, password change). It reuses the server's existing registry and connections — no new transport. See the [Dashboard guide](dashboard.md).
 
 ## Node state machine
 
@@ -51,7 +71,7 @@ The node runs three concurrent asyncio tasks:
 
 **`_recv_loop`** — reads inbound messages from the server WebSocket and routes them to `_cmd_q` (JSON control) or `_tts_q` (binary PCM).
 
-**`_cmd_loop`** — processes `_cmd_q`: handles `trigger`, `stop`, `tts_start`, `tts_end`.
+**`_cmd_loop`** — processes `_cmd_q`: handles `config` (apply pulled config), `trigger`, `stop`, `tts_start`, `tts_end`.
 
 ### State transitions
 
@@ -108,4 +128,4 @@ The tool-calling loop executes skills sequentially until the model returns a pla
 
 ## Wake-word models
 
-Two `.tflite` models ship with the package: `hey_kenzie.tflite` (loaded by default) and `ken_zee.tflite`. Custom models (`.tflite` or `.onnx`) can be specified via `wakeword_models` in `configs/node.yaml`; the inference framework is inferred from the file extension.
+One `.tflite` model ships with the package and is loaded by default: `hey_ken_zee.tflite` (wake phrase "hey Kenzie"). Custom models (`.tflite` or `.onnx`) can be specified via `wakeword_models` in `configs/node.yaml`; the inference framework is inferred from the file extension.

@@ -25,15 +25,9 @@ from typing import Any
 import numpy as np
 import sounddevice as sd  # type: ignore[import-untyped]
 
-log = logging.getLogger(__name__)
+from kenzy.speaker import DEFAULT_ENROLL_PROMPTS
 
-DEFAULT_PROMPTS = [
-    "The weather outside is looking pretty good today.",
-    "Can you turn off the lights in the living room please.",
-    "What time does the movie start tonight?",
-    "I'd like to set a reminder for tomorrow morning at eight.",
-    "Please add milk and eggs to the shopping list.",
-]
+log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Audio helpers
@@ -140,6 +134,7 @@ def _init_tts(cfg: dict[str, Any]) -> bool:
     global _tts_url, _tts_timeout
     try:
         import httpx  # type: ignore[import-untyped]  # noqa: F401 — verify importable
+
         tcfg: dict[str, Any] = cfg.get("tts", {})
         url = tcfg.get("url")
         if not url:
@@ -160,6 +155,7 @@ def _speak(text: str, also_print: bool = True) -> None:
         return
     try:
         import httpx  # type: ignore[import-untyped]
+
         resp = httpx.post(
             _tts_url,
             json={"text": text},
@@ -205,11 +201,22 @@ def main() -> None:
     base_url = args.url or f"http://{cfg.get('host', '127.0.0.1')}:{cfg.get('port', 8768)}"
     enroll_url = base_url.rstrip("/") + "/enroll"
 
+    # TTS endpoint for voice guidance: a local tts.url wins (multi-host override);
+    # otherwise pull it from the server (single source of truth), best-effort.
+    if not (cfg.get("tts") or {}).get("url"):
+        from kenzy.serviceboot import fetch_service_config
+
+        server_cfg = fetch_service_config("speaker")
+        server_tts = (server_cfg or {}).get("tts") or {}
+        if server_tts.get("url"):
+            cfg.setdefault("tts", {})["url"] = server_tts["url"]
+            log.info("Using TTS endpoint auto-wired from the server: %s", server_tts["url"])
+
     sample_rate = int(cfg.get("enroll_sample_rate", 16_000))
     silence_rms = float(cfg.get("enroll_silence_rms", 300))
     silence_ms = int(cfg.get("enroll_silence_ms", 800))
     min_speech_ms = int(cfg.get("enroll_min_speech_ms", 1_500))
-    prompts: list[str] = cfg.get("enroll_prompts", DEFAULT_PROMPTS)
+    prompts: list[str] = cfg.get("enroll_prompts") or DEFAULT_ENROLL_PROMPTS
 
     tts_available = _init_tts(cfg)
     if not tts_available:
@@ -249,7 +256,12 @@ def main() -> None:
             sys.exit(1)
 
         _play_confirm()  # lower-pitched "done" tone
-        _speak(f"Got it. {len(prompts) - i} more to go." if i < len(prompts) else "That's the last one.", also_print=False)
+        _speak(
+            f"Got it. {len(prompts) - i} more to go."
+            if i < len(prompts)
+            else "That's the last one.",
+            also_print=False,
+        )
         time.sleep(0.3)
 
     print()

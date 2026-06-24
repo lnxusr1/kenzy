@@ -1,6 +1,6 @@
 # Built-in Skills
 
-## Weather — `skills/weather.py`
+## Weather — `builtin_skills/weather.py`
 
 Provides current conditions and multi-day forecasts using the [National Weather Service API](https://www.weather.gov/documentation/services-web-api) (US only, no API key required). Geocoding uses Nominatim (OpenStreetMap).
 
@@ -11,16 +11,16 @@ Provides current conditions and multi-day forecasts using the [National Weather 
 | `get_current_weather(location)` | Current temperature, conditions, humidity, wind |
 | `get_forecast(location, days)` | Multi-day forecast; `days` defaults to 3 |
 
-### Configuration (`skills.weather` in `llm.yaml`)
+### Configuration
 
-| Key | Default | Description |
-|---|---|---|
-| `default_location` | *(from `location` block)* | Used when the user does not specify a location |
-| `units` | `"imperial"` | `imperial` (°F) or `metric` (°C) |
+The weather skill has **no per-skill keys**. When the user doesn't name a location it
+uses the top-level **`location:`** block in `llm.yaml` (`city` + `state`; optional
+`latitude`/`longitude` skip a geocoding step and are otherwise derived from city/state).
+Output is in °F.
 
 ---
 
-## News — `skills/news.py`
+## News — `builtin_skills/news.py`
 
 Fetches headlines and article summaries from configurable RSS feeds. Articles are extracted with [trafilatura](https://trafilatura.readthedocs.io) and summarized by a sub-LLM call.
 
@@ -54,7 +54,7 @@ Add or replace any category by editing the `feeds` map. Any RSS 2.0 or Atom feed
 
 ---
 
-## Stocks — `skills/stocks.py`
+## Stocks — `builtin_skills/stocks.py`
 
 Returns stock quotes using [yfinance](https://github.com/ranaroussi/yfinance).
 
@@ -76,7 +76,7 @@ Apple Inc. (AAPL)
 
 ---
 
-## Home Assistant — `skills/home_assistant.py`
+## Home Assistant — `builtin_skills/home_assistant.py`
 
 Controls and queries smart home devices via the [Home Assistant REST API](https://developers.home-assistant.io/docs/api/rest/). See [Home Assistant](home-assistant.md) for full setup documentation.
 
@@ -101,7 +101,7 @@ Controls and queries smart home devices via the [Home Assistant REST API](https:
 
 ---
 
-## Random Tools — `skills/random_tools.py`
+## Random Tools — `builtin_skills/random_tools.py`
 
 Utility skills for randomness and selection.
 
@@ -118,8 +118,32 @@ Utility skills for randomness and selection.
 
 ---
 
-## About — `skills/about.py`
+## About — `builtin_skills/about.py`
 
 | Function | Description |
 |---|---|
 | `get_assistant_version()` | Returns the installed Kenzy package version |
+
+---
+
+## Announce — `builtin_skills/announce.py`
+
+Broadcasts a spoken message to other rooms. Say *"Hey Kenzy… tell everyone dinner's ready"* and Kenzy speaks it in every room, then confirms in the room you asked from.
+
+| Function | Description |
+|---|---|
+| `announce(message, rooms="")` | Speak `message` aloud in other rooms; `rooms` is an optional comma-separated list of room names (empty = everywhere) |
+
+This is the first user of the **server-actions** mechanism: the skill can't speak in other rooms itself (it runs in `kenzy-llm`), so it queues an action that `kenzy-server` actuates via its existing `announce()` (synthesize once, stream to the target nodes). The asking room is excluded from the broadcast so it doesn't hear the message twice. The server tells the model which room names are currently connected, so it targets real rooms.
+
+---
+
+## Intercom — `builtin_skills/intercom.py`
+
+Starts a live two-way voice call to another room. Say *"call the living room"* and Kenzy rings that room; the call connects **only after someone there says "yes"** to accept it.
+
+| Function | Description |
+|---|---|
+| `connect_room(room)` | Ring `room` for a live intercom call (the other room must verbally accept) |
+
+Like `announce`, this queues a server action. The server rings the target room, plays a spoken consent prompt, and bridges audio **only on a clear spoken "yes"** (default-deny on silence/ambiguity/timeout). During an active call a wake word at either end ends it immediately. Requires a speakerphone with hardware echo cancellation.

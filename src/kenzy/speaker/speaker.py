@@ -13,7 +13,8 @@ Endpoints
   GET  /health
   POST /identify   → speaker name + confidence
   POST /enroll     → add an utterance embedding for a named speaker
-  GET  /speakers   → list enrolled speaker names
+  GET  /speakers   → list enrolled speakers + sample counts
+  POST /speakers/{name}/rename → rename a speaker profile
   DELETE /speakers/{name} → remove a speaker profile
 """
 
@@ -22,13 +23,20 @@ from __future__ import annotations
 import asyncio
 import base64
 import logging
-import sys
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
+
+from kenzy import kenzy_version
+from kenzy.fastapi_auth import (
+    install_logs_endpoint,
+    install_restart_endpoint,
+    install_service_auth,
+)
+from kenzy.logutil import quiet_health_access_log
 
 log = logging.getLogger(__name__)
 
@@ -38,7 +46,7 @@ log = logging.getLogger(__name__)
 
 
 class IdentifyRequest(BaseModel):
-    audio_b64: str           # base64-encoded int16 PCM at 16 kHz mono
+    audio_b64: str  # base64-encoded int16 PCM at 16 kHz mono
     room_id: str | None = None
 
 
@@ -58,8 +66,17 @@ class EnrollResponse(BaseModel):
     sample_count: int
 
 
+class SpeakerInfo(BaseModel):
+    name: str
+    samples: int  # number of enrolled utterance embeddings
+
+
 class SpeakersResponse(BaseModel):
-    speakers: list[str]
+    speakers: list[SpeakerInfo]
+
+
+class RenameRequest(BaseModel):
+    new_name: str
 
 
 class StatusResponse(BaseModel):
@@ -77,6 +94,7 @@ _embeddings_dir: Path = Path("data/speakers")
 _identify_threshold: float = 0.25
 _unknown_speaker: str = "unknown"
 _sem: asyncio.Semaphore | None = None
+_model_name: str = ""  # surfaced on /health for the dashboard
 
 
 # ---------------------------------------------------------------------------
@@ -100,6 +118,24 @@ def _cosine_sim(a: np.ndarray[Any, Any], b: np.ndarray[Any, Any]) -> float:
     return float(np.dot(a, b) / (denom + 1e-8))
 
 
+def _safe_speaker_name(name: str) -> str:
+    """Validate a speaker name used to build a ``<name>.npy`` path (F-5).
+
+    Names map directly to filenames, so reject anything that could escape the
+    embeddings dir or be otherwise unsafe. Returns the trimmed name.
+    """
+    name = name.strip()
+    if (
+        not name
+        or "/" in name
+        or "\\" in name
+        or name in (".", "..")
+        or any(ord(c) < 32 for c in name)
+    ):
+        raise HTTPException(status_code=400, detail="invalid speaker name")
+    return name
+
+
 def _speaker_path(name: str) -> Path:
     return _embeddings_dir / f"{name}.npy"
 
@@ -108,7 +144,7 @@ def _load_embeddings() -> dict[str, np.ndarray[Any, Any]]:
     """Return {speaker_name: centroid_embedding} for all enrolled speakers."""
     result: dict[str, np.ndarray[Any, Any]] = {}
     for p in _embeddings_dir.glob("*.npy"):
-        stored = np.load(p)              # (N, dim)
+        stored = np.load(p)  # (N, dim)
         result[p.stem] = stored.mean(axis=0)
     return result
 
@@ -119,8 +155,13 @@ def _load_embeddings() -> dict[str, np.ndarray[Any, Any]]:
 
 
 @app.get("/health")
-async def health() -> dict[str, str]:
-    return {"status": "ok"}
+async def health() -> dict[str, object]:
+    return {
+        "status": "ok",
+        "version": kenzy_version(),
+        "model": _model_name,
+        "threshold": _identify_threshold,
+    }
 
 
 @app.post("/identify", response_model=IdentifyResponse)
@@ -150,10 +191,8 @@ async def identify(req: IdentifyRequest) -> IdentifyResponse:
 
 @app.post("/enroll", response_model=EnrollResponse)
 async def enroll(req: EnrollRequest) -> EnrollResponse:
+    name = _safe_speaker_name(req.name)  # validate input before anything else
     assert _sem is not None
-    name = req.name.strip()
-    if not name:
-        raise HTTPException(status_code=400, detail="name must not be empty")
 
     pcm = base64.b64decode(req.audio_b64)
     loop = asyncio.get_running_loop()
@@ -176,12 +215,19 @@ async def enroll(req: EnrollRequest) -> EnrollResponse:
 
 @app.get("/speakers", response_model=SpeakersResponse)
 async def list_speakers() -> SpeakersResponse:
-    names = sorted(p.stem for p in _embeddings_dir.glob("*.npy"))
-    return SpeakersResponse(speakers=names)
+    speakers: list[SpeakerInfo] = []
+    for p in sorted(_embeddings_dir.glob("*.npy")):
+        try:
+            samples = int(np.load(p).shape[0])
+        except Exception:
+            samples = 0
+        speakers.append(SpeakerInfo(name=p.stem, samples=samples))
+    return SpeakersResponse(speakers=speakers)
 
 
 @app.delete("/speakers/{name}", response_model=StatusResponse)
 async def delete_speaker(name: str) -> StatusResponse:
+    name = _safe_speaker_name(name)
     path = _speaker_path(name)
     if not path.exists():
         raise HTTPException(status_code=404, detail=f"Speaker '{name}' not found")
@@ -190,25 +236,48 @@ async def delete_speaker(name: str) -> StatusResponse:
     return StatusResponse(status="ok")
 
 
+@app.post("/speakers/{name}/rename", response_model=EnrollResponse)
+async def rename_speaker(name: str, req: RenameRequest) -> EnrollResponse:
+    name = _safe_speaker_name(name)
+    new_name = _safe_speaker_name(req.new_name)
+    src = _speaker_path(name)
+    if not src.exists():
+        raise HTTPException(status_code=404, detail=f"Speaker '{name}' not found")
+    dst = _speaker_path(new_name)
+    if dst.exists():
+        raise HTTPException(status_code=409, detail=f"Speaker '{new_name}' already exists")
+    src.rename(dst)
+    count = int(np.load(dst).shape[0])
+    log.info("Renamed speaker profile: %s → %s", name, new_name)
+    return EnrollResponse(status="ok", name=new_name, sample_count=count)
+
+
 # ---------------------------------------------------------------------------
 # CLI entry point
 # ---------------------------------------------------------------------------
 
 
 def main() -> None:
-    global _classifier, _embeddings_dir, _identify_threshold, _unknown_speaker, _sem
+    global _classifier, _embeddings_dir, _identify_threshold, _unknown_speaker, _sem, _model_name
 
     import uvicorn  # type: ignore[import-untyped]
-    import yaml  # type: ignore[import-untyped]
 
-    config_path = sys.argv[1] if len(sys.argv) > 1 else "configs/speaker.yaml"
-    with open(config_path) as fh:
-        cfg: dict[str, Any] = yaml.safe_load(fh)
+    from kenzy.logutil import configure_logging, level_value
+    from kenzy.serviceboot import load_service_config
 
-    log_level: int = getattr(logging, str(cfg.get("log_level", "info")).upper(), logging.INFO)
-    fmt = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
-    logging.basicConfig(level=logging.WARNING, format=fmt)
-    logging.getLogger("kenzy").setLevel(log_level)
+    configure_logging(logging.INFO)  # provisional, so the config pull's retries are visible
+
+    # Central config: pull from the server (blocking until it answers); an explicit
+    # config path loads locally instead (dev/offline escape hatch).
+    cfg: dict[str, Any] = load_service_config("speaker")
+
+    configure_logging(level_value(cfg.get("log_level"), logging.INFO))
+    quiet_health_access_log()
+    install_service_auth(app)
+    install_logs_endpoint(
+        app, capture_level=level_value(cfg.get("log_capture_level"), logging.DEBUG)
+    )
+    install_restart_endpoint(app)
 
     _embeddings_dir = Path(cfg.get("embeddings_dir", "data/speakers"))
     _embeddings_dir.mkdir(parents=True, exist_ok=True)
@@ -219,11 +288,10 @@ def main() -> None:
     try:
         from speechbrain.pretrained import EncoderClassifier  # type: ignore[import-untyped]
     except ImportError as exc:
-        raise RuntimeError(
-            "speechbrain is not installed – run: pip install speechbrain"
-        ) from exc
+        raise RuntimeError("speechbrain is not installed – run: pip install speechbrain") from exc
 
     model_source = cfg.get("model_source", "speechbrain/spkrec-ecapa-voxceleb")
+    _model_name = str(model_source).rstrip("/").split("/")[-1]
     model_save_dir = cfg.get("model_save_dir", "models/speaker")
     log.info("Loading speaker model from %s…", model_save_dir)
     _classifier = EncoderClassifier.from_hparams(

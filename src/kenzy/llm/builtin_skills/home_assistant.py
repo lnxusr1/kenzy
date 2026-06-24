@@ -90,10 +90,9 @@ Respond with a JSON object — no markdown, no extra text:
 
 
 def _project_root() -> Path:
-    for path in [Path.cwd(), *Path.cwd().parents]:
-        if (path / "pyproject.toml").exists():
-            return path
-    return Path.cwd()
+    """Operational-tree root that holds ``data/home_assistant/`` (KENZY_HOME-aware)."""
+    from kenzy.config import kenzy_data_root
+    return kenzy_data_root()
 
 
 def _room_to_area(yaml_text: str) -> dict[str, str]:

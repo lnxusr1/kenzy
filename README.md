@@ -1,7 +1,7 @@
 # KENZY &middot; [![GitHub license](https://img.shields.io/github/license/lnxusr1/kenzy.svg)](https://github.com/lnxusr1/kenzy/blob/main/LICENSE) ![Python Versions](https://img.shields.io/pypi/pyversions/yt2mp3.svg) ![Read the Docs](https://img.shields.io/readthedocs/kenzy) ![GitHub release (latest by date)](https://img.shields.io/github/v/release/lnxusr1/kenzy.svg)
 
 
-A distributed home voice assistant built as six independently deployable microservices. Kenzy runs wake-word detection locally on room nodes (Raspberry Pi Zero 2 W or similar), streams audio to a central server for transcription, runs it through an LLM with tool-calling skills, and streams synthesized speech back to the room.
+A distributed home voice assistant built as six independently deployable microservices. Kenzy runs wake-word detection locally on room nodes (Orange Pi Zero 3 / 3W or Raspberry Pi 3 / 4 / 5), streams audio to a central server for transcription, runs it through an LLM with tool-calling skills, and streams synthesized speech back to the room.
 
 ## Architecture
 
@@ -39,6 +39,17 @@ Node (mic) ──PCM over WebSocket──► Server
 
 ## Setup
 
+Kenzy installs from PyPI — the default configs, built-in skills, and `.env.example`
+ship as package data, so a service runs from a bare install with no source checkout:
+
+```bash
+pipx install "kenzy[node]"           # or use the one-line installer at kenzy.dev/install.sh
+kenzy-setup                          # download wake-word / speaker-ID models (run once)
+kenzy-init                           # scaffold a config home (~/.config/kenzy)
+```
+
+For development from a checkout, use an editable install instead:
+
 ```bash
 # Create and activate a virtualenv
 python3 -m venv .venv
@@ -59,15 +70,17 @@ cp .env.example .env
 
 ## Running
 
-Each service reads its config from `configs/<service>.yaml`. Start them in any order:
+The config-path argument is optional — each service resolves its config from the config home automatically. **Start the server first**: the backend services and nodes pull their config from it on startup and block until it answers.
 
 ```bash
+# Server host first
 kenzy-server  [configs/server.yaml]
 kenzy-stt     [configs/stt.yaml]
 kenzy-tts     [configs/tts.yaml]
 kenzy-llm     [configs/llm.yaml]
 kenzy-speaker [configs/speaker.yaml]
-kenzy-node    [configs/node.yaml]     # on each room device
+
+kenzy-node    [configs/node.yaml]     # then each room device (discovers + pulls from the server)
 ```
 
 ### Speaker enrollment
@@ -97,18 +110,35 @@ kenzy-deploy status     # check service health
 
 Prerequisites on each remote host: SSH key auth and passwordless sudo.
 
+## Dashboard
+
+`kenzy-server` can serve an **opt-in** web fleet manager (off by default). Enable it in
+`server.yaml` (`dashboard.enabled: true`, `controls: true`, `logs: true`) and open
+`http://127.0.0.1:8770/dashboard`. It gives you one place to:
+
+- See live node + backend-service health
+- Configure each node and **rename its room** (pushed to the node and saved)
+- Trigger / stop / restart nodes and send TTS **announcements** to every room
+- Read server, service, and per-node **logs**
+
+Login defaults to `admin` / `password` — change it with `kenzy-passwd` (server host
+only). It is plaintext HTTP on a LAN bind, so **do not port-forward it**. See the
+[Dashboard guide](https://docs.kenzy.dev/dashboard/).
+
 ## Configuration
 
-All config files live in `configs/`. Copy and edit as needed — the defaults are reasonable starting points.
+The server is the configuration authority for the whole fleet. Nodes and the backend
+services pull their config from it at boot and are edited from the dashboard; the YAML
+files below are the server-side store and the seed defaults.
 
 Key settings:
 
-* **`configs/node.yaml`** — wake word threshold, VAD silence detection, audio device selection, sound files
-* **`configs/server.yaml`** — URLs for each downstream service; omit a URL to disable that stage
-* **`configs/llm.yaml`** — LLM model (supports OpenAI, Anthropic, Ollama, and any LiteLLM provider), system prompt, location context, per-skill config
-* **`configs/stt.yaml`** — Whisper model size and compute device
-* **`configs/tts.yaml`** — OpenAI TTS model and voice
-* **`configs/speaker.yaml`** — similarity threshold for speaker identification
+* **`configs/node.yaml`** — **bootstrap-only** (identity + how to reach the server + early logging). A node auto-generates a stable `node_id`, then blocks until the server pushes its full operational config (audio device, wake-word threshold/VAD, sounds, room name) and initializes audio from that. Per-node overrides live in `configs/nodes/<node_id>.yaml`; the room name is server-owned and set from the dashboard.
+* **`configs/server.yaml`** — URLs for each downstream service (omit a URL to disable that stage), `node_defaults`, discovery, and the dashboard block
+* **`configs/services/<svc>.yaml`** — server-owned overrides for the backend services (stt/tts/llm/speaker), edited from the dashboard's **Services** tab; each service pulls its effective config (packaged default + this override, secrets stripped) from the server at boot
+* **`configs/llm.yaml` / `stt.yaml` / `tts.yaml` / `speaker.yaml`** — packaged seed defaults for those services (model/voice/thresholds/etc.)
+
+Secrets stay in each host's environment / `.env` — never in the config store.
 
 ## Skills
 

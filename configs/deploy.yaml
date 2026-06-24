@@ -11,6 +11,14 @@
 #   - SSH key auth:      ssh-copy-id user@host
 #   - Passwordless sudo: add "user ALL=(ALL) NOPASSWD: ALL" to /etc/sudoers
 
+# Install mode (top-level default; override per host, or with CLI flags):
+#   source  – rsync this checkout to each host and `pip install -e` (default).
+#   pypi    – install `kenzy[extras]` from PyPI; only configs/ + sync paths are
+#             pushed. Use `version:` to pin (else the latest >=3 is used).
+# CLI overrides: `--local` forces source everywhere; `--version X` overrides the pin.
+install_mode: source
+# version: 3.1.0          # pypi mode only; omit for the latest 3.x
+
 defaults:
   ssh_user:     pi
   install_path: /opt/kenzy

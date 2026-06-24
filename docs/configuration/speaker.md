@@ -5,6 +5,9 @@
 
 The speaker identification service uses a SpeechBrain ECAPA-TDNN model to compare incoming audio against enrolled speaker profiles and return the closest match.
 
+!!! note "Pulled from the server"
+    `kenzy-speaker` pulls this config from the server at boot — it discovers the server via mDNS (or `KENZY_SERVER_URL`) and blocks until it answers, so start the server first. Edit it from the dashboard's **Services** tab (writes `configs/services/speaker.yaml` on the server and restarts the service). Passing an explicit path loads locally instead (dev/offline). The `kenzy-enroll` CLI still reads a local config. See [central config for backend services](server.md#central-config-for-backend-services).
+
 ## Full reference
 
 ### Service
@@ -13,7 +16,8 @@ The speaker identification service uses a SpeechBrain ECAPA-TDNN model to compar
 |---|---|---|
 | `host` | `"127.0.0.1"` | Bind address |
 | `port` | `8768` | HTTP port |
-| `log_level` | `"info"` | Log verbosity |
+| `log_level` | `"info"` | What the service prints to its console |
+| `log_capture_level` | `"debug"` | How deep the dashboard log viewer can see, independent of `log_level` |
 
 ### Model
 
@@ -29,6 +33,7 @@ The speaker identification service uses a SpeechBrain ECAPA-TDNN model to compar
 | `embeddings_dir` | `"data/speakers"` | Directory containing per-speaker `.npy` embedding files. Each file is named `<speaker_name>.npy`. |
 | `identify_threshold` | `0.25` | Cosine similarity threshold [0.0–1.0]. Utterances below this score are attributed to `unknown_speaker`. |
 | `unknown_speaker` | `"unknown"` | Name returned when no enrolled speaker exceeds the threshold. |
+| `allow_voice_enroll` | `false` | Allow [voice enrollment](../speaker-enrollment.md#enrolling-by-voice-from-a-node) ("enroll me as Alice") from a node. The **server** reads this live (editable from the dashboard's Services → speaker). Off by default; when on, anyone in earshot can enroll — see the security warning in the enrollment guide. |
 
 ### Enrollment (`kenzy-enroll`)
 
@@ -39,7 +44,7 @@ The speaker identification service uses a SpeechBrain ECAPA-TDNN model to compar
 | `enroll_silence_ms` | `800` | Consecutive silence (ms) that ends a recording |
 | `enroll_min_speech_ms` | `1500` | Minimum speech (ms) required for a valid sample |
 | `enroll_prompts` | *(built-in list)* | Sentences read aloud by the user during enrollment. Phonetically diverse sentences produce better embeddings. |
-| `tts.url` | — | TTS service used to read enrollment prompts aloud |
+| `tts.url` | *(from server)* | TTS service used to read enrollment prompts aloud. **Auto-wired from the server by default** (it injects its own `tts.url`), so you normally leave this unset; set it only to override per host (e.g. a multi-host setup where this machine reaches TTS at a different address). |
 | `tts.timeout` | `30.0` | TTS HTTP timeout |
 
 ## Threshold tuning

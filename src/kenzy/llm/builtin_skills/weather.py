@@ -5,12 +5,17 @@ No API key required. US locations only.
 Dynamic location queries (non-home) use the US Census Bureau geocoding API,
 which is also free and requires no key.
 
+The default (home) location comes from the top-level ``location:`` block in
+llm.yaml — there is no separate weather location key. ``city``/``state`` are the
+source of truth; ``latitude``/``longitude`` are optional (they skip a geocoding
+step and are otherwise derived from the city/state).
+
 Config in llm.yaml:
   location:
-    latitude: 36.0957
-    longitude: -79.4378
     city: "Burlington"
     state: "NC"
+    latitude: 36.0957     # optional
+    longitude: -79.4378   # optional
 """
 
 from __future__ import annotations
@@ -24,6 +29,9 @@ _NWS_AGENT = "kenzy-home-assistant/1.0"
 # Cache NWS grid URLs and nearest station per lat/lon so we don't hit
 # the points endpoint on every request.
 _url_cache: dict[str, dict[str, str]] = {}
+# Cache geocoded coordinates per location string (incl. the home city/state) so a
+# repeated query doesn't re-hit the geocoder.
+_geocode_cache: dict[str, tuple[float, float]] = {}
 
 
 # ---------------------------------------------------------------------------
@@ -33,6 +41,9 @@ _url_cache: dict[str, dict[str, str]] = {}
 
 async def _geocode(location: str) -> tuple[float, float] | None:
     """Resolve a city/address string to (lat, lon) via Nominatim (OpenStreetMap)."""
+    key = location.strip().lower()
+    if key in _geocode_cache:
+        return _geocode_cache[key]
     try:
         async with httpx.AsyncClient(timeout=10, headers={"User-Agent": _NWS_AGENT}) as client:
             resp = await client.get(
@@ -43,7 +54,9 @@ async def _geocode(location: str) -> tuple[float, float] | None:
             results = resp.json()
         if not results:
             return None
-        return float(results[0]["lat"]), float(results[0]["lon"])
+        coords = (float(results[0]["lat"]), float(results[0]["lon"]))
+        _geocode_cache[key] = coords
+        return coords
     except Exception:
         return None
 
@@ -75,14 +88,20 @@ async def _get_nws_urls(lat: float, lon: float) -> dict[str, str]:
 async def _resolve(location: str | None) -> tuple[float, float, str] | None:
     """Return (lat, lon, display_label) for a location string or home default."""
     if not location:
-        lat = get_config("location", "latitude")
-        lon = get_config("location", "longitude")
-        if lat is None or lon is None:
-            return None
-        city  = get_config("location", "city", "")
+        city = get_config("location", "city", "")
         state = get_config("location", "state", "")
         label = ", ".join(filter(None, [city, state])) or "home"
-        return float(lat), float(lon), label
+        lat = get_config("location", "latitude")
+        lon = get_config("location", "longitude")
+        if lat is not None and lon is not None:
+            return float(lat), float(lon), label
+        # No explicit coordinates — derive them from the home city/state, which is the
+        # single source of truth (lat/lon are just an optional precision/speed override).
+        home = ", ".join(filter(None, [city, state]))
+        coords = await _geocode(home) if home else None
+        if coords is None:
+            return None
+        return coords[0], coords[1], label
 
     coords = await _geocode(location)
     if coords is None:

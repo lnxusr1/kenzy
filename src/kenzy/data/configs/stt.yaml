@@ -1,0 +1,22 @@
+# Kenzy STT service configuration
+
+# Bind address — 127.0.0.1 keeps it local; use 0.0.0.0 to expose on the network
+host: "127.0.0.1"
+
+# HTTP port
+port: 8767
+
+# Log level (debug, info, warning, error)
+log_level: "info"
+log_capture_level: "debug"  # how deep the dashboard log viewer can see (debug/trace); set via the dashboard
+
+# faster-whisper model configuration
+whisper:
+  # Model size: tiny, base, small, medium, large-v2, large-v3
+  model: "tiny"
+  # Inference device: cpu or cuda
+  device: "cpu"
+  # Quantisation type: int8 (fastest on CPU), float16 (GPU), float32
+  compute_type: "int8"
+  # Language code (e.g. "en"), or omit / set to null for auto-detect
+  language: "en"

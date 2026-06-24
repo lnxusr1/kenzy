@@ -15,8 +15,8 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def _load_datetime_skill():
-    """Import skills/datetime_skill.py by path (it lives outside the package)."""
-    path = ROOT / "skills" / "datetime_skill.py"
+    """Import the bundled datetime_skill by path (loaded the way the registry does)."""
+    path = ROOT / "src" / "kenzy" / "llm" / "builtin_skills" / "datetime_skill.py"
     spec = importlib.util.spec_from_file_location("datetime_skill", path)
     assert spec and spec.loader
     mod = importlib.util.module_from_spec(spec)
@@ -39,6 +39,7 @@ def clean_fast_registry():
 # ---------------------------------------------------------------------------
 # FastResult contract
 # ---------------------------------------------------------------------------
+
 
 def test_fastresult_handled():
     r = reg.FastResult.handled("hello")
@@ -71,6 +72,7 @@ def test_fastresult_handled_with_expect_response():
 # ---------------------------------------------------------------------------
 # Registry + dispatch
 # ---------------------------------------------------------------------------
+
 
 def test_fast_intent_requires_async():
     with pytest.raises(TypeError):
@@ -129,6 +131,7 @@ async def test_dispatch_skips_raising_matcher(clean_fast_registry):
 # ---------------------------------------------------------------------------
 # datetime Stage-0 intent
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.parametrize(
     "utterance,expected",

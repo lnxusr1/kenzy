@@ -5,6 +5,9 @@
 
 The TTS service accepts POST requests with text and returns raw int16 PCM audio at 24 kHz mono. Two providers are supported, selected via the `provider` key.
 
+!!! note "Pulled from the server"
+    `kenzy-tts` pulls this config from the server at boot — it discovers the server via mDNS (or `KENZY_SERVER_URL`) and blocks until it answers, so start the server first. Edit it from the dashboard's **Services** tab (writes `configs/services/tts.yaml` on the server and restarts the service). Passing an explicit path loads locally instead (dev/offline). `log_level` (console) and `log_capture_level` (dashboard viewer depth, default `debug`) work like every service. See [central config for backend services](server.md#central-config-for-backend-services).
+
 ## Provider selection
 
 | Key | Default | Description |
@@ -45,7 +48,7 @@ openai:
 ## Kokoro provider
 
 **Requires:**
-- `pip install -e ".[kokoro]"` (installs the `kokoro` package and PyTorch)
+- The `kokoro` extra: `pip install 'kenzy[kokoro]'` (or `pip install -e ".[kokoro]"` in a source checkout) — installs the `kokoro` package and PyTorch
 - `sudo apt-get install espeak-ng` (system phonemization library)
 - Run `kenzy-setup` after install to pre-download model weights
 
@@ -100,8 +103,8 @@ kokoro:
 # System dependency
 sudo apt-get install espeak-ng
 
-# Python package
-pip install -e ".[kokoro]"
+# Python package (or `pip install -e ".[kokoro]"` in a source checkout)
+pip install 'kenzy[kokoro]'
 
 # Pre-download model weights
 kenzy-setup

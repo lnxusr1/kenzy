@@ -1,0 +1,26 @@
+/* Kenzy palette over the ReadTheDocs theme — petrol + golden accent. */
+:root {
+  --kenzy-petrol: #013249;
+  --kenzy-gold: #ffb500;
+}
+
+/* Sidebar search header (top of the nav) and the mobile top bar. */
+.wy-side-nav-search,
+.wy-nav-top {
+  background-color: var(--kenzy-petrol);
+}
+
+/* Search box: golden border + focus ring. */
+.wy-side-nav-search input[type="text"] {
+  border: 2px solid var(--kenzy-gold);
+  border-radius: 4px;
+}
+.wy-side-nav-search input[type="text"]:focus {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(255, 181, 0, 0.45);
+}
+
+/* Subtitle/version under the logo, in golden. */
+.wy-side-nav-search > div.version {
+  color: var(--kenzy-gold);
+}

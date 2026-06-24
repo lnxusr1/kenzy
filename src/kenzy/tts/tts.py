@@ -20,12 +20,19 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-import sys
 from typing import Any
 
 from fastapi import FastAPI
 from fastapi.responses import Response
 from pydantic import BaseModel
+
+from kenzy import kenzy_version
+from kenzy.fastapi_auth import (
+    install_logs_endpoint,
+    install_restart_endpoint,
+    install_service_auth,
+)
+from kenzy.logutil import quiet_health_access_log
 
 log = logging.getLogger(__name__)
 
@@ -66,8 +73,21 @@ _kokoro_speed: float = 1.0
 
 
 @app.get("/health")
-async def health() -> dict[str, str]:
-    return {"status": "ok"}
+async def health() -> dict[str, object]:
+    if _provider == "kokoro":
+        return {
+            "status": "ok",
+            "version": kenzy_version(),
+            "provider": "kokoro",
+            "voice": _kokoro_voice,
+        }
+    return {
+        "status": "ok",
+        "version": kenzy_version(),
+        "provider": "openai",
+        "model": _model,
+        "voice": _voice,
+    }
 
 
 @app.post("/speak")
@@ -145,6 +165,7 @@ def _resolve_device(device: str) -> str:
     if device != "auto":
         return device
     import torch  # type: ignore[import-untyped]
+
     if torch.cuda.is_available():
         return "cuda"
     if torch.backends.mps.is_available():
@@ -197,19 +218,26 @@ def main() -> None:
     global _kokoro_pipeline, _kokoro_voice, _kokoro_speed
 
     import uvicorn  # type: ignore[import-untyped]
-    import yaml  # type: ignore[import-untyped]
     from dotenv import load_dotenv  # type: ignore[import-untyped]
 
     load_dotenv()
 
-    config_path = sys.argv[1] if len(sys.argv) > 1 else "configs/tts.yaml"
-    with open(config_path) as fh:
-        cfg: dict[str, Any] = yaml.safe_load(fh)
+    from kenzy.logutil import configure_logging, level_value
+    from kenzy.serviceboot import load_service_config
 
-    log_level: int = getattr(logging, str(cfg.get("log_level", "info")).upper(), logging.INFO)
-    fmt = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
-    logging.basicConfig(level=logging.WARNING, format=fmt)
-    logging.getLogger("kenzy").setLevel(log_level)
+    configure_logging(logging.INFO)  # provisional, so the config pull's retries are visible
+
+    # Central config: pull from the server (blocking until it answers); an explicit
+    # config path loads locally instead (dev/offline escape hatch).
+    cfg: dict[str, Any] = load_service_config("tts")
+
+    configure_logging(level_value(cfg.get("log_level"), logging.INFO))
+    quiet_health_access_log()
+    install_service_auth(app)
+    install_logs_endpoint(
+        app, capture_level=level_value(cfg.get("log_capture_level"), logging.DEBUG)
+    )
+    install_restart_endpoint(app)
 
     _provider = str(cfg.get("provider", "openai")).lower()
 
@@ -225,12 +253,15 @@ def main() -> None:
         kcfg: dict[str, Any] = cfg.get("kokoro", {})
         _kokoro_voice = str(kcfg.get("voice", "af_heart"))
         _kokoro_speed = float(kcfg.get("speed", 1.0))
-        device        = _resolve_device(str(kcfg.get("device", "auto")))
-        lang_code     = str(kcfg.get("lang_code") or _kokoro_voice[0])
+        device = _resolve_device(str(kcfg.get("device", "auto")))
+        lang_code = str(kcfg.get("lang_code") or _kokoro_voice[0])
 
         log.info(
             "TTS provider: kokoro  voice=%s speed=%.2f device=%s lang=%s",
-            _kokoro_voice, _kokoro_speed, device, lang_code,
+            _kokoro_voice,
+            _kokoro_speed,
+            device,
+            lang_code,
         )
         _kokoro_pipeline = KPipeline(lang_code=lang_code, device=device)
 
@@ -238,14 +269,12 @@ def main() -> None:
         try:
             from openai import OpenAI  # type: ignore[import-untyped]
         except ImportError as exc:
-            raise RuntimeError(
-                "openai is not installed — run: pip install openai"
-            ) from exc
+            raise RuntimeError("openai is not installed — run: pip install openai") from exc
 
-        ocfg    = cfg.get("openai", {})
-        _model  = str(ocfg.get("model", "gpt-4o-mini-tts"))
-        _voice  = str(ocfg.get("voice", "sage"))
-        _speed  = float(ocfg.get("speed", 1.0))
+        ocfg = cfg.get("openai", {})
+        _model = str(ocfg.get("model", "gpt-4o-mini-tts"))
+        _voice = str(ocfg.get("voice", "sage"))
+        _speed = float(ocfg.get("speed", 1.0))
         _client = OpenAI()
         log.info("TTS provider: openai  model=%s voice=%s speed=%.2f", _model, _voice, _speed)
 

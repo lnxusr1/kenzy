@@ -15,6 +15,7 @@ from typing import Any
 # ---------------------------------------------------------------------------
 
 MSG_HELLO = "hello"
+MSG_CONFIG = "config"
 MSG_AUDIO_START = "audio_start"
 MSG_AUDIO_END = "audio_end"
 MSG_WAKEWORD = "wakeword"
@@ -23,25 +24,67 @@ MSG_STOP = "stop"
 MSG_ACK = "ack"
 MSG_TTS_START = "tts_start"
 MSG_TTS_END = "tts_end"
+MSG_RESTART = "restart"
+MSG_SET_ROOM = "set_room"
+MSG_REQUEST_LOGS = "request_logs"
+MSG_LOGS = "logs"
+MSG_STATUS = "status"  # node→server: report node health (e.g. audio init failed)
+MSG_TUNE_START = "tune_start"  # server→node: begin a bounded calibration window
+MSG_TUNE_STOP = "tune_stop"  # server→node: end calibration early
+MSG_TUNE_SAMPLE = "tune_sample"  # node→server: one calibration sample (rms/wake/vad)
+MSG_EXPECT_UTTERANCE = "expect_utterance"  # server→node: capture one utterance after the next TTS
+# Intercom (live two-way call between two rooms; gated by the receiver's consent).
+MSG_CALL_REQUEST = "call_request"  # server→node: ring the receiver (no audio yet)
+MSG_CALL_CANCEL = "call_cancel"  # server→node: caller hung up before accept
+MSG_INTERCOM_START = "intercom_start"  # server→node: consent accepted, begin the call
+MSG_INTERCOM_END = "intercom_end"  # server↔node: end the call
 
 # ---------------------------------------------------------------------------
 # Audio format (shared by node and server)
 # ---------------------------------------------------------------------------
 
-SAMPLE_RATE: int = 16_000       # Hz
-CHANNELS: int = 1               # mono
-SAMPLE_WIDTH: int = 2           # bytes per sample (int16)
-FRAME_MS: int = 80              # milliseconds per frame
-FRAME_SAMPLES: int = SAMPLE_RATE * FRAME_MS // 1000   # 1 280 samples
-FRAME_BYTES: int = FRAME_SAMPLES * SAMPLE_WIDTH        # 2 560 bytes
+SAMPLE_RATE: int = 16_000  # Hz
+CHANNELS: int = 1  # mono
+SAMPLE_WIDTH: int = 2  # bytes per sample (int16)
+FRAME_MS: int = 80  # milliseconds per frame
+FRAME_SAMPLES: int = SAMPLE_RATE * FRAME_MS // 1000  # 1 280 samples
 
 # ---------------------------------------------------------------------------
 # Message constructors
 # ---------------------------------------------------------------------------
 
 
-def hello(room_id: str, version: str = "1.0") -> str:
-    return json.dumps({"type": MSG_HELLO, "room_id": room_id, "version": version})
+def hello(
+    room_id: str,
+    node_id: str | None = None,
+    version: str = "1.0",
+    capabilities: dict[str, Any] | None = None,
+    token: str | None = None,
+    kenzy_version: str | None = None,
+) -> str:
+    """Node→server registration.
+
+    ``room_id`` is the human room *name* (sent to the backends as context).
+    ``node_id`` is the node's stable primary identifier; when omitted the server
+    falls back to using ``room_id`` as the key (legacy nodes). ``version`` is the
+    wire-protocol version; ``kenzy_version`` is the installed package version (for
+    the dashboard's per-host version view).
+    """
+    payload: dict[str, Any] = {"type": MSG_HELLO, "room_id": room_id, "version": version}
+    if node_id is not None:
+        payload["node_id"] = node_id
+    if capabilities is not None:
+        payload["capabilities"] = capabilities
+    if token is not None:
+        payload["token"] = token
+    if kenzy_version is not None:
+        payload["kenzy_version"] = kenzy_version
+    return json.dumps(payload)
+
+
+def config(node_config: dict[str, Any]) -> str:
+    """Server→node frame carrying the node's effective configuration."""
+    return json.dumps({"type": MSG_CONFIG, "config": node_config})
 
 
 def audio_start(session_id: str | None = None, room_id: str | None = None) -> tuple[str, str]:
@@ -59,7 +102,12 @@ def audio_end(session_id: str, reason: str = "silence") -> str:
 
 def wakeword(session_id: str | None, model: str, score: float) -> str:
     return json.dumps(
-        {"type": MSG_WAKEWORD, "session_id": session_id, "model": model, "score": round(float(score), 4)}
+        {
+            "type": MSG_WAKEWORD,
+            "session_id": session_id,
+            "model": model,
+            "score": round(float(score), 4),
+        }
     )
 
 
@@ -71,19 +119,113 @@ def stop() -> str:
     return json.dumps({"type": MSG_STOP})
 
 
+def restart() -> str:
+    return json.dumps({"type": MSG_RESTART})
+
+
+def set_room(room_id: str) -> str:
+    """Server→node: set the node's room name (the node persists + applies it)."""
+    return json.dumps({"type": MSG_SET_ROOM, "room_id": room_id})
+
+
+def request_logs(request_id: str, level: str = "", limit: int = 200) -> str:
+    return json.dumps(
+        {"type": MSG_REQUEST_LOGS, "request_id": request_id, "level": level, "limit": limit}
+    )
+
+
+def node_logs(request_id: str, entries: list[dict[str, Any]]) -> str:
+    return json.dumps({"type": MSG_LOGS, "request_id": request_id, "logs": entries})
+
+
+def status(
+    audio_ok: bool,
+    audio_error: str | None = None,
+    devices: list[dict[str, Any]] | None = None,
+) -> str:
+    """Node→server health update: sent when audio init fails (so the node can be
+    fixed/restarted remotely while staying connected) and when the audio-device
+    probe finishes (to deliver the device list for the dashboard picker)."""
+    payload: dict[str, Any] = {"type": MSG_STATUS, "audio_ok": audio_ok, "audio_error": audio_error}
+    if devices is not None:
+        payload["devices"] = devices
+    return json.dumps(payload)
+
+
+def tune_start(seconds: float = 20.0) -> str:
+    return json.dumps({"type": MSG_TUNE_START, "seconds": seconds})
+
+
+def tune_stop() -> str:
+    return json.dumps({"type": MSG_TUNE_STOP})
+
+
+def expect_utterance() -> str:
+    """Tell the node to auto-capture one utterance after the next TTS prompt finishes
+    (used by the consent gate and voice enrollment)."""
+    return json.dumps({"type": MSG_EXPECT_UTTERANCE})
+
+
+def tune_sample(
+    rms: float = 0.0, wake: float = 0.0, vad: float = 0.0, seq: int = 0, stopped: bool = False
+) -> str:
+    """One calibration measurement frame (or a final ``stopped`` marker)."""
+    return json.dumps(
+        {
+            "type": MSG_TUNE_SAMPLE,
+            "rms": rms,
+            "wake": wake,
+            "vad": vad,
+            "seq": seq,
+            "stopped": stopped,
+        }
+    )
+
+
 def ack(session_id: str) -> str:
     return json.dumps({"type": MSG_ACK, "session_id": session_id})
 
 
 def tts_start(session_id: str, sample_rate: int = 22050, channels: int = 1) -> str:
     return json.dumps(
-        {"type": MSG_TTS_START, "session_id": session_id,
-         "sample_rate": sample_rate, "channels": channels}
+        {
+            "type": MSG_TTS_START,
+            "session_id": session_id,
+            "sample_rate": sample_rate,
+            "channels": channels,
+        }
     )
 
 
 def tts_end(session_id: str) -> str:
     return json.dumps({"type": MSG_TTS_END, "session_id": session_id})
+
+
+def call_request(from_room: str) -> str:
+    """Server→node: ring the receiver for an intercom call. No audio is bridged yet."""
+    return json.dumps({"type": MSG_CALL_REQUEST, "from_room": from_room})
+
+
+def call_cancel() -> str:
+    """Server→node: the caller cancelled before the receiver accepted."""
+    return json.dumps({"type": MSG_CALL_CANCEL})
+
+
+def intercom_start(peer_room: str, sample_rate: int = SAMPLE_RATE, channels: int = CHANNELS) -> str:
+    """Server→node: consent accepted — begin live two-way audio with the peer room."""
+    return json.dumps(
+        {
+            "type": MSG_INTERCOM_START,
+            "peer_room": peer_room,
+            "sample_rate": sample_rate,
+            "channels": channels,
+        }
+    )
+
+
+def intercom_end(reason: str = "ended") -> str:
+    """End an intercom call (server→node to tear down, or node→server on wake word)."""
+    return json.dumps({"type": MSG_INTERCOM_END, "reason": reason})
 
 
 def parse(raw: str | bytes) -> dict[str, Any]:
