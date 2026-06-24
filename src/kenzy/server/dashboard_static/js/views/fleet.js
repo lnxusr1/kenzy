@@ -49,6 +49,7 @@ function NodeCard({ node, onConfigure }) {
         <dt>address</dt><dd>${node.ip || "—"}</dd>
         <dt>session</dt><dd>${node.session_id || "—"}</dd>
         <dt>link</dt><dd>${node.connected ? "connected" : "down"}</dd>
+        <dt>version</dt><dd>${node.version || "—"}</dd>
       </dl>
       ${audioFailed
         ? html`<div class="unclaimed" title=${node.audio_error || ""}>⚠ audio failed — check the device, then Restart</div>`
@@ -61,7 +62,9 @@ function NodeCard({ node, onConfigure }) {
 
 function ServiceChip({ svc, onConfigure }) {
   const detail = svc.detail || {};
-  const bits = [detail.model, detail.provider, detail.voice].filter(Boolean).join(" · ");
+  const bits = [detail.version && "v" + detail.version, detail.model, detail.provider, detail.voice]
+    .filter(Boolean)
+    .join(" · ");
   return html`
     <div class="chip" role="button" tabindex="0" title="Configure ${svc.name}"
          onClick=${() => onConfigure(svc.name)}>

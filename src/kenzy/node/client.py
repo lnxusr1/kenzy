@@ -54,7 +54,7 @@ import websockets
 import websockets.exceptions
 from websockets.asyncio.client import ClientConnection
 
-from kenzy import protocol
+from kenzy import kenzy_version, protocol
 from kenzy.logutil import TRACE
 
 log = logging.getLogger(__name__)
@@ -1527,6 +1527,7 @@ class NodeClient:
                 node_id=self._node_id,
                 capabilities=capabilities,
                 token=self._join_token,
+                kenzy_version=kenzy_version(),
             )
         )
         log.info("Connected; sent hello as room '%s' (node %s)", self._room_id, self._node_id)

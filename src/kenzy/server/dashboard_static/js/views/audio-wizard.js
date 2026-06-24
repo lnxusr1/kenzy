@@ -184,7 +184,7 @@ export function AudioWizard({ node, info, onClose, onApplied }) {
       <p class="calib-read">RMS <span class="mono">${Math.round(tune.latest.rms)}</span>
         ${tune.stats.rms
           ? html` · floor <span class="mono">${tune.stats.rms.p90}</span> · suggest
-              <span class="mono">${sug ?? "—"}</span> · current <span class="mono">${fmt(cv)}</span>`
+              ${" "}<span class="mono">${sug ?? "—"}</span> · current <span class="mono">${fmt(cv)}</span>`
           : html` · ${tune.running ? "listening…" : "not started"}`}</p>
       <p class="wiz-hint">${hint}</p>
       <div class="wiz-actions">
@@ -230,7 +230,7 @@ export function AudioWizard({ node, info, onClose, onApplied }) {
         <p class="calib-read">score <span class="mono">${round2(tune.latest.wake)}</span>
           ${tune.stats.wake
             ? html` · peak <span class="mono">${round2(tune.stats.wake.max)}</span> · suggest
-                <span class="mono">${sw ?? "—"}</span> · current <span class="mono">${fmt(cw)}</span>`
+                ${" "}<span class="mono">${sw ?? "—"}</span> · current <span class="mono">${fmt(cw)}</span>`
             : html` · ${tune.running ? "listening…" : "not started"}`}</p>
       </div>
       <div class="calib-grp"><span class="micro">voice-activity (VAD) score</span>
@@ -241,7 +241,7 @@ export function AudioWizard({ node, info, onClose, onApplied }) {
         <p class="calib-read">score <span class="mono">${round2(tune.latest.vad)}</span>
           ${tune.stats.vad
             ? html` · suggest <span class="mono">${sv ?? "—"}</span> · current
-                <span class="mono">${fmt(cvd)}</span>
+                ${" "}<span class="mono">${fmt(cvd)}</span>
                 ${pendingVad != null ? html` · queued <span class="mono">${pendingVad}</span>` : null}`
             : null}</p>
       </div>

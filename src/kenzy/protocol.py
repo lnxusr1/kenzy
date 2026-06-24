@@ -60,12 +60,15 @@ def hello(
     version: str = "1.0",
     capabilities: dict[str, Any] | None = None,
     token: str | None = None,
+    kenzy_version: str | None = None,
 ) -> str:
     """Node→server registration.
 
     ``room_id`` is the human room *name* (sent to the backends as context).
     ``node_id`` is the node's stable primary identifier; when omitted the server
-    falls back to using ``room_id`` as the key (legacy nodes).
+    falls back to using ``room_id`` as the key (legacy nodes). ``version`` is the
+    wire-protocol version; ``kenzy_version`` is the installed package version (for
+    the dashboard's per-host version view).
     """
     payload: dict[str, Any] = {"type": MSG_HELLO, "room_id": room_id, "version": version}
     if node_id is not None:
@@ -74,6 +77,8 @@ def hello(
         payload["capabilities"] = capabilities
     if token is not None:
         payload["token"] = token
+    if kenzy_version is not None:
+        payload["kenzy_version"] = kenzy_version
     return json.dumps(payload)
 
 

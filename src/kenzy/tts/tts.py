@@ -26,6 +26,7 @@ from fastapi import FastAPI
 from fastapi.responses import Response
 from pydantic import BaseModel
 
+from kenzy import kenzy_version
 from kenzy.fastapi_auth import (
     install_logs_endpoint,
     install_restart_endpoint,
@@ -74,8 +75,19 @@ _kokoro_speed: float = 1.0
 @app.get("/health")
 async def health() -> dict[str, object]:
     if _provider == "kokoro":
-        return {"status": "ok", "provider": "kokoro", "voice": _kokoro_voice}
-    return {"status": "ok", "provider": "openai", "model": _model, "voice": _voice}
+        return {
+            "status": "ok",
+            "version": kenzy_version(),
+            "provider": "kokoro",
+            "voice": _kokoro_voice,
+        }
+    return {
+        "status": "ok",
+        "version": kenzy_version(),
+        "provider": "openai",
+        "model": _model,
+        "voice": _voice,
+    }
 
 
 @app.post("/speak")

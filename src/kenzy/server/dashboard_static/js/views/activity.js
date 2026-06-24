@@ -33,7 +33,7 @@ export function ActivityView() {
   if (sessions === null) return html`<div class="empty">Loading…</div>`;
   if (!sessions.length)
     return html`<div class="empty">No activity recorded yet. Requires
-      <span class="mono">dashboard.logs: true</span>; talk to a node to populate it.</div>`;
+      ${" "}<span class="mono">dashboard.logs: true</span>; talk to a node to populate it.</div>`;
 
   const n = sessions.length;
   const fastN = sessions.filter((s) => s.fast).length;

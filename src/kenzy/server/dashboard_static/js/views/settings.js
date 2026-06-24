@@ -227,13 +227,13 @@ export function SettingsView({ onLogout }) {
         <div class="card pad">
           ${s.join_token
             ? html`<p class="micro">Join token — add a new room node with it:
-                  <code class="mono">kenzy-init --profile node --token …</code> (or the
+                  ${" "}<code class="mono">kenzy-init --profile node --token …</code> (or the
                   installer's <code class="mono">--token</code>). It must match on every node.</p>
                 <${CopyField} value=${s.join_token} />`
             : html`<p class="micro">⚠ No join token is set, so any device on the network can
                 register as a node and read service config. Set
-                <code class="mono">discovery.token</code> in server.yaml (or re-run
-                <code class="mono">kenzy-init</code>) to require one.</p>`}
+                ${" "}<code class="mono">discovery.token</code> in server.yaml (or re-run
+                ${" "}<code class="mono">kenzy-init</code>) to require one.</p>`}
           ${s.api_token
             ? html`<p class="micro" style="margin-top:var(--s4)">API/CLI bearer
                   (<code class="mono">dashboard.auth_token</code>):</p>

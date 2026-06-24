@@ -26,7 +26,7 @@ export function SpeakersView() {
   if (!data.reachable)
     return html`<div class="empty">The speaker service isn't reachable, so profiles can't be
       managed. Check <span class="mono">speaker.url</span> and that
-      <span class="mono">kenzy-speaker</span> is running.</div>`;
+      ${" "}<span class="mono">kenzy-speaker</span> is running.</div>`;
 
   const controls = data.controls;
   const speakers = data.speakers || [];
@@ -75,7 +75,7 @@ export function SpeakersView() {
         : null}
       ${speakers.length === 0
         ? html`<div class="empty">No voices enrolled yet. Use
-            <span class="mono">kenzy-enroll</span> on the server, or enroll from a room below.</div>`
+            ${" "}<span class="mono">kenzy-enroll</span> on the server, or enroll from a room below.</div>`
         : html`<div class="card">
             <div class="sk-list">
               ${speakers.map(

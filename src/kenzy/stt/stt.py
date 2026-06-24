@@ -20,6 +20,7 @@ import numpy as np
 from fastapi import FastAPI
 from pydantic import BaseModel
 
+from kenzy import kenzy_version
 from kenzy.fastapi_auth import (
     install_logs_endpoint,
     install_restart_endpoint,
@@ -58,7 +59,12 @@ _model_size: str = ""  # surfaced on /health for the dashboard
 
 @app.get("/health")
 async def health() -> dict[str, object]:
-    return {"status": "ok", "model": _model_size, "language": _language or "auto"}
+    return {
+        "status": "ok",
+        "version": kenzy_version(),
+        "model": _model_size,
+        "language": _language or "auto",
+    }
 
 
 @app.post("/transcribe", response_model=TranscribeResponse)

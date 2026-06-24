@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import asyncio
 import hmac
-import importlib.metadata
 import json
 import logging
 import os
@@ -43,7 +42,7 @@ from websockets.asyncio.server import ServerConnection
 from websockets.datastructures import Headers
 from websockets.http11 import Request, Response
 
-from kenzy import protocol
+from kenzy import kenzy_version, protocol
 from kenzy.config import SERVICES
 from kenzy.serviceauth import check_bearer
 from kenzy.speaker import DEFAULT_ENROLL_PROMPTS
@@ -214,6 +213,9 @@ class NodeSession:
     # Capabilities announced in `hello` (audio device + the device probe used by the
     # dashboard's device picker). Not persisted; refreshed on each connect.
     capabilities: dict[str, Any] = field(default_factory=dict)
+    # Installed kenzy package version the node reported in `hello` (None = legacy node
+    # that didn't send one). For the dashboard's per-host version view.
+    kenzy_version: str | None = field(default=None)
 
     async def send_json(self, payload: dict[str, Any]) -> None:
         await self.ws.send(json.dumps(payload))
@@ -779,7 +781,13 @@ class AudioServer:
         if effective.get("room_id"):
             room_id = str(effective["room_id"])
 
-        session = NodeSession(ws=ws, node_id=node_id, room_id=room_id, capabilities=caps)
+        session = NodeSession(
+            ws=ws,
+            node_id=node_id,
+            room_id=room_id,
+            capabilities=caps,
+            kenzy_version=(str(msg["kenzy_version"]) if msg.get("kenzy_version") else None),
+        )
 
         async with self._lock:
             old = self._nodes.get(node_id)
@@ -1930,10 +1938,7 @@ def main() -> None:
     if discovery_cfg.get("enabled", True):
         from kenzy.discovery import ServerAdvertiser
 
-        try:
-            version = importlib.metadata.version("kenzy")
-        except importlib.metadata.PackageNotFoundError:
-            version = "0"
+        version = kenzy_version()
         auth = "required" if discovery_cfg.get("token") else "none"
         advertiser = ServerAdvertiser(
             port=server._port,

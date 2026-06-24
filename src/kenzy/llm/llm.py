@@ -32,6 +32,7 @@ from typing import Any
 from fastapi import FastAPI
 from pydantic import BaseModel
 
+from kenzy import kenzy_version
 from kenzy.fastapi_auth import (
     install_logs_endpoint,
     install_restart_endpoint,
@@ -174,7 +175,7 @@ Example (output this format exactly):
 
 @app.get("/health")
 async def health() -> dict[str, object]:
-    return {"status": "ok", "model": _model}
+    return {"status": "ok", "version": kenzy_version(), "model": _model}
 
 
 class SkillToggle(BaseModel):

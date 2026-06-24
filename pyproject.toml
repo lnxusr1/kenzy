@@ -7,6 +7,31 @@ name = "kenzy"
 version = "3.1.0"
 description = "Distributed home voice-assistant: kenzy-node, kenzy-server, kenzy-stt, kenzy-tts, kenzy-llm, kenzy-speaker"
 requires-python = ">=3.11"
+readme = "README.md"
+license = { file = "LICENSE" }
+authors = [{ name = "lnxusr1" }]
+keywords = [
+    "voice-assistant",
+    "home-automation",
+    "speech-recognition",
+    "text-to-speech",
+    "llm",
+    "wakeword",
+    "raspberry-pi",
+    "self-hosted",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Home Automation",
+    "Topic :: Multimedia :: Sound/Audio :: Speech",
+]
 
 # Core dependencies shared by both node and server
 dependencies = [
@@ -101,6 +126,12 @@ kenzy-enroll  = "kenzy.speaker.enroll:main"
 kenzy-passwd  = "kenzy.passwd:main"
 kenzy-setup   = "kenzy.setup:main"
 kenzy-init    = "kenzy.init:main"
+
+[project.urls]
+Homepage = "https://kenzy.dev"
+Documentation = "https://docs.kenzy.dev"
+Repository = "https://github.com/lnxusr1/kenzy"
+Changelog = "https://github.com/lnxusr1/kenzy/blob/main/CHANGELOG.md"
 
 [tool.setuptools.packages.find]
 where = ["src"]

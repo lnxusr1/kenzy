@@ -16,7 +16,6 @@ import asyncio
 import base64
 import binascii
 import hmac
-import importlib.metadata
 import json
 import logging
 import secrets
@@ -30,7 +29,7 @@ import websockets
 from websockets.datastructures import Headers
 from websockets.http11 import Request, Response
 
-from kenzy import serviceauth
+from kenzy import kenzy_version, serviceauth
 from kenzy.logutil import install_ring_handler, level_value
 
 if TYPE_CHECKING:
@@ -293,6 +292,7 @@ class Dashboard:
                     "session_id": session.session_id,
                     "audio_ok": bool(session.audio_ok),
                     "audio_error": session.audio_error,
+                    "version": session.kenzy_version,
                 }
             )
         return nodes
@@ -395,10 +395,7 @@ class Dashboard:
 
     def _settings_state(self) -> dict[str, Any]:
         """Read-only server/dashboard info shown on the Settings page."""
-        try:
-            version = importlib.metadata.version("kenzy")
-        except importlib.metadata.PackageNotFoundError:
-            version = "dev"
+        version = kenzy_version()
         return {
             "version": version,
             "username": self._dcfg.auth_username,

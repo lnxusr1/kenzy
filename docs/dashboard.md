@@ -45,10 +45,11 @@ change takes effect immediately and signs out other sessions.
 The landing page lists:
 
 - **Room nodes** — one card per connected node, showing its room name, a short node
-  id, IP address, and live status (idle / streaming). Cards flagged **⚑ unconfigured**
-  have no saved per-node config yet. A **Configure** button opens the node editor.
+  id, IP address, installed Kenzy **version**, and live status (idle / streaming). Cards
+  flagged **⚑ unconfigured** have no saved per-node config yet. A **Configure** button
+  opens the node editor.
 - **Backend services** — STT, TTS, LLM, and Speaker health (from each service's
-  `/health`), with a few details (model, voice, provider).
+  `/health`), with a few details (version, model, voice, provider).
 
 The status pill (top right) shows whether the live channel is connected and keeps a
 running "last update" time. State is pushed live over a WebSocket, falling back to
