@@ -53,3 +53,5 @@ design/
 site/
 www/
 screenshot_site.py
+
+xbuild_pypi.sh
