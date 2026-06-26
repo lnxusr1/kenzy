@@ -1,7 +1,8 @@
 # Dashboard
 
-`kenzy-server` can serve an **opt-in** web dashboard — a fleet manager for your
-Kenzy deployment. It is **off by default** and adds zero overhead when disabled
+`kenzy-server` serves a web dashboard — a fleet manager for your
+Kenzy deployment. It is **on by default** in the shipped config (localhost-bound);
+set `dashboard.enabled: false` to turn it off, which adds zero overhead when disabled
 (nothing is mounted, no node-side cost). When enabled it gives you one place to see
 every room node and backend service, configure nodes, control them, send
 announcements, and read logs.

@@ -57,7 +57,7 @@ The server is also the config authority for the backend HTTP services. It serves
 
 ## Dashboard
 
-`kenzy-server` can serve an **opt-in** web fleet manager (`dashboard.enabled`, off by default) on its own bind/port. When disabled it is wired up nowhere and adds zero overhead. When enabled it serves a no-build SPA over the `websockets` HTTP hook (no new dependency): username/password login, a live fleet/health view, a per-node config editor with room rename, a **Services** editor for the backend services' central config (with restart), node controls (trigger/stop/restart), TTS announcements, a pull-based log viewer (with on-demand TRACE capture for a node), and a settings page (system info, feature flags, password change). It reuses the server's existing registry and connections — no new transport. See the [Dashboard guide](dashboard.md).
+`kenzy-server` serves a web fleet manager (`dashboard.enabled`, on by default in the shipped config, localhost-bound) on its own bind/port. Set it false and it is wired up nowhere and adds zero overhead. When enabled it serves a no-build SPA over the `websockets` HTTP hook (no new dependency): username/password login, a live fleet/health view, a per-node config editor with room rename, a **Services** editor for the backend services' central config (with restart), node controls (trigger/stop/restart), TTS announcements, a pull-based log viewer (with on-demand TRACE capture for a node), and a settings page (system info, feature flags, password change). It reuses the server's existing registry and connections — no new transport. See the [Dashboard guide](dashboard.md).
 
 ## Node state machine
 
