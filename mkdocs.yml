@@ -12,10 +12,10 @@ theme:
   prev_next_buttons_location: none
   titles_only: true
   collapse_navigation: false
-  logo: https://kenzy.dev/assets/img/logo.png
+  logo: https://docs.kenzy.dev/img/logo-sm.png
 
-#extra_css:
-#  - css/extra.css
+extra_css:
+  - css/extra.css
 
 plugins:
   - search

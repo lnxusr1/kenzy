@@ -111,7 +111,8 @@ def _get_embedding(pcm: bytes) -> np.ndarray[Any, Any]:
     waveform = torch.tensor(audio).unsqueeze(0)  # (1, samples)
     with torch.no_grad():
         emb = _classifier.encode_batch(waveform)  # (1, 1, dim)
-    return emb.squeeze().numpy()  # (dim,)
+    embedding: np.ndarray[Any, Any] = emb.squeeze().numpy()  # (dim,)
+    return embedding
 
 
 def _cosine_sim(a: np.ndarray[Any, Any], b: np.ndarray[Any, Any]) -> float:

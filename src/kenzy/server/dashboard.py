@@ -577,6 +577,9 @@ class Dashboard:
         if path == "/api/skills":
             return self._json(200, await self._skills_state())
 
+        if path == "/api/ha/curation":
+            return self._json(200, await self._ha_curation_state())
+
         if path == "/api/speakers":
             return self._json(200, await self._speakers_state())
 
@@ -736,6 +739,53 @@ class Dashboard:
             return data if isinstance(data, dict) else None
         except Exception:
             return None
+
+    async def _llm_curation_request(
+        self, method: str, payload: dict[str, Any] | None = None
+    ) -> dict[str, Any] | None:
+        """GET/POST the LLM service's /ha/curation endpoint; None if unreachable."""
+        health_url = self._service_urls.get("llm")
+        if not health_url:
+            return None
+        base = health_url[: -len("/health")]
+        import httpx
+
+        try:
+            async with httpx.AsyncClient(timeout=20.0) as client:
+                if method == "POST":
+                    r = await client.post(
+                        f"{base}/ha/curation",
+                        json=payload or {},
+                        headers=self._server._service_headers(),
+                    )
+                else:
+                    r = await client.get(
+                        f"{base}/ha/curation", headers=self._server._service_headers()
+                    )
+                r.raise_for_status()
+            data = r.json()
+            return data if isinstance(data, dict) else None
+        except Exception:
+            return None
+
+    async def _ha_curation_state(self) -> dict[str, Any]:
+        info = await self._llm_curation_request("GET")
+        return {
+            "reachable": info is not None,
+            "controls": self._dcfg.controls,
+            "curation": (info or {}).get("curation", {}),
+            "devices": (info or {}).get("devices", []),
+            "ha_reachable": bool((info or {}).get("reachable", False)),
+        }
+
+    async def _set_ha_curation(self, curation: dict[str, Any]) -> tuple[bool, str | None]:
+        """Persist the curation document via the LLM service."""
+        res = await self._llm_curation_request("POST", {"curation": curation})
+        if res is None:
+            return False, "LLM service not reachable"
+        if not res.get("ok"):
+            return False, res.get("error") or "could not save curation"
+        return True, None
 
     async def _skills_state(self) -> dict[str, Any]:
         info = await self._llm_skills_request("GET")
@@ -1107,6 +1157,14 @@ class Dashboard:
             if not name:
                 return await ack(False, "skill name is required")
             ok, err = await self._set_skill_disabled(name, bool(msg.get("disabled")))
+            await ack(ok, err)
+        elif mtype == "set_ha_curation":
+            if not self._dcfg.controls:
+                return await ack(False, "controls are disabled (set dashboard.controls: true)")
+            curation = msg.get("curation")
+            if not isinstance(curation, dict):
+                return await ack(False, "curation document is required")
+            ok, err = await self._set_ha_curation(curation)
             await ack(ok, err)
         elif mtype == "delete_speaker":
             if not self._dcfg.controls:

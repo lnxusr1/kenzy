@@ -54,4 +54,5 @@ site/
 www/
 screenshot_site.py
 
-xbuild_pypi.sh
+build_pypi.sh
+publish.sh

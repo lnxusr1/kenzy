@@ -96,8 +96,7 @@ skills:
 
   home_assistant:
     url: "http://homeassistant.local:8123"
-    device_ids_yaml: "data/home_assistant/device_ids.yaml"
-    device_ids_json: "data/home_assistant/device_ids.json"
+    curation_file: "data/home_assistant/curation.yaml"   # optional
     default_room: "living_room"
 ```
 

@@ -91,11 +91,14 @@ Controls and queries smart home devices via the [Home Assistant REST API](https:
 | Key | Default | Description |
 |---|---|---|
 | `url` | `"http://homeassistant.local:8123"` | Home Assistant base URL |
-| `model` | `"gpt-4o"` | Model used for device resolution |
+| `model` | `"gpt-4o"` | Model used by the fallback resolver |
 | `base_url` | — | Base URL for local model providers |
-| `device_ids_yaml` | `"data/home_assistant/device_ids.yaml"` | Device hierarchy (human-readable aliases) |
-| `device_ids_json` | `"data/home_assistant/device_ids.json"` | Alias → HA entity ID mapping |
+| `curation_file` | `"data/home_assistant/curation.yaml"` | Aliases, notes, room defaults, and exclusions (optional) |
+| `cache_ttl` | `300` | Seconds to cache the live HA topology pull |
+| `domains` | `light, switch, fan, cover, lock, climate` | Entity domains exposed to voice control |
 | `default_room` | `""` | Room assumed when the user does not specify one |
+
+The device inventory is pulled live from Home Assistant — there are no device-map files to maintain. See [Home Assistant](home-assistant.md).
 
 **Requires:** `HA_API_KEY` in `.env`
 

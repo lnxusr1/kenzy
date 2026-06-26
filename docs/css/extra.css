@@ -1,6 +1,6 @@
 /* Kenzy palette over the ReadTheDocs theme — petrol + golden accent. */
 :root {
-  --kenzy-petrol: #013249;
+  --kenzy-petrol: #06303f;
   --kenzy-gold: #ffb500;
 }
 
@@ -23,4 +23,24 @@
 /* Subtitle/version under the logo, in golden. */
 .wy-side-nav-search > div.version {
   color: var(--kenzy-gold);
+}
+
+.wy-side-nav-search {
+  border-bottom: 1px solid #aaa;
+}
+
+.wy-nav-side {
+  background: #184758;
+}
+
+.wy-menu-vertical p.caption {
+  color: var(--kenzy-gold);
+}
+
+.wy-menu-vertical li.current>a {
+  background: rgba(255, 181, 0, 0.3);
+}
+
+.rst-versions {
+    display: none;
 }

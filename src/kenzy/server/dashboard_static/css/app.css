@@ -545,4 +545,39 @@ button { font: inherit; cursor: pointer; }
 .enroll-row select { flex: 0 1 200px; }
 .enroll-row .btn-primary { width: auto; flex: none; margin: 0; padding: 10px var(--s5); }
 
+/* ---- Home Assistant curation editor ---- */
+.ha-actions { display: flex; align-items: center; gap: var(--s4); margin: .5rem 0 1rem; }
+.ha-actions .btn-primary { width: auto; margin: 0; padding: 10px var(--s5); }
+.ha-bulk { display: flex; flex-direction: column; gap: var(--s3); }
+.ha-bulk label { display: flex; flex-direction: column; gap: 4px; }
+.ha-bulk input, .ha-bulk textarea {
+  background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius);
+  color: var(--text); font: inherit; font-family: var(--font-mono); padding: 8px var(--s3);
+  resize: vertical;
+}
+.ha-floor { margin-bottom: var(--s4); }
+.ha-floor-h { margin: var(--s3) 0; font-size: 14px; letter-spacing: .04em; text-transform: uppercase; color: var(--text-faint); }
+.ha-area { padding: 0; overflow: hidden; }
+.ha-area-h { padding: var(--s3) var(--s4); font-weight: 700; border-bottom: 1px solid var(--border); background: var(--panel-2, var(--panel)); }
+.ha-dom + .ha-dom { border-top: 1px solid var(--border); }
+.ha-dom-h { padding: 6px var(--s4) 0; }
+.ha-row {
+  display: grid; align-items: center; gap: var(--s3);
+  grid-template-columns: minmax(200px, 1.4fr) minmax(120px, 1fr) minmax(120px, 1.2fr) auto;
+  padding: var(--s3) var(--s4); border-bottom: 1px solid var(--border);
+}
+.ha-row:last-child { border-bottom: 0; }
+.ha-row.excluded { opacity: .55; }
+.ha-ent { min-width: 0; display: flex; flex-direction: column; }
+.ha-ent .micro { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ha-in {
+  background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius);
+  color: var(--text); font: inherit; padding: 7px var(--s3); min-width: 0;
+}
+.ha-flags { display: flex; gap: var(--s3); flex-wrap: wrap; }
+.ha-chk { display: flex; align-items: center; gap: 4px; font-size: 12px; color: var(--text-faint); white-space: nowrap; }
+@media (max-width: 720px) {
+  .ha-row { grid-template-columns: 1fr; }
+}
+
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }

@@ -156,6 +156,24 @@ the fast path), and is **persisted** to `configs/services/llm.yaml` (`skills.dis
 so it survives a restart. Disabling a skill also disables any same-named fast intent.
 Without `controls`, the tab is read-only.
 
+## Home Assistant
+
+The **Home Assistant** tab edits the device **curation** layer for the Home Assistant
+skill — the small set of things HA can't store. The device inventory itself is pulled
+**live from HA** (via `kenzy-llm`) and shown as a tree (`floor → area → domain → entity`);
+you don't list devices here. Each entity row has:
+
+- **aliases** — extra spoken names ("the lamp", "black light")
+- **note** — free-form context handed to the resolver ("the light by the chair")
+- **default** — include in this room's bare "turn on the lights" set
+- **in groups** — uncheck to keep it addressable by name but out of group commands (a bare "turn off all the lights" still includes it; only **exclude** removes it from voice entirely)
+- **exclude** — remove it from voice control entirely
+
+plus **bulk exclusions** (patterns/domains/areas) for things like smart-plug status LEDs
+that show up as controllable lights. Saving writes `curation.yaml` and refreshes the
+topology immediately. The tab needs `kenzy-llm` reachable and `dashboard.controls: true`
+to edit (read-only otherwise). See [Home Assistant](skills/home-assistant.md).
+
 ## Speakers
 
 The **Speakers** tab manages the enrolled voice profiles held by `kenzy-speaker`. It

@@ -186,7 +186,8 @@ def _synthesise_kokoro(text: str) -> bytes:
         return b""
 
     combined = np.concatenate(segments)
-    return (np.clip(combined, -1.0, 1.0) * 32767).astype(np.int16).tobytes()
+    pcm_bytes: bytes = (np.clip(combined, -1.0, 1.0) * 32767).astype(np.int16).tobytes()
+    return pcm_bytes
 
 
 # ---------------------------------------------------------------------------

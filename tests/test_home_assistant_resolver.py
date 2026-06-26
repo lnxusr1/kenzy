@@ -20,7 +20,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 @pytest.fixture
-def ha():
+def ha(monkeypatch):
     """Load the bundled home_assistant skill by path with the index from real files."""
     # Resolve paths relative to project root regardless of cwd.
     reg.set_config(
@@ -46,6 +46,14 @@ def ha():
     overlay_path = ROOT / "data/home_assistant/device_overlay.yaml"
     overlay = yaml.safe_load(overlay_path.read_text()) if overlay_path.exists() else {}
     mod._INDEX = mod._index_from(yaml_text, device_map, overlay or {})
+    mod._RESOLVER_TEXT = yaml_text
+
+    # These tests exercise the offline resolution engine against the static
+    # files, so bypass the live-HA topology pull entirely.
+    async def _noop_view():
+        return None
+
+    monkeypatch.setattr(mod, "_ensure_view", _noop_view)
     return mod
 
 
@@ -188,6 +196,20 @@ def test_excluded_device_still_addressable_directly(ha):
     # Excluded only from groups — naming it directly still works.
     codes = ha._resolve_target(ha._get_index(), "turn_on", "sink light", "kitchen")
     assert codes == ["kt_sink_light"]
+
+
+def test_turn_off_all_overrides_in_group_exclude(ha):
+    # "turn off ALL the lights" means literally all — the in_group:false floor
+    # (kt_sink_light) is bypassed for an explicit deactivate-all.
+    codes = ha._resolve_target(ha._get_index(), "turn_off", "all the lights", "kitchen")
+    assert "kt_sink_light" in codes
+
+
+def test_turn_on_all_still_honors_in_group_exclude(ha):
+    # "turn on all the lights" still respects in_group:false — a name-only light
+    # shouldn't blaze on with a bare "all".
+    codes = ha._resolve_target(ha._get_index(), "turn_on", "all the lights", "kitchen")
+    assert "kt_sink_light" not in codes
 
 
 # ---------------------------------------------------------------------------

@@ -179,14 +179,11 @@ async def my_skill(query: str) -> str:
 
 Per-skill config lives under `skills.<name>` in `llm.yaml`. Secrets come from environment variables in `.env`.
 
-### Home Assistant device map
+### Home Assistant device topology
 
-Smart home control uses two files in `data/home_assistant/`:
+Smart home control pulls your device **topology live from Home Assistant** — which entities exist, their friendly names, domains, and floor/area placement — so there's no device-map file to maintain. Add a device in HA and it's voice-controllable on the next refresh. Commands resolve in two tiers: a deterministic fast path (padacioso + rapidfuzz, no LLM) for everyday imperatives, and a sub-LLM fallback that reads the live `floor → area → type → entity` outline for harder requests.
 
-- `device_ids.yaml` — human-readable device hierarchy (floors → rooms → types → aliases)
-- `device_ids.json` — flat alias → HA entity ID mapping
-
-The LLM resolves natural language commands against the YAML to find the right devices, then looks up their entity IDs in the JSON before calling the HA API.
+The only hand-authored input is an optional `data/home_assistant/curation.yaml` — the voice layer HA can't store: spoken aliases, per-device notes, room group-defaults, and voice-control exclusions. Edit it directly or from the dashboard's **Home Assistant** tab. Run `kenzy-ha-devices` to print the live tree with each entity ID and its included/excluded status. (If HA is unreachable and legacy `device_ids.yaml`/`device_ids.json` files are present, the skill falls back to them.)
 
 ## Development
 

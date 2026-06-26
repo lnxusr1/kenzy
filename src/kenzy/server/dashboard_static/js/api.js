@@ -49,3 +49,9 @@ export async function getSpeakers() {
   if (!r.ok) throw new Error(`speakers ${r.status}`);
   return await r.json();
 }
+
+export async function getHaCuration() {
+  const r = await fetch("/api/ha/curation");
+  if (!r.ok) throw new Error(`ha curation ${r.status}`);
+  return await r.json();
+}
