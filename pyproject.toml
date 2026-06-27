@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "kenzy"
-version = "3.1.0"
+version = "3.2.0"
 description = "Distributed home voice-assistant: kenzy-node, kenzy-server, kenzy-stt, kenzy-tts, kenzy-llm, kenzy-speaker"
 requires-python = ">=3.11"
 readme = "README.md"
@@ -121,6 +121,7 @@ kenzy-server  = "kenzy.server.server:main"
 kenzy-stt     = "kenzy.stt.stt:main"
 kenzy-tts     = "kenzy.tts.tts:main"
 kenzy-llm     = "kenzy.llm.llm:main"
+kenzy-ha-devices = "kenzy.llm.ha_devices:main"
 kenzy-speaker = "kenzy.speaker.speaker:main"
 kenzy-enroll  = "kenzy.speaker.enroll:main"
 kenzy-passwd  = "kenzy.passwd:main"
@@ -172,6 +173,11 @@ select = ["E", "F", "I", "UP"]
 python_version = "3.11"
 strict         = true
 mypy_path      = "src"
+# strict enables warn_unused_ignores, but the `# type: ignore[import-untyped]`
+# comments on optional third-party imports (sounddevice, torch, litellm, yaml …)
+# are needed or not depending on which extras are installed and the mypy version.
+# Keep the protective ignores; don't fail when a given environment doesn't need one.
+warn_unused_ignores = false
 
 [[tool.mypy.overrides]]
 module = "kenzy.llm.builtin_skills.*"

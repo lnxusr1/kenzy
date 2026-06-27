@@ -119,6 +119,29 @@ def _dotted_set(d: dict[str, Any], key: str, value: Any) -> None:
     cur[parts[-1]] = value
 
 
+def _version_tuple(v: str) -> tuple[int, ...]:
+    """Best-effort numeric version tuple (leading digits of each dotted segment),
+    e.g. ``"3.1.10"`` → ``(3, 1, 10)``. Non-numeric segments contribute 0."""
+    out: list[int] = []
+    for seg in v.split(".")[:4]:
+        digits = ""
+        for ch in seg:
+            if ch.isdigit():
+                digits += ch
+            else:
+                break
+        out.append(int(digits) if digits else 0)
+    return tuple(out)
+
+
+def _is_newer(latest: str, current: str) -> bool:
+    """True if ``latest`` is a newer version than ``current`` (numeric compare)."""
+    try:
+        return _version_tuple(latest) > _version_tuple(current)
+    except Exception:
+        return False
+
+
 def _coerce_server_value(raw: Any, typ: str) -> Any:
     if typ == "bool":
         return bool(raw)
@@ -165,6 +188,9 @@ class Dashboard:
         # burst of node state changes can't hammer the backends.
         self._clients: set[ServerConnection] = set()
         self._svc_cache: tuple[float, list[dict[str, Any]]] | None = None
+        # Cache of the latest kenzy version on PyPI (checked lazily; ~1 h TTL) so the
+        # update check doesn't hit PyPI on every Settings load.
+        self._pypi_cache: tuple[float, str | None] | None = None
         server.add_state_listener(self._on_state_change)
         # Calibration: which connected browser is tuning which node (connection → node_id).
         # Tune samples are relayed only to the subscribed client, not all clients, and
@@ -551,8 +577,14 @@ class Dashboard:
         if path == "/api/skills":
             return self._json(200, await self._skills_state())
 
+        if path == "/api/ha/curation":
+            return self._json(200, await self._ha_curation_state())
+
         if path == "/api/speakers":
             return self._json(200, await self._speakers_state())
+
+        if path == "/api/upgrade":
+            return self._json(200, await self._upgrade_state())
 
         if path.startswith("/api/services/") and path.endswith("/config"):
             name = path[len("/api/services/") : -len("/config")]
@@ -640,6 +672,44 @@ class Dashboard:
         except Exception:
             return False
 
+    async def _upgrade_service(self, name: str, version: str | None) -> tuple[bool, str]:
+        """POST /upgrade to a backend service (it pip-upgrades its own extra + re-execs).
+        Long timeout — a pip install on a slow host can take minutes."""
+        health_url = self._service_urls.get(name)
+        if not health_url:
+            return False, "service not reachable"
+        base = health_url[: -len("/health")]
+        import httpx
+
+        try:
+            async with httpx.AsyncClient(timeout=900.0) as client:
+                r = await client.post(
+                    f"{base}/upgrade",
+                    json={"version": version},
+                    headers=self._server._service_headers(),
+                )
+                r.raise_for_status()
+            data = r.json()
+            return bool(data.get("ok")), str(data.get("output", ""))[-800:]
+        except Exception as exc:
+            return False, str(exc)
+
+    async def _do_service_upgrade(
+        self, connection: ServerConnection, name: str, version: str | None
+    ) -> None:
+        """Run a service upgrade and report progress/result over the WS (the service
+        re-execs itself on success)."""
+
+        async def send(payload: dict[str, Any]) -> None:
+            try:
+                await connection.send(json.dumps(payload))
+            except Exception:
+                pass
+
+        await send({"type": "upgrade_progress", "stage": "installing", "target": name})
+        ok, output = await self._upgrade_service(name, version)
+        await send({"type": "upgrade_result", "ok": ok, "output": output, "target": name})
+
     # ------------------------------------------------------------------
     # Skill registry (kenzy-llm): read the loaded skills + live-toggle disables
     # ------------------------------------------------------------------
@@ -669,6 +739,53 @@ class Dashboard:
             return data if isinstance(data, dict) else None
         except Exception:
             return None
+
+    async def _llm_curation_request(
+        self, method: str, payload: dict[str, Any] | None = None
+    ) -> dict[str, Any] | None:
+        """GET/POST the LLM service's /ha/curation endpoint; None if unreachable."""
+        health_url = self._service_urls.get("llm")
+        if not health_url:
+            return None
+        base = health_url[: -len("/health")]
+        import httpx
+
+        try:
+            async with httpx.AsyncClient(timeout=20.0) as client:
+                if method == "POST":
+                    r = await client.post(
+                        f"{base}/ha/curation",
+                        json=payload or {},
+                        headers=self._server._service_headers(),
+                    )
+                else:
+                    r = await client.get(
+                        f"{base}/ha/curation", headers=self._server._service_headers()
+                    )
+                r.raise_for_status()
+            data = r.json()
+            return data if isinstance(data, dict) else None
+        except Exception:
+            return None
+
+    async def _ha_curation_state(self) -> dict[str, Any]:
+        info = await self._llm_curation_request("GET")
+        return {
+            "reachable": info is not None,
+            "controls": self._dcfg.controls,
+            "curation": (info or {}).get("curation", {}),
+            "devices": (info or {}).get("devices", []),
+            "ha_reachable": bool((info or {}).get("reachable", False)),
+        }
+
+    async def _set_ha_curation(self, curation: dict[str, Any]) -> tuple[bool, str | None]:
+        """Persist the curation document via the LLM service."""
+        res = await self._llm_curation_request("POST", {"curation": curation})
+        if res is None:
+            return False, "LLM service not reachable"
+        if not res.get("ok"):
+            return False, res.get("error") or "could not save curation"
+        return True, None
 
     async def _skills_state(self) -> dict[str, Any]:
         info = await self._llm_skills_request("GET")
@@ -706,6 +823,60 @@ class Dashboard:
         if applied is None:
             return False, "saved, but live-apply failed (will take effect on restart)"
         return True, None
+
+    # ------------------------------------------------------------------
+    # Update check (visibility layer for the upgrade feature)
+    # ------------------------------------------------------------------
+
+    async def _latest_pypi_version(self) -> str | None:
+        """Latest kenzy version on PyPI, cached ~1 h. None if unreachable (offline /
+        air-gapped degrade gracefully). Checked lazily, only when the UI asks."""
+        import time
+
+        if self._pypi_cache and time.monotonic() - self._pypi_cache[0] < 3600:
+            return self._pypi_cache[1]
+        import httpx
+
+        latest: str | None = None
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                r = await client.get("https://pypi.org/pypi/kenzy/json")
+                r.raise_for_status()
+            info = r.json().get("info") or {}
+            latest = str(info["version"]) if info.get("version") else None
+        except Exception:
+            latest = None
+        self._pypi_cache = (time.monotonic(), latest)
+        return latest
+
+    async def _do_server_upgrade(self, connection: ServerConnection, version: str | None) -> None:
+        """Run the server self-upgrade, push the result, and re-exec on success."""
+        async def send(payload: dict[str, Any]) -> None:
+            try:
+                await connection.send(json.dumps(payload))
+            except Exception:
+                pass
+
+        await send({"type": "upgrade_progress", "stage": "installing"})
+        ok, output = await self._server.run_self_upgrade("server", version)
+        await send({"type": "upgrade_result", "ok": ok, "output": output})
+        if ok:
+            # Re-exec so the new code loads; the WS drops and the SPA reconnects.
+            await send({"type": "server_restarting"})
+            asyncio.get_running_loop().call_later(0.8, self._server.restart_server)
+
+    async def _upgrade_state(self) -> dict[str, Any]:
+        current = kenzy_version()
+        latest = await self._latest_pypi_version()
+        # A dev/editable checkout has no comparable version — never flag it.
+        update = bool(latest and current != "dev" and _is_newer(latest, current))
+        return {
+            "current": current,
+            "latest": latest,
+            "update_available": update,
+            "checkable": latest is not None,
+            "controls": self._dcfg.controls,
+        }
 
     # ------------------------------------------------------------------
     # Speaker profiles (kenzy-speaker): manage the enrolled list
@@ -953,6 +1124,32 @@ class Dashboard:
                 return await ack(False, "controls are disabled (set dashboard.controls: true)")
             ok = await self._restart_service(str(msg.get("service", "")))
             await ack(ok, None if ok else "service not reachable")
+        elif mtype == "upgrade_server":
+            if not self._dcfg.controls:
+                return await ack(False, "controls are disabled (set dashboard.controls: true)")
+            version = (str(msg.get("version") or "")).strip() or None
+            # Accept now; the pip run can take minutes (longer than the request/ack
+            # timeout), so progress + result ride separate events and, on success, the
+            # server re-execs (the WS drops and the SPA reconnects to the new version).
+            await ack(True)
+            asyncio.create_task(self._do_server_upgrade(connection, version))
+        elif mtype == "upgrade_service":
+            if not self._dcfg.controls:
+                return await ack(False, "controls are disabled (set dashboard.controls: true)")
+            service = str(msg.get("service", "")).strip()
+            if service not in ("stt", "tts", "llm", "speaker"):
+                return await ack(False, "unknown service")
+            version = (str(msg.get("version") or "")).strip() or None
+            await ack(True)
+            asyncio.create_task(self._do_service_upgrade(connection, service, version))
+        elif mtype == "upgrade_node":
+            if not self._dcfg.controls:
+                return await ack(False, "controls are disabled (set dashboard.controls: true)")
+            version = (str(msg.get("version") or "")).strip() or None
+            # Fire-and-watch: the node installs + re-execs, reconnecting with its new
+            # version (visible in the fleet view). No progress stream from the node.
+            ok = await self._server.upgrade_node(str(msg.get("node", "")), version)
+            await ack(ok, None if ok else "node not connected")
         elif mtype == "set_skill_disabled":
             if not self._dcfg.controls:
                 return await ack(False, "controls are disabled (set dashboard.controls: true)")
@@ -960,6 +1157,14 @@ class Dashboard:
             if not name:
                 return await ack(False, "skill name is required")
             ok, err = await self._set_skill_disabled(name, bool(msg.get("disabled")))
+            await ack(ok, err)
+        elif mtype == "set_ha_curation":
+            if not self._dcfg.controls:
+                return await ack(False, "controls are disabled (set dashboard.controls: true)")
+            curation = msg.get("curation")
+            if not isinstance(curation, dict):
+                return await ack(False, "curation document is required")
+            ok, err = await self._set_ha_curation(curation)
             await ack(ok, err)
         elif mtype == "delete_speaker":
             if not self._dcfg.controls:

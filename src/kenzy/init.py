@@ -95,8 +95,10 @@ def _set_env_var(env_path: Path, key: str, value: str) -> None:
 def _enable_dashboard(server_yaml: Path) -> None:
     """Flip ``dashboard.enabled`` to true in the scaffolded server.yaml.
 
-    The dashboard block is the only ``enabled: false`` in the template (discovery
-    defaults to true), so the first false-valued ``enabled:`` key is the one.
+    The dashboard now ships enabled by default, so this is normally a no-op
+    (idempotent) and ``--enable-dashboard`` is redundant; it stays as a backstop
+    in case an operator templates a server.yaml with the dashboard turned off.
+    It flips the first false-valued ``enabled:`` key (discovery defaults to true).
     """
     text = server_yaml.read_text()
     new, n = re.subn(r"(?m)^(\s+)enabled:\s*false\b", r"\1enabled: true", text, count=1)

@@ -98,6 +98,22 @@ function ServiceEditor({ name, onBack }) {
     notify(res.ok ? `${name} restarting.` : res.error || "Restart failed.", res.ok ? "ok" : "err");
   }
 
+  async function upgrade() {
+    if (
+      !window.confirm(
+        `Upgrade ${name} to the latest release and restart it? It installs in the ` +
+          `background (a few minutes) and reports the result; your constraints.txt pins ` +
+          `are honored.`,
+      )
+    )
+      return;
+    const res = await send("upgrade_service", { service: name });
+    notify(
+      res.ok ? `${name} upgrade started — watch for the result.` : res.error || "Upgrade failed.",
+      res.ok ? "ok" : "err",
+    );
+  }
+
   const keys = Object.keys(orig).sort();
   const row = (k) => {
     const t = typeOf(orig[k]);
@@ -172,6 +188,8 @@ function ServiceEditor({ name, onBack }) {
       <div class="section">
         <header><h2>Controls</h2><span class="rule"></span></header>
         <div class="ctl-row">
+          <button class="btn-ghost" disabled=${!info.controls || !info.reachable}
+            onClick=${upgrade}>Upgrade</button>
           <button class="btn-ghost danger" disabled=${!info.controls || !info.reachable}
             onClick=${restart}>Restart</button>
         </div>

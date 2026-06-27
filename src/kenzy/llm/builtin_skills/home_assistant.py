@@ -1,20 +1,31 @@
 """
-Home Assistant skill — device control via YAML device map + LLM resolution.
+Home Assistant skill — device control over the HA REST API.
+
+Device topology (entities, names, domains, area/floor placement) is pulled
+**live from Home Assistant** by :mod:`kenzy.llm.builtin_skills.ha_model` and
+cached; the only hand-authored input is ``curation.yaml`` (aliases, per-device
+notes, room group-defaults, voice-control exclusions). ``_ensure_view`` builds a
+``_DeviceIndex`` + resolver text from that merged view; if HA is unreachable and
+the legacy ``device_ids.yaml`` / ``device_ids.json`` files exist, it falls back
+to them.
 
 On each home control request:
-  1. Reads device_ids.yaml (human-readable alias hierarchy) as text
-  2. Sends the YAML + user request to a sub-LLM call to resolve device aliases
-  3. Looks up each alias in device_ids.json to get the actual HA entity ID
-  4. Calls the HA REST API to execute the action(s)
+  1. Fast path: padacioso intent parse + local resolution to entity IDs, executed
+     directly against HA (no LLM). Hard cases defer.
+  2. LLM fallback: the live topology is rendered as a floor>area>type>entity
+     outline and sent to a sub-LLM that picks entity IDs + action.
+  3. The HA REST API executes the action(s); device *state* is read live only
+     when a request needs it (status queries, relative temperature changes).
 
 Requires: HA_API_KEY in .env
 Config in llm.yaml under skills.home_assistant:
-  url:              "http://homeassistant.local:8123"
-  model:            "gpt-4o"          # model for the sub-LLM call; defaults to gpt-4o
-  base_url:         null              # only needed for local providers (Ollama, etc.)
-  device_ids_yaml:  "device_ids.yaml" # relative to project root
-  device_ids_json:  "device_ids.json"
-  default_room:     ""               # used when the user doesn't specify a room
+  url:           "http://homeassistant.local:8123"
+  model:         "gpt-4o"     # model for the sub-LLM resolver; defaults to gpt-4o
+  base_url:      null         # only needed for local providers (Ollama, etc.)
+  curation_file: "data/home_assistant/curation.yaml"   # optional
+  cache_ttl:     300          # seconds to cache the HA topology
+  domains:       [light, switch, fan, cover, lock, climate]
+  default_room:  ""           # used when the user doesn't specify a room
 """
 
 from __future__ import annotations
@@ -29,6 +40,7 @@ from typing import Any
 
 import httpx
 
+from kenzy.llm.builtin_skills import ha_model
 from kenzy.llm.skills import FastResult, fast_intent, get_config, skill  # type: ignore[import]
 
 log = logging.getLogger(__name__)
@@ -68,6 +80,10 @@ Selection rules:
   matching devices across every room in that area.
 - If no specific device or type is mentioned and the room has a "default" list,
   use those devices.
+- Each "- " line is a Home Assistant entity_id (e.g. light.kitchen_island).
+  Use it verbatim as the "id" value. The text after "#" is the friendly name
+  and optional context — read it to match the user's wording, but never return
+  it as the id.
 - YAML line comments (# ...) provide helpful context — read them.
 - For a status query use action "get_status".
 - For relative temperature changes ("warmer", "cooler") use "get_status" first
@@ -234,12 +250,14 @@ async def handle_home_control(request: str, speaker: str | None = None, room: st
              the user's request does not name a specific room.
     """
     try:
-        yaml_text, device_map = _load_device_files()
+        await _ensure_view()
+        resolver_text = _get_resolver_text()
+        device_map = _get_index().device_map
     except Exception as exc:
         return f"Could not load device map: {exc}"
 
     try:
-        result = await _resolve(request, yaml_text, room)
+        result = await _resolve(request, resolver_text, room)
     except Exception as exc:
         log.error("Device resolution failed: %s", exc, exc_info=True)
         return f"Could not resolve devices for that request: {exc}"
@@ -288,7 +306,9 @@ async def _apply_devices(
     for dev in devices:
         alias  = str(dev.get("id", ""))
         action = str(dev.get("action", ""))
-        ha_id  = device_map.get(alias)
+        # In the live-HA path the id is already an entity_id (device_map is an
+        # identity map); in the static path it's a friendly code mapped to one.
+        ha_id  = device_map.get(alias) or (alias if "." in alias else None)
 
         if not ha_id:
             log.warning("Unknown device alias %r — skipping", alias)
@@ -488,6 +508,123 @@ def _build_intents() -> Any:
 # Lazily-built, process-wide caches (rebuilt via _reset_cache in tests).
 _INDEX: _DeviceIndex | None = None
 _INTENTS: Any = None
+_RESOLVER_TEXT: str | None = None
+# Timestamp of the HA topology the cached view was built from; None for the
+# static-file fallback (so a later live pull always supersedes it).
+_VIEW_TS: float | None = None
+
+
+# ---------------------------------------------------------------------------
+# Live-HA view: build the resolver index + text from ha_model + curation
+# ---------------------------------------------------------------------------
+
+
+def _index_from_model(model: ha_model.HAModel, curation: dict[str, Any]) -> _DeviceIndex:
+    """Build the resolver index from live HA topology + curation.
+
+    Entity_ids are used directly as the device "codes"; ``device_map`` is an
+    identity map so the shared executor path is unchanged.
+    """
+    devices_cur = curation.get("devices", {}) or {}
+    rooms_cur = curation.get("rooms", {}) or {}
+
+    rooms: dict[str, dict[str, list[str]]] = {}
+    spoken: dict[str, str] = {}
+    aliases: dict[tuple[str, str], list[str]] = {}
+    exclude: set[str] = set()
+    room_phrases: dict[str, str] = {}
+    device_map: dict[str, str] = {}
+
+    for e in model.entities:
+        type_key = _DOMAIN_TO_TYPE.get(e.domain, e.domain)
+        room = e.area or "unplaced"
+        room_phrases[room.replace("_", " ")] = room
+        bucket = rooms.setdefault(room, {}).setdefault(type_key, [])
+        if e.entity_id not in bucket:
+            bucket.append(e.entity_id)
+        spoken[e.entity_id] = e.name
+        device_map[e.entity_id] = e.entity_id
+
+        dc = devices_cur.get(e.entity_id, {}) or {}
+        for phrase in dc.get("aliases", []) or []:
+            aliases.setdefault((room, _norm(str(phrase))), []).append(e.entity_id)
+        if dc.get("in_group") is False:
+            exclude.add(e.entity_id)
+
+    defaults: dict[str, dict[str, list[str]]] = {}
+    for area, ov in rooms_cur.items():
+        rslug = ha_model._slug(str(area))
+        for tk, eids in ((ov or {}).get("defaults", {}) or {}).items():
+            if isinstance(eids, list):
+                defaults.setdefault(rslug, {})[str(tk)] = [str(x) for x in eids]
+
+    return _DeviceIndex(rooms, defaults, spoken, aliases, exclude, room_phrases, device_map)
+
+
+def _resolver_text(model: ha_model.HAModel, curation: dict[str, Any]) -> str:
+    """Render the live topology as the floor>area>type>entity text the LLM reads."""
+    notes = {
+        eid: str(dev.get("note") or "")
+        for eid, dev in (curation.get("devices", {}) or {}).items()
+    }
+    tree: dict[str, dict[str, dict[str, list[ha_model.Entity]]]] = {}
+    for e in model.entities:
+        type_key = _DOMAIN_TO_TYPE.get(e.domain, e.domain)
+        area = e.area or "unplaced"
+        tree.setdefault(e.floor, {}).setdefault(area, {}).setdefault(type_key, []).append(e)
+
+    lines: list[str] = []
+    for floor in sorted(tree):
+        lines.append(f"{floor}:")
+        for area in sorted(tree[floor]):
+            lines.append(f"  {area}:")
+            for tk in sorted(tree[floor][area]):
+                lines.append(f"    {tk}:")
+                for e in tree[floor][area][tk]:
+                    ctx = e.name
+                    note = notes.get(e.entity_id)
+                    if note:
+                        ctx = f"{ctx} — {note}"
+                    lines.append(f"      - {e.entity_id}  # {ctx}")
+    return "\n".join(lines)
+
+
+def _load_static_view() -> None:
+    """Offline / legacy fallback: build the view from the static device_ids files."""
+    global _INDEX, _RESOLVER_TEXT, _VIEW_TS
+    yaml_text, device_map = _load_device_files()
+    _INDEX = _index_from(yaml_text, device_map, _load_overlay())
+    _RESOLVER_TEXT = yaml_text
+    _VIEW_TS = None
+
+
+async def _ensure_view() -> None:
+    """Refresh the cached resolver index + text from live HA topology.
+
+    Falls back to the static device_ids files when HA is unreachable and nothing
+    is cached yet. A successful live pull always supersedes a static fallback.
+    """
+    global _INDEX, _RESOLVER_TEXT, _VIEW_TS
+    try:
+        model = await ha_model.get_model()
+    except Exception as exc:
+        if _INDEX is not None:
+            return  # keep the existing (live-stale or static) view
+        log.warning("HA topology unavailable (%s); using static device files", exc)
+        _load_static_view()
+        return
+
+    if _INDEX is None or _RESOLVER_TEXT is None or _VIEW_TS != model.fetched_at:
+        curation = ha_model.load_curation()
+        _INDEX = _index_from_model(model, curation)
+        _RESOLVER_TEXT = _resolver_text(model, curation)
+        _VIEW_TS = model.fetched_at
+
+
+def _get_resolver_text() -> str:
+    if _RESOLVER_TEXT is None:
+        raise RuntimeError("resolver text not initialized; call _ensure_view() first")
+    return _RESOLVER_TEXT
 
 
 def _load_overlay() -> dict[str, Any]:
@@ -505,10 +642,8 @@ def _load_overlay() -> dict[str, Any]:
 
 
 def _get_index() -> _DeviceIndex:
-    global _INDEX
     if _INDEX is None:
-        yaml_text, device_map = _load_device_files()
-        _INDEX = _index_from(yaml_text, device_map, _load_overlay())
+        raise RuntimeError("device index not initialized; call _ensure_view() first")
     return _INDEX
 
 
@@ -520,10 +655,13 @@ def _get_intents() -> Any:
 
 
 def _reset_cache() -> None:
-    """Test hook: drop the cached index + intent container."""
-    global _INDEX, _INTENTS
+    """Test hook: drop the cached view + intent container."""
+    global _INDEX, _INTENTS, _RESOLVER_TEXT, _VIEW_TS
     _INDEX = None
     _INTENTS = None
+    _RESOLVER_TEXT = None
+    _VIEW_TS = None
+    ha_model.reset_cache()
 
 
 def _room_key(origin: str | None) -> str:
@@ -609,7 +747,12 @@ def _resolve_target(
             codes = idx.defaults.get(room, {}).get(gtype) or rt.get(gtype, [])
         else:
             codes = rt.get(gtype, [])
-        codes = [c for c in codes if c not in idx.exclude]
+        # The in_group:false floor (name-only devices) applies to every group
+        # command EXCEPT an explicit deactivate-all ("turn off all the lights"),
+        # where "all" means literally all — only hard-excluded devices, already
+        # absent from the model, stay out. Hard floors still hold for on/all-on.
+        if not (has_all and direction == "deactivate"):
+            codes = [c for c in codes if c not in idx.exclude]
         return codes or None
 
     # Specific device, scoped to the resolved room.
@@ -673,6 +816,7 @@ async def fast_home_control(
 ) -> FastResult:
     """Deterministic home control: instant, no LLM, defers hard cases."""
     try:
+        await _ensure_view()
         idx = _get_index()
         container = _get_intents()
     except Exception as exc:

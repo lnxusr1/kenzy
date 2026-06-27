@@ -109,6 +109,69 @@ function ServerSettings() {
     </div>`;
 }
 
+// Update check — installed version vs. the latest on PyPI. Read-only visibility
+// layer; the actual upgrade action is a later, controls-gated step.
+function UpdateCheck() {
+  const [u, setU] = useState(null);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    fetch("/api/upgrade")
+      .then((r) => (r.ok ? r.json() : { error: true }))
+      .then(setU)
+      .catch(() => setU({ error: true }));
+  }, []);
+
+  if (!u) return html`<p class="micro">Checking for updates…</p>`;
+  if (u.error) return html`<p class="micro">Could not load the update status.</p>`;
+
+  let status;
+  if (!u.checkable) status = html`<span class="micro">couldn't reach PyPI</span>`;
+  else if (u.current === "dev") status = html`<span class="micro">development build</span>`;
+  else if (u.update_available)
+    status = html`<span class="badge streaming">update available → ${u.latest}</span>`;
+  else status = html`<span class="micro">up to date</span>`;
+
+  async function upgrade() {
+    if (
+      !window.confirm(
+        `Upgrade the server to ${u.latest} and restart it? The dashboard will disconnect ` +
+          `while it installs (a few minutes) and reconnect when it's back. Your dependency ` +
+          `pins (constraints.txt) are honored.`,
+      )
+    )
+      return;
+    setBusy(true);
+    const res = await send("upgrade_server", { version: u.latest });
+    setBusy(false);
+    notify(
+      res.ok
+        ? "Upgrade started — installing in the background; watch for the result."
+        : res.error || "Could not start the upgrade.",
+      res.ok ? "ok" : "err",
+    );
+  }
+
+  // Only offer the action when controls are on, an update exists, and this isn't a
+  // dev/editable checkout. The backends/nodes upgrade separately (fan-out — later).
+  const canUpgrade = u.controls && u.update_available && u.current !== "dev";
+
+  return html`
+    <dl class="kv">
+      <dt>installed</dt><dd><span class="mono">${u.current}</span></dd>
+      <dt>latest on PyPI</dt><dd><span class="mono">${u.latest || "—"}</span></dd>
+      <dt>status</dt><dd>${status}</dd>
+    </dl>
+    ${canUpgrade
+      ? html`<div class="cfg-actions">
+            <button class="btn-primary" disabled=${busy} onClick=${upgrade}>
+              ${busy ? "Starting…" : `Upgrade server to ${u.latest}`}</button>
+          </div>
+          <p class="micro">Upgrades this server host only (its <span class="mono">server</span>
+            extra); restarts it on success. Backend services and nodes are upgraded
+            separately.</p>`
+      : null}`;
+}
+
 function ChangePassword({ username, onChanged }) {
   const [cur, setCur] = useState("");
   const [next, setNext] = useState("");
@@ -220,6 +283,11 @@ export function SettingsView({ onLogout }) {
             )}
           </dl>
         </div>
+      </section>
+
+      <section class="section">
+        <header><h2>Updates</h2><span class="rule"></span></header>
+        <div class="card pad"><${UpdateCheck} /></div>
       </section>
 
       <section class="section">

@@ -1,7 +1,8 @@
 # Dashboard
 
-`kenzy-server` can serve an **opt-in** web dashboard — a fleet manager for your
-Kenzy deployment. It is **off by default** and adds zero overhead when disabled
+`kenzy-server` serves a web dashboard — a fleet manager for your
+Kenzy deployment. It is **on by default** in the shipped config (localhost-bound);
+set `dashboard.enabled: false` to turn it off, which adds zero overhead when disabled
 (nothing is mounted, no node-side cost). When enabled it gives you one place to see
 every room node and backend service, configure nodes, control them, send
 announcements, and read logs.
@@ -82,8 +83,10 @@ Open a node's **Configure** page to:
   immediately on save; hardware keys are applied on the node's next boot or via the
   Restart button. Options with a fixed set of values (log levels, on/off, etc.) are
   dropdown choosers; numeric fields are number inputs.
-- **Control the node** — **Trigger** (start a session), **Stop**, or **Restart** (the
-  node re-execs itself, with or without systemd).
+- **Control the node** — **Trigger** (start a session), **Stop**, **Restart** (the
+  node re-execs itself, with or without systemd), or **Upgrade** (the node pip-upgrades
+  `kenzy[node]`, honoring `constraints.txt`, and reconnects on the new version — watch the
+  version on its fleet card to confirm).
 
 Secrets (API keys) are never served to a node and never editable here.
 
@@ -138,7 +141,9 @@ with live health. Open one to edit its **effective config** in a generic editor 
 each field is the packaged default or your stored override. Saving writes
 `configs/services/<service>.yaml` on the server and **restarts the service** so the new
 config takes effect (the service re-pulls on boot); a separate **Restart** button
-restarts without editing. Secrets (API keys) are read from the service host's
+restarts without editing, and an **Upgrade** button pip-upgrades that service to the
+latest release (honoring `constraints.txt`) and restarts it — the install runs in the
+background and reports the result. Secrets (API keys) are read from the service host's
 environment and are never shown or stored here. Requires `dashboard.controls: true`.
 
 ## Skills
@@ -151,6 +156,24 @@ the service** (the skill stays loaded but is gated out of the tool list, `execut
 the fast path), and is **persisted** to `configs/services/llm.yaml` (`skills.disabled`)
 so it survives a restart. Disabling a skill also disables any same-named fast intent.
 Without `controls`, the tab is read-only.
+
+## Home Assistant
+
+The **Home Assistant** tab edits the device **curation** layer for the Home Assistant
+skill — the small set of things HA can't store. The device inventory itself is pulled
+**live from HA** (via `kenzy-llm`) and shown as a tree (`floor → area → domain → entity`);
+you don't list devices here. Each entity row has:
+
+- **aliases** — extra spoken names ("the lamp", "black light")
+- **note** — free-form context handed to the resolver ("the light by the chair")
+- **default** — include in this room's bare "turn on the lights" set
+- **in groups** — uncheck to keep it addressable by name but out of group commands (a bare "turn off all the lights" still includes it; only **exclude** removes it from voice entirely)
+- **exclude** — remove it from voice control entirely
+
+plus **bulk exclusions** (patterns/domains/areas) for things like smart-plug status LEDs
+that show up as controllable lights. Saving writes `curation.yaml` and refreshes the
+topology immediately. The tab needs `kenzy-llm` reachable and `dashboard.controls: true`
+to edit (read-only otherwise). See [Home Assistant](skills/home-assistant.md).
 
 ## Speakers
 
@@ -208,8 +231,19 @@ persisted. Refresh during/after the window to view the captured detail. Requires
 ## Settings
 
 The **Settings** page shows system info (Kenzy version, server and dashboard binds, mDNS
-discovery), the **node join token**, and lets you **change the dashboard password** and
-edit a **scoped subset of the server's own configuration**.
+discovery), an **update check**, the **node join token**, and lets you **change the
+dashboard password** and edit a **scoped subset of the server's own configuration**.
+
+The **Updates** section compares the installed version against the latest `kenzy` release
+on PyPI and flags when one is available. It's checked lazily (only when you open Settings,
+cached ~1 hour) and degrades gracefully on an offline/air-gapped host. When an update is
+available and `dashboard.controls` is on, an **Upgrade server** button runs
+`pip install -U "kenzy[server]"` in the server's venv (honoring your `constraints.txt`
+pins, pinned to the target version) and then restarts the server. The install runs in the
+background — the dashboard disconnects while it works (a few minutes) and reconnects when
+the server is back on the new version; a failed install is reported and leaves the server
+running as-is. This upgrades the **server host only**; backend services and room nodes are
+upgraded separately.
 
 Under **Node provisioning** the page displays the `discovery.token` (the shared secret a
 node presents to join, also the service-to-service bearer) with a copy button, so you can

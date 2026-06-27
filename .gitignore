@@ -53,3 +53,6 @@ design/
 site/
 www/
 screenshot_site.py
+
+build_pypi.sh
+publish.sh

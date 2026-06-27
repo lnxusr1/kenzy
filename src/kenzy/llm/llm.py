@@ -37,6 +37,7 @@ from kenzy.fastapi_auth import (
     install_logs_endpoint,
     install_restart_endpoint,
     install_service_auth,
+    install_upgrade_endpoint,
 )
 from kenzy.llm import skills as skill_registry
 from kenzy.logutil import quiet_health_access_log
@@ -195,6 +196,41 @@ async def set_skills(body: SkillToggle) -> dict[str, Any]:
     skill_registry.set_disabled(body.disabled)
     log.info("Skills disabled set updated: %s", sorted(body.disabled))
     return skill_registry.registry_info()
+
+
+class CurationUpdate(BaseModel):
+    # The full curation document (exclude / devices / rooms) to write.
+    curation: dict[str, Any]
+
+
+@app.get("/ha/curation")
+async def get_ha_curation() -> dict[str, Any]:
+    """Current Home Assistant curation + the live device tree (for the editor)."""
+    from kenzy.llm.builtin_skills import ha_model
+
+    curation = ha_model.load_curation()
+    devices: list[dict[str, Any]] = []
+    reachable = True
+    try:
+        raw = await ha_model.fetch_raw()
+        devices = [vars(e) for e in ha_model.classify(raw, curation)]
+    except Exception as exc:
+        reachable = False
+        log.warning("HA device list unavailable for curation editor: %s", exc)
+    return {"curation": curation, "devices": devices, "reachable": reachable}
+
+
+@app.post("/ha/curation")
+async def set_ha_curation(body: CurationUpdate) -> dict[str, Any]:
+    """Validate + persist the curation document; drops the topology cache."""
+    from kenzy.llm.builtin_skills import ha_model
+
+    try:
+        ha_model.save_curation(body.curation)
+    except ValueError as exc:
+        return {"ok": False, "error": str(exc)}
+    log.info("Home Assistant curation updated")
+    return {"ok": True, "curation": ha_model.load_curation()}
 
 
 @app.post("/process", response_model=ProcessResponse)
@@ -418,6 +454,7 @@ def main() -> None:
         app, capture_level=level_value(cfg.get("log_capture_level"), logging.DEBUG)
     )
     install_restart_endpoint(app)
+    install_upgrade_endpoint(app, "llm")
 
     global \
         _model, \

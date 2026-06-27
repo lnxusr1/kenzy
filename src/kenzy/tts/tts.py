@@ -31,6 +31,7 @@ from kenzy.fastapi_auth import (
     install_logs_endpoint,
     install_restart_endpoint,
     install_service_auth,
+    install_upgrade_endpoint,
 )
 from kenzy.logutil import quiet_health_access_log
 
@@ -185,7 +186,8 @@ def _synthesise_kokoro(text: str) -> bytes:
         return b""
 
     combined = np.concatenate(segments)
-    return (np.clip(combined, -1.0, 1.0) * 32767).astype(np.int16).tobytes()
+    pcm_bytes: bytes = (np.clip(combined, -1.0, 1.0) * 32767).astype(np.int16).tobytes()
+    return pcm_bytes
 
 
 # ---------------------------------------------------------------------------
@@ -238,6 +240,7 @@ def main() -> None:
         app, capture_level=level_value(cfg.get("log_capture_level"), logging.DEBUG)
     )
     install_restart_endpoint(app)
+    install_upgrade_endpoint(app, "tts")
 
     _provider = str(cfg.get("provider", "openai")).lower()
 

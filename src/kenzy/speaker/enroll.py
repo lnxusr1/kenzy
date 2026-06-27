@@ -118,7 +118,8 @@ def _record_utterance(
                     break
 
     print("\r             \r", end="", flush=True)
-    return np.concatenate(collected).flatten().tobytes()
+    pcm_bytes: bytes = np.concatenate(collected).flatten().tobytes()
+    return pcm_bytes
 
 
 # ---------------------------------------------------------------------------

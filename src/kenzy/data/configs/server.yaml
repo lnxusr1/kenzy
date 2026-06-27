@@ -26,12 +26,13 @@ discovery:
 # immediately; hardware keys (audio_device, sample rates, wakeword models,
 # sounds) are reported but take effect on node restart. Per-room overrides go in
 # configs/nodes/<room_id>.yaml and shallow-merge over these defaults.
-# Web dashboard — opt-in, off by default. When disabled nothing is wired up
-# (no route, buffers, or node-side overhead). Read-only fleet/health by default;
-# sub-flags enable logs and controls. Bind to localhost or the LAN; do not
-# port-forward it. Set auth_token to require a bearer token on mutating actions.
+# Web dashboard — on by default (localhost-bound), fully interactive: the logs and
+# controls sub-flags default on too (set either false to restrict). Set enabled:
+# false to wire up nothing (no route, buffers, or node-side overhead). Bind to
+# localhost or the LAN; do not port-forward it. Set auth_token to require a bearer
+# token on mutating actions.
 dashboard:
-  enabled: false
+  enabled: true
   bind: "127.0.0.1"
   port: 8770
   # Browser login for mutating actions (config edits, controls). Defaults to
@@ -42,8 +43,8 @@ dashboard:
     password_hash: "scrypt$16384:8:1$tI5Hed-tJCVbiLvz3n12kA$29VNd72xhZKs_H0TyxhempZRKLrn9PEABFXGHo8tlwk"
   # Optional bearer token for API/CLI clients (curl/scripts); humans use the login above.
   auth_token: null
-  logs: false
-  controls: false
+  logs: true
+  controls: true
 
 # Config-pull defaults (see below)
 node_defaults:

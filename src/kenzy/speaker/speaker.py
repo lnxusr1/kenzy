@@ -35,6 +35,7 @@ from kenzy.fastapi_auth import (
     install_logs_endpoint,
     install_restart_endpoint,
     install_service_auth,
+    install_upgrade_endpoint,
 )
 from kenzy.logutil import quiet_health_access_log
 
@@ -110,7 +111,8 @@ def _get_embedding(pcm: bytes) -> np.ndarray[Any, Any]:
     waveform = torch.tensor(audio).unsqueeze(0)  # (1, samples)
     with torch.no_grad():
         emb = _classifier.encode_batch(waveform)  # (1, 1, dim)
-    return emb.squeeze().numpy()  # (dim,)
+    embedding: np.ndarray[Any, Any] = emb.squeeze().numpy()  # (dim,)
+    return embedding
 
 
 def _cosine_sim(a: np.ndarray[Any, Any], b: np.ndarray[Any, Any]) -> float:
@@ -278,6 +280,7 @@ def main() -> None:
         app, capture_level=level_value(cfg.get("log_capture_level"), logging.DEBUG)
     )
     install_restart_endpoint(app)
+    install_upgrade_endpoint(app, "speaker")
 
     _embeddings_dir = Path(cfg.get("embeddings_dir", "data/speakers"))
     _embeddings_dir.mkdir(parents=True, exist_ok=True)
