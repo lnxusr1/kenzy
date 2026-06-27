@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [3.2.1]
+
+### Added
+
+- **Uninstall.** `kenzy-deploy uninstall` is the inverse of install — it stops and disables the services, removes their systemd units, and deletes the venv; `--purge` also deletes the install directory (configs/.env/models/data), and `--yes` skips the per-host confirmation. The per-user installer gains a matching `install.sh --uninstall` (stop/disable the `systemd --user` units, remove the venv and the `kenzy-*` commands; `--purge` also removes the config home). Both refuse dangerously shallow paths (`/`, `$HOME`, `/opt`, …) and leave shared model caches and `loginctl` lingering untouched.
+- **`kenzy-deploy` provisions into the central, dashboard-managed model.** Backend services (`stt`/`tts`/`llm`/`speaker`) are now installed in **pull mode** — their units run arg-less so they fetch their effective config from the server, which keeps them editable from the dashboard like a per-user install. A `deploy.yaml` host may set a per-host `node_id:` slug (else the node self-generates a uuid); it's baked into the node's `node.yaml` so the node has a stable, readable central record at `configs/nodes/<node_id>.yaml`. The server's central store (`configs/nodes/`, `configs/services/`) is **seeded but never clobbered** — a re-deploy only adds files the server doesn't have, so live dashboard edits survive upgrades; `kenzy-deploy --reseed install|upgrade` forces the operator's values back. (Pull-mode services need `KENZY_SERVICE_TOKEN` + mDNS or `KENZY_SERVER_URL` in their `.env`.)
+
+### Fixed
+
+- **A missing explicit config path no longer crashes a service.** Starting a service with a config path that doesn't exist yet (e.g. a deploy unit pointing at `{install}/configs/server.yaml` on a first deploy, before one is authored) now logs a warning and falls back to the normal resolution order — ending at the packaged default — instead of failing to start. The packaged `server.yaml` is a complete, working single-box config (discovery on, dashboard on, backend URLs pointing at localhost), so a first deploy boots with no config authoring required.
+
 ## [3.2.0]
 
 ### Added

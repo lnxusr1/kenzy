@@ -7,8 +7,11 @@ defaults plus a user config home at ``$KENZY_HOME`` or ``~/.config/kenzy``).
 
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
+
+log = logging.getLogger("kenzy.config")
 
 #: Directory of default configs bundled inside the package.
 _PACKAGED_CONFIGS = Path(__file__).parent / "data" / "configs"
@@ -88,14 +91,25 @@ def resolve_config(service: str, explicit: str | None = None) -> Path:
 
     Resolution order:
 
-    1. ``explicit`` — a CLI argument / ``--config`` value, used as given.
+    1. ``explicit`` — a CLI argument / ``--config`` value, used as given **if it
+       exists**. A missing explicit path is non-fatal: it falls through to the
+       normal search below (so e.g. a deploy unit that points at
+       ``{install}/configs/server.yaml`` before one exists still boots on the
+       packaged default instead of crashing).
     2. ``$KENZY_HOME/configs/<service>.yaml`` (if ``KENZY_HOME`` is set).
     3. ``./configs/<service>.yaml`` — the source-push / dev layout (CWD).
     4. ``~/.config/kenzy/configs/<service>.yaml``.
     5. The packaged default (always present).
     """
     if explicit:
-        return Path(explicit).expanduser()
+        p = Path(explicit).expanduser()
+        if p.is_file():
+            return p
+        log.warning(
+            "Config path %r for %s not found — falling back to default resolution.",
+            explicit,
+            service,
+        )
 
     filename = f"{service}.yaml"
     candidates: list[Path] = []

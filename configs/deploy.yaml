@@ -37,21 +37,28 @@ service_sync:
   llm:     [skills, data/home_assistant]
   speaker: [data/speakers]
 
-# Per-host config overrides
-# -------------------------
-# To customise configs for a specific host, create a directory at:
-#   configs/hosts/<host-name>/
-# and place only the files that differ from the base configs/ there.
-# On install/upgrade, these files are merged into {install_path}/configs/
-# on that host only, overwriting just the files present in the overlay.
+# Config: central (dashboard-managed) vs per-host overlay
+# -------------------------------------------------------
+# Kenzy's config is server-owned and editable live from the dashboard. kenzy-deploy
+# provisions into that model:
+#   - Backend services (stt/tts/llm/speaker) run in PULL MODE — their units are
+#     arg-less, so they fetch their effective config from the server and stay
+#     dashboard-managed. (They need KENZY_SERVICE_TOKEN, + mDNS or KENZY_SERVER_URL,
+#     in each host's .env to reach the server.)
+#   - Nodes pull too. Set a per-host `node_id:` slug (below) to give a node a
+#     stable, readable central record at configs/nodes/<node_id>.yaml; omit it and
+#     the node self-generates a uuid (still dashboard-managed, just opaque).
+#   - Author the central store as files in:
+#       configs/nodes/<node_id>.yaml      (per node, operational config)
+#       configs/services/<service>.yaml   (per backend service)
+#     These are SEEDED to the server with --ignore-existing (seed-don't-clobber):
+#     a re-deploy never overwrites a dashboard edit. Use `kenzy-deploy --reseed
+#     install|upgrade` to force the operator's values back.
 #
-# Example — two nodes with different room IDs and audio devices:
-#   configs/hosts/living-room/node.yaml   ← full copy of configs/node.yaml, edited for this host
-#   configs/hosts/bedroom/node.yaml       ← full copy of configs/node.yaml, edited for this host
-#
-# Each overlay file completely replaces the base config file on that host.
-# It must be a complete, valid config — partial files are not merged.
-# Files not present in the overlay are left as the base version (no --delete).
+# Legacy per-host overlay (still supported): create configs/hosts/<host-name>/ and
+# place complete config files there; they're rsynced into {install_path}/configs/
+# on that host only. Prefer the central nodes/ + services/ store above for anything
+# you want to manage from the dashboard.
 
 hosts:
   # Example: this machine — no SSH needed, commands run directly
@@ -61,11 +68,13 @@ hosts:
     ssh_user: ubuntu          # used as the systemd service User even locally
     services: [server, stt, tts, llm]
 
-  # Example: room node (Pi Zero 2 W or similar)
-  # Create configs/hosts/living-room/node.yaml to set room_id and audio_device.
+  # Example: room node (Pi Zero 2 W or similar). The node_id slug keys its central
+  # config — author configs/nodes/living-room.yaml to set tuning; the room NAME is
+  # set later from the dashboard. Omit node_id to let the node generate a uuid.
   living-room:
     address:  192.168.1.10
     services: [node]
+    node_id:  living-room
 
   # Example: dedicated speaker-ID box (GPU optional)
   speaker-box:

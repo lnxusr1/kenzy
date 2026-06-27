@@ -1,0 +1,19 @@
+# Central, dashboard-managed config for node_id "kenzy-office-pi".
+# Only keys that differ from the node defaults; everything else uses defaults
+# (incl. the bundled wake-word model). Edit live from the dashboard once connected.
+room_id: "office"
+
+# Audio hardware (device native rate; resampled to 16k/24k internally)
+audio_device: "Anker PowerConf S330"
+capture_sample_rate: 48000
+playback_sample_rate: 48000
+
+sound_waiting: complete.wav
+
+# Wake word
+wakeword_threshold: 0.4
+wakeword_vad_threshold: 0.7
+
+# Capture / VAD
+silence_rms_threshold: 150
+speech_min_ms: 400

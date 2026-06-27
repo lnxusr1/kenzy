@@ -26,6 +26,23 @@ Usage
     stop    <service>    stop a service
     restart <service>    restart a service
     logs    <service>    tail journald logs  (requires --host)
+    uninstall            stop + disable services, remove units + venv
+                         (add --purge to also delete the install dir)
+
+Central config (dashboard-managed)
+----------------------------------
+Backend services (stt/tts/llm/speaker) are installed in *pull mode*: their units
+run arg-less so they fetch their effective config from the server (serviceboot),
+which keeps them editable from the dashboard. Nodes already pull (node.yaml is
+bootstrap-only); set a per-host ``node_id:`` slug in deploy.yaml to give a node a
+stable, predictable central record (``configs/nodes/<node_id>.yaml``) — omit it
+and the node self-generates a uuid (still dashboard-managed, just opaque).
+
+The server's central store (``configs/nodes/``, ``configs/services/``) is seeded
+from the operator tree with ``--ignore-existing`` (seed-don't-clobber), so a
+re-deploy never overwrites live dashboard edits. ``--reseed`` forces the operator
+values back. Pull-mode services need ``KENZY_SERVICE_TOKEN`` (+ mDNS or
+``KENZY_SERVER_URL``) in each host's ``.env`` to reach the server.
 """
 
 from __future__ import annotations
@@ -161,7 +178,18 @@ RSYNC_EXCLUDES: list[str] = [
     "/data/",
     "/models/",
     "/.env",  # secrets stay on each host
+    # Central, dashboard-owned override store — seeded separately (seed-don't-
+    # clobber) so a re-deploy never overwrites live dashboard edits.
+    "/configs/nodes/",
+    "/configs/services/",
 ]
+
+# Backend services that pull their effective config from the server at boot
+# (serviceboot). Their systemd units run arg-less so they fetch GET /config/<svc>
+# rather than reading a local file — which is what makes them dashboard-managed.
+# node + server keep an explicit local config (node.yaml is bootstrap-only; the
+# server is the config authority).
+_PULL_SERVICES: frozenset[str] = frozenset({"stt", "tts", "llm", "speaker"})
 
 # ---------------------------------------------------------------------------
 # Host config
@@ -184,6 +212,7 @@ class HostConfig:
     install_mode: str = "source"  # "source" (rsync + pip -e) or "pypi" (pip install kenzy)
     version: str | None = None  # pin a PyPI version (pypi mode); None = latest >=3
     constraints: str | None = None  # pip constraints file (rel. to config-root or abs)
+    node_id: str | None = None  # operator-chosen stable node_id (slug); None = node self-generates
 
 
 # ---------------------------------------------------------------------------
@@ -322,8 +351,87 @@ def _rsync_host_configs(host: HostConfig, local_path: Path) -> None:
         _ok(f"host config overlay applied ({overlay.relative_to(local_path)})")
 
 
-def _rsync_path(host: HostConfig, local_path: Path, subpath: str) -> bool:
-    """Sync a file or directory from the project root to the remote host."""
+# Remote one-liner that sets node_id in node.yaml: replaces the first node_id line
+# (commented or not), else appends. Mirrors kenzy.init._set_node_id; run with the
+# host's system python (the venv may not exist yet on first install).
+_NODE_ID_PATCH: str = (
+    "import json,re,sys,pathlib;"
+    "p=pathlib.Path(sys.argv[1]);"
+    "t=p.read_text() if p.exists() else '';"
+    "v=json.dumps(sys.argv[2]);"
+    r"n,c=re.subn(r'(?m)^#?\s*node_id:.*$','node_id: '+v,t,count=1);"
+    "p.write_text(n if c else (t.rstrip(chr(10))+'\\nnode_id: '+v+'\\n'))"
+)
+
+
+def _set_remote_node_id(host: HostConfig) -> None:
+    """Bake the operator-chosen node_id into the node host's node.yaml.
+
+    node_id is the node's stable bootstrap identity and the key for its central
+    record (``configs/nodes/<node_id>.yaml``). Only runs for hosts that run the
+    node service with an explicit ``node_id`` set; otherwise the node
+    self-generates a uuid on first run (still dashboard-managed, just opaque).
+    """
+    if "node" not in host.services or not host.node_id:
+        return
+    cfg = f"{host.install_path}/configs/node.yaml"
+    code = shlex.quote(_NODE_ID_PATCH)
+    r = _ssh(
+        host,
+        f"{shlex.quote(host.python_bin)} -c {code} "
+        f"{shlex.quote(cfg)} {shlex.quote(host.node_id)}",
+        check=False,
+    )
+    if r.returncode == 0:
+        _ok(f"node_id set: {host.node_id}")
+    else:
+        _warn(f"could not set node_id on {host.name} (node will self-generate one)")
+
+
+def _seed_central_config(host: HostConfig, local_path: Path, *, reseed: bool) -> None:
+    """Seed the server's central, dashboard-owned override store from the operator tree.
+
+    ``configs/nodes/`` and ``configs/services/`` are read by the server (via
+    ``kenzy_data_root``) and edited live from the dashboard. We copy operator-
+    authored files there with ``--ignore-existing`` so a re-deploy never clobbers
+    a dashboard edit; ``reseed`` drops that flag to force the operator's values
+    back. Only the server host holds the central store, so this is a no-op
+    elsewhere.
+    """
+    if "server" not in host.services:
+        return
+    if host.local and local_path.resolve() == Path(host.install_path).resolve():
+        return  # operator tree IS the live store — nothing to copy
+
+    flags = ["rsync", "-az", "--info=progress2"]
+    # seed: copy only files the server doesn't have (dashboard edits win).
+    # reseed: force the operator's values back even if size+mtime match (--ignore-times),
+    # otherwise a same-size edit could be skipped by rsync's quick-check.
+    flags.append("--ignore-times" if reseed else "--ignore-existing")
+
+    for sub in ("configs/nodes", "configs/services"):
+        src = local_path / sub
+        if not src.is_dir() or not any(src.iterdir()):
+            continue
+        dst = f"{host.install_path}/{sub}"
+        _run(host, f"mkdir -p {shlex.quote(dst)}", check=False)
+        dest = f"{dst}/" if host.local else f"{host.ssh_user}@{host.address}:{dst}/"
+        r = subprocess.run([*flags, f"{src}/", dest], text=True)
+        if r.returncode == 0:
+            _ok(f"central config seeded: {sub}" + ("" if reseed else " (kept existing)"))
+        else:
+            _err(f"central config seed failed for {sub}")
+
+
+def _rsync_path(
+    host: HostConfig, local_path: Path, subpath: str, *, excludes: list[str] | None = None
+) -> bool:
+    """Sync a file or directory from the project root to the remote host.
+
+    ``excludes`` are rsync patterns (relative to ``subpath``) kept out of the
+    transfer; with ``--delete`` they are also protected from deletion on the
+    receiver, so the central store can be excluded without being removed.
+    """
     src = local_path / subpath
     if not src.exists():
         _warn(f"sync path does not exist locally, skipping: {subpath}")
@@ -335,14 +443,18 @@ def _rsync_path(host: HostConfig, local_path: Path, subpath: str) -> bool:
 
     dst = f"{host.install_path}/{subpath}"
 
+    exc: list[str] = []
+    for e in excludes or []:
+        exc += ["--exclude", e]
+
     if src.is_dir():
         _run(host, f"mkdir -p {shlex.quote(dst)}", check=False)
-        cmd = ["rsync", "-az", "--delete", "--info=progress2", f"{src}/", f"{dst}/"]
+        cmd = ["rsync", "-az", "--delete", "--info=progress2", *exc, f"{src}/", f"{dst}/"]
     else:
         parent = str(Path(subpath).parent)
         if parent and parent != ".":
             _run(host, f"mkdir -p {shlex.quote(f'{host.install_path}/{parent}')}", check=False)
-        cmd = ["rsync", "-az", "--info=progress2", str(src), dst]
+        cmd = ["rsync", "-az", "--info=progress2", *exc, str(src), dst]
 
     if not host.local:
         # Rewrite the destination as user@host:path for the remote case.
@@ -368,18 +480,27 @@ def _unit_name(service: str) -> str:
 
 def _unit_content(service: str, host: HostConfig) -> str:
     info = SERVICE_INFO[service]
+    # Pull-mode services run arg-less so they fetch their config from the server
+    # (serviceboot) and stay dashboard-managed; they also order after the server
+    # (no-op when kenzy-server isn't on this host). node/server pass a local config.
+    if service in _PULL_SERVICES:
+        exec_start = f"{host.venv_path}/bin/{info['script']}"
+        after_server = "After=kenzy-server.service\n"
+    else:
+        exec_start = f"{host.venv_path}/bin/{info['script']} {host.install_path}/{info['config']}"
+        after_server = ""
     return (
         f"[Unit]\n"
         f"Description={info['desc']}\n"
         f"After=network.target\n"
         f"Wants=network.target\n"
+        f"{after_server}"
         f"\n"
         f"[Service]\n"
         f"Type=simple\n"
         f"User={host.ssh_user}\n"
         f"WorkingDirectory={host.install_path}\n"
-        f"ExecStart={host.venv_path}/bin/{info['script']} "
-        f"{host.install_path}/{info['config']}\n"
+        f"ExecStart={exec_start}\n"
         f"Restart=on-failure\n"
         f"RestartSec=10\n"
         f"EnvironmentFile=-{host.install_path}/.env\n"
@@ -465,12 +586,17 @@ def _pip_target(
     return f"{c}-e '{host.install_path}[{extras}]'"
 
 
-def _sync_tree(host: HostConfig, local_path: Path) -> bool:
+def _sync_tree(host: HostConfig, local_path: Path, *, reseed: bool = False) -> bool:
     """Transfer what the host needs: full source (source mode) or just configs
-    (pypi mode, code comes from PyPI), then per-host sync paths and overlays."""
+    (pypi mode, code comes from PyPI), then per-host sync paths and overlays.
+
+    The central store (configs/nodes, configs/services) is excluded from these
+    syncs and seeded separately (seed-don't-clobber) so dashboard edits survive.
+    """
     if host.install_mode == "pypi":
         _info("pypi mode: code from PyPI, syncing configs only…")
-        if not _rsync_path(host, local_path, "configs"):
+        # Keep the dashboard-owned central store out of the --delete configs sync.
+        if not _rsync_path(host, local_path, "configs", excludes=["nodes/", "services/"]):
             return False
         _ok("configs synced")
     else:
@@ -485,6 +611,8 @@ def _sync_tree(host: HostConfig, local_path: Path) -> bool:
             _ok(f"{subpath} synced")
 
     _rsync_host_configs(host, local_path)
+    _set_remote_node_id(host)
+    _seed_central_config(host, local_path, reseed=reseed)
     return True
 
 
@@ -504,9 +632,9 @@ def _resolve_constraints(host: HostConfig, local_path: Path) -> Path | None:
     return cfile if cfile.is_file() else None
 
 
-def _provision(host: HostConfig, local_path: Path, *, upgrade: bool) -> bool:
+def _provision(host: HostConfig, local_path: Path, *, upgrade: bool, reseed: bool = False) -> bool:
     """Shared install/upgrade body: sync, venv, pip, host pip packages."""
-    if not _sync_tree(host, local_path):
+    if not _sync_tree(host, local_path, reseed=reseed):
         return False
     if not _ensure_venv(host):
         return False
@@ -645,7 +773,7 @@ def cmd_init(hosts: list[HostConfig]) -> None:
             _err("failed to set ownership on install directory")
 
 
-def cmd_install(hosts: list[HostConfig], local_path: Path) -> None:
+def cmd_install(hosts: list[HostConfig], local_path: Path, *, reseed: bool = False) -> None:
     """First-time full install: sync, venv, pip, models, systemd."""
     for host in hosts:
         _header(
@@ -653,7 +781,7 @@ def cmd_install(hosts: list[HostConfig], local_path: Path) -> None:
             f"install  {host.address}  services={host.services}  mode={host.install_mode}",
         )
 
-        if not _provision(host, local_path, upgrade=False):
+        if not _provision(host, local_path, upgrade=False, reseed=reseed):
             continue
 
         _info("downloading models (kenzy-setup)…")
@@ -681,12 +809,12 @@ def cmd_install(hosts: list[HostConfig], local_path: Path) -> None:
                 _err(f"enable failed: {unit}")
 
 
-def cmd_upgrade(hosts: list[HostConfig], local_path: Path) -> None:
+def cmd_upgrade(hosts: list[HostConfig], local_path: Path, *, reseed: bool = False) -> None:
     """Sync, update packages, re-write units, restart services."""
     for host in hosts:
         _header(host.name, f"upgrade  {host.address}  mode={host.install_mode}")
 
-        if not _provision(host, local_path, upgrade=True):
+        if not _provision(host, local_path, upgrade=True, reseed=reseed):
             continue
 
         _info("updating systemd unit files…")
@@ -734,6 +862,113 @@ def cmd_logs(service: str, host: HostConfig) -> None:
     unit = _unit_name(service)
     _header(host.name, f"logs: {unit}  (Ctrl+C to exit)")
     _ssh_interactive(host, f"sudo journalctl -u {unit} -f --no-pager")
+
+
+# Critical/shallow paths we refuse to ``rm -rf`` even if a deploy.yaml is
+# misconfigured (e.g. an empty or root install_path/venv_path).
+_UNSAFE_REMOVE: frozenset[str] = frozenset(
+    {
+        "",
+        "/",
+        "/root",
+        "/home",
+        "/usr",
+        "/etc",
+        "/var",
+        "/opt",
+        "/bin",
+        "/sbin",
+        "/boot",
+        "/lib",
+        "/lib64",
+        "/srv",
+        "/tmp",
+        "/mnt",
+        "/media",
+    }
+)
+
+
+def _safe_to_remove(path: str) -> bool:
+    """Guard against ``rm -rf`` on a dangerously shallow or critical path.
+
+    Requires at least two path components below root (e.g. ``/opt/kenzy``) so a
+    misconfigured ``install_path``/``venv_path`` can't wipe a system directory.
+    """
+    p = path.rstrip("/")
+    if p in _UNSAFE_REMOVE:
+        return False
+    return len([seg for seg in p.split("/") if seg]) >= 2
+
+
+def cmd_uninstall(hosts: list[HostConfig], *, purge: bool, assume_yes: bool) -> None:
+    """Stop + disable services, remove systemd units, and delete the venv.
+
+    The inverse of install. With ``purge`` it also deletes the install directory
+    (configs, ``.env``, models, data); without it the install dir is kept so a
+    reinstall preserves state. Asks for confirmation per host unless ``assume_yes``.
+    """
+    for host in hosts:
+        _header(
+            host.name,
+            f"uninstall  {host.address}  services={host.services}"
+            + ("  (purge)" if purge else ""),
+        )
+
+        units = [_unit_name(s) for s in host.services]
+        _info(f"systemd units: {', '.join(units) if units else '(none)'}")
+        _info(f"venv: {host.venv_path}")
+        if purge:
+            _warn(f"PURGE: install dir will be deleted: {host.install_path}")
+        else:
+            _info(f"install dir kept (configs/.env/models): {host.install_path}")
+
+        if not assume_yes:
+            try:
+                ans = input(f"  Remove the above on {host.name!r}? type 'yes' to confirm: ")
+            except EOFError:
+                ans = ""
+            if ans.strip().lower() != "yes":
+                _warn("skipped (not confirmed)")
+                continue
+
+        # 1. Stop + disable units.
+        for unit in units:
+            r = _ssh(host, f"systemctl disable --now {unit}", sudo=True, check=False)
+            if r.returncode == 0:
+                _ok(f"stopped + disabled {unit}")
+            else:
+                _warn(f"could not disable {unit} (already removed?)")
+
+        # 2. Remove unit files, then daemon-reload.
+        if units:
+            paths = " ".join(f"/etc/systemd/system/{u}" for u in units)
+            _ssh(host, f"rm -f {paths}", sudo=True, check=False)
+            _ssh(host, "systemctl daemon-reload", sudo=True, check=False)
+            _ok("removed unit files")
+
+        # 3. Remove the venv.
+        if _safe_to_remove(host.venv_path):
+            r = _ssh(host, f"rm -rf {shlex.quote(host.venv_path)}", sudo=True, check=False)
+            if r.returncode == 0:
+                _ok(f"removed venv: {host.venv_path}")
+            else:
+                _err(f"failed to remove venv: {host.venv_path}")
+        else:
+            _err(f"refusing to remove unsafe venv path: {host.venv_path!r}")
+
+        # 4. Optionally purge the install directory.
+        if purge:
+            if _safe_to_remove(host.install_path):
+                r = _ssh(host, f"rm -rf {shlex.quote(host.install_path)}", sudo=True, check=False)
+                if r.returncode == 0:
+                    _ok(f"purged install dir: {host.install_path}")
+                else:
+                    _err(f"failed to purge install dir: {host.install_path}")
+            else:
+                _err(f"refusing to purge unsafe install path: {host.install_path!r}")
+        else:
+            _info("re-run with --purge to also delete the install dir")
 
 
 # ---------------------------------------------------------------------------
@@ -810,6 +1045,7 @@ def _load_hosts(
                 install_mode=mode,
                 version=str(ver) if ver else None,
                 constraints=(hcfg.get("constraints") or defaults.get("constraints") or None),
+                node_id=(str(hcfg["node_id"]) if hcfg.get("node_id") else None),
             )
         )
 
@@ -877,6 +1113,13 @@ def main() -> None:
         metavar="V",
         help="Override the PyPI version to install (pypi mode), e.g. 3.1.0",
     )
+    parser.add_argument(
+        "--reseed",
+        action="store_true",
+        help="On install/upgrade, overwrite the server's central config store "
+        "(configs/nodes, configs/services) from the operator tree — discards "
+        "dashboard edits. Default: seed only files that don't exist yet.",
+    )
 
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -891,6 +1134,22 @@ def main() -> None:
 
     logs_p = sub.add_parser("logs", help="Tail service logs (requires --host)")
     logs_p.add_argument("service", choices=sorted(SERVICE_INFO))
+
+    unin_p = sub.add_parser(
+        "uninstall",
+        help="Stop + disable services, remove units and venv "
+        "(--purge also deletes the install dir)",
+    )
+    unin_p.add_argument(
+        "--purge",
+        action="store_true",
+        help="Also delete the install directory (configs, .env, models, data)",
+    )
+    unin_p.add_argument(
+        "--yes",
+        action="store_true",
+        help="Skip the per-host confirmation prompt",
+    )
 
     args = parser.parse_args()
 
@@ -911,13 +1170,15 @@ def main() -> None:
         case "init":
             cmd_init(hosts)
         case "install":
-            cmd_install(hosts, local_path)
+            cmd_install(hosts, local_path, reseed=args.reseed)
         case "upgrade":
-            cmd_upgrade(hosts, local_path)
+            cmd_upgrade(hosts, local_path, reseed=args.reseed)
         case "status":
             cmd_status(hosts)
         case "start" | "stop" | "restart":
             cmd_service_action(args.command, args.service, hosts)
+        case "uninstall":
+            cmd_uninstall(hosts, purge=args.purge, assume_yes=args.yes)
 
 
 if __name__ == "__main__":
