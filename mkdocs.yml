@@ -46,5 +46,7 @@ nav:
     - Built-in Skills: skills/builtin.md
     - Writing Skills: skills/writing-skills.md
     - Home Assistant: skills/home-assistant.md
+  - Integrations:
+    - Home Assistant: integrations/home-assistant.md
   - Speaker Enrollment: speaker-enrollment.md
   - Deployment: deployment.md

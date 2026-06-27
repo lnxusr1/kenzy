@@ -146,6 +146,13 @@ _SERVER_EDITABLE: dict[str, str] = {
     "speaker.unknown_speaker": "str",
     "discovery.enabled": "bool",
     "discovery.instance": "str",
+    # Home Assistant / MQTT integration (no secrets — broker creds are env-only).
+    "integrations.mqtt.enabled": "bool",
+    "integrations.mqtt.host": "str",
+    "integrations.mqtt.port": "num",
+    "integrations.mqtt.base_topic": "str",
+    "integrations.mqtt.discovery_prefix": "str",
+    "integrations.mqtt.commands": "bool",
 }
 
 
@@ -1100,6 +1107,7 @@ class AudioServer:
         self._transient_node_cfg.setdefault(node_id, {})["muted"] = bool(muted)
         await self.push_config(node_id)
         log.info("[%s] %s", node_id, "muted" if muted else "unmuted")
+        self._notify_state()  # surface the change to observers (dashboard, integrations)
         return True
 
     async def set_room(self, node_id: str, room_name: str) -> bool:
@@ -1977,10 +1985,41 @@ def main() -> None:
 
         dashboard = Dashboard(server, cfg, DashboardConfig.from_cfg(cfg), config_path=config_path)
 
+    # Home Assistant / MQTT integration: opt-in; publishes node state/events via HA
+    # MQTT Discovery. When off, nothing is wired (zero node-/pipeline-side overhead).
+    mqtt_transport = None
+    mqtt_cfg = (cfg.get("integrations", {}) or {}).get("mqtt", {}) or {}
+    if mqtt_cfg.get("enabled", False):
+        from kenzy.integrations import IntegrationHub, attach_to_server
+        from kenzy.integrations.mqtt import Command, MqttConfig, MqttTransport
+
+        _mcfg = MqttConfig.from_cfg(mqtt_cfg)
+
+        async def _dispatch_command(cmd: Command) -> None:
+            """Map an inbound HA command onto the matching server action."""
+            if cmd.action == "trigger" and cmd.node_id:
+                await server.trigger_node(cmd.node_id)
+            elif cmd.action == "stop" and cmd.node_id:
+                await server.stop_node(cmd.node_id)
+            elif cmd.action == "volume" and cmd.node_id is not None:
+                await server.set_node_volume(cmd.node_id, level=int(cmd.value))
+            elif cmd.action == "mute" and cmd.node_id is not None:
+                await server.set_node_muted(cmd.node_id, bool(cmd.value))
+            elif cmd.action == "announce" and cmd.value:
+                await server.announce(str(cmd.value))
+
+        _hub = IntegrationHub()
+        _dispatch = _dispatch_command if _mcfg.commands else None
+        mqtt_transport = MqttTransport(_mcfg, dispatch=_dispatch)
+        _hub.subscribe(mqtt_transport.submit)
+        attach_to_server(_hub, server)
+
     async def _main() -> None:
         coros: list[Any] = [server.serve()]
         if dashboard is not None:
             coros.append(dashboard.serve())
+        if mqtt_transport is not None:
+            coros.append(mqtt_transport.run())
         if sys.stdin.isatty():
             coros.append(_stdin_control(server))
         await asyncio.gather(*coros)

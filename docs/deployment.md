@@ -74,6 +74,7 @@ hosts:
 | `install_path` | *(from defaults)* | Remote installation directory |
 | `python_bin` | *(from defaults)* | Python executable name |
 | `local` | `false` | Set `true` for the local machine (no SSH used) |
+| `node_id` | *(node self-generates a uuid)* | Operator-chosen stable slug for a node host; baked into its `node.yaml` and keys its central record at `configs/nodes/<node_id>.yaml` |
 | `sync` | `[]` | Additional paths synced to this host specifically |
 | `install_mode` | *(from top-level, `source`)* | `source` or `pypi` for this host |
 | `version` | *(from top-level)* | PyPI version to install in `pypi` mode |
@@ -121,6 +122,13 @@ kenzy-deploy install
 kenzy-deploy install --host main-server
 ```
 
+!!! note "Central, dashboard-managed config"
+    `install` provisions into the server-owned config model, so what it deploys stays editable from the dashboard (just like a per-user install):
+
+    - **Backend services run in pull mode** — `stt`/`tts`/`llm`/`speaker` units are arg-less and fetch their effective config from the server. They need `KENZY_SERVICE_TOKEN` (plus mDNS or `KENZY_SERVER_URL`) in their `.env` to reach it.
+    - **Per-host `node_id`** (a slug in `deploy.yaml`, or a self-generated uuid) is baked into the node's `node.yaml` so it has a stable central record at `configs/nodes/<node_id>.yaml`.
+    - The server's central store (`configs/nodes/`, `configs/services/`) is **seeded but never clobbered** — a re-deploy only adds files the server doesn't have, so live dashboard edits survive. Pass `--reseed` (`kenzy-deploy --reseed install|upgrade`) to force the operator's files back over a dashboard edit.
+
 ### `kenzy-deploy upgrade`
 
 Push an update to running hosts:
@@ -152,29 +160,43 @@ kenzy-deploy logs llm --host main-server
 kenzy-deploy logs node --host living-room
 ```
 
-## Per-host configuration
+### `kenzy-deploy uninstall`
 
-All hosts receive the same base `configs/` directory on every install and upgrade. To give a specific host different settings — a host-local `audio_device`, a different LLM model, etc. — create a per-host overlay directory:
+The inverse of install. Stops and disables the services, removes their systemd units (`daemon-reload`), and deletes the virtualenv. By default the install directory (configs, `.env`, models, data) is **kept** so a reinstall preserves state; pass `--purge` to remove it too. Prompts per host unless `--yes`.
+
+```bash
+kenzy-deploy uninstall                          # all hosts; keep install dir; confirm each
+kenzy-deploy uninstall --host living-room --yes
+kenzy-deploy uninstall --purge                  # also delete the install dir
+```
+
+`rm -rf` targets are guarded against dangerously shallow/critical paths (`/`, `/opt`, an empty path). Shared model caches outside the install directory (e.g. `~/.cache/huggingface`) are left untouched.
+
+!!! tip "Per-user installs"
+    For a host set up with the per-user installer (`install.sh`) rather than `kenzy-deploy`, use `install.sh --uninstall` (add `--purge` to also remove the config home). It removes the `systemd --user` units, the venv, and the linked `kenzy-*` commands.
+
+## Configuration: the central store (dashboard-managed)
+
+Kenzy's runtime config is **server-owned** and editable live from the dashboard. `kenzy-deploy` provisions into that model rather than pushing per-host files, so anything it deploys can be managed from the browser afterward. Author config as files in the central store; the deploy **seeds them to the server host**:
 
 ```
 configs/
-  node.yaml                      ← base defaults, sent to all hosts
-  hosts/
-    living-room/
-      node.yaml                  ← overrides for living-room only
-    bedroom/
-      node.yaml                  ← overrides for bedroom only
-    main-server/
-      llm.yaml                   ← different model or system prompt
+  node.yaml                       ← shared node bootstrap (server_url/discovery + logging only)
+  nodes/
+    living-room.yaml              ← per-node operational config, keyed by node_id
+    kitchen.yaml
+  services/
+    llm.yaml                      ← per-service config (model, prompt, skills…)
+    stt.yaml
 ```
 
-On each `install` or `upgrade`, after syncing the base `configs/`, the deploy script checks for `configs/hosts/<host-name>/` and copies any files it finds into `{install_path}/configs/` on that host, replacing the base version of each file completely. Config files not present in the overlay are left as the base version.
+- **Nodes** pull their operational config (audio device, wake-word thresholds, VAD timing, sounds, **and room name**) from the server on connect. Give a node host a `node_id:` slug in `deploy.yaml` (or let it self-generate a uuid) — it's baked into the node's `node.yaml` and keys `configs/nodes/<node_id>.yaml`. Set fleet-wide defaults in `server.yaml`'s `node_defaults`. The shared `configs/node.yaml` holds **only** bootstrap (how to reach the server + early logging); leave `server_url` unset to auto-discover the server over mDNS. See [Discovery & config-pull](configuration/server.md#discovery-and-config-pull).
+- **Services** run in pull mode and fetch `configs/services/<service>.yaml` from the server, so the dashboard's Services tab manages them.
+- The central store is **seeded, not clobbered**: a re-deploy adds only the files the server is missing, preserving dashboard edits. Use `--reseed` to force the operator's files back.
 
-!!! note "Complete files required"
-    The overlay is a file-level replacement, not a key-level merge. A host-specific config file must be complete and valid on its own — the service will not fall back to base `configs/` values for keys that are missing. The recommended approach is to copy the full base config file into the overlay directory and change only the lines that differ.
+### Legacy per-host overlay
 
-!!! tip "Nodes: prefer config-pull"
-    A node's operational config (audio device, wake-word thresholds, VAD timing, sounds, **and its room name**) is server-owned and pulled on connect — you usually don't need a per-host node overlay at all. Set `node_defaults` in the server's `server.yaml` and per-node values (including `room_id`) in `configs/nodes/<node_id>.yaml`; the server pushes them to each node when it connects. Pre-seed a not-yet-deployed device by assigning its `node_id` at install (`kenzy-init --node-id`) and creating that override file ahead of time. Reserve the deploy overlay for cases where you must pin a value *before* the node can reach the server. See [Discovery & config-pull](configuration/server.md#discovery-and-config-pull).
+The older `configs/hosts/<host-name>/` overlay still works for non-central files. On each install/upgrade, files placed there are copied into `{install_path}/configs/` on that host, **replacing the base file completely** (file-level replacement, not a key merge — a host file must be complete and valid on its own). Prefer the central `nodes/` + `services/` store above for anything you want to manage from the dashboard.
 
 ```yaml
 # configs/hosts/living-room/node.yaml  (full copy of configs/node.yaml, with these lines changed)

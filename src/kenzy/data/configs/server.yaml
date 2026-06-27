@@ -79,3 +79,26 @@ tts:
 stt:
   url: "http://127.0.0.1:8767/transcribe"
   timeout: 60.0
+
+# Integrations — surface Kenzy into external systems. Opt-in; nothing is wired
+# (zero overhead) unless enabled. Requires the mqtt extra: pip install kenzy[server,mqtt]
+integrations:
+  # Home Assistant via MQTT Discovery: each node auto-appears in HA as a device with
+  # state / last-speaker / last-heard sensors. No HA-side config or custom component.
+  mqtt:
+    enabled: false
+    host: "127.0.0.1"
+    port: 1883
+    # Broker credentials come from the environment, never this file:
+    #   KENZY_MQTT_USERNAME / KENZY_MQTT_PASSWORD
+    base_topic: "kenzy"
+    discovery_prefix: "homeassistant"   # must match HA's MQTT discovery prefix
+    # Accept inbound commands from HA so automations can drive Kenzy. Adds per-node
+    # Trigger + Stop buttons and a Mute switch (reflects voice/dashboard mutes too),
+    # and these command topics you can also publish to from automations:
+    #   kenzy/<node_id>/trigger   kenzy/<node_id>/stop
+    #   kenzy/<node_id>/volume    (payload 0–100)
+    #   kenzy/<node_id>/mute      (payload ON/OFF)
+    #   kenzy/announce            (payload = text spoken in every room)
+    # Set false for a read-only (publish-only) integration.
+    commands: true

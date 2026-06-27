@@ -106,9 +106,10 @@ kenzy-deploy init       # one-time OS setup on all hosts
 kenzy-deploy install    # first full deployment (source or PyPI mode)
 kenzy-deploy upgrade    # install updates and restart services
 kenzy-deploy status     # check service health
+kenzy-deploy uninstall  # stop, remove units + venv (--purge also removes the install dir)
 ```
 
-Prerequisites on each remote host: SSH key auth and passwordless sudo.
+Prerequisites on each remote host: SSH key auth and passwordless sudo. Backend services are deployed in **pull mode** (they fetch config from the server) and per-node config lives in the server-owned central store (`configs/nodes/`, `configs/services/`), so a deployed fleet is managed from the dashboard. See the [deployment docs](https://docs.kenzy.dev/deployment/) for the central-config model, per-host `node_id`, and `--reseed`.
 
 ## Dashboard
 
