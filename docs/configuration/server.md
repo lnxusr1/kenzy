@@ -93,6 +93,21 @@ Opt-in web fleet manager served by `kenzy-server`. **Off by default**; when disa
 | `tts.timeout` | `60.0` | HTTP timeout in seconds |
 | `tts.chunk_size` | `4096` | Bytes per PCM chunk streamed to the node. At 24 kHz int16 mono, 4096 bytes ≈ 85 ms of audio. |
 
+### Home Assistant / MQTT integration
+
+Opt-in; nothing is wired (zero overhead) unless `enabled`. Requires the `mqtt` extra (`pip install "kenzy[server,mqtt]"`). See [Integrations → Home Assistant](../integrations/home-assistant.md) for the full guide.
+
+| Key | Default | Description |
+|---|---|---|
+| `integrations.mqtt.enabled` | `false` | Publish node state/events to an MQTT broker via HA MQTT Discovery |
+| `integrations.mqtt.host` | `"127.0.0.1"` | Broker hostname |
+| `integrations.mqtt.port` | `1883` | Broker port |
+| `integrations.mqtt.base_topic` | `"kenzy"` | Topic prefix for Kenzy's state/command topics |
+| `integrations.mqtt.discovery_prefix` | `"homeassistant"` | Must match HA's MQTT discovery prefix |
+| `integrations.mqtt.commands` | `true` | Accept inbound commands (Trigger/Stop buttons, Mute switch, command topics). `false` = read-only |
+
+Broker credentials come from the environment, never this file: `KENZY_MQTT_USERNAME` / `KENZY_MQTT_PASSWORD`.
+
 ## Example
 
 ```yaml

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "kenzy"
-version = "3.2.1"
+version = "3.3.0"
 description = "Distributed home voice-assistant: kenzy-node, kenzy-server, kenzy-stt, kenzy-tts, kenzy-llm, kenzy-speaker"
 requires-python = ">=3.11"
 readme = "README.md"
@@ -103,6 +103,12 @@ llm = [
 kokoro = [
     "kokoro>=0.9.0",
     "torch>=2.0.0",
+]
+
+# Home Assistant / MQTT integration on the server host (install kenzy[server,mqtt]).
+# Publishes node state/events via HA MQTT Discovery; opt-in via integrations.mqtt.
+mqtt = [
+    "aiomqtt>=2.0.0",
 ]
 
 # Dev / test tooling

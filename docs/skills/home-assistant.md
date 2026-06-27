@@ -3,7 +3,7 @@
 Kenzy integrates with Home Assistant in **both directions**:
 
 - **Kenzy → HA** — the Home Assistant skill lets Kenzy control and query your smart home devices using natural language (lights, switches, fans, covers, locks, thermostats). This is the bulk of this page.
-- **HA → Kenzy** — Home Assistant automations can make Kenzy speak in your rooms via the server's announce webhook. See [Calling Kenzy from Home Assistant](#calling-kenzy-from-home-assistant) at the end.
+- **HA → Kenzy** — Home Assistant can see and control Kenzy itself: each node appears in HA as a device (state/presence sensors, Trigger/Stop buttons, a Mute switch) and automations can trigger, announce, set volume, or mute. See the [Home Assistant integration](../integrations/home-assistant.md) guide. (Automations can also make Kenzy speak via the server's announce webhook — see [Calling Kenzy from Home Assistant](#calling-kenzy-from-home-assistant) at the end.)
 
 The Home Assistant skill lets Kenzy control and query your smart home devices using natural language. It supports lights, switches, fans, covers (blinds/garage doors), locks, and thermostats.
 
