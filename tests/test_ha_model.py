@@ -28,9 +28,19 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def test_build_model_filters_and_normalizes():
     raw = [
-        {"entity_id": "light.lr_main", "name": "Main", "area": "Living Room", "floor": "Downstairs"},
+        {
+            "entity_id": "light.lr_main",
+            "name": "Main",
+            "area": "Living Room",
+            "floor": "Downstairs",
+        },
         {"entity_id": "sensor.temp", "name": "Temp", "area": "Living Room", "floor": "Downstairs"},
-        {"entity_id": "light.office_plug_led", "name": "LED", "area": "Office", "floor": "Downstairs"},
+        {
+            "entity_id": "light.office_plug_led",
+            "name": "LED",
+            "area": "Office",
+            "floor": "Downstairs",
+        },
         {"entity_id": "light.garage_relay", "name": "Relay", "area": "Garage", "floor": None},
         {"entity_id": "fan.bp_fan", "name": None, "area": "Back Porch", "floor": None},
     ]
@@ -44,9 +54,9 @@ def test_build_model_filters_and_normalizes():
     assert ids == {"light.lr_main", "fan.bp_fan"}
 
     fan = model.by_id()["fan.bp_fan"]
-    assert fan.name == "bp fan"          # derived from id (no friendly_name)
-    assert fan.area == "back_porch"      # slugified
-    assert fan.floor == "home"           # floorless fallback
+    assert fan.name == "bp fan"  # derived from id (no friendly_name)
+    assert fan.area == "back_porch"  # slugified
+    assert fan.floor == "home"  # floorless fallback
 
 
 def test_build_model_exclude_by_domain_and_area():
@@ -69,7 +79,12 @@ def test_validate_curation_normalizes_and_drops_empties():
     raw = {
         "exclude": {"patterns": ["light.*_led", " "], "domains": [], "entities": ["light.x"]},
         "devices": {
-            "light.a": {"aliases": ["lamp", " "], "note": " hi ", "in_group": False, "hidden": False},
+            "light.a": {
+                "aliases": ["lamp", " "],
+                "note": " hi ",
+                "in_group": False,
+                "hidden": False,
+            },
             "light.b": {"aliases": []},  # empty -> dropped
         },
         "rooms": {"Living Room": {"defaults": {"lights": ["light.a"], "fans": []}}},
@@ -84,10 +99,10 @@ def test_validate_curation_normalizes_and_drops_empties():
 @pytest.mark.parametrize(
     "bad",
     [
-        [],                                    # not a mapping
-        {"bogus": 1},                          # unknown top-level key
-        {"exclude": {"patterns": "x"}},        # exclude list is a string
-        {"devices": {"light.a": "x"}},         # device entry not a mapping
+        [],  # not a mapping
+        {"bogus": 1},  # unknown top-level key
+        {"exclude": {"patterns": "x"}},  # exclude list is a string
+        {"devices": {"light.a": "x"}},  # device entry not a mapping
         {"rooms": {"den": {"defaults": {"lights": "x"}}}},  # defaults list is a string
     ],
 )
@@ -105,7 +120,9 @@ def test_save_curation_roundtrip(tmp_path):
     )
     assert path.exists()
     loaded = ha_model.load_curation()
-    assert loaded == {"devices": {"light.a": {"aliases": ["lamp"], "note": "x"}}}  # empty exclude dropped
+    assert loaded == {
+        "devices": {"light.a": {"aliases": ["lamp"], "note": "x"}}
+    }  # empty exclude dropped
 
 
 # ---------------------------------------------------------------------------
@@ -126,12 +143,54 @@ def ha(monkeypatch):
     mod._reset_cache()
 
     entities = [
-        Entity("light.lr_floor_lamp", "light", "Floor Lamp", "living_room", "Living Room", "downstairs", "Downstairs"),
-        Entity("light.lr_ceiling", "light", "Living Room Ceiling", "living_room", "Living Room", "downstairs", "Downstairs"),
-        Entity("light.lr_accent", "light", "Accent Light", "living_room", "Living Room", "downstairs", "Downstairs"),
-        Entity("fan.lr_fan", "fan", "Ceiling Fan", "living_room", "Living Room", "downstairs", "Downstairs"),
-        Entity("climate.lr_thermo", "climate", "Thermostat", "living_room", "Living Room", "downstairs", "Downstairs"),
-        Entity("lock.front_door", "lock", "Front Door", "foyer", "Foyer", "downstairs", "Downstairs"),
+        Entity(
+            "light.lr_floor_lamp",
+            "light",
+            "Floor Lamp",
+            "living_room",
+            "Living Room",
+            "downstairs",
+            "Downstairs",
+        ),
+        Entity(
+            "light.lr_ceiling",
+            "light",
+            "Living Room Ceiling",
+            "living_room",
+            "Living Room",
+            "downstairs",
+            "Downstairs",
+        ),
+        Entity(
+            "light.lr_accent",
+            "light",
+            "Accent Light",
+            "living_room",
+            "Living Room",
+            "downstairs",
+            "Downstairs",
+        ),
+        Entity(
+            "fan.lr_fan",
+            "fan",
+            "Ceiling Fan",
+            "living_room",
+            "Living Room",
+            "downstairs",
+            "Downstairs",
+        ),
+        Entity(
+            "climate.lr_thermo",
+            "climate",
+            "Thermostat",
+            "living_room",
+            "Living Room",
+            "downstairs",
+            "Downstairs",
+        ),
+        Entity(
+            "lock.front_door", "lock", "Front Door", "foyer", "Foyer", "downstairs", "Downstairs"
+        ),
     ]
     model = HAModel(entities=entities, fetched_at=123.0)
     curation = {
@@ -161,11 +220,13 @@ async def _view(ha):
 async def test_index_from_model_structure(ha):
     idx = await _view(ha)
     assert set(idx.rooms["living_room"]["lights"]) == {
-        "light.lr_floor_lamp", "light.lr_ceiling", "light.lr_accent"
+        "light.lr_floor_lamp",
+        "light.lr_ceiling",
+        "light.lr_accent",
     }
     assert idx.spoken["light.lr_floor_lamp"] == "Floor Lamp"
     assert idx.device_map["light.lr_floor_lamp"] == "light.lr_floor_lamp"  # identity
-    assert "light.lr_accent" in idx.exclude                                # in_group: false
+    assert "light.lr_accent" in idx.exclude  # in_group: false
     assert idx.defaults["living_room"]["lights"] == ["light.lr_floor_lamp"]
     assert idx.aliases[("living_room", "lamp")] == ["light.lr_floor_lamp"]
 
@@ -222,5 +283,5 @@ async def test_fast_intent_over_live_model(ha, monkeypatch):
     result = await ha.fast_home_control("turn off the living room lights", "living_room", "john")
     assert result.is_handled
     ids = {d["id"] for d in applied["devices"]}
-    assert ids == {"light.lr_floor_lamp", "light.lr_ceiling"}      # accent excluded
+    assert ids == {"light.lr_floor_lamp", "light.lr_ceiling"}  # accent excluded
     assert all(d["action"] == "turn_off" for d in applied["devices"])
