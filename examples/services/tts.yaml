@@ -1,0 +1,19 @@
+# TTS service override — copy to configs/services/tts.yaml. Only keys you change.
+host: "127.0.0.1"
+port: 8769
+
+# openai (cloud; needs OPENAI_API_KEY in .env) | kokoro (local PyTorch; needs the
+# `kokoro` pip extra + `apt-get install espeak-ng`). kenzy-deploy auto-adds the
+# kokoro extra when this is set to "kokoro".
+provider: "openai"
+
+openai:
+  model: "gpt-4o-mini-tts"
+  voice: "sage"
+  speed: 1.0
+
+# Used when provider: kokoro
+kokoro:
+  voice: "af_heart"
+  device: "auto"       # auto | cpu | cuda | mps
+  speed: 1.0

@@ -17,16 +17,21 @@ import json
 import logging
 import os
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import urlencode, urlparse
 
 log = logging.getLogger(__name__)
 
 #: ws(s):// → http(s):// for talking to the server's config endpoint.
 _SCHEME_MAP = {"ws": "http", "wss": "https"}
+
+#: Last server HTTP base resolved by :func:`bootstrap_config`, reused by the
+#: registration heartbeat so it doesn't re-run mDNS every tick.
+_server_base: str | None = None
 
 
 def _http_base(url: str) -> str:
@@ -96,6 +101,8 @@ def bootstrap_config(service: str, *, timeout: float = 5.0) -> dict[str, Any]:
             if not isinstance(cfg, dict):
                 raise ValueError("server returned a non-object config")
             _save_local(service, cfg)
+            global _server_base
+            _server_base = base
             log.info("Pulled %s config from %s", service, base)
             return cfg
         except (OSError, urllib.error.URLError, ValueError, json.JSONDecodeError) as exc:
@@ -123,6 +130,63 @@ def fetch_service_config(service: str, *, timeout: float = 3.0) -> dict[str, Any
         return cfg if isinstance(cfg, dict) else None
     except Exception:
         return None
+
+
+def effective_bind(cfg: dict[str, Any]) -> str:
+    """The host a service should bind to: ``KENZY_BIND`` if set (e.g. ``0.0.0.0`` from
+    ``kenzy-deploy --listen-all``), else the config's ``host`` (default 127.0.0.1)."""
+    return os.environ.get("KENZY_BIND") or str(cfg.get("host", "127.0.0.1"))
+
+
+def start_registration(service: str, cfg: dict[str, Any], *, interval: float = 30.0) -> None:
+    """Announce this service to the server periodically so it auto-appears.
+
+    Backend services pull their config but don't otherwise tell the server they
+    exist; the server learns of them only from static ``<svc>.url`` config. This
+    heartbeat closes that gap: every ``interval`` seconds (and once at startup) the
+    service GETs ``/register?service=&host=&port=&version=`` so the server can add it
+    to the live backend set (dashboard + pipeline) without hand-wired URLs.
+
+    Best-effort daemon thread (stdlib only); it never blocks startup and silently
+    retries. The server resolves the reachable host from the request's source IP when
+    the service binds ``0.0.0.0``, so a bind host of ``0.0.0.0`` is reported as-is.
+    """
+    port = int(cfg.get("port", 0) or 0)
+    if not port:
+        return
+    # Report the effective bind host; the server maps 0.0.0.0 to our source IP.
+    host = effective_bind(cfg)
+    token = os.environ.get("KENZY_SERVICE_TOKEN")
+
+    def _version() -> str:
+        try:
+            from kenzy import kenzy_version
+
+            return kenzy_version()
+        except Exception:
+            return ""
+
+    def _loop() -> None:
+        params = urlencode({"service": service, "host": host, "port": port, "version": _version()})
+        while True:
+            base = _server_base
+            if base is None:
+                try:
+                    base = _resolve_server_http(3.0)
+                except OSError:
+                    base = None
+            if base:
+                try:
+                    req = urllib.request.Request(f"{base}/register?{params}")  # noqa: S310
+                    if token:
+                        req.add_header("Authorization", f"Bearer {token}")
+                    urllib.request.urlopen(req, timeout=5).close()  # noqa: S310
+                except Exception as exc:  # noqa: BLE001 - heartbeat is best-effort
+                    log.debug("Service registration for %s failed: %s", service, exc)
+            time.sleep(interval)
+
+    threading.Thread(target=_loop, name=f"kenzy-register-{service}", daemon=True).start()
+    log.info("Service registration heartbeat started for %s", service)
 
 
 def load_service_config(service: str, argv: list[str] | None = None) -> dict[str, Any]:

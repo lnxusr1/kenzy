@@ -1,0 +1,15 @@
+# Shared node bootstrap — copy to configs/node.yaml.
+#
+# Bootstrap-only: identity + how to reach the server + early logging. Everything
+# operational (room name, audio device, wake-word tuning) is server-owned and lives
+# in configs/nodes/<node_id>.yaml, pulled on connect. node_id is omitted here on
+# purpose — kenzy-deploy bakes the per-host slug, or the node self-generates a uuid.
+
+# Leave server_url unset to auto-discover the server over mDNS, or set an explicit
+# "ws://your-server:8765" to skip discovery (kenzy-deploy auto-sets this per host).
+server_url: null
+discovery:
+  enabled: true
+
+log_level: "info"
+verbose: false

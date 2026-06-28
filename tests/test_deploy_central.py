@@ -77,6 +77,99 @@ def test_node_id_loaded_from_deploy_yaml(tmp_path: Path) -> None:
     assert hosts["garage"].node_id is None  # omitted → node self-generates
 
 
+# --- server URL auto-derivation + --listen-all ------------------------------
+
+
+def _fleet_yaml(tmp_path: Path, extra: str = "") -> str:
+    cfg = tmp_path / "deploy.yaml"
+    cfg.write_text(
+        f"{extra}"
+        "hosts:\n"
+        "  pc:\n"
+        "    address: officepc.lan\n"
+        "    services: [server, llm]\n"
+        "  bedroom:\n"
+        "    address: 10.0.0.5\n"
+        "    services: [stt]\n"
+    )
+    return str(cfg)
+
+
+def test_server_url_derived_from_fleet(tmp_path: Path) -> None:
+    hosts = {h.name: h for h in _load_hosts(_fleet_yaml(tmp_path))}
+    # Co-located service uses loopback; a remote service uses the server host's address.
+    assert hosts["pc"].server_url == "ws://127.0.0.1:8765"
+    assert hosts["bedroom"].server_url == "ws://officepc.lan:8765"
+
+
+def test_explicit_server_url_and_port_override(tmp_path: Path) -> None:
+    hosts = {h.name: h for h in _load_hosts(_fleet_yaml(tmp_path, "server_port: 9000\n"))}
+    assert hosts["bedroom"].server_url == "ws://officepc.lan:9000"
+    hosts = {h.name: h for h in _load_hosts(_fleet_yaml(tmp_path, "server_url: ws://kenzy.lan:8765\n"))}
+    assert hosts["pc"].server_url == "ws://kenzy.lan:8765"  # explicit wins everywhere
+
+
+def test_no_server_in_fleet_means_no_url(tmp_path: Path) -> None:
+    cfg = tmp_path / "deploy.yaml"
+    cfg.write_text("hosts:\n  box:\n    address: 10.0.0.9\n    services: [stt]\n")
+    hosts = {h.name: h for h in _load_hosts(str(cfg))}
+    assert hosts["box"].server_url is None  # falls back to mDNS
+
+
+def test_pull_unit_has_server_url_and_listen_all_env(tmp_path: Path) -> None:
+    hosts = {h.name: h for h in _load_hosts(_fleet_yaml(tmp_path), listen_all=True)}
+    unit = _unit_content("llm", hosts["pc"])
+    assert "Environment=KENZY_SERVER_URL=ws://127.0.0.1:8765" in unit
+    assert "Environment=KENZY_BIND=0.0.0.0" in unit
+    # Without --listen-all there's no KENZY_BIND.
+    hosts2 = {h.name: h for h in _load_hosts(_fleet_yaml(tmp_path))}
+    assert "KENZY_BIND" not in _unit_content("llm", hosts2["pc"])
+
+
+# --- extras (kokoro / mqtt) -------------------------------------------------
+
+
+def test_non_service_entries_route_to_extras(tmp_path: Path) -> None:
+    from kenzy.deploy.deploy import _pip_extras, _unit_name
+
+    cfg = tmp_path / "deploy.yaml"
+    cfg.write_text(
+        "hosts:\n"
+        "  pc:\n"
+        "    address: x\n"
+        "    services: [server, tts, kokoro, mqtt]\n"  # kokoro/mqtt are extras, not services
+    )
+    host = next(iter(_load_hosts(str(cfg))))
+    assert host.services == ["server", "tts"]  # only runnable services get units
+    assert host.extras == ["kokoro", "mqtt"]
+    assert _pip_extras(host, tmp_path) == "server,tts,kokoro,mqtt"
+    # No bogus kenzy-kokoro / kenzy-mqtt units.
+    assert [_unit_name(s) for s in host.services] == ["kenzy-server.service", "kenzy-tts.service"]
+
+
+def test_explicit_extras_field(tmp_path: Path) -> None:
+    from kenzy.deploy.deploy import _pip_extras
+
+    cfg = tmp_path / "deploy.yaml"
+    cfg.write_text(
+        "hosts:\n  pc:\n    address: x\n    services: [server, llm]\n    extras: [mqtt]\n"
+    )
+    host = next(iter(_load_hosts(str(cfg))))
+    assert host.extras == ["mqtt"]
+    assert _pip_extras(host, tmp_path) == "server,llm,mqtt"
+
+
+def test_kokoro_autodetected_from_central_tts_config(tmp_path: Path) -> None:
+    from kenzy.deploy.deploy import _pip_extras
+
+    (tmp_path / "configs" / "services").mkdir(parents=True)
+    (tmp_path / "configs" / "services" / "tts.yaml").write_text("provider: kokoro\n")
+    cfg = tmp_path / "configs" / "deploy.yaml"
+    cfg.write_text("hosts:\n  pc:\n    address: x\n    services: [server, tts]\n")
+    host = next(iter(_load_hosts(str(cfg))))
+    assert "kokoro" in _pip_extras(host, tmp_path).split(",")
+
+
 # --- node_id patch one-liner ------------------------------------------------
 
 

@@ -33,11 +33,14 @@ discovery:
 # token on mutating actions.
 dashboard:
   enabled: true
-  bind: "127.0.0.1"
+  # 0.0.0.0 makes the dashboard reachable from other machines on your LAN (the
+  # common headless-server case). Use 127.0.0.1 to restrict it to the server only.
+  bind: "0.0.0.0"
   port: 8770
   # Browser login for mutating actions (config edits, controls). Defaults to
-  # admin / password; change it with `kenzy-passwd` (run on the server node).
-  # It's plaintext HTTP on a LAN bind — keep it off the public internet.
+  # admin / password — CHANGE IT with `kenzy-passwd` (run on the server node),
+  # especially with the 0.0.0.0 bind above: this is plaintext HTTP reachable by
+  # anyone on your LAN. Never port-forward it to the public internet.
   auth:
     username: "admin"
     password_hash: "scrypt$16384:8:1$tI5Hed-tJCVbiLvz3n12kA$29VNd72xhZKs_H0TyxhempZRKLrn9PEABFXGHo8tlwk"
