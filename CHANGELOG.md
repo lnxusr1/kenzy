@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [3.4.1]
+
+### Fixed
+
+- **The bundled wake-word model (`hey_ken_zee.tflite`) was missing from the published package**, so a fresh node that relies on the bundled default (rather than a separately-synced model) failed to start with "could not find pretrained model …". The model file had never been committed to git, so package builds from a clean checkout omitted it; it's now tracked and ships in the wheel/sdist.
+
 ## [3.4.0]
 
 ### Added
