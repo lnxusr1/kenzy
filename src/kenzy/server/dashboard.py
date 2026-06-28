@@ -49,6 +49,27 @@ _CONTENT_TYPES = {
 }
 
 
+def _default_dashboard_auth() -> tuple[str | None, str | None]:
+    """The shipped default dashboard login, read from the packaged ``server.yaml``.
+
+    The default lives in config (operator-editable, a single source) rather than
+    hardcoded in source. Used only as a fallback when the active config enables the
+    dashboard but omits an ``auth`` block (e.g. a bare/partial config), so login
+    still works out of the box. The hash is stable, so the cookie-signing secret
+    survives restarts.
+    """
+    try:
+        import yaml  # type: ignore[import-untyped]
+
+        from kenzy.config import packaged_config
+
+        data = yaml.safe_load(packaged_config("server").read_text()) or {}
+        auth = (data.get("dashboard") or {}).get("auth") or {}
+        return (auth.get("username") or None), (auth.get("password_hash") or None)
+    except Exception:  # packaged default unreadable — no fallback creds
+        return None, None
+
+
 @dataclass
 class DashboardConfig:
     enabled: bool = False
@@ -68,13 +89,16 @@ class DashboardConfig:
     def from_cfg(cls, cfg: dict[str, Any]) -> DashboardConfig:
         d = cfg.get("dashboard", {}) or {}
         auth = d.get("auth", {}) or {}
+        # Fall back to the shipped default login (from the packaged server.yaml) when
+        # the active config enables the dashboard without its own auth block.
+        def_user, def_hash = _default_dashboard_auth()
         return cls(
             enabled=bool(d.get("enabled", False)),
             bind=str(d.get("bind", "127.0.0.1")),
             port=int(d.get("port", 8770)),
             auth_token=d.get("auth_token") or None,
-            auth_username=auth.get("username") or None,
-            auth_password_hash=auth.get("password_hash") or None,
+            auth_username=auth.get("username") or def_user,
+            auth_password_hash=auth.get("password_hash") or def_hash,
             logs=bool(d.get("logs", False)),
             controls=bool(d.get("controls", False)),
             allowed_hosts=tuple(str(h) for h in (d.get("allowed_hosts") or [])),
@@ -178,12 +202,19 @@ class Dashboard:
             and serviceauth.verify_password("password", dcfg.auth_password_hash)
         )
         if dcfg.enabled and self._default_password:
-            log.warning(
-                "Dashboard is using the DEFAULT password (admin/password) — change it in "
-                "Settings or with `kenzy-passwd`. Anyone who can reach %s:%s can take control.",
-                dcfg.bind,
-                dcfg.port,
-            )
+            if dcfg.bind in ("127.0.0.1", "localhost", "::1"):
+                log.warning(
+                    "Dashboard is using the DEFAULT password (admin/password) — change it in "
+                    "Settings or with `kenzy-passwd`."
+                )
+            else:
+                log.warning(
+                    "SECURITY: dashboard is using the DEFAULT password (admin/password) AND is "
+                    "bound to %s:%s — it is plaintext HTTP reachable by anyone on your network, "
+                    "who could take control. Change it now in Settings or with `kenzy-passwd`.",
+                    dcfg.bind,
+                    dcfg.port,
+                )
         # Live-push: connected browser WS clients + a short health-check cache so a
         # burst of node state changes can't hammer the backends.
         self._clients: set[ServerConnection] = set()
@@ -324,7 +355,10 @@ class Dashboard:
         return nodes
 
     async def _services_state(self) -> list[dict[str, Any]]:
-        if not self._service_urls:
+        # Statically-configured backends plus any that auto-registered with the server
+        # (GET /register); the latter win on name collision (live address).
+        targets = {**self._service_urls, **self._server.announced_health_urls()}
+        if not targets:
             return []
         import time
 
@@ -345,7 +379,7 @@ class Dashboard:
             except Exception:
                 return {"name": name, "up": False, "detail": {}}
 
-        result = list(await asyncio.gather(*(check(n, u) for n, u in self._service_urls.items())))
+        result = list(await asyncio.gather(*(check(n, u) for n, u in targets.items())))
         self._svc_cache = (time.monotonic(), result)
         return result
 
@@ -472,6 +506,10 @@ class Dashboard:
         self._dcfg.auth_username = username
         self._dcfg.auth_password_hash = new_hash
         self._cookie_secret = new_hash
+        # Re-evaluate the default-password flag so the dashboard's "default password"
+        # warning clears immediately (or re-appears if set back to "password") — no
+        # restart needed.
+        self._default_password = new_password == "password"
 
     # ------------------------------------------------------------------
     # HTTP handling (via the websockets process_request hook)

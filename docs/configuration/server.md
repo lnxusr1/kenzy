@@ -52,7 +52,7 @@ Opt-in web fleet manager served by `kenzy-server`. **Off by default**; when disa
 | Key | Default | Description |
 |---|---|---|
 | `dashboard.enabled` | `false` | Master switch. `false` ⇒ nothing below is mounted. |
-| `dashboard.bind` | `"127.0.0.1"` | Listener address — keep it on localhost or the LAN; do **not** port-forward it (login is plaintext HTTP) |
+| `dashboard.bind` | `"0.0.0.0"` | Listener address. `0.0.0.0` is reachable across your LAN (the default — **change the default password!**); use `127.0.0.1` to restrict it to the server itself. Never port-forward it (plaintext HTTP) |
 | `dashboard.port` | `8770` | Dashboard HTTP port (separate from the node WS port) |
 | `dashboard.auth.username` / `dashboard.auth.password_hash` | `admin` / *(hash of `password`)* | Browser login. Change it with the server-only **`kenzy-passwd`** CLI (or the dashboard's Settings page); never edit the hash by hand. |
 | `dashboard.auth_token` | `null` | Optional bearer token for API/CLI clients (the browser uses the login cookie, not this) |

@@ -1,0 +1,31 @@
+# LLM service override — copy to configs/services/llm.yaml. Only keys you change.
+# API keys are read from the environment (.env), never stored here.
+host: "127.0.0.1"
+port: 8766
+
+# LiteLLM model string: gpt-4o | claude-opus-4-8 | ollama/llama3.1 | …
+model: "gpt-4o"
+# base_url: "http://localhost:11434"   # for local providers (Ollama, LM Studio)
+
+system_prompt: |
+  You are Kenzy, a helpful home voice assistant. Be concise and conversational —
+  one or two sentences is usually enough. Use the available tools for live data.
+
+voice_prompt: "Respond in a friendly, conversational tone at a moderate pace."
+
+# Injected as context + used by skills (e.g. weather) as the default location.
+location:
+  city: "Your City"
+  state: "ST"
+  country: "US"
+  timezone: "America/New_York"
+  # latitude: 0.0
+  # longitude: 0.0
+
+skills:
+  dir: skills
+  disabled: []
+
+  home_assistant:
+    url: "http://homeassistant.local:8123"   # your HA instance; HA_API_KEY in .env
+    default_room: "living_room"

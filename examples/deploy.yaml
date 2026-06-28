@@ -67,6 +67,9 @@ hosts:
     local:    true
     ssh_user: ubuntu          # used as the systemd service User even locally
     services: [server, stt, tts, llm]
+    # Service extras install automatically from `services` above. Add non-service
+    # pip extras here — e.g. local TTS and the Home Assistant integration:
+    # extras: [kokoro, mqtt]   # (kokoro is also auto-added when tts provider=kokoro)
 
   # Example: room node (Pi Zero 2 W or similar). The node_id slug keys its central
   # config — author configs/nodes/living-room.yaml to set tuning; the room NAME is

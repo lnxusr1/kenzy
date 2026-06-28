@@ -1,0 +1,9 @@
+# STT service override — copy to configs/services/stt.yaml. Only keys you change.
+host: "127.0.0.1"   # 0.0.0.0 to expose on the LAN (multi-host); see kenzy-deploy --listen-all
+port: 8767
+
+whisper:
+  model: "base"          # tiny | base | small | medium | large-v2 | large-v3
+  device: "cpu"          # cpu | cuda
+  compute_type: "int8"   # int8 (cpu) | float16 (gpu)
+  language: "en"         # or null for auto-detect

@@ -439,13 +439,14 @@ def main() -> None:
     load_dotenv()
 
     from kenzy.logutil import configure_logging, level_value
-    from kenzy.serviceboot import load_service_config
+    from kenzy.serviceboot import effective_bind, load_service_config, start_registration
 
     configure_logging(logging.INFO)  # provisional, so the config pull's retries are visible
 
     # Central config: pull from the server (blocking until it answers); an explicit
     # config path loads locally instead (dev/offline escape hatch).
     cfg: dict[str, Any] = load_service_config("llm")
+    start_registration("llm", cfg)  # auto-announce to the server (dashboard + pipeline)
 
     configure_logging(level_value(cfg.get("log_level"), logging.INFO))
     quiet_health_access_log()
@@ -497,7 +498,7 @@ def main() -> None:
 
     uvicorn.run(
         app,
-        host=cfg.get("host", "127.0.0.1"),
+        host=effective_bind(cfg),
         port=int(cfg.get("port", 8766)),
         log_level=str(cfg.get("log_level", "info")).lower(),
     )

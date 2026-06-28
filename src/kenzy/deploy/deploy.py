@@ -213,6 +213,9 @@ class HostConfig:
     version: str | None = None  # pin a PyPI version (pypi mode); None = latest >=3
     constraints: str | None = None  # pip constraints file (rel. to config-root or abs)
     node_id: str | None = None  # operator-chosen stable node_id (slug); None = node self-generates
+    server_url: str | None = None  # KENZY_SERVER_URL for pull-mode services (auto-derived)
+    listen_all: bool = False  # bind backend services to 0.0.0.0 instead of 127.0.0.1
+    extras: list[str] = field(default_factory=list)  # extra pip extras (e.g. kokoro, mqtt)
 
 
 # ---------------------------------------------------------------------------
@@ -483,9 +486,17 @@ def _unit_content(service: str, host: HostConfig) -> str:
     # Pull-mode services run arg-less so they fetch their config from the server
     # (serviceboot) and stay dashboard-managed; they also order after the server
     # (no-op when kenzy-server isn't on this host). node/server pass a local config.
+    env_lines = ""
     if service in _PULL_SERVICES:
         exec_start = f"{host.venv_path}/bin/{info['script']}"
         after_server = "After=kenzy-server.service\n"
+        # Point pull-mode services straight at the server (auto-derived from the
+        # fleet) so config-pull + auto-registration don't depend on mDNS; and bind
+        # them on all interfaces when the operator asked for it (--listen-all).
+        if host.server_url:
+            env_lines += f"Environment=KENZY_SERVER_URL={host.server_url}\n"
+        if host.listen_all:
+            env_lines += "Environment=KENZY_BIND=0.0.0.0\n"
     else:
         exec_start = f"{host.venv_path}/bin/{info['script']} {host.install_path}/{info['config']}"
         after_server = ""
@@ -501,6 +512,7 @@ def _unit_content(service: str, host: HostConfig) -> str:
         f"User={host.ssh_user}\n"
         f"WorkingDirectory={host.install_path}\n"
         f"ExecStart={exec_start}\n"
+        f"{env_lines}"
         f"Restart=on-failure\n"
         f"RestartSec=10\n"
         f"EnvironmentFile=-{host.install_path}/.env\n"
@@ -555,16 +567,26 @@ def _effective_yaml(host: HostConfig, filename: str, local_path: Path) -> dict[s
 
 
 def _pip_extras(host: HostConfig, local_path: Path) -> str:
-    """Build the pip extras string for this host, including optional add-ons."""
-    extras: list[str] = list(host.services)
+    """Build the pip extras string for this host.
 
-    if "tts" in host.services:
-        tts_cfg = _effective_yaml(host, "tts.yaml", local_path)
+    Runnable services + any explicit ``extras:`` (and non-service entries in
+    ``services:``), plus ``kokoro`` auto-added when the TTS provider is kokoro.
+    """
+    extras: list[str] = [*host.services, *host.extras]
+
+    if "tts" in host.services and "kokoro" not in extras:
+        # Prefer the central store (configs/services/tts.yaml); fall back to legacy.
+        central = local_path / "configs" / "services" / "tts.yaml"
+        tts_cfg = (
+            (yaml.safe_load(central.read_text()) or {})
+            if central.exists()
+            else _effective_yaml(host, "tts.yaml", local_path)
+        )
         if str(tts_cfg.get("provider", "openai")).lower() == "kokoro":
             extras.append("kokoro")
-            _info("tts.yaml provider=kokoro — adding kokoro extra")
+            _info("tts provider=kokoro — adding kokoro extra")
 
-    return ",".join(extras)
+    return ",".join(dict.fromkeys(extras))  # dedup, preserve order
 
 
 def _pip_target(
@@ -981,6 +1003,7 @@ def _load_hosts(
     *,
     force_source: bool = False,
     version_override: str | None = None,
+    listen_all: bool = False,
 ) -> list[HostConfig]:
     with open(config_path) as fh:
         raw: dict[str, Any] = yaml.safe_load(fh)
@@ -989,6 +1012,21 @@ def _load_hosts(
     # install_mode/version may be set at top level or under defaults; per-host wins.
     default_mode = str(raw.get("install_mode", defaults.get("install_mode", "source")))
     default_version = raw.get("version", defaults.get("version"))
+
+    # Derive the URL pull-mode services use to reach the server: an explicit
+    # `server_url:` wins, else it's built from the host running the `server` service
+    # (loopback for a co-located service, the server host's address otherwise) on
+    # `server_port:` (default 8765). None when no host runs the server (→ mDNS).
+    explicit_server_url = raw.get("server_url") or defaults.get("server_url") or None
+    server_port = int(raw.get("server_port", 8765))
+    server_addr = next(
+        (
+            str(h["address"])
+            for h in raw.get("hosts", {}).values()
+            if "server" in (h.get("services") or [])
+        ),
+        None,
+    )
     service_sync: dict[str, list[str]] = {
         k: [str(p) for p in v] for k, v in raw.get("service_sync", {}).items()
     }
@@ -1029,6 +1067,24 @@ def _load_hosts(
         mode = "source" if force_source else str(hcfg.get("install_mode", default_mode))
         ver = version_override or hcfg.get("version", default_version)
 
+        # Split `services:` into runnable services (get a systemd unit) and anything
+        # else (treated as a pip extra — e.g. kokoro, mqtt), merged with `extras:`.
+        raw_services = list(hcfg.get("services", []))
+        svcs = [s for s in raw_services if s in SERVICE_INFO]
+        host_extras: list[str] = [s for s in raw_services if s not in SERVICE_INFO]
+        for e in [*defaults.get("extras", []), *hcfg.get("extras", [])]:
+            if str(e) not in host_extras:
+                host_extras.append(str(e))
+
+        if explicit_server_url:
+            surl: str | None = str(explicit_server_url)
+        elif server_addr is not None:
+            # Loopback when this host also runs the server; else the server's address.
+            reach = "127.0.0.1" if "server" in svcs else server_addr
+            surl = f"ws://{reach}:{server_port}"
+        else:
+            surl = None
+
         hosts.append(
             HostConfig(
                 name=name,
@@ -1038,7 +1094,7 @@ def _load_hosts(
                 venv_path=_d(hcfg, "venv_path", f"{install_path}/.venv"),
                 python_bin=_d(hcfg, "python_bin", "python3"),
                 local=bool(hcfg.get("local", defaults.get("local", False))),
-                services=list(hcfg.get("services", [])),
+                services=svcs,
                 sync=sync_paths,
                 torch_index_url=str(torch_url) if torch_url else None,
                 pip_packages=pip_pkgs,
@@ -1046,6 +1102,9 @@ def _load_hosts(
                 version=str(ver) if ver else None,
                 constraints=(hcfg.get("constraints") or defaults.get("constraints") or None),
                 node_id=(str(hcfg["node_id"]) if hcfg.get("node_id") else None),
+                server_url=surl,
+                listen_all=listen_all,
+                extras=host_extras,
             )
         )
 
@@ -1120,6 +1179,13 @@ def main() -> None:
         "(configs/nodes, configs/services) from the operator tree — discards "
         "dashboard edits. Default: seed only files that don't exist yet.",
     )
+    parser.add_argument(
+        "--listen-all",
+        action="store_true",
+        help="Bind backend services (stt/tts/llm/speaker) to 0.0.0.0 instead of "
+        "127.0.0.1, so they're reachable across the network (needed for multi-host). "
+        "Set a KENZY_SERVICE_TOKEN too, since this exposes them on the LAN.",
+    )
 
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -1153,7 +1219,12 @@ def main() -> None:
 
     args = parser.parse_args()
 
-    all_hosts = _load_hosts(args.config, force_source=args.local, version_override=args.version)
+    all_hosts = _load_hosts(
+        args.config,
+        force_source=args.local,
+        version_override=args.version,
+        listen_all=args.listen_all,
+    )
     local_path = _config_root(args.config)
 
     if args.command == "logs":

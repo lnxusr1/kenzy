@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## [3.4.0]
+
+### Added
+
+- **Backend services auto-register with the server.** `stt`/`tts`/`llm`/`speaker` now announce themselves to the server on startup and via a lightweight heartbeat, so they appear in the dashboard and become reachable by the pipeline **without hand-wiring `stt/tts/llm/speaker.url`** in `server.yaml`. The server resolves each service's address (using the request source IP when a service binds `0.0.0.0`), drops services that stop heartbeating, and always lets a statically-configured URL win. This fixes "I deployed the services but they never show up / the server doesn't know they exist."
+- **`kenzy-deploy` auto-wires the server URL.** Deploy now derives `KENZY_SERVER_URL` for each backend service from the fleet (the host running `server` → loopback when co-located, else its address; `server_port`/`server_url` in `deploy.yaml` override) and bakes it into the service units, so config-pull and registration no longer depend on mDNS — fixing services that "start but never check in" on single-host and known-topology deploys.
+- **`kenzy-deploy --listen-all`.** Binds the backend services to `0.0.0.0` (via `KENZY_BIND`) instead of `127.0.0.1`, for multi-host setups where the server must reach services on other hosts. Off by default (loopback); pair with a `KENZY_SERVICE_TOKEN` since it exposes the services on the LAN.
+- **`kenzy-deploy` pip extras.** Service extras are installed automatically from a host's `services:` list. Non-service extras (e.g. `kokoro` for local TTS, `mqtt` for the HA integration) can be added via a new per-host `extras:` list — or just listed in `services:`, where they're now routed to extras instead of trying to create a (non-existent) systemd unit. `kokoro` is still auto-added when the TTS provider is `kokoro` (now read from the central `configs/services/tts.yaml`).
+
+### Changed
+
+- **The dashboard now binds to `0.0.0.0` by default** (was `127.0.0.1`), so it's reachable from other machines on your LAN out of the box — the common headless-server case. **This means an upgraded server's dashboard becomes LAN-reachable.** It's plaintext HTTP with a default `admin`/`password` login, so **change the password** (`kenzy-passwd` or the Settings tab); the server logs a loud security warning at startup while the default password is in use on a non-loopback bind. Set `dashboard.bind: "127.0.0.1"` to restore localhost-only. Never port-forward it to the public internet.
+
+### Fixed
+
+- **The "default password" warning in the dashboard didn't clear after changing the password** until the server was restarted. The in-memory flag is now re-evaluated when the password is changed, so the warning disappears immediately (and reappears if you set it back to the default).
+- **Default dashboard login (`admin`/`password`) failed when the server config had no `dashboard.auth` block.** The default credentials previously lived only in the shipped `server.yaml`, so a server running from a bare or partial config — e.g. the packaged-default fallback, or one that enables the dashboard without an `auth:` block — had no credentials and rejected every login (`{"error": "invalid credentials"}`). The dashboard now falls back to the default login from the packaged `server.yaml` when the active config omits an `auth:` block, so login works out of the box (and keeps the loud "change the default password" warning). The default is **not** hardcoded in source — it's read from the shipped config.
+
 ## [3.3.0]
 
 ### Added

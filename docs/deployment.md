@@ -125,7 +125,7 @@ kenzy-deploy install --host main-server
 !!! note "Central, dashboard-managed config"
     `install` provisions into the server-owned config model, so what it deploys stays editable from the dashboard (just like a per-user install):
 
-    - **Backend services run in pull mode** — `stt`/`tts`/`llm`/`speaker` units are arg-less and fetch their effective config from the server. They need `KENZY_SERVICE_TOKEN` (plus mDNS or `KENZY_SERVER_URL`) in their `.env` to reach it.
+    - **Backend services run in pull mode** — `stt`/`tts`/`llm`/`speaker` units are arg-less and fetch their effective config from the server, then **auto-register** so they appear in the dashboard and the pipeline reaches them without static `*.url` config. Deploy auto-derives `KENZY_SERVER_URL` from the fleet (the host running `server`; loopback when co-located) and bakes it into the units, so this doesn't depend on mDNS. They still need `KENZY_SERVICE_TOKEN` in their `.env` if the server uses a token. Use **`--listen-all`** to bind the services to `0.0.0.0` (multi-host); default is `127.0.0.1` (loopback).
     - **Per-host `node_id`** (a slug in `deploy.yaml`, or a self-generated uuid) is baked into the node's `node.yaml` so it has a stable central record at `configs/nodes/<node_id>.yaml`.
     - The server's central store (`configs/nodes/`, `configs/services/`) is **seeded but never clobbered** — a re-deploy only adds files the server doesn't have, so live dashboard edits survive. Pass `--reseed` (`kenzy-deploy --reseed install|upgrade`) to force the operator's files back over a dashboard edit.
 
@@ -177,7 +177,7 @@ kenzy-deploy uninstall --purge                  # also delete the install dir
 
 ## Configuration: the central store (dashboard-managed)
 
-Kenzy's runtime config is **server-owned** and editable live from the dashboard. `kenzy-deploy` provisions into that model rather than pushing per-host files, so anything it deploys can be managed from the browser afterward. Author config as files in the central store; the deploy **seeds them to the server host**:
+Kenzy's runtime config is **server-owned** and editable live from the dashboard. `kenzy-deploy` provisions into that model rather than pushing per-host files, so anything it deploys can be managed from the browser afterward. Author config as files in the central store; the deploy **seeds them to the server host**. These files hold site-specific details (rooms, your HA URL, location, auth), so they're **gitignored** — copy the generic templates in [`examples/`](https://github.com/lnxusr1/kenzy/tree/main/examples) into `configs/` and edit:
 
 ```
 configs/

@@ -155,6 +155,17 @@ _SERVER_EDITABLE: dict[str, str] = {
     "integrations.mqtt.commands": "bool",
 }
 
+#: Endpoint path each backend service serves, appended to an announced base URL so
+#: the pipeline can reach an auto-registered service without a static ``<svc>.url``.
+_SERVICE_ENDPOINTS: dict[str, str] = {
+    "stt": "/transcribe",
+    "tts": "/speak",
+    "llm": "/process",
+    "speaker": "/identify",
+}
+#: Drop an auto-registered service if it hasn't re-announced within this many seconds.
+_REGISTER_TTL = 90.0
+
 
 def _server_override_path(config_path: str | Path) -> Path:
     """Dashboard-written server settings live beside server.yaml, layered over it
@@ -283,6 +294,11 @@ class AudioServer:
         # Pipeline observability: the dashboard registers a listener fed a record per
         # completed command pipeline. Empty ⇒ no record is built (no transcript kept).
         self._session_listeners: list[Callable[[dict[str, Any]], None]] = []
+        # Backend services that auto-register via GET /register (name → {base, version,
+        # last_seen}); merged with static <svc>.url config for the dashboard + pipeline.
+        self._announced_services: dict[str, dict[str, Any]] = {}
+        # Services whose URL came from static config (never overwritten by an announce).
+        self._static_services: set[str] = set()
 
     def add_state_listener(self, fn: Callable[[], None]) -> None:
         """Register a callback fired (in-loop) when the node registry/state changes."""
@@ -588,6 +604,8 @@ class AudioServer:
         path = request.path.split("?", 1)[0]
         if path == "/announce":
             return await self._http_announce(request)
+        if path == "/register":
+            return self._http_register(request, connection)
         if not path.startswith("/config/"):
             return None
         if not self._check_service_token(request):
@@ -619,6 +637,65 @@ class AudioServer:
             targets = list(self._nodes)
         count = await self.announce(text, targets or None)
         return self._http_json(200, {"announced": count, "text": text})
+
+    def _http_register(self, request: Request, connection: ServerConnection) -> Response:
+        """Handle ``/register?service=&host=&port=&version=`` — a backend service
+        announcing itself so it appears in the dashboard and the pipeline can reach it
+        without a static ``<svc>.url``. Token-gated; params ride the query string (the
+        request hook exposes no body). The reachable host is the reported ``host``, or
+        the request's source IP when the service binds ``0.0.0.0``.
+        """
+        from urllib.parse import parse_qs, urlsplit
+
+        if not self._check_service_token(request):
+            return self._http_json(401, {"error": "invalid service token"})
+        qs = parse_qs(urlsplit(request.path).query)
+        service = (qs.get("service") or [""])[0]
+        if service not in _SERVICE_ENDPOINTS:
+            return self._http_json(404, {"error": "unknown service"})
+        host = (qs.get("host") or [""])[0].strip()
+        if host in ("", "0.0.0.0", "::"):
+            host = connection.remote_address[0] if connection.remote_address else "127.0.0.1"
+        try:
+            port = int((qs.get("port") or ["0"])[0])
+        except ValueError:
+            port = 0
+        if not port:
+            return self._http_json(400, {"error": "missing or invalid port"})
+        base = f"http://{host}:{port}"
+        first = service not in self._announced_services
+        self._announced_services[service] = {
+            "base": base,
+            "version": (qs.get("version") or [""])[0] or None,
+            "last_seen": time.time(),
+        }
+        # Fill the pipeline URL when the operator didn't configure one statically.
+        if service not in self._static_services:
+            setattr(self, f"_{service}_url", base + _SERVICE_ENDPOINTS[service])
+        if first:
+            log.info("Backend service '%s' registered at %s", service, base)
+            self._notify_state()
+        return self._http_json(200, {"ok": True})
+
+    def announced_health_urls(self) -> dict[str, str]:
+        """Fresh auto-registered services → ``{name: <base>/health}``, pruning any that
+        haven't re-announced within the TTL (and clearing their pipeline URL)."""
+        out: dict[str, str] = {}
+        now = time.time()
+        for name in list(self._announced_services):
+            rec = self._announced_services[name]
+            if now - float(rec["last_seen"]) > _REGISTER_TTL:
+                del self._announced_services[name]
+                if name not in self._static_services:
+                    setattr(self, f"_{name}_url", None)
+                log.info("Backend service '%s' deregistered (no heartbeat)", name)
+                continue
+            out[name] = f"{rec['base']}/health"
+        return out
+
+    def announced_service_version(self, name: str) -> str | None:
+        rec = self._announced_services.get(name)
+        return str(rec["version"]) if rec and rec.get("version") else None
 
     async def boost_node_trace(self, node_id: str, seconds: int = 30) -> bool:
         """Temporarily capture TRACE-level logs on a node, auto-reverting later.
@@ -1276,6 +1353,19 @@ class TranscribingServer(AudioServer):
         self._speaker_url: str | None = str(spcfg["url"]) if spcfg.get("url") else None
         self._speaker_timeout: float = float(spcfg.get("timeout", 10.0))
         self._unknown_speaker: str = str(spcfg.get("unknown_speaker", "unknown"))
+
+        # Remember which service URLs came from static config; auto-registration
+        # (GET /register) fills the rest and must never overwrite a configured one.
+        self._static_services = {
+            svc
+            for svc, url in (
+                ("stt", self._stt_url),
+                ("tts", self._tts_url),
+                ("llm", self._llm_url),
+                ("speaker", self._speaker_url),
+            )
+            if url
+        }
         # Voice enrollment ("enroll me as Alice") is gated by `allow_voice_enroll` in the
         # speaker *service* config (read live via _voice_enroll_allowed, so it's editable
         # from the dashboard's Services tab). Active sessions keyed by node_id

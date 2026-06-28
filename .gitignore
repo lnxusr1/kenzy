@@ -31,8 +31,11 @@ models/
 # Runtime data
 data/speakers/
 data/home_assistant/
+
+# Operator/site-specific config — never commit (it holds your rooms, HA URL, location,
+# auth, etc.). Generic templates live in examples/. (.env is ignored above.)
 configs/hosts/
-configs/deploy_local.yaml
+configs/
 
 # IDE / editor
 .vscode/

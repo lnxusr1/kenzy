@@ -1,0 +1,34 @@
+# Optional server config — copy to configs/server.yaml.
+#
+# The server runs fine on the packaged default (no file needed); author this only to
+# change server-level settings. The full annotated reference is
+# src/kenzy/data/configs/server.yaml. Having an on-disk server.yaml is also what lets
+# the dashboard's Settings editor (and `kenzy-passwd`) persist changes.
+
+host: "0.0.0.0"   # WebSocket hub bind (nodes connect here)
+port: 8765
+
+discovery:
+  enabled: true            # advertise over mDNS so nodes/services auto-find the server
+  # token: "shared-secret" # require this in node hello + service calls (kenzy-init generates one)
+
+dashboard:
+  enabled: true
+  bind: "0.0.0.0"          # reachable on your LAN; 127.0.0.1 to restrict to the server
+  port: 8770
+  # Change the default admin/password — especially with the 0.0.0.0 bind above.
+  # Use `kenzy-passwd` or the Settings tab; it's plaintext HTTP on the LAN.
+
+# Backend service URLs. Usually unnecessary — services auto-register on startup.
+# Set these only to pin a fixed address (a static URL always wins over auto-discovery).
+# stt:     { url: "http://127.0.0.1:8767/transcribe" }
+# tts:     { url: "http://127.0.0.1:8769/speak" }
+# llm:     { url: "http://127.0.0.1:8766/process" }
+# speaker: { url: "http://127.0.0.1:8768/identify" }
+
+# Home Assistant integration (opt-in; needs the `mqtt` extra). See
+# docs/integrations/home-assistant.md.
+# integrations:
+#   mqtt:
+#     enabled: true
+#     host: "homeassistant.local"

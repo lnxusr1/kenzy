@@ -632,6 +632,9 @@ async def test_set_password_via_ws(tmp_path):
     assert verify_password("s3cret!!", d._dcfg.auth_password_hash)
     assert d._cookie_secret == d._dcfg.auth_password_hash  # sessions invalidated
     assert d._dcfg.auth_password_hash in path.read_text()  # written through
+    # The default-password warning clears immediately (no restart needed).
+    assert d._default_password is False
+    assert d._settings_state()["default_password"] is False
 
 
 async def test_ws_live_channel_requires_auth_and_pushes():

@@ -1,0 +1,9 @@
+# Speaker-ID service override — copy to configs/services/speaker.yaml. Only keys you change.
+host: "127.0.0.1"
+port: 8768
+
+identify_threshold: 0.25     # cosine similarity; below this → unknown
+unknown_speaker: "unknown"
+# Voice enrollment ("enroll me as Alice") — off by default; anyone in earshot can
+# enroll when on, so leave false unless you want it (kenzy-enroll is the safer path).
+allow_voice_enroll: false
