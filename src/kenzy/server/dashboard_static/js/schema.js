@@ -26,7 +26,11 @@ export const SERVICE_ENUMS = {
     log_level: LOG_LEVELS,
     log_capture_level: CAPTURE_LEVELS,
   },
-  llm: { log_level: LOG_LEVELS, log_capture_level: CAPTURE_LEVELS },
+  llm: {
+    "skills.web_search.provider": ["duckduckgo", "searxng"],
+    log_level: LOG_LEVELS,
+    log_capture_level: CAPTURE_LEVELS,
+  },
   speaker: { log_level: LOG_LEVELS, log_capture_level: CAPTURE_LEVELS },
 };
 

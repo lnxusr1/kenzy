@@ -32,9 +32,10 @@ system_prompt: |
 
   Tool usage: always call the appropriate tool when one is available for the
   user's request — this includes controlling devices, fetching current
-  information (weather, news, stocks), and any other action a tool can perform.
-  Never describe an action as if you performed it without actually calling the
-  tool first.
+  information (weather, news, stocks), searching the web for anything you don't
+  reliably know or that may have changed since your training, and any other
+  action a tool can perform. Never describe an action as if you performed it
+  without actually calling the tool first.
 
   Never assume the current state of any device (lights, fans, locks, covers,
   thermostats, etc.).  Physical state can change at any time without your
@@ -49,12 +50,12 @@ voice_prompt: "Respond in a friendly, conversational tone at a moderate pace."
 # Location context — injected into every LLM call and used by skills
 # (e.g. weather default location) when not otherwise specified.
 location:
-  city: "Burlington"
-  state: "NC"
+  city: "Your City"
+  state: "ST"
   country: "US"
-  timezone: "America/New_York"   # IANA timezone e.g. "America/Chicago"
-  latitude: 36.099177
-  longitude: -79.433217
+  timezone: "America/New_York"
+  latitude: 40.7589
+  longitude: -73.9851
 
 # ---------------------------------------------------------------------------
 # Skills
@@ -84,6 +85,20 @@ skills:
       latest:   "https://moxie.foxnews.com/google-publisher/latest.xml"
       world:    "https://moxie.foxnews.com/google-publisher/world.xml"
       politics: "https://moxie.foxnews.com/google-publisher/politics.xml"
+
+  web_search:
+    # Search backend: "duckduckgo" (keyless, zero setup) or "searxng" (self-hosted).
+    provider: "duckduckgo"
+    max_results: 5
+    timeout: 15
+    # DuckDuckGo region ("wt-wt" = no region).
+    region: "wt-wt"
+    # SearXNG /search endpoint — used only when provider is "searxng". The instance
+    # must have the JSON format enabled (search.formats: [html, json] in settings.yml).
+    # From a containerized kenzy-llm reaching a SearXNG container on the same host,
+    # use http://host.docker.internal:<port>/search; if kenzy-llm runs directly on
+    # the host, use http://localhost:<port>/search.
+    searxng_url: "http://localhost:8888/search"
 
   home_assistant:
     url: "http://homeassistant.local:8123"

@@ -343,6 +343,10 @@ class _SoundPlayer:
         self._pending: np.ndarray[Any, Any] = self._chime  # audio to switch to on restart
         self._pos: int = len(self._audio)  # past end → silent
         self._restart: bool = False
+        # Like _restart, but swaps to _pending *immediately* (regardless of _pos)
+        # on the next callback. Used to cut a chime/waiting sound the instant TTS is
+        # ready, so a fast reply's audio always plays from the start (no clipped head).
+        self._interrupt: bool = False
         # "alert" audio (the ready chime) stays audible when muted; TTS/stream do not.
         self._alert: bool = True
         self._pending_alert: bool = True
@@ -377,7 +381,8 @@ class _SoundPlayer:
             outdata[:, 0] = self._ring.read(frames)
             self._apply_gain(outdata, alert=False)
             return
-        if self._restart and self._pos >= len(self._audio):
+        if self._interrupt or (self._restart and self._pos >= len(self._audio)):
+            self._interrupt = False
             self._restart = False
             self._audio = self._pending
             self._alert = self._pending_alert
@@ -417,10 +422,18 @@ class _SoundPlayer:
         self._pending_alert = True
         self._restart = True
 
-    def play_pcm(self, audio: np.ndarray[Any, Any]) -> None:
-        """Play arbitrary int16 mono PCM at _TTS_SAMPLE_RATE (honors mute)."""
+    def play_pcm(self, audio: np.ndarray[Any, Any], interrupt: bool = False) -> None:
+        """Play arbitrary int16 mono PCM at _TTS_SAMPLE_RATE (honors mute).
+
+        With ``interrupt=True`` the new audio replaces whatever is playing on the
+        very next callback (from the start), rather than waiting for the current
+        sound to drain — a single atomic swap, so a concurrently-queued chime can't
+        wedge between an abort and this call and clip the new audio's head.
+        """
         self._pending = audio.reshape(-1, 1)
         self._pending_alert = False
+        if interrupt:
+            self._interrupt = True
         self._restart = True
 
     def set_volume(self, volume: float) -> None:
@@ -434,11 +447,13 @@ class _SoundPlayer:
     def abort(self) -> None:
         """Stop playback immediately."""
         self._restart = False
+        self._interrupt = False
         self._pos = len(self._audio)
 
     def start_stream(self) -> None:
         """Switch to live streaming mode (a fresh, empty ring buffer)."""
         self._restart = False
+        self._interrupt = False
         self._ring.clear()
         self._streaming = True
 
@@ -676,7 +691,11 @@ class NodeClient:
             except Exception:
                 pass
         log.info("[%s] streaming ended (%s)", (sid or "?")[:8], reason)
-        if self._player and self._waiting_audio is not None:
+        # Only start the "processing" sound if we're still idle. On a fast reply the
+        # server's tts_start can arrive during the audio_end send above and flip us
+        # to TTS on the cmd loop; starting the waiting sound now would queue it behind
+        # (or clip) the reply. _begin_tts/_begin_streaming move us out of IDLE.
+        if self._state == _STATE_IDLE and self._player and self._waiting_audio is not None:
             self._player.play_pcm(self._waiting_audio)
 
     # ------------------------------------------------------------------
@@ -710,8 +729,9 @@ class NodeClient:
             if self._tts_sample_rate != self._playback_rate:
                 audio = _resample(audio, self._tts_sample_rate, self._playback_rate)
             if self._player:
-                self._player.abort()  # cut waiting sound immediately before TTS
-                self._player.play_pcm(audio)
+                # Atomic interrupt: cut the waiting sound and start TTS from the
+                # first sample in one swap, so a fast reply is never clipped.
+                self._player.play_pcm(audio, interrupt=True)
             # Stay in TTS state while audio plays; _tts_wait_done transitions to IDLE.
             self._tts_task = asyncio.create_task(self._tts_wait_done(), name="tts_wait")
             log.info("TTS playback started")

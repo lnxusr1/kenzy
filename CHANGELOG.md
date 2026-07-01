@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [3.5.0]
+
+### Added
+
+- **Web search skill.** The LLM can now search the web for current, live, or niche information it can't answer from its own knowledge (recent events, prices, "look it up…"). Two backends, selected by `skills.web_search.provider`: **DuckDuckGo** (default — keyless, zero setup, via the new `ddgs` dependency) or a self-hosted **SearXNG** instance (nothing leaves your network; point `skills.web_search.searxng_url` at its `/search` endpoint with the JSON format enabled). All options (provider, max results, timeout, region, SearXNG URL) are editable from the dashboard's Services → llm tab, with the provider shown as a dropdown.
+
+## [3.4.2]
+
+### Fixed
+
+- **"Turn off the lights downstairs" only affected the current room** (or missed entirely). The Home Assistant resolver modeled areas (rooms) but had no concept of **floors**, so a floor name like "downstairs" wasn't recognized as a scope — the request fell through the fast path to the LLM, which was biased back toward the node's own room. Floors are now first-class in the fast path: a floor name expands a bare-group command ("the lights") to **every area on that floor**, independent of which room the node is in. Area-level ("in the office") and implicit-room ("the lights") commands are unchanged. The LLM fallback's prompt was also corrected — it described the topology as `area > room` when it's actually `floor > area`, which hurt floor-level status queries.
+- **Fast replies clipped the start of the spoken confirmation** (e.g. only "…office lights" instead of "I turned off the office lights"). On the fast path the server's reply could arrive while the node was still starting its "processing" sound, and the two ran on different async tasks; the chime→TTS handoff was a non-atomic `abort()`+`play()` pair whose flag writes the audio callback could interleave with, dropping the reply's opening words. TTS playback now swaps in **atomically from the first sample** (a single interrupt flag, regardless of what's currently playing), and the "processing" sound is suppressed once a reply has already begun — so a fast confirmation always plays in full.
+
 ## [3.4.1]
 
 ### Fixed
