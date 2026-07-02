@@ -56,8 +56,8 @@ Web fleet manager served by `kenzy-server`. **On by default in the shipped confi
 | `dashboard.port` | `8770` | Dashboard HTTP port (separate from the node WS port) |
 | `dashboard.auth.username` / `dashboard.auth.password_hash` | `admin` / *(hash of `password`)* | Browser login. Change it with the server-only **`kenzy-passwd`** CLI (or the dashboard's Settings page); never edit the hash by hand. |
 | `dashboard.auth_token` | `null` | Optional bearer token for API/CLI clients (the browser uses the login cookie, not this) |
-| `dashboard.controls` | `false` | Enable mutating actions — config edits, room rename, trigger/stop/restart, announcements. `false` ⇒ read-only. |
-| `dashboard.logs` | `false` | Enable the pull-based log viewer (server, services, and per-node buffers) and the Activity tab |
+| `dashboard.controls` | `true` | Enable mutating actions — config edits, room rename, trigger/stop/restart, announcements. Set `false` for a read-only dashboard. |
+| `dashboard.logs` | `true` | Enable the pull-based log viewer (server, services, and per-node buffers) and the Activity tab. Set `false` to keep no logs/transcripts in memory. |
 | `dashboard.allowed_hosts` | `[]` | Optional list of hostnames the dashboard will accept in the `Host` header (DNS-rebinding defense). Empty = no Host restriction; the cross-site `Origin` check always applies. Set it when serving under a fixed name (e.g. `["kenzy.local"]`). |
 
 !!! warning "Keep the dashboard off the public internet"

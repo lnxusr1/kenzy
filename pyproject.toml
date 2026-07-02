@@ -60,6 +60,8 @@ stt = [
     "fastapi>=0.100.0",
     "uvicorn>=0.23.0",
     "faster-whisper>=1.0.0",
+    "openai>=1.0.0",
+    "python-dotenv>=1.0.0",
     "zeroconf>=0.130",
 ]
 

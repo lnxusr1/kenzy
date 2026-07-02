@@ -78,8 +78,10 @@ class DashboardConfig:
     auth_token: str | None = None
     auth_username: str | None = None
     auth_password_hash: str | None = None
-    logs: bool = False
-    controls: bool = False
+    # logs/controls default ON (matching the shipped server.yaml) so a partial config
+    # that just enables the dashboard gets the full experience; set false to opt out.
+    logs: bool = True
+    controls: bool = True
     # Optional Host allow-list (hostnames, no port) for DNS-rebinding defense on the
     # WS/mutation channel. Empty ⇒ no Host restriction (the Origin==Host check still
     # applies); set it when serving under a fixed hostname (F-6).
@@ -99,8 +101,8 @@ class DashboardConfig:
             auth_token=d.get("auth_token") or None,
             auth_username=auth.get("username") or def_user,
             auth_password_hash=auth.get("password_hash") or def_hash,
-            logs=bool(d.get("logs", False)),
-            controls=bool(d.get("controls", False)),
+            logs=bool(d.get("logs", True)),
+            controls=bool(d.get("controls", True)),
             allowed_hosts=tuple(str(h) for h in (d.get("allowed_hosts") or [])),
         )
 

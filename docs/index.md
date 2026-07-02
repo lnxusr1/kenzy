@@ -47,14 +47,16 @@ spread across several:
 |---|---|---|---|
 | **node** | `kenzy-node` | — | Room device: wake word, audio capture, playback |
 | **server** | `kenzy-server` | 8765 | The hub: connects rooms and runs the pipeline |
-| **stt** | `kenzy-stt` | 8767 | Speech-to-text (faster-whisper, runs locally) |
+| **stt** | `kenzy-stt` | 8767 | Speech-to-text (local faster-whisper, or OpenAI cloud) |
 | **tts** | `kenzy-tts` | 8769 | Text-to-speech (OpenAI, or local Kokoro) |
 | **llm** | `kenzy-llm` | 8766 | The language model + skills (any LiteLLM provider) |
 | **speaker** | `kenzy-speaker` | 8768 | Voice identification (runs locally) |
 
-Speech recognition and voice identification always run on your hardware. The
-language model and the voice are your choice — a cloud provider (the easiest start)
-or fully local. See [Architecture](architecture.md) for how it all fits together.
+Voice identification always runs on your hardware, and speech recognition does by
+default. Every stage is your choice — run the speech, language, and voice services
+fully local, use a cloud provider (the easiest start, and the lightest on your
+hardware), or mix and match per service. See [Architecture](architecture.md) for
+how it all fits together.
 
 ## Quick links
 
