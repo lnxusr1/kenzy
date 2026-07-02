@@ -1,6 +1,14 @@
 # Speaker Enrollment
 
-Speaker identification lets Kenzy know who is talking. This enables personalized responses and is required for sensitive operations like locking and unlocking doors.
+Speaker identification lets Kenzy know **who** is talking. Enroll each family member once and Kenzy can address people by name, keep track of who asked what, and require a recognized voice for sensitive actions like unlocking doors.
+
+There are three ways to enroll someone — pick whichever fits:
+
+- **From the dashboard (easiest):** **Speakers → Enroll from a room** — choose a room and a name, and Kenzy walks the person through a few sentences right at that room's microphone. No terminal needed.
+- **From the terminal:** the `kenzy-enroll` CLI, [below](#running-enrollment).
+- **By voice** ("hey Kenzie, enroll me as Alice") — off by default for a good security reason, [see below](#enrolling-by-voice-from-a-node).
+
+Whichever you use, enroll **in the room, on the microphone people will actually use** — that's the biggest factor in how well recognition works.
 
 ## How it works
 

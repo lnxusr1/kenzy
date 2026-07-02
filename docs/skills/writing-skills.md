@@ -46,7 +46,7 @@ async def get_current_weather(location: str) -> str:
 
     Do NOT use for forecasts — use get_forecast instead.
 
-    location: city and state or full address, e.g. "Burlington, NC"
+    location: city and state or full address, e.g. "New York, NY"
     """
 ```
 

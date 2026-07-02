@@ -34,7 +34,7 @@ def _mock_pipeline(srv, monkeypatch, *, fast: bool) -> None:
         return "alice"
 
     async def llm(text, room, sid, speaker):  # noqa: ANN001, ANN202
-        return ("Done.", "vp", [], fast)
+        return ("Done.", "vp", [], fast, False)
 
     async def tts(*a):  # noqa: ANN002, ANN202
         return True

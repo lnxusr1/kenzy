@@ -1,18 +1,54 @@
 site_name: KENZY
 site_description: Distributed home voice assistant
-site_url: https://kenzy.dev/
+site_url: https://docs.kenzy.dev/
 #repo_url: https://github.com/lnxusr1/kenzy/
 copyright: "Copyright © 2026. All rights reserved. <a href='https://kenzy.dev'>Kenzy.dev</a>"
 docs_dir: docs
 
 theme:
-  name: readthedocs
-  custom_dir: overrides
-  highlightjs: true
-  prev_next_buttons_location: none
-  titles_only: true
-  collapse_navigation: false
-  logo: https://docs.kenzy.dev/img/logo-sm.png
+  name: material
+  logo: img/logo-sm.png
+  favicon: img/logo-sm.png
+  font:
+    text: IBM Plex Sans
+    code: IBM Plex Mono
+  palette:
+    # Light (default) — petrol ink on paper, matching kenzy.dev
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    # Dark
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.sections
+    - navigation.top
+    - navigation.footer
+    - toc.follow
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+
+extra:
+  generator: false
+  # Header logo/wordmark links back to the main site (nav "Home" covers the docs root).
+  homepage: https://kenzy.dev
+  social:
+    - icon: material/home
+      name: kenzy.dev — main site
+      link: https://kenzy.dev
+    - icon: fontawesome/brands/github
+      name: Kenzy on GitHub
+      link: https://github.com/lnxusr1/kenzy
 
 extra_css:
   - css/extra.css
@@ -22,15 +58,18 @@ plugins:
 
 markdown_extensions:
   - admonition
-  - codehilite
-  - fenced_code
   - tables
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.superfences
+  - pymdownx.inlinehilite
   - toc:
       permalink: true
 
 nav:
   - Home: index.md
   - Getting Started: getting-started.md
+  - Troubleshooting: troubleshooting.md
   - Architecture: architecture.md
   - Dashboard: dashboard.md
   - Configuration:

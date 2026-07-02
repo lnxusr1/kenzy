@@ -1,46 +1,66 @@
-/* Kenzy palette over the ReadTheDocs theme — petrol + golden accent. */
+/* ============================================================================
+   Kenzy brand over Material for MkDocs — petrol ink + golden "signal" accent,
+   matching kenzy.dev (tokens mirror kenzy-promo-www/assets/css/styles.css).
+   ========================================================================== */
+
 :root {
-  --kenzy-petrol: #06303f;
-  --kenzy-gold: #ffb500;
+  --kenzy-ink:         #013249;   /* dark petrol — primary ink */
+  --kenzy-ink-2:       #0a4866;   /* slightly lifted ink */
+  --kenzy-ink-dark:    #01283a;
+  --kenzy-signal:      #ffb500;   /* golden yellow */
+  --kenzy-signal-deep: #e09e00;   /* golden, readable on white */
+  --kenzy-signal-soft: #ffc94d;   /* golden, readable on dark */
 }
 
-/* Sidebar search header (top of the nav) and the mobile top bar. */
-.wy-side-nav-search,
-.wy-nav-top {
-  background-color: var(--kenzy-petrol);
+/* ---- Light scheme (default) --------------------------------------------- */
+:root,
+[data-md-color-scheme="default"] {
+  --md-primary-fg-color:        var(--kenzy-ink);
+  --md-primary-fg-color--light: var(--kenzy-ink-2);
+  --md-primary-fg-color--dark:  var(--kenzy-ink-dark);
+  --md-accent-fg-color:         var(--kenzy-signal-deep);
+  --md-accent-fg-color--transparent: rgba(224, 158, 0, 0.12);
+  --md-typeset-a-color:         var(--kenzy-ink-2);
 }
 
-/* Search box: golden border + focus ring. */
-.wy-side-nav-search input[type="text"] {
-  border: 2px solid var(--kenzy-gold);
-  border-radius: 4px;
-}
-.wy-side-nav-search input[type="text"]:focus {
-  outline: none;
-  box-shadow: 0 0 0 2px rgba(255, 181, 0, 0.45);
-}
-
-/* Subtitle/version under the logo, in golden. */
-.wy-side-nav-search > div.version {
-  color: var(--kenzy-gold);
+/* ---- Dark scheme (slate) ------------------------------------------------- */
+[data-md-color-scheme="slate"] {
+  --md-primary-fg-color:        var(--kenzy-ink);
+  --md-primary-fg-color--light: var(--kenzy-ink-2);
+  --md-primary-fg-color--dark:  var(--kenzy-ink-dark);
+  --md-accent-fg-color:         var(--kenzy-signal);
+  --md-accent-fg-color--transparent: rgba(255, 181, 0, 0.12);
+  --md-typeset-a-color:         var(--kenzy-signal-soft);
 }
 
-.wy-side-nav-search {
-  border-bottom: 1px solid #aaa;
+/* Golden signal line under the header — the datasheet accent from kenzy.dev. */
+.md-header {
+  border-bottom: 2px solid var(--kenzy-signal);
 }
 
-.wy-nav-side {
-  background: #184758;
+/* Re-tint the default "note" admonition (used for ✓ Checkpoints) to brand ink
+   instead of Material's stock blue. */
+.md-typeset .admonition.note,
+.md-typeset details.note {
+  border-color: var(--kenzy-ink-2);
 }
-
-.wy-menu-vertical p.caption {
-  color: var(--kenzy-gold);
+.md-typeset .note > .admonition-title,
+.md-typeset .note > summary {
+  background-color: rgba(10, 72, 102, 0.08);
 }
-
-.wy-menu-vertical li.current>a {
-  background: rgba(255, 181, 0, 0.3);
+.md-typeset .note > .admonition-title::before,
+.md-typeset .note > summary::before {
+  background-color: var(--kenzy-ink-2);
 }
-
-.rst-versions {
-    display: none;
+[data-md-color-scheme="slate"] .md-typeset .admonition.note,
+[data-md-color-scheme="slate"] .md-typeset details.note {
+  border-color: var(--kenzy-signal-soft);
+}
+[data-md-color-scheme="slate"] .md-typeset .note > .admonition-title,
+[data-md-color-scheme="slate"] .md-typeset .note > summary {
+  background-color: rgba(255, 181, 0, 0.10);
+}
+[data-md-color-scheme="slate"] .md-typeset .note > .admonition-title::before,
+[data-md-color-scheme="slate"] .md-typeset .note > summary::before {
+  background-color: var(--kenzy-signal-soft);
 }

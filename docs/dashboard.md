@@ -1,11 +1,12 @@
 # Dashboard
 
-`kenzy-server` serves a web dashboard — a fleet manager for your
-Kenzy deployment. It is **on by default** in the shipped config (localhost-bound);
-set `dashboard.enabled: false` to turn it off, which adds zero overhead when disabled
-(nothing is mounted, no node-side cost). When enabled it gives you one place to see
-every room node and backend service, configure nodes, control them, send
-announcements, and read logs.
+The dashboard is the web page where you run your Kenzy home: see every room and
+service at a glance, name rooms, pick and tune microphones, enroll voices, send
+announcements, read logs, and install updates — all from a browser, no terminal
+needed after install. It's served by `kenzy-server` and is **on by default**,
+reachable from any machine on your network at `http://<server>:8770`. (Set
+`dashboard.enabled: false` to turn it off entirely — when disabled, nothing is
+mounted and it adds zero overhead.)
 
 !!! warning "Keep it on the LAN"
     Login runs over **plaintext HTTP** and defaults to `admin` / `password`. Bind the
@@ -14,20 +15,20 @@ announcements, and read logs.
 
 ## Enabling it
 
-In `configs/server.yaml`:
+The shipped config already has it on. The relevant block in `configs/server.yaml`:
 
 ```yaml
 dashboard:
   enabled: true
-  bind: "127.0.0.1"     # or a LAN address; never the public internet
+  bind: "0.0.0.0"       # reachable on your LAN (the default); "127.0.0.1" = this machine only
   port: 8770
   controls: true        # allow edits/actions (false = read-only)
-  logs: true            # enable the log viewer
+  logs: true            # enable the log viewer + Activity tab
 ```
 
-Restart `kenzy-server` and open `http://<bind>:<port>/dashboard` (e.g.
-`http://127.0.0.1:8770/dashboard`). See the full key reference in
-[Server Configuration](configuration/server.md#dashboard).
+Open `http://<server>:8770` in a browser (the same machine can use
+`http://localhost:8770`). After changing this block, restart `kenzy-server`. See the
+full key reference in [Server Configuration](configuration/server.md#dashboard).
 
 ## Logging in
 

@@ -76,6 +76,35 @@ Apple Inc. (AAPL)
 
 ---
 
+## Web Search — `builtin_skills/web_search.py`
+
+Lets Kenzy search the web for things it can't answer from the language model's own knowledge — recent events, prices, sports scores, opening hours, or any "look it up…" request. The skill returns the top results (title, snippet, source) to the model, which reads them and speaks a concise answer.
+
+### Skills
+
+| Function | Description |
+|---|---|
+| `web_search(query)` | Searches the web and returns a numbered list of results for the model to synthesize from |
+
+### Configuration (`skills.web_search` in `llm.yaml`)
+
+| Key | Default | Description |
+|---|---|---|
+| `provider` | `"duckduckgo"` | Search backend: `duckduckgo` or `searxng` |
+| `max_results` | `5` | Results returned per search |
+| `timeout` | `15` | Request timeout in seconds |
+| `region` | `"wt-wt"` | DuckDuckGo region code (`wt-wt` = no region) |
+| `searxng_url` | `"http://localhost:8888/search"` | Your SearXNG `/search` endpoint (searxng provider only) |
+
+All of these are editable from the dashboard (**Services → llm**), with the provider as a dropdown.
+
+**DuckDuckGo** (the default) is keyless and needs zero setup — it just works. If you'd rather no search queries leave your network, point the `searxng` provider at a self-hosted [SearXNG](https://docs.searxng.org/) instance; its JSON output format must be enabled (`search.formats: [html, json]` in SearXNG's `settings.yml`).
+
+!!! note "Queries go out, either way something is searched"
+    With DuckDuckGo, the search query (not the room audio) is sent to an external service. Use SearXNG if you self-host your search. Disable the skill entirely (`web_search` under `skills.disabled`, or the dashboard's Skills tab) if you don't want Kenzy searching the web at all.
+
+---
+
 ## Home Assistant — `builtin_skills/home_assistant.py`
 
 Controls and queries smart home devices via the [Home Assistant REST API](https://developers.home-assistant.io/docs/api/rest/). See [Home Assistant](home-assistant.md) for full setup documentation.
@@ -150,3 +179,39 @@ Starts a live two-way voice call to another room. Say *"call the living room"* a
 | `connect_room(room)` | Ring `room` for a live intercom call (the other room must verbally accept) |
 
 Like `announce`, this queues a server action. The server rings the target room, plays a spoken consent prompt, and bridges audio **only on a clear spoken "yes"** (default-deny on silence/ambiguity/timeout). During an active call a wake word at either end ends it immediately. Requires a speakerphone with hardware echo cancellation.
+
+---
+
+## Date & Time — `builtin_skills/datetime_skill.py`
+
+Answers "what time is it?" and "what's the date today?" **instantly** — these are handled by a deterministic fast intent with no language-model call, so the most common question of the day is also the fastest. Uses `location.timezone` from `llm.yaml`.
+
+| Matcher | Description |
+|---|---|
+| `fast_datetime` (fast intent) | Time and date queries, answered locally with no LLM round-trip |
+
+---
+
+## Volume — `builtin_skills/volume.py`
+
+Adjusts the volume of the room you're speaking from — also a deterministic fast intent, so it's instant.
+
+Say things like: *"turn it up"*, *"quieter"*, *"set the volume to 40"*, *"volume at 75 percent"*, *"mute"*, *"unmute"*.
+
+| Matcher | Description |
+|---|---|
+| `fast_volume` (fast intent) | up / down (±15), set to an exact level, mute, unmute — applied to the asking room's node |
+
+The volume level **persists** (it's part of the node's server-owned config, also settable from the dashboard's slider). **Mute is temporary** — a muted node still plays its wake-word chime at a low level so you can tell it's listening, and comes back un-muted after a restart.
+
+---
+
+## Enroll Speaker — `builtin_skills/enroll.py`
+
+Starts hands-free voice enrollment: *"hey Kenzie, enroll me as Alice"* — Kenzy reads a few sentences aloud and records your replies through the room's mic.
+
+| Function | Description |
+|---|---|
+| `enroll_speaker(name)` | Requests a server-side enrollment session for `name` at the asking node |
+
+**Off by default**: the server honors this skill only when `allow_voice_enroll` is enabled in the speaker service config — when it's on, *anyone within earshot can enroll*, including under an existing name. See the security discussion and the alternative enrollment paths (dashboard, CLI) in [Speaker Enrollment](../speaker-enrollment.md#enrolling-by-voice-from-a-node).

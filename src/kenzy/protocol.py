@@ -34,6 +34,7 @@ MSG_TUNE_START = "tune_start"  # server→node: begin a bounded calibration wind
 MSG_TUNE_STOP = "tune_stop"  # server→node: end calibration early
 MSG_TUNE_SAMPLE = "tune_sample"  # node→server: one calibration sample (rms/wake/vad)
 MSG_EXPECT_UTTERANCE = "expect_utterance"  # server→node: capture one utterance after the next TTS
+MSG_END_DIALOG = "end_dialog"  # server→node: a multi-turn dialog ended — play the end cue
 # Intercom (live two-way call between two rooms; gated by the receiver's consent).
 MSG_CALL_REQUEST = "call_request"  # server→node: ring the receiver (no audio yet)
 MSG_CALL_CANCEL = "call_cancel"  # server→node: caller hung up before accept
@@ -171,8 +172,14 @@ def tune_stop() -> str:
 
 def expect_utterance() -> str:
     """Tell the node to auto-capture one utterance after the next TTS prompt finishes
-    (used by the consent gate and voice enrollment)."""
+    (used by the consent gate, voice enrollment, and multi-turn follow-ups)."""
     return json.dumps({"type": MSG_EXPECT_UTTERANCE})
+
+
+def end_dialog() -> str:
+    """Tell the node a multi-turn dialog just ended — play the end-of-dialog cue
+    (after any in-progress TTS finishes)."""
+    return json.dumps({"type": MSG_END_DIALOG})
 
 
 def tune_sample(

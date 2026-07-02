@@ -71,6 +71,7 @@ _ALLOWED_OVERRIDE_KEYS = frozenset(
         "sound_waiting",
         "sound_connect",
         "sound_disconnect",
+        "sound_dialog_end",
         "log_level",
         "log_capture_level",
         "volume",
@@ -1294,6 +1295,10 @@ _STOP_PHRASES: frozenset[str] = frozenset(
     }
 )
 
+# Safety cap on consecutive assistant-held follow-up turns (multi-turn dialog), so a
+# model that keeps asking for a response can't hold the mic open indefinitely.
+_MAX_FOLLOWUP_TURNS = 6
+
 
 class TranscribingServer(AudioServer):
     """
@@ -1323,6 +1328,10 @@ class TranscribingServer(AudioServer):
         # *receiver* node_id → (caller_node_id, caller_room, timeout_task). No audio is
         # bridged while a call is pending.
         self._pending_calls: dict[str, tuple[str, str, asyncio.Task[None]]] = {}
+        # Count of consecutive assistant-held follow-up turns per node (multi-turn
+        # dialog). Bumped each time we re-arm the mic without a wake word; cleared when
+        # the exchange ends (no re-arm, silence, stop phrase, disconnect).
+        self._followup_turns: dict[str, int] = {}
 
         scfg: dict[str, Any] = cfg.get("stt", {})
         self._stt_url: str | None = str(scfg["url"]) if scfg.get("url") else None
@@ -1514,6 +1523,9 @@ class TranscribingServer(AudioServer):
                 return
 
             if not text:
+                # Silence — including a held follow-up window the user let lapse: end
+                # any multi-turn dialog and return to idle.
+                self._end_followup_dialog(node_id)
                 await self.stop_node(node_id)
                 self._tts_active.discard(node_id)
                 return
@@ -1521,21 +1533,38 @@ class TranscribingServer(AudioServer):
             normalized = re.sub(r"[^\w\s]", "", text).strip().lower()
             if normalized in _STOP_PHRASES:
                 log.info("[%s] stop phrase detected (%r) — ending session", node_id, text)
+                self._end_followup_dialog(node_id)
                 await self.stop_node(node_id)
                 self._tts_active.discard(node_id)
                 return
 
             if self._llm_url:
                 _t = time.monotonic()
-                response_text, voice_prompt, actions, fast = await self._call_llm(
+                response_text, voice_prompt, actions, fast, expect_response = await self._call_llm(
                     text, room_name, session_id, speaker
                 )
                 llm_ms = (time.monotonic() - _t) * 1000.0
                 log.info("[%s] LLM%s: %s", node_id, " (fast)" if fast else "", response_text)
                 log.debug("[%s] voice_prompt: %s", node_id, voice_prompt)
+
+                # Multi-turn: if the reply deliberately holds the floor, arm the node to
+                # capture the user's answer after the prompt plays (no wake word), bounded
+                # by _MAX_FOLLOWUP_TURNS. Arm BEFORE _run_tts so _capture_after_prompt is
+                # set before playback finishes (mirrors the enrollment prompt flow).
+                was_holding = node_id in self._followup_turns
+                rearmed = await self._maybe_hold_floor(
+                    node_id, expect_response and bool(response_text)
+                )
+
                 _t = time.monotonic()
                 await self._run_tts(node_id, room_name, session_id, response_text, voice_prompt)
                 tts_ms = (time.monotonic() - _t) * 1000.0
+
+                # A held dialog that just concluded with its final spoken reply: play the
+                # end-of-dialog cue on the node (after this TTS). Only fires when we were
+                # actually holding the floor — never after a plain single-turn reply.
+                if was_holding and not rearmed:
+                    await self._play_dialog_end(node_id)
 
                 # Record the completed pipeline for the dashboard (only when something
                 # is listening, so no transcript is kept when observability is off).
@@ -1565,6 +1594,47 @@ class TranscribingServer(AudioServer):
             log.error("[%s] pipeline error: %s", node_id, exc, exc_info=True)
         finally:
             self._stt_tasks.pop(node_id, None)
+
+    async def _maybe_hold_floor(self, node_id: str, hold: bool) -> bool:
+        """Arm/continue a multi-turn dialog, or end it. Returns whether we re-armed.
+
+        When ``hold`` (the reply deliberately expects an answer) and we're under the
+        per-node turn cap, send ``expect_utterance`` so the node re-opens the mic after
+        the prompt plays — no wake word. Otherwise the exchange is over: end it.
+        """
+        turns = self._followup_turns.get(node_id, 0)
+        if hold and turns < _MAX_FOLLOWUP_TURNS:
+            node = self._nodes.get(node_id)
+            if node is not None:
+                try:
+                    await node.ws.send(protocol.expect_utterance())
+                    self._followup_turns[node_id] = turns + 1
+                    log.info("[%s] holding floor for follow-up (turn %d)", node_id, turns + 1)
+                    return True
+                except Exception as exc:
+                    log.warning("[%s] could not arm follow-up capture: %s", node_id, exc)
+        self._end_followup_dialog(node_id)
+        return False
+
+    def _end_followup_dialog(self, node_id: str) -> None:
+        """Clear the per-node follow-up turn counter (a held dialog is over).
+
+        Does not itself play the end cue — that fires from ``_transcribe`` after the
+        final reply's TTS (see ``_play_dialog_end``), so the cue never clips the last
+        spoken line and never sounds after a silent/stop exit.
+        """
+        if self._followup_turns.pop(node_id, None):
+            log.info("[%s] multi-turn dialog ended", node_id)
+
+    async def _play_dialog_end(self, node_id: str) -> None:
+        """Tell the node to play its end-of-dialog cue (best effort)."""
+        node = self._nodes.get(node_id)
+        if node is None:
+            return
+        try:
+            await node.ws.send(protocol.end_dialog())
+        except Exception as exc:
+            log.debug("[%s] could not send end-of-dialog cue: %s", node_id, exc)
 
     async def _call_speaker(self, pcm: bytes, room_id: str) -> str:
         import base64
@@ -1608,7 +1678,7 @@ class TranscribingServer(AudioServer):
 
     async def _call_llm(
         self, text: str, room_id: str, session_id: str | None, speaker: str | None = None
-    ) -> tuple[str, str, list[dict[str, Any]], bool]:
+    ) -> tuple[str, str, list[dict[str, Any]], bool, bool]:
         import httpx  # type: ignore[import-untyped]
 
         payload = {
@@ -1629,7 +1699,13 @@ class TranscribingServer(AudioServer):
             resp.raise_for_status()
             data = resp.json()
         actions = data.get("actions") or []
-        return str(data["text"]), str(data["voice_prompt"]), actions, bool(data.get("fast", False))
+        return (
+            str(data["text"]),
+            str(data["voice_prompt"]),
+            actions,
+            bool(data.get("fast", False)),
+            bool(data.get("expect_response", False)),
+        )
 
     async def _dispatch_actions(
         self, actions: list[dict[str, Any]], source_node_id: str, source_room: str
@@ -1819,6 +1895,7 @@ class TranscribingServer(AudioServer):
 
     def _cleanup_on_disconnect(self, node_id: str) -> None:
         self._end_enroll_session(node_id)
+        self._followup_turns.pop(node_id, None)
 
     async def _enroll_timeout(self, node_id: str) -> None:
         try:

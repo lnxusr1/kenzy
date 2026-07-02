@@ -47,11 +47,11 @@ For a ready-to-use Home Assistant `rest_command`, see [Home Assistant Integratio
 
 ### Dashboard
 
-Opt-in web fleet manager served by `kenzy-server`. **Off by default**; when disabled nothing is wired up (no route, no overhead). When enabled it provides a live fleet/health view, a per-node config editor (with room rename), node controls (trigger/stop/restart), TTS announcements, a log viewer, and a settings page. See the [Dashboard guide](../dashboard.md) for the full walkthrough.
+Web fleet manager served by `kenzy-server`. **On by default in the shipped config** (set `enabled: false` to disable — nothing is then wired up: no route, no overhead). When enabled it provides a live fleet/health view, a per-node config editor (with room rename), node controls (trigger/stop/restart), TTS announcements, a log viewer, and a settings page. See the [Dashboard guide](../dashboard.md) for the full walkthrough.
 
 | Key | Default | Description |
 |---|---|---|
-| `dashboard.enabled` | `false` | Master switch. `false` ⇒ nothing below is mounted. |
+| `dashboard.enabled` | `true` *(shipped config; `false` when the key is absent)* | Master switch. `false` ⇒ nothing below is mounted. |
 | `dashboard.bind` | `"0.0.0.0"` | Listener address. `0.0.0.0` is reachable across your LAN (the default — **change the default password!**); use `127.0.0.1` to restrict it to the server itself. Never port-forward it (plaintext HTTP) |
 | `dashboard.port` | `8770` | Dashboard HTTP port (separate from the node WS port) |
 | `dashboard.auth.username` / `dashboard.auth.password_hash` | `admin` / *(hash of `password`)* | Browser login. Change it with the server-only **`kenzy-passwd`** CLI (or the dashboard's Settings page); never edit the hash by hand. |
@@ -125,8 +125,8 @@ node_defaults:             # pushed to nodes on connect (config-pull)
   silence_ms: 400
 
 dashboard:
-  enabled: false           # opt-in; nothing is wired up while false
-  bind: "127.0.0.1"
+  enabled: true            # false ⇒ nothing is wired up (zero overhead)
+  bind: "0.0.0.0"          # LAN-reachable (change the default password!); 127.0.0.1 = this machine only
   port: 8770
 
 stt:

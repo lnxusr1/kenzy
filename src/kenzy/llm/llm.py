@@ -161,12 +161,23 @@ final reply.
 Final reply format: a single raw JSON object and nothing else — no markdown, \
 no code fences, no explanation, no trailing characters after the closing brace.
 
-The object must contain exactly two fields:
+The object must contain two required fields and one optional field:
   "text": your spoken response (read aloud — plain prose, no markdown)
   "voice_prompt": a short TTS instruction describing tone, pace, and style
+  "expect_response" (optional, default false): whether to keep the microphone open
+      for the user's reply without requiring the wake word again.
+
+Set "expect_response" to true ONLY when your reply is deliberately incomplete and
+needs the user's immediate answer to finish what they asked for — for example the
+opening line of a knock-knock joke ("Knock knock." expects "Who's there?"). In every
+other case set it to false, and when in doubt use false. Do NOT set it true merely to
+offer more help ("Is there anything else?", "Let me know if you need anything"), for
+pleasantries or sign-offs, or to say you didn't understand and ask them to clarify.
 
 Example (output this format exactly):
-{"text": "The lights are on.", "voice_prompt": "Speak naturally at a conversational pace."}"""
+{"text": "The lights are on.", "voice_prompt": "Speak naturally at a conversational pace."}
+Example holding the floor:
+{"text": "Knock knock.", "voice_prompt": "Playful tone.", "expect_response": true}"""
 
 
 # ---------------------------------------------------------------------------
@@ -256,11 +267,15 @@ async def process(req: ProcessRequest) -> ProcessResponse:
             fast=True,
         )
 
-    text, voice_prompt = await _run_llm(
+    text, voice_prompt, expect_response = await _run_llm(
         req.text, raw_speaker, req.room_id, available_rooms=req.rooms
     )
     return ProcessResponse(
-        text=text, voice_prompt=voice_prompt, actions=skill_registry.take_actions(), fast=False
+        text=text,
+        voice_prompt=voice_prompt,
+        expect_response=expect_response,
+        actions=skill_registry.take_actions(),
+        fast=False,
     )
 
 
@@ -287,8 +302,31 @@ def _build_context() -> str:
     return "\n".join(lines)
 
 
-def _parse_response(content: str) -> tuple[str, str]:
-    """Extract (text, voice_prompt) from a JSON response.
+# Closer / clarify phrases that chat models emit reflexively. Even when the model
+# sets expect_response=true, a reply matching one of these is a conversation-ender
+# (or a clarify re-prompt we deliberately skip for now), so the floor-hold is
+# suppressed. High-precision on purpose — a real floor-hold ("Who's there?") won't
+# match — so it never eats a legitimate multi-turn continuation.
+_CLOSER_RE = re.compile(
+    r"anything else|something else|(?:^|\b)(?:is|was) there (?:anything|something)"
+    r"|let me know|feel free to (?:ask|reach)|happy to help|glad to help"
+    r"|hope (?:that|this) helps|how (?:else )?can i (?:help|assist)"
+    r"|(?:didn'?t|did not|couldn'?t) (?:quite )?(?:understand|catch|get)"
+    r"|(?:can|could) you (?:please )?(?:clarify|repeat|rephrase)",
+    re.IGNORECASE,
+)
+
+
+def _suppress_floor_hold(text: str, expect_response: bool) -> bool:
+    """Force expect_response false for reflexive closer/clarify replies (LLM path)."""
+    if expect_response and _CLOSER_RE.search(text or ""):
+        log.info("Suppressing expect_response for closer/clarify reply: %r", text[:80])
+        return False
+    return expect_response
+
+
+def _parse_response(content: str) -> tuple[str, str, bool]:
+    """Extract (text, voice_prompt, expect_response) from a JSON response.
 
     Tries increasingly lenient strategies before falling back to raw text:
       1. Strict json.loads on the stripped content.
@@ -302,14 +340,22 @@ def _parse_response(content: str) -> tuple[str, str]:
     # Strategy 1: clean JSON.
     try:
         parsed = json.loads(stripped)
-        return str(parsed["text"]), str(parsed.get("voice_prompt", _voice_prompt))
+        return (
+            str(parsed["text"]),
+            str(parsed.get("voice_prompt", _voice_prompt)),
+            bool(parsed.get("expect_response", False)),
+        )
     except (json.JSONDecodeError, KeyError, TypeError):
         pass
 
     # Strategy 2: valid JSON followed by trailing garbage.
     try:
         parsed, _ = json.JSONDecoder().raw_decode(stripped)
-        return str(parsed["text"]), str(parsed.get("voice_prompt", _voice_prompt))
+        return (
+            str(parsed["text"]),
+            str(parsed.get("voice_prompt", _voice_prompt)),
+            bool(parsed.get("expect_response", False)),
+        )
     except (json.JSONDecodeError, KeyError, TypeError, ValueError):
         pass
 
@@ -318,12 +364,16 @@ def _parse_response(content: str) -> tuple[str, str]:
     if m:
         try:
             parsed = json.loads(m.group(0))
-            return str(parsed["text"]), str(parsed.get("voice_prompt", _voice_prompt))
+            return (
+                str(parsed["text"]),
+                str(parsed.get("voice_prompt", _voice_prompt)),
+                bool(parsed.get("expect_response", False)),
+            )
         except (json.JSONDecodeError, KeyError, TypeError):
             pass
 
     log.warning("LLM response could not be parsed as JSON — speaking raw content")
-    return stripped, _voice_prompt
+    return stripped, _voice_prompt, False
 
 
 async def _run_llm(
@@ -331,7 +381,7 @@ async def _run_llm(
     speaker: str,
     room_id: str | None,
     available_rooms: list[str] | None = None,
-) -> tuple[str, str]:
+) -> tuple[str, str, bool]:
     from litellm import acompletion  # type: ignore[import-untyped]
 
     # Build current user message — named speakers only in the prefix.
@@ -392,9 +442,10 @@ async def _run_llm(
         messages.append(assistant_msg)
 
         if not message.tool_calls:
-            spoken, vp = _parse_response(message.content or "")
+            spoken, vp, expect = _parse_response(message.content or "")
+            expect = _suppress_floor_hold(spoken, expect)
             _history.add(room_id or "", speaker, text, spoken)
-            return spoken, vp
+            return spoken, vp, expect
 
         # Execute each tool call and append results.
         log.debug(
@@ -422,9 +473,12 @@ async def _run_llm(
         kwargs["messages"] = messages
 
     log.warning("Reached max tool iterations (%d) — returning last content", _max_tool_iterations)
-    spoken, vp = _parse_response(message.content or "I wasn't able to complete that request.")
+    spoken, vp, expect = _parse_response(
+        message.content or "I wasn't able to complete that request."
+    )
+    expect = _suppress_floor_hold(spoken, expect)
     _history.add(room_id or "", speaker, text, spoken)
-    return spoken, vp
+    return spoken, vp, expect
 
 
 # ---------------------------------------------------------------------------
