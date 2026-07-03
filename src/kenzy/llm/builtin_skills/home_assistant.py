@@ -41,7 +41,13 @@ from typing import Any
 import httpx
 
 from kenzy.llm.builtin_skills import ha_model
-from kenzy.llm.skills import FastResult, fast_intent, get_config, skill  # type: ignore[import]
+from kenzy.llm.skills import (  # type: ignore[import]
+    FastResult,
+    endpoint_kwargs,
+    fast_intent,
+    get_config,
+    skill,
+)
 
 log = logging.getLogger(__name__)
 
@@ -210,8 +216,9 @@ async def _resolve(request: str, yaml_text: str, room: str | None = None) -> dic
             {"role": "user",   "content": user_content},
         ],
     }
-    if base_url:
-        kwargs["base_url"] = base_url
+    # Custom endpoint: OPENAI_API_KEY never rides to it (F-14; CUSTOM_LLM_API_KEY
+    # is the opt-in credential for hosted proxies).
+    kwargs.update(endpoint_kwargs(base_url))
 
     # json_object mode is supported by OpenAI and most hosted providers.
     # Omit for local/unknown providers — the system prompt instructs JSON output.

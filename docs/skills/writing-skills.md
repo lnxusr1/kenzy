@@ -128,7 +128,7 @@ For tasks that require reasoning over fetched content (article summarization, de
 
 ```python
 from litellm import acompletion
-from kenzy.llm.skills import get_config
+from kenzy.llm.skills import endpoint_kwargs, get_config
 
 async def _summarize(content: str) -> str:
     model    = get_config("my_skill", "model") or "gpt-4o"
@@ -141,11 +141,61 @@ async def _summarize(content: str) -> str:
             {"role": "user",   "content": content},
         ],
     }
-    if base_url:
-        kwargs["base_url"] = base_url
+    kwargs.update(endpoint_kwargs(base_url))
 
     response = await acompletion(**kwargs)
     return response.choices[0].message.content or ""
+```
+
+!!! warning "Always use `endpoint_kwargs` for a custom `base_url`"
+    A `base_url` redirects the model call to a server of your choosing (a local
+    Ollama or LM Studio, or a hosted proxy). Passed to LiteLLM directly, the
+    request would still carry the configured cloud provider's API key from the
+    environment — meaning whatever server the URL points at receives a real
+    credential, and a mistyped or tampered URL becomes a key leak.
+    `endpoint_kwargs(base_url)` applies Kenzy's rule instead: a custom endpoint
+    only ever receives `CUSTOM_LLM_API_KEY` (set it if your endpoint requires
+    auth) or a harmless placeholder — cloud provider keys stay bound to their
+    own providers.
+
+## Server-side actions
+
+A skill runs inside `kenzy-llm`, which holds no node connections — it can't speak in
+another room, ring an intercom, or schedule a timer by itself. For those, queue an
+**action** the server actuates after the reply is spoken:
+
+```python
+from kenzy.llm.skills import add_action, skill
+
+@skill
+async def doorbell_test(room: str) -> str:
+    """Play a spoken test announcement in a named room. ..."""
+    add_action({"type": "announce", "text": "This is a test.", "rooms": [room]})
+    return f"Queued a test announcement for {room}."
+```
+
+Actions ship with the response and are dispatched by the server. The built-in action
+types: `announce`, `start_intercom`, `set_volume`, `start_enrollment`,
+`set_schedule`, `cancel_schedule` — see the built-ins that use them
+(`announce.py`, `volume.py`, `schedule.py`) for the exact payloads. Custom action
+types require a matching handler in the server, so user skills should stick to the
+built-in ones.
+
+## Server-injected request context
+
+The server injects per-request context that skills and fast intents can read with
+`get_request(key, default)`:
+
+| Key | Value |
+|---|---|
+| `room_id` | The asking room's name |
+| `rooms` | Names of all currently connected rooms (validate targets against this) |
+| `schedules` | The asking node's active timers/alarms/reminders (with ids) |
+
+```python
+from kenzy.llm.skills import get_request
+
+rooms = get_request("rooms") or []
 ```
 
 ## Running blocking code
@@ -199,7 +249,7 @@ A matcher is called as `func(utterance, room_id, speaker)` and must return a `Fa
 |---|---|
 | `FastResult.handled(text, voice_prompt=None, expect_response=False)` | Short-circuit the pipeline and speak `text` (skip the LLM) |
 | `FastResult.miss()` | This matcher doesn't apply — fall through to the next matcher, then the LLM |
-| `FastResult.clarify(text)` | Speak a clarifying question (skips the LLM) |
+| `FastResult.clarify(text)` | Speak a clarifying question and **re-open the mic** for the answer (no wake word needed) |
 
 Matchers run in **descending `priority`** order; the first to return a handled/clarify result wins. A matcher that raises is logged and treated as a miss, so one bad skill can't break the pipeline.
 
@@ -209,9 +259,21 @@ A single skill file commonly exposes both: a `@fast_intent` for the easy cases a
 
 For deterministic intent/slot parsing beyond simple keyword checks, the `llm` extra ships [`padacioso`](https://github.com/OpenVoiceOS/padacioso) (pure-Python, Padatious-style `.intent` syntax) and [`rapidfuzz`](https://github.com/rapidfuzz/RapidFuzz) (fuzzy name matching).
 
+## The development loop
+
+1. Save your file under `~/.config/kenzy/skills/`.
+2. Restart the LLM service to load it: `systemctl --user restart kenzy-llm`
+   (or the **Restart** button on the dashboard's Services → llm page).
+3. Verify it registered: the dashboard's **Skills** tab lists every loaded skill and
+   fast intent, with invocation counts — if yours is missing, the file failed to
+   import (check Logs → llm for the traceback).
+4. Talk to it. The Activity tab shows what was heard, whether the fast path or the
+   LLM answered, and the response.
+
 ## Disabling a skill temporarily
 
-Add the function name to `skills.disabled` in `llm.yaml`:
+Toggle it off in the dashboard's **Skills** tab — applied live, no restart, and
+persisted. Or list the function name under `skills.disabled` in `llm.yaml`:
 
 ```yaml
 skills:
@@ -219,4 +281,5 @@ skills:
     - my_skill
 ```
 
-The file is not deleted; the skill is simply not registered at startup. This disables both its `@skill` and any `@fast_intent` of the same name.
+The skill stays loaded but is gated out of the tool list and the fast path. A name
+disables both its `@skill` and any `@fast_intent` of the same name.

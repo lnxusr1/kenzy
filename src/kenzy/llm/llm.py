@@ -34,6 +34,7 @@ from pydantic import BaseModel
 
 from kenzy import kenzy_version
 from kenzy.fastapi_auth import (
+    install_backup_endpoint,
     install_logs_endpoint,
     install_restart_endpoint,
     install_service_auth,
@@ -151,6 +152,24 @@ _voice_prompt: str = "Respond in a friendly, conversational tone."
 _max_tool_iterations: int = 5
 _location: str = ""  # "City, State, Country" assembled at startup
 _timezone: str = ""  # IANA timezone string e.g. "America/Chicago"
+_skills_dir: Path | None = None  # resolved user skills overlay (backup slice)
+
+
+def _backup_items() -> list[tuple[Path, str]]:
+    """This host's backup slice: the user skills overlay + HA curation data.
+
+    Both live with the LLM service (not the server), so the server pulls them
+    via ``GET /backup`` to keep a multi-host deployment's archive complete.
+    """
+    from kenzy.config import kenzy_data_root
+
+    items: list[tuple[Path, str]] = [
+        (kenzy_data_root() / "data" / "home_assistant", "data/home_assistant")
+    ]
+    if _skills_dir is not None:
+        items.append((_skills_dir, "skills"))
+    return items
+
 
 # Appended to every system prompt — instructs the LLM to return structured output.
 # voice_prompt tells kenzy-tts how to speak the response (tone, pace, style).
@@ -440,8 +459,9 @@ async def _run_llm(
         "model": _model,
         "messages": messages,
     }
-    if _base_url:
-        kwargs["base_url"] = _base_url
+    # Custom endpoint (Ollama/LM Studio/proxy): never lets OPENAI_API_KEY ride
+    # to a dashboard-editable URL — see skills.endpoint_kwargs (F-14).
+    kwargs.update(skill_registry.endpoint_kwargs(_base_url))
     if tools:
         kwargs["tools"] = tools
         kwargs["tool_choice"] = "auto"
@@ -538,6 +558,9 @@ def main() -> None:
     )
     install_restart_endpoint(app)
     install_upgrade_endpoint(app, "llm")
+    # Backup slice: this host's user skills overlay + HA curation (they live with
+    # the LLM service, not the server), merged into the server's backup archive.
+    install_backup_endpoint(app, _backup_items)
 
     global \
         _model, \
@@ -546,7 +569,8 @@ def main() -> None:
         _voice_prompt, \
         _max_tool_iterations, \
         _location, \
-        _timezone
+        _timezone, \
+        _skills_dir
     _model = str(cfg.get("model", "gpt-4o"))
     _base_url = cfg.get("base_url") or None
     _system_prompt = str(cfg.get("system_prompt", _system_prompt))
@@ -574,6 +598,7 @@ def main() -> None:
 
     raw_dir = skills_cfg.get("dir", "skills")
     user_dir = Path(raw_dir) if Path(raw_dir).is_absolute() else kenzy_data_root() / raw_dir
+    _skills_dir = user_dir  # exposed via GET /backup (the server's merged archive)
 
     skill_registry.set_config(skills_cfg)
     skill_registry.load_skills(user_dir, disabled)

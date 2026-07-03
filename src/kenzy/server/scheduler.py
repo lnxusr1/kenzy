@@ -175,7 +175,22 @@ class Scheduler:
         self._entries: dict[str, Entry] = {}
         self._wake = asyncio.Event()
         self._task: asyncio.Task[None] | None = None
+        # Change observers (add/cancel/fire) — the dashboard's live-push hook.
+        # Empty list ⇒ zero overhead, same discipline as the server's listeners.
+        self._listeners: list[Callable[[], None]] = []
         self._load()
+
+    def add_listener(self, cb: Callable[[], None]) -> None:
+        """Register a callback fired (synchronously, in-loop) whenever the entry
+        set changes — added, cancelled, fired, or advanced."""
+        self._listeners.append(cb)
+
+    def _notify(self) -> None:
+        for cb in self._listeners:
+            try:
+                cb()
+            except Exception as exc:  # an observer must never break the scheduler
+                log.warning("Schedule listener raised: %s", exc)
 
     # -- persistence ---------------------------------------------------
 
@@ -278,6 +293,7 @@ class Scheduler:
         self._entries[entry.id] = entry
         self._save()
         self._wake.set()
+        self._notify()
         log.info(
             "[%s] scheduled %s %r → %s%s",
             room or node_id,
@@ -294,6 +310,7 @@ class Scheduler:
         if removed:
             self._save()
             self._wake.set()
+            self._notify()
             for e in removed:
                 log.info("[%s] cancelled %s %r", e.room or e.node_id, e.kind, e.label)
         return removed
@@ -324,6 +341,7 @@ class Scheduler:
                 self._entries.pop(entry.id, None)
         if due:
             self._save()
+            self._notify()
         return due
 
     async def _run(self) -> None:

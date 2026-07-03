@@ -171,6 +171,32 @@ async def test_fire_cb_error_does_not_stop_others(tmp_path):
     assert s.entries() == []  # both consumed, even the failed one
 
 
+async def test_listener_notified_on_add_cancel_and_fire(tmp_path):
+    s = Scheduler(tmp_path / "s.json", _noop)
+    pokes: list[int] = []
+    s.add_listener(lambda: pokes.append(1))
+
+    t = s.add("timer", "n", "r", seconds=0.01)
+    assert len(pokes) == 1
+    s.cancel(["nonsense"])  # no change → no poke
+    assert len(pokes) == 1
+    s.cancel([t.id])
+    assert len(pokes) == 2
+
+    s.add("timer", "n", "r", seconds=0.01)
+    await asyncio.sleep(0.02)
+    await s.fire_due()
+    assert len(pokes) == 4  # add + fire
+
+    # A raising listener is contained (logged, not propagated).
+    def boom() -> None:
+        raise RuntimeError("observer bug")
+
+    s.add_listener(boom)
+    s.add("timer", "n", "r", seconds=60)  # must not raise
+    assert len(pokes) == 5
+
+
 async def test_loop_fires_soon_entry(tmp_path):
     fired = asyncio.Event()
 

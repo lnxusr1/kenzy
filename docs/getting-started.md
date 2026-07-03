@@ -68,6 +68,10 @@ Find the `OPENAI_API_KEY` line, paste your key between the quotes, save (in nano
 systemctl --user restart 'kenzy-*'
 ```
 
+!!! tip "Prefer the browser?"
+    You can also set keys from the dashboard once it's up (next step): **Settings →
+    API keys**, paste the value, then restart the services from the **Services** tab.
+
 ## Step 3 — Open the dashboard and say hello
 
 In a browser on the same network, open:

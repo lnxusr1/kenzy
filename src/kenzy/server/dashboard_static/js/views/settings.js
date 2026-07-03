@@ -228,6 +228,97 @@ function ChangePassword({ username, onChanged }) {
     </form>`;
 }
 
+// Backup download with the two opt-in scope toggles. The link is a plain GET so
+// the browser's download flow (and the session cookie) just work.
+function BackupPanel() {
+  const [secrets, setSecrets] = useState(false);
+  const [full, setFull] = useState(false);
+  const qs = [secrets ? "secrets=1" : "", full ? "full=1" : ""].filter(Boolean).join("&");
+  return html`
+    <p class="micro">
+      Download the deployment's state — node/service settings, rooms, Home Assistant
+      curation, <b>enrolled voice profiles</b>, dependency pins, and custom skills
+      (state on the speaker/LLM hosts is fetched and merged automatically). Restore
+      with ${" "}<span class="mono">kenzy-init --restore &lt;file&gt;</span>.
+    </p>
+    <label class="micro" style="display:block">
+      <input type="checkbox" checked=${secrets} onChange=${(e) => setSecrets(e.target.checked)} />
+      ${" "}Include secrets (<span class="mono">.env</span> / API keys) — the archive then
+      contains <b>live credentials</b>; store it like a password.
+    </label>
+    <label class="micro" style="display:block">
+      <input type="checkbox" checked=${full} onChange=${(e) => setFull(e.target.checked)} />
+      ${" "}Include everything (adds <span class="mono">models/</span> — larger file;
+      normally re-downloaded by <span class="mono">kenzy-setup</span>, but captures any
+      hand-placed custom model on the server)
+    </label>
+    <p><a class="btn" href=${"/api/backup" + (qs ? "?" + qs : "")} download>Download backup</a></p>
+  `;
+}
+
+// Write-only API-key entry (mirrors the change-password form): set a value, never
+// read one back — the server only ever reports which names are set.
+const KNOWN_KEYS = ["OPENAI_API_KEY", "HA_API_KEY", "HF_TOKEN"];
+
+function ApiKeys({ envKeys, controls }) {
+  const [name, setName] = useState(KNOWN_KEYS[0]);
+  const [custom, setCustom] = useState("");
+  const [value, setValue] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [setNames, setSetNames] = useState(envKeys);
+
+  const allNames = [...new Set([...KNOWN_KEYS, ...setNames])];
+  const effective = name === "__custom__" ? custom.trim() : name;
+
+  async function submit(e) {
+    e.preventDefault();
+    if (!effective || !value) return;
+    setBusy(true);
+    const res = await send("set_secret", { name: effective, value });
+    setBusy(false);
+    if (res.ok) {
+      setSetNames([...new Set([...setNames, effective])]);
+      setValue("");
+      notify(`${effective} saved — restart the affected services (Services tab) to apply.`);
+    } else notify(res.error || "Could not save the key.", "err");
+  }
+
+  return html`
+    <p class="micro">
+      <b>Write-only:</b> values are stored in the server's <span class="mono">.env</span>
+      and never shown again. Applies after the affected services restart. On a
+      multi-host setup this writes the <i>server's</i> host only. Note the dashboard
+      runs over plain HTTP — enter keys from a machine on your own network.
+    </p>
+    <dl class="kv">
+      ${allNames.map(
+        (k) => html`<dt><span class="mono">${k}</span></dt>
+          <dd>${setNames.includes(k)
+            ? html`<span class="badge streaming">set</span>`
+            : html`<span class="micro">not set</span>`}</dd>`,
+      )}
+    </dl>
+    ${controls
+      ? html`<form onSubmit=${submit} class="enroll-row">
+          <select value=${name} onChange=${(e) => setName(e.target.value)}>
+            ${allNames.map((k) => html`<option value=${k}>${k}</option>`)}
+            <option value="__custom__">Other…</option>
+          </select>
+          ${name === "__custom__"
+            ? html`<input placeholder="NAME_LIKE_THIS" value=${custom}
+                onInput=${(e) => setCustom(e.target.value)} />`
+            : null}
+          <input type="password" placeholder="value (write-only)" value=${value}
+            onInput=${(e) => setValue(e.target.value)} autocomplete="off" />
+          <button class="btn" disabled=${busy || !effective || !value}>
+            ${busy ? "…" : "Set"}
+          </button>
+        </form>`
+      : html`<p class="micro">Read-only — set
+          ${" "}<span class="mono">dashboard.controls: true</span> to set keys.</p>`}
+  `;
+}
+
 export function SettingsView({ onLogout }) {
   const [info, setInfo] = useState(null);
   const [err, setErr] = useState("");
@@ -288,6 +379,18 @@ export function SettingsView({ onLogout }) {
       <section class="section">
         <header><h2>Updates</h2><span class="rule"></span></header>
         <div class="card pad"><${UpdateCheck} /></div>
+      </section>
+
+      <section class="section">
+        <header><h2>Backup</h2><span class="rule"></span></header>
+        <div class="card pad"><${BackupPanel} /></div>
+      </section>
+
+      <section class="section">
+        <header><h2>API keys</h2><span class="rule"></span></header>
+        <div class="card pad">
+          <${ApiKeys} envKeys=${s.env_keys || []} controls=${s.flags && s.flags.controls} />
+        </div>
       </section>
 
       <section class="section">

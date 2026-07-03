@@ -29,6 +29,13 @@ export function subscribeSession(fn) {
   return () => _sessionSubs.delete(fn);
 }
 
+// Schedule-set change pokes (Scheduled tab re-fetches /api/schedules on each).
+const _scheduleSubs = new Set();
+export function subscribeSchedules(fn) {
+  _scheduleSubs.add(fn);
+  return () => _scheduleSubs.delete(fn);
+}
+
 // Send a mutation over the WS and resolve with the server's {ok,error} ack.
 export function send(type, payload = {}) {
   return new Promise((resolve) => {
@@ -97,6 +104,8 @@ function connectWS() {
         _tuneSubs.forEach((fn) => fn(m));
       } else if (m.type === "session") {
         _sessionSubs.forEach((fn) => fn(m.data));
+      } else if (m.type === "schedules") {
+        _scheduleSubs.forEach((fn) => fn());
       } else if (m.type === "upgrade_progress") {
         notify("Upgrade: installing… this can take a few minutes.");
       } else if (m.type === "upgrade_result") {

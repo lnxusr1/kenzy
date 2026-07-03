@@ -126,6 +126,28 @@ def get_config(section: str, key: str, default: Any = None) -> Any:
     return _CONFIG.get(section, {}).get(key, default)
 
 
+def endpoint_kwargs(base_url: str | None) -> dict[str, Any]:
+    """LiteLLM kwargs for an optional custom endpoint (Ollama / LM Studio / proxy).
+
+    Security invariant (F-14 in the security design doc): ``OPENAI_API_KEY``
+    **never travels to a custom base_url**. ``base_url`` is dashboard-editable by
+    design, so a request to it must not inherit the highest-value secret in
+    ``.env`` — otherwise repointing the URL exfiltrates the key via the
+    Authorization header. With a base_url set, the credential is
+    ``CUSTOM_LLM_API_KEY`` (hosted proxies that need auth), else a dummy —
+    local servers ignore it. No base_url ⇒ no override: LiteLLM routes known
+    providers to their official endpoints with their own env keys, as ever.
+    """
+    if not base_url:
+        return {}
+    import os
+
+    return {
+        "base_url": base_url,
+        "api_key": os.environ.get("CUSTOM_LLM_API_KEY") or "sk-no-key-for-custom-endpoint",
+    }
+
+
 # ---------------------------------------------------------------------------
 # Type → JSON Schema
 # ---------------------------------------------------------------------------

@@ -1,6 +1,6 @@
 import { html, useState, useEffect } from "../html.js";
 import { getSchedules } from "../api.js";
-import { send, notify } from "../store.js";
+import { send, notify, subscribeSchedules } from "../store.js";
 
 // Scheduled view: the active timers / alarms / reminders held by the server's
 // scheduler, with a live countdown and per-entry Cancel. Deliberately simple —
@@ -48,10 +48,14 @@ export function SchedulesView() {
   useEffect(() => {
     load();
     const tick = setInterval(() => setNow(Date.now()), 1000);
-    const refresh = setInterval(load, 30000); // catch fired/voice-set entries
+    // Live: the server pokes on any schedule change (voice-set, fired, cancelled);
+    // the 60 s poll is just a fallback if the WS channel is down.
+    const unsub = subscribeSchedules(load);
+    const refresh = setInterval(load, 60000);
     return () => {
       clearInterval(tick);
       clearInterval(refresh);
+      unsub();
     };
   }, []);
 

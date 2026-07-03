@@ -88,4 +88,5 @@ nav:
   - Integrations:
     - Home Assistant: integrations/home-assistant.md
   - Speaker Enrollment: speaker-enrollment.md
+  - Backup & Restore: backup-restore.md
   - Deployment: deployment.md

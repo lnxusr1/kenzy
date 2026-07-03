@@ -168,6 +168,10 @@ kenzy-node` on the device.
 
 ## Starting over
 
+**First: grab a backup** if there's anything worth keeping (enrolled voices,
+room tuning, curation) — dashboard → Settings → **Download backup**, restorable
+later with `kenzy-init --restore` ([details](backup-restore.md)).
+
 The installer removes everything it created:
 
 ```bash

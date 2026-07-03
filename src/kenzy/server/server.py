@@ -85,6 +85,8 @@ _ALLOWED_OVERRIDE_KEYS = frozenset(
 _SERVER_MANAGED_KEYS = frozenset({"room_id"})
 _SECRET_KEY_RE = re.compile(r"key|token|secret|password|passwd|credential", re.IGNORECASE)
 _SAFE_ID_RE = re.compile(r"[A-Za-z0-9._-]+")
+# Env-var names the write-only secret editor will accept (dashboard → API keys).
+_ENV_NAME_RE = re.compile(r"^[A-Z][A-Z0-9_]{0,63}$")
 _ANNOUNCE_VOICE_PROMPT = "Read this aloud as a clear, calm public announcement."
 _INTERCOM_VOICE_PROMPT = "Read this aloud as a brief, friendly spoken notification."
 # How long to wait for the receiver's spoken consent before declining (no answer).
@@ -1233,6 +1235,53 @@ class AudioServer:
         """Cancel schedule entries by id; returns how many were removed."""
         return 0
 
+    def add_schedule_listener(self, cb: Callable[[], None]) -> None:
+        """Observe schedule-set changes (add/cancel/fire). Base server: no-op."""
+
+    async def create_backup_archive(
+        self, *, include_secrets: bool = False, include_models: bool = False
+    ) -> bytes:
+        """Config-home backup archive (the dashboard download). The base server
+        packs the local tree; ``TranscribingServer`` also merges the backend
+        services' state slices so a multi-host deployment's archive is complete."""
+        from kenzy.backup import create_backup
+        from kenzy.config import kenzy_data_root
+
+        return create_backup(
+            kenzy_data_root(), include_secrets=include_secrets, include_models=include_models
+        )
+
+    def set_env_secret(self, name: str, value: str) -> None:
+        """Write-only secret entry (dashboard → Settings → API keys).
+
+        Upserts ``NAME="value"`` in the config home's ``.env`` and this process's
+        environment. Deliberately write-only: values are never read back, served,
+        or logged. Co-located services share this ``.env`` (restart them to
+        apply); remote service hosts keep their own (``kenzy-deploy`` syncs it).
+        """
+        from kenzy.config import kenzy_data_root
+
+        name = name.strip()
+        if not _ENV_NAME_RE.match(name):
+            raise ValueError("name must be UPPER_SNAKE_CASE (A–Z, digits, underscores)")
+        value = value.strip()
+        if not value or len(value) > 4096 or any(c in value for c in '\r\n"'):
+            raise ValueError("value must be a non-empty single line without quotes")
+        env_path = kenzy_data_root() / ".env"
+        lines = env_path.read_text().splitlines() if env_path.is_file() else []
+        prefix_plain, prefix_export = f"{name}=", f"export {name}="
+        replaced = False
+        for i, line in enumerate(lines):
+            stripped = line.strip()
+            if stripped.startswith(prefix_plain) or stripped.startswith(prefix_export):
+                lines[i] = f'{name}="{value}"'
+                replaced = True
+        if not replaced:
+            lines.append(f'{name}="{value}"')
+        env_path.write_text("\n".join(lines) + "\n")
+        os.environ[name] = value
+        log.info("Secret %s %s in %s", name, "updated" if replaced else "added", env_path)
+
     def connected_nodes(self) -> list[str]:
         return list(self._nodes.keys())
 
@@ -1871,6 +1920,60 @@ class TranscribingServer(AudioServer):
 
     def cancel_schedule_ids(self, ids: list[str]) -> int:
         return len(self._scheduler.cancel(ids))
+
+    def add_schedule_listener(self, cb: Callable[[], None]) -> None:
+        self._scheduler.add_listener(cb)
+
+    async def create_backup_archive(
+        self, *, include_secrets: bool = False, include_models: bool = False
+    ) -> bytes:
+        """One complete archive even on a multi-host deployment: the local tree
+        plus the stateful services' slices (speaker embeddings; the LLM host's
+        skills + curation). Local wins on collisions — which is also what dedupes
+        the co-located case, where the slices duplicate the local files. An
+        unreachable service degrades to a partial archive, recorded in the
+        manifest's ``service_slices`` and logged loudly."""
+        from kenzy.backup import create_backup
+        from kenzy.config import kenzy_data_root
+
+        extra: dict[str, bytes] = {}
+        notes: dict[str, str] = {}
+        for svc, url in (("speaker", self._speaker_url), ("llm", self._llm_url)):
+            if not url:
+                notes[svc] = "not configured"
+                continue
+            try:
+                entries = await self._fetch_backup_slice(url.rsplit("/", 1)[0])
+                for name, data in entries.items():
+                    extra.setdefault(name, data)
+                notes[svc] = f"{len(entries)} file(s)"
+            except Exception as exc:
+                notes[svc] = "unreachable"
+                log.warning(
+                    "backup: %s slice unavailable (%s) — the archive may be missing "
+                    "that host's state",
+                    svc,
+                    exc,
+                )
+        return create_backup(
+            kenzy_data_root(),
+            extra_entries=extra,
+            notes={"service_slices": notes},
+            include_secrets=include_secrets,
+            include_models=include_models,
+        )
+
+    async def _fetch_backup_slice(self, base_url: str) -> dict[str, bytes]:
+        import httpx  # type: ignore[import-untyped]
+
+        from kenzy.backup import unpack_archive_bytes
+
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(
+                base_url + "/backup", timeout=20.0, headers=self._service_headers()
+            )
+            resp.raise_for_status()
+        return unpack_archive_bytes(resp.content)
 
     def _schedule_target(self, entry: Any) -> str | None:
         """Resolve where an entry fires: its node if connected, else any connected

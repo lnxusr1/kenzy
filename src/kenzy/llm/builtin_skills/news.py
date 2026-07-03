@@ -27,7 +27,7 @@ from urllib.parse import urlparse
 import feedparser  # type: ignore[import-untyped]
 import httpx
 
-from kenzy.llm.skills import get_config, skill  # type: ignore[import]
+from kenzy.llm.skills import endpoint_kwargs, get_config, skill  # type: ignore[import]
 
 log = logging.getLogger(__name__)
 
@@ -136,8 +136,9 @@ async def _summarize(title: str, body: str) -> str:
             },
         ],
     }
-    if base_url:
-        kwargs["base_url"] = base_url
+    # Custom endpoint: OPENAI_API_KEY never rides to it (F-14; CUSTOM_LLM_API_KEY
+    # is the opt-in credential for hosted proxies).
+    kwargs.update(endpoint_kwargs(base_url))
 
     response = await acompletion(**kwargs)
     return (response.choices[0].message.content or "").strip()
