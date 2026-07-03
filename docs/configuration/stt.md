@@ -77,6 +77,7 @@ No model download, near-zero CPU/RAM — the whole transcription happens on Open
 | `openai.model` | `"gpt-4o-mini-transcribe"` | Transcription model: `gpt-4o-mini-transcribe`, `gpt-4o-transcribe`, or `whisper-1` |
 | `openai.language` | `"en"` | Language code (e.g. `"en"`), or `null` for auto-detect |
 | `openai.timeout` | `30.0` | HTTP timeout in seconds |
+| `openai.fallback` | `true` | On a cloud failure, silently retry with **local faster-whisper** (loaded lazily on first need, using the `whisper.*` settings). Note: works offline only if the whisper model was previously downloaded/cached; otherwise the failure surfaces as the error cue. |
 
 !!! warning "Your voice leaves the network"
     With this provider, **everything captured after the wake word is sent to OpenAI** for transcription (audio only — nothing is recorded between wake words either way). If keeping spoken audio on your own hardware matters to you, stay on the default `whisper` provider. This is the same trade the default OpenAI TTS/LLM setup already makes for text.

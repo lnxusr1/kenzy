@@ -34,3 +34,8 @@ openai:
   language: "en"
   # HTTP timeout in seconds
   timeout: 30.0
+  # On a cloud failure, silently retry with local faster-whisper (loaded on
+  # first need, using the whisper: settings above). Works offline only if the
+  # whisper model was previously cached; otherwise the failure surfaces as the
+  # error cue.
+  fallback: true

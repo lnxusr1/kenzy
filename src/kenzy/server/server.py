@@ -74,6 +74,7 @@ _ALLOWED_OVERRIDE_KEYS = frozenset(
         "sound_dialog_end",
         "sound_timer",
         "sound_alarm",
+        "sound_error",
         "log_level",
         "log_capture_level",
         "volume",
@@ -1640,8 +1641,14 @@ class TranscribingServer(AudioServer):
                 )
 
                 _t = time.monotonic()
-                await self._run_tts(node_id, room_name, session_id, response_text, voice_prompt)
+                spoke_ok = await self._run_tts(
+                    node_id, room_name, session_id, response_text, voice_prompt
+                )
                 tts_ms = (time.monotonic() - _t) * 1000.0
+                if not spoke_ok:
+                    # The reply exists but couldn't be spoken (TTS down/failed):
+                    # play the pre-recorded cue so the user isn't left in silence.
+                    await self._play_error_cue(node_id)
 
                 # A held dialog that just concluded with its final spoken reply: play the
                 # end-of-dialog cue on the node (after this TTS). Only fires when we were
@@ -1674,9 +1681,27 @@ class TranscribingServer(AudioServer):
         except asyncio.CancelledError:
             raise
         except Exception as exc:
+            # From the couch, a swallowed failure is indistinguishable from being
+            # ignored — say so instead (pre-recorded, so it works when TTS is the
+            # broken part), and release any held multi-turn floor.
             log.error("[%s] pipeline error: %s", node_id, exc, exc_info=True)
+            self._end_followup_dialog(node_id)
+            await self._play_error_cue(node_id)
         finally:
             self._stt_tasks.pop(node_id, None)
+
+    async def _play_error_cue(self, node_id: str) -> None:
+        """Stream the pre-recorded failure cue (``sound_error``, read live like
+        the timer/alarm tones; empty ⇒ silent opt-out). Best effort."""
+        try:
+            spec = self._effective_node_config(node_id).get("sound_error", "error.wav")
+        except Exception:
+            spec = "error.wav"
+        from . import tones
+
+        pcm = tones.load_tone(spec)
+        if pcm:
+            await self._stream_pcm(node_id, pcm)
 
     async def _maybe_hold_floor(self, node_id: str, hold: bool) -> bool:
         """Arm/continue a multi-turn dialog, or end it. Returns whether we re-armed.
@@ -2386,9 +2411,12 @@ class TranscribingServer(AudioServer):
 
     async def _run_tts(
         self, node_id: str, room_name: str, session_id: str | None, text: str, voice_prompt: str
-    ) -> None:
+    ) -> bool:
+        """Synthesize + stream a reply. Returns False when synthesis/streaming
+        *failed* (so the caller can play the error cue); a deliberately TTS-less
+        config returns True — silence by choice isn't a failure."""
         if not self._tts_url:
-            return
+            return True
 
         import httpx  # type: ignore[import-untyped]
 
@@ -2406,14 +2434,16 @@ class TranscribingServer(AudioServer):
             pcm = resp.content
             for i in range(0, len(pcm), self._tts_chunk_size):
                 if not await self.send_tts_frame(node_id, pcm[i : i + self._tts_chunk_size]):
-                    return  # node disconnected mid-stream
+                    return False  # node disconnected mid-stream
             await self.send_tts_end(node_id, sid)
             log.info("[%s] TTS complete", node_id)
+            return True
         except asyncio.CancelledError:
             raise
         except Exception as exc:
             log.error("[%s] TTS error: %s", node_id, exc, exc_info=True)
             await self.send_tts_end(node_id, sid)
+            return False
         finally:
             if node_id in self._tts_active:
                 await self.stop_node(node_id)

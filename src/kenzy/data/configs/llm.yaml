@@ -20,6 +20,14 @@ model: "gpt-5.1"
 # base_url is only needed for local providers (Ollama, LM Studio, etc.)
 # base_url: "http://localhost:11434"
 
+# Optional LOCAL fallback model: when the primary model call fails (cloud
+# outage, provider error), the request is silently retried once against this
+# model — if that fails too, the user just hears the error cue. Needs a local
+# server (e.g. Ollama) with a tool-calling-capable model pulled.
+# fallback:
+#   model: "ollama/qwen2.5:14b"
+#   base_url: "http://127.0.0.1:11434"
+
 # Maximum tool-call iterations before returning whatever the LLM has.
 max_tool_iterations: 5
 

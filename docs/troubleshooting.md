@@ -92,8 +92,12 @@ just re-run the one step.
 
 ## It hears me but never replies
 
-Chime, you speak, then… nothing. The audio reached the server but the pipeline
-stalled somewhere. Work down the chain:
+First, listen for the apology: when a request fails mid-pipeline, Kenzy plays a
+pre-recorded *"I'm sorry, but I'm having trouble processing your request"* cue —
+so hearing **that** means the node and server are fine and one of the backend
+stages failed (keep reading). Hearing **nothing at all** points earlier in the
+chain: the node↔server link, or the cue was disabled (`sound_error` in the
+node's settings). Work down the chain:
 
 1. **Open the dashboard's Activity tab.** If your words appear as a transcript,
    speech-to-text worked and the problem is further along (LLM or TTS). If nothing

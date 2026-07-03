@@ -158,8 +158,8 @@ including giving devices natural spoken names, is at
 - [Explore the dashboard](dashboard.md) — updates, logs, activity view, per-room tuning
 - [See what it can do](skills/builtin.md) — weather, news, announcements, and more
 - [Write a skill](skills/writing-skills.md) — add abilities with a small Python file
-- [Go local](configuration/llm.md#model-strings) — run the language model on your own
-  hardware with Ollama, and the voice with [Kokoro](configuration/tts.md#kokoro-provider)
+- [Go fully local](fully-local.md) — run the language model and the voice on your
+  own hardware; nothing spoken at home leaves your network
 
 ---
 

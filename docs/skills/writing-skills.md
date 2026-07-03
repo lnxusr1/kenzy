@@ -2,6 +2,14 @@
 
 A skill is an async Python function decorated with `@skill`. Drop the file in your skills overlay directory — `~/.config/kenzy/skills/` (or `skills/` in a dev checkout), set by `skills.dir` in `llm.yaml` — and it is loaded automatically at startup, alongside the built-in skills. A file that defines a skill of the same name as a built-in overrides it.
 
+!!! tip "Start from the complete example"
+    [`examples/skills/example_skill.py`](https://github.com/lnxusr1/kenzy/blob/main/examples/skills/example_skill.py)
+    is one runnable file demonstrating everything on this page — an `@skill`, a
+    `@fast_intent`, per-skill config, request context, and a server action —
+    with try-it instructions in its header. It's loaded by the test suite through
+    the real overlay loader, so it's guaranteed current. Copy it into your
+    overlay directory and say *"give me a fortune."*
+
 ## Minimal example
 
 ```python

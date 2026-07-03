@@ -126,6 +126,54 @@ def get_config(section: str, key: str, default: Any = None) -> Any:
     return _CONFIG.get(section, {}).get(key, default)
 
 
+# Optional local fallback model (llm.yaml `fallback:`) — tried once, silently,
+# when the primary model call fails; if the fallback fails too, the exception
+# propagates and the user just gets the spoken error cue.
+_FALLBACK: dict[str, Any] = {}
+
+
+def set_fallback(model: str | None, base_url: str | None) -> None:
+    """Configure (or clear) the local fallback model. Called at service startup."""
+    _FALLBACK.clear()
+    if model:
+        _FALLBACK["model"] = str(model)
+        _FALLBACK["base_url"] = str(base_url) if base_url else None
+
+
+async def acompletion_with_fallback(
+    kwargs: dict[str, Any], state: dict[str, Any] | None = None
+) -> Any:
+    """LiteLLM call with a single silent retry on the configured local fallback.
+
+    ``state`` is a per-request dict: once the primary has failed, the request is
+    pinned to the fallback so a multi-iteration tool loop doesn't re-pay the
+    primary's timeout on every turn. No fallback configured ⇒ behaves exactly
+    like a plain ``acompletion`` call.
+    """
+    from litellm import acompletion  # type: ignore[import-untyped]
+
+    if not (state and state.get("fallback")):
+        try:
+            return await acompletion(**kwargs)
+        except Exception as exc:
+            if not _FALLBACK.get("model"):
+                raise
+            log.warning(
+                "Primary model %r failed (%s) — falling back to %s",
+                kwargs.get("model"),
+                exc,
+                _FALLBACK["model"],
+            )
+            if state is not None:
+                state["fallback"] = True
+    fb = dict(kwargs)
+    fb.pop("base_url", None)
+    fb.pop("api_key", None)
+    fb["model"] = _FALLBACK["model"]
+    fb.update(endpoint_kwargs(_FALLBACK.get("base_url")))
+    return await acompletion(**fb)
+
+
 def endpoint_kwargs(base_url: str | None) -> dict[str, Any]:
     """LiteLLM kwargs for an optional custom endpoint (Ollama / LM Studio / proxy).
 
@@ -395,6 +443,15 @@ def set_disabled(names: list[str]) -> None:
     """Replace the runtime-disabled set (live, no reload). Idempotent."""
     global _DISABLED
     _DISABLED = {str(n) for n in names}
+
+
+def is_disabled(name: str) -> bool:
+    """Whether a skill/fast-intent name is currently disabled (live-toggled).
+
+    Lets one skill gate on another — e.g. the lists skill refuses to touch
+    Home Assistant when the ``home_assistant`` skill is switched off.
+    """
+    return name in _DISABLED
 
 
 def registry_info() -> dict[str, Any]:

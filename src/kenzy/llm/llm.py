@@ -243,6 +243,7 @@ async def get_ha_curation() -> dict[str, Any]:
 
     curation = ha_model.load_curation()
     devices: list[dict[str, Any]] = []
+    lists: list[dict[str, str]] = []
     reachable = True
     try:
         raw = await ha_model.fetch_raw()
@@ -250,7 +251,11 @@ async def get_ha_curation() -> dict[str, Any]:
     except Exception as exc:
         reachable = False
         log.warning("HA device list unavailable for curation editor: %s", exc)
-    return {"curation": curation, "devices": devices, "reachable": reachable}
+    try:
+        lists = await ha_model.fetch_todo_lists()
+    except Exception as exc:
+        log.warning("HA todo lists unavailable for curation editor: %s", exc)
+    return {"curation": curation, "devices": devices, "lists": lists, "reachable": reachable}
 
 
 @app.post("/ha/curation")
@@ -427,7 +432,9 @@ async def _run_llm(
     available_rooms: list[str] | None = None,
     schedules: list[dict[str, Any]] | None = None,
 ) -> tuple[str, str, bool]:
-    from litellm import acompletion  # type: ignore[import-untyped]
+    # Per-request fallback state: once the primary model fails, the whole tool
+    # loop stays on the configured local fallback (see skills.set_fallback).
+    fb_state: dict[str, Any] = {}
 
     # Build current user message — named speakers only in the prefix.
     parts = []
@@ -467,7 +474,7 @@ async def _run_llm(
         kwargs["tool_choice"] = "auto"
 
     for iteration in range(_max_tool_iterations):
-        response = await acompletion(**kwargs)
+        response = await skill_registry.acompletion_with_fallback(kwargs, fb_state)
         message = response.choices[0].message
 
         # Serialise the assistant turn back into the message list.
@@ -599,6 +606,13 @@ def main() -> None:
     raw_dir = skills_cfg.get("dir", "skills")
     user_dir = Path(raw_dir) if Path(raw_dir).is_absolute() else kenzy_data_root() / raw_dir
     _skills_dir = user_dir  # exposed via GET /backup (the server's merged archive)
+
+    # Optional local fallback model (silent retry on primary failure; if the
+    # fallback also fails the user just gets the spoken error cue).
+    fb = cfg.get("fallback") or {}
+    skill_registry.set_fallback(fb.get("model"), fb.get("base_url"))
+    if fb.get("model"):
+        log.info("LLM fallback: %s (base_url=%s)", fb["model"], fb.get("base_url") or "default")
 
     skill_registry.set_config(skills_cfg)
     skill_registry.load_skills(user_dir, disabled)

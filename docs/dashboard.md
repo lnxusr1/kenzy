@@ -172,8 +172,10 @@ you don't list devices here. Each entity row has:
 - **exclude** — remove it from voice control entirely
 
 plus **bulk exclusions** (patterns/domains/areas) for things like smart-plug status LEDs
-that show up as controllable lights. Saving writes `curation.yaml` and refreshes the
-topology immediately. The tab needs `kenzy-llm` reachable and `dashboard.controls: true`
+that show up as controllable lights, and a **Lists** section for the shopping/to-do
+voice layer — pick which HA to-do list a bare "the list" means and give lists spoken
+aliases ("the groceries"); see [Built-in Skills → Lists](skills/builtin.md#lists).
+Saving writes `curation.yaml` and refreshes the topology immediately. The tab needs `kenzy-llm` reachable and `dashboard.controls: true`
 to edit (read-only otherwise). See [Home Assistant](skills/home-assistant.md).
 
 ## Speakers

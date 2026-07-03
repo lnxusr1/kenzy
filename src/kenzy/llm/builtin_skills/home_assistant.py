@@ -43,6 +43,7 @@ import httpx
 from kenzy.llm.builtin_skills import ha_model
 from kenzy.llm.skills import (  # type: ignore[import]
     FastResult,
+    acompletion_with_fallback,
     endpoint_kwargs,
     fast_intent,
     get_config,
@@ -192,8 +193,6 @@ async def _ha_state(entity_id: str) -> dict[str, Any]:
 
 async def _resolve(request: str, yaml_text: str, room: str | None = None) -> dict[str, Any]:
     """Sub-LLM call: map the user request to device aliases + actions."""
-    from litellm import acompletion  # type: ignore[import-untyped]
-
     model    = get_config("home_assistant", "model",    "gpt-4o")
     base_url = get_config("home_assistant", "base_url") or None
 
@@ -222,12 +221,13 @@ async def _resolve(request: str, yaml_text: str, room: str | None = None) -> dic
 
     # json_object mode is supported by OpenAI and most hosted providers.
     # Omit for local/unknown providers — the system prompt instructs JSON output.
+    # Both attempts ride the silent local-fallback path (skills.set_fallback).
     try:
         kwargs["response_format"] = {"type": "json_object"}
-        response = await acompletion(**kwargs)
+        response = await acompletion_with_fallback(kwargs)
     except Exception:
         kwargs.pop("response_format", None)
-        response = await acompletion(**kwargs)
+        response = await acompletion_with_fallback(kwargs)
 
     return _extract_json(response.choices[0].message.content or "")
 

@@ -96,6 +96,31 @@ Like `announce`, this queues a server action. The server rings the target room, 
 
 ---
 
+## Lists
+
+**File:** `builtin_skills/lists.py`
+
+Shopping and to-do lists by voice — *"add milk to the shopping list"*, *"what's on the list?"*, *"check off eggs"*, *"take bread off the list"*.
+
+The lists themselves live in **Home Assistant** (`todo` entities), not in Kenzy — deliberately: HA's companion app puts the list on everyone's phone (the half of a shopping list that matters at the store), and the same interface covers HA's local lists and synced backends (Google Tasks, Todoist, CalDAV, …) alike. Kenzy is the voice layer.
+
+**Setup:** you barely need any — with **no list yet**, saying "add eggs to the shopping list" makes Kenzy ask *"Should I create one called Shopping list?"*; on your spoken **yes** it creates a Local to-do list in HA and adds your items (nothing is ever created without the confirmation). If HA won't allow the creation, Kenzy falls back to the manual instruction: *Settings → Devices & Services → Add Integration → **Local to-do***. You can also ask directly — *"create a camping list"*. Then, optionally, in the Kenzy dashboard's **Home Assistant tab → Lists**, pick which list a bare "the list" means and add spoken aliases ("the groceries"). With exactly one list it's the default automatically; with several and no default set, Kenzy asks which one — and keeps the mic open for your answer.
+
+The common phrasings are a deterministic fast intent (instant, no model call): adding (*"add bread, jam and coffee…"* adds three items), reading, removing (*"take X off the list"* — deletes the item), and checking off (*"check off X"*, *"mark X as done"* — stays visible as completed in HA). Item names match case-insensitively. Fuzzier requests (*"add everything I need for pancakes"*) fall through to the LLM tools:
+
+| Function | Description |
+|---|---|
+| `add_to_list(items, list_name)` | Add one or more items; empty `list_name` = the default list |
+| `read_list(list_name)` | Read the open items |
+| `remove_from_list(items, list_name)` | Delete items from the list |
+| `complete_list_items(items, list_name)` | Mark items done (kept as completed in HA) |
+| `create_list(name, items)` | Create a new Local to-do list (only on explicit request/confirmation) |
+| `fast_lists` (fast intent) | The instant tier for all the phrasings above |
+
+**Requires:** `HA_API_KEY` in `.env` and the Home Assistant skill's `url` (the lists share its HA connection). Everything here is hard-gated on that connection: with no `HA_API_KEY`, or with the `home_assistant` skill disabled in the Skills tab, list commands stay out of the way entirely.
+
+---
+
 ## News
 
 **File:** `builtin_skills/news.py`

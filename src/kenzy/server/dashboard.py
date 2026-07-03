@@ -878,6 +878,7 @@ class Dashboard:
             "controls": self._dcfg.controls,
             "curation": (info or {}).get("curation", {}),
             "devices": (info or {}).get("devices", []),
+            "lists": (info or {}).get("lists", []),
             "ha_reachable": bool((info or {}).get("reachable", False)),
         }
 

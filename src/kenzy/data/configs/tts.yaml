@@ -28,6 +28,10 @@ openai:
   # Playback speed multiplier (0.25–4.0; 1.0 = normal)
   speed: 1.0
 
+  # On a cloud failure, silently retry with local Kokoro — used only when the
+  # kokoro extra is installed; otherwise the failure surfaces as the error cue.
+  fallback: true
+
 # ---------------------------------------------------------------------------
 # Kokoro settings  (used when provider: kokoro)
 # ---------------------------------------------------------------------------

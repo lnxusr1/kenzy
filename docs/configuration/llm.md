@@ -20,6 +20,8 @@ The LLM service processes transcribed text through a tool-calling loop and retur
 | `log_capture_level` | `"debug"` | How deep the dashboard log viewer can see, independent of `log_level` |
 | `model` | `"gpt-4o"` | LiteLLM model string (see [Model strings](#model-strings)) |
 | `base_url` | — | Provider base URL. Required for Ollama, LM Studio, and similar local providers. |
+| `fallback.model` | — | Optional **local fallback**: when the primary model call fails (cloud outage, provider error), the request is silently retried once against this model — e.g. `"ollama/qwen2.5:14b"`. If the fallback also fails, the user just hears the error cue. Unset = no fallback. |
+| `fallback.base_url` | — | The fallback model's endpoint, e.g. `"http://127.0.0.1:11434"` |
 | `max_tool_iterations` | `5` | Maximum skill call iterations per request before returning whatever the model has |
 
 ### Prompts

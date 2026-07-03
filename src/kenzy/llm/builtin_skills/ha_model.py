@@ -78,11 +78,11 @@ class Entity:
 
     entity_id: str
     domain: str
-    name: str          # spoken-friendly name (HA friendly_name, or derived)
-    area: str          # room slug (lowercased, underscored); "" if unplaced
-    area_name: str     # room display name
-    floor: str         # floor slug; _NO_FLOOR when the area has no floor
-    floor_name: str    # floor display name
+    name: str  # spoken-friendly name (HA friendly_name, or derived)
+    area: str  # room slug (lowercased, underscored); "" if unplaced
+    area_name: str  # room display name
+    floor: str  # floor slug; _NO_FLOOR when the area has no floor
+    floor_name: str  # floor display name
 
 
 @dataclass
@@ -137,9 +137,7 @@ def _domains() -> tuple[str, ...]:
 def _curation_path() -> Path:
     from kenzy.config import kenzy_data_root
 
-    rel = get_config(
-        "home_assistant", "curation_file", "data/home_assistant/curation.yaml"
-    )
+    rel = get_config("home_assistant", "curation_file", "data/home_assistant/curation.yaml")
     return kenzy_data_root() / rel
 
 
@@ -186,7 +184,7 @@ def _excluded(entity_id: str, domain: str, area: str, curation: dict[str, Any]) 
     return bool(_exclude_reason(entity_id, domain, area, curation))
 
 
-_ALLOWED_TOP = {"exclude", "devices", "rooms"}
+_ALLOWED_TOP = {"exclude", "devices", "rooms", "lists"}
 _EXCLUDE_LISTS = ("entities", "patterns", "domains", "areas")
 
 
@@ -264,6 +262,33 @@ def validate_curation(data: dict[str, Any]) -> dict[str, Any]:
     if clean_rooms:
         out["rooms"] = clean_rooms
 
+    # lists: the shopping/to-do voice layer — which todo entity is "the list",
+    # plus spoken aliases per list ("the groceries" → todo.shopping_list).
+    ls = data.get("lists") or {}
+    if not isinstance(ls, dict):
+        raise ValueError("lists must be a mapping")
+    unknown_ls = set(ls) - {"default", "aliases"}
+    if unknown_ls:
+        raise ValueError(f"unknown lists keys: {sorted(unknown_ls)}")
+    clean_lists: dict[str, Any] = {}
+    default_list = str(ls.get("default") or "").strip()
+    if default_list:
+        clean_lists["default"] = default_list
+    la = ls.get("aliases") or {}
+    if not isinstance(la, dict):
+        raise ValueError("lists.aliases must be a mapping")
+    clean_la: dict[str, list[str]] = {}
+    for eid, al in la.items():
+        if not isinstance(al, list):
+            raise ValueError(f"lists.aliases.{eid} must be a list")
+        vals = [str(x).strip() for x in al if str(x).strip()]
+        if vals:
+            clean_la[str(eid).strip()] = vals
+    if clean_la:
+        clean_lists["aliases"] = clean_la
+    if clean_lists:
+        out["lists"] = clean_lists
+
     return out
 
 
@@ -286,6 +311,27 @@ def save_curation(data: dict[str, Any]) -> None:
 # ---------------------------------------------------------------------------
 # Fetch + build
 # ---------------------------------------------------------------------------
+
+
+async def fetch_todo_lists() -> list[dict[str, str]]:
+    """The `todo` entities HA currently has (the available lists), name + id.
+
+    Read from ``/api/states`` (todo entities need no area/floor placement, so
+    the heavier template pull isn't needed). Used by the lists skill and by the
+    dashboard's curation editor for its default-list picker.
+    """
+    base, headers = ha_conn()
+    async with httpx.AsyncClient(timeout=10) as client:
+        resp = await client.get(f"{base}/api/states", headers=headers)
+        resp.raise_for_status()
+    out: list[dict[str, str]] = []
+    for st in resp.json():
+        eid = str(st.get("entity_id", ""))
+        if eid.startswith("todo."):
+            attrs = st.get("attributes") or {}
+            name = str(attrs.get("friendly_name") or eid.split(".", 1)[1].replace("_", " "))
+            out.append({"entity_id": eid, "name": name})
+    return sorted(out, key=lambda x: x["entity_id"])
 
 
 async def fetch_raw() -> list[dict[str, Any]]:
@@ -355,7 +401,7 @@ class ClassifiedEntity:
     area_name: str
     floor_name: str
     included: bool
-    reason: str        # the excluding curation rule, or "" when included
+    reason: str  # the excluding curation rule, or "" when included
 
 
 def classify(raw: list[dict[str, Any]], curation: dict[str, Any]) -> list[ClassifiedEntity]:

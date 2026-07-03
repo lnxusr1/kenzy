@@ -27,7 +27,12 @@ from urllib.parse import urlparse
 import feedparser  # type: ignore[import-untyped]
 import httpx
 
-from kenzy.llm.skills import endpoint_kwargs, get_config, skill  # type: ignore[import]
+from kenzy.llm.skills import (  # type: ignore[import]
+    acompletion_with_fallback,
+    endpoint_kwargs,
+    get_config,
+    skill,
+)
 
 log = logging.getLogger(__name__)
 
@@ -109,8 +114,6 @@ def _extract_article_text(url: str) -> str:
 
 async def _summarize(title: str, body: str) -> str:
     """Sub-LLM: produce a 2–3 sentence spoken summary of an article."""
-    from litellm import acompletion  # type: ignore[import-untyped]
-
     model    = get_config("news", "model")    or "gpt-4o"
     base_url = get_config("news", "base_url") or None
 
@@ -140,7 +143,7 @@ async def _summarize(title: str, body: str) -> str:
     # is the opt-in credential for hosted proxies).
     kwargs.update(endpoint_kwargs(base_url))
 
-    response = await acompletion(**kwargs)
+    response = await acompletion_with_fallback(kwargs)
     return (response.choices[0].message.content or "").strip()
 
 
