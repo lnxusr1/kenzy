@@ -33,7 +33,7 @@ def _mock_pipeline(srv, monkeypatch, *, fast: bool) -> None:
     async def spk(pcm, room):  # noqa: ANN001, ANN202
         return "alice"
 
-    async def llm(text, room, sid, speaker):  # noqa: ANN001, ANN202
+    async def llm(text, room, sid, speaker, node_id=None):  # noqa: ANN001, ANN202
         return ("Done.", "vp", [], fast, False)
 
     async def tts(*a):  # noqa: ANN002, ANN202

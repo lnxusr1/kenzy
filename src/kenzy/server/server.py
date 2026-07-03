@@ -72,6 +72,8 @@ _ALLOWED_OVERRIDE_KEYS = frozenset(
         "sound_connect",
         "sound_disconnect",
         "sound_dialog_end",
+        "sound_timer",
+        "sound_alarm",
         "log_level",
         "log_capture_level",
         "volume",
@@ -1222,6 +1224,15 @@ class AudioServer:
         """
         return 0
 
+    def list_schedules(self) -> list[dict[str, Any]]:
+        """Active timers/alarms/reminders (dashboard surface). The base server
+        has no scheduler; ``TranscribingServer`` provides the real one."""
+        return []
+
+    def cancel_schedule_ids(self, ids: list[str]) -> int:
+        """Cancel schedule entries by id; returns how many were removed."""
+        return 0
+
     def connected_nodes(self) -> list[str]:
         return list(self._nodes.keys())
 
@@ -1299,6 +1310,15 @@ _STOP_PHRASES: frozenset[str] = frozenset(
 # model that keeps asking for a response can't hold the mic open indefinitely.
 _MAX_FOLLOWUP_TURNS = 6
 
+# Alarm ring loop: re-announce every interval until acknowledged (wake word),
+# capped so an empty house doesn't get lectured all morning (~10 × 25 s ≈ 4 min).
+_ALARM_RING_REPEATS = 10
+_ALARM_RING_INTERVAL_S = 25.0
+# Lead-in tone per schedule kind: (node config key, bundled default). The key is a
+# per-node setting (dashboard grid / node_defaults) read live at fire time; empty
+# disables the tone. Reminders are deliberately voice-only.
+_SCHEDULE_TONE_KEYS = {"timer": ("sound_timer", "timer.wav"), "alarm": ("sound_alarm", "alarm.wav")}
+
 
 class TranscribingServer(AudioServer):
     """
@@ -1332,6 +1352,18 @@ class TranscribingServer(AudioServer):
         # dialog). Bumped each time we re-arm the mic without a wake word; cleared when
         # the exchange ends (no re-arm, silence, stop phrase, disconnect).
         self._followup_turns: dict[str, int] = {}
+
+        # Timers / alarms / reminders: persisted store + firing loop (started in
+        # serve(), which needs the running event loop). Ring tasks per node for
+        # alarms, which repeat until acknowledged (wake word) or the repeat cap.
+        from kenzy.config import kenzy_data_root
+
+        from .scheduler import Scheduler
+
+        self._scheduler = Scheduler(
+            kenzy_data_root() / "data" / "schedules.json", self._fire_schedule
+        )
+        self._ring_tasks: dict[str, asyncio.Task[None]] = {}
 
         scfg: dict[str, Any] = cfg.get("stt", {})
         self._stt_url: str | None = str(scfg["url"]) if scfg.get("url") else None
@@ -1420,6 +1452,8 @@ class TranscribingServer(AudioServer):
 
     async def on_wakeword(self, session: NodeSession, model: str, score: float) -> None:
         self._cancel_stt(session.node_id)
+        # The wake word acknowledges a ringing alarm (mirrors the intercom hang-up).
+        self._stop_ringing(session.node_id)
         # If the node is not currently streaming audio to us it may be playing
         # TTS or waiting idle — send STOP so it can interrupt and re-activate.
         if not session.streaming:
@@ -1541,7 +1575,7 @@ class TranscribingServer(AudioServer):
             if self._llm_url:
                 _t = time.monotonic()
                 response_text, voice_prompt, actions, fast, expect_response = await self._call_llm(
-                    text, room_name, session_id, speaker
+                    text, room_name, session_id, speaker, node_id=node_id
                 )
                 llm_ms = (time.monotonic() - _t) * 1000.0
                 log.info("[%s] LLM%s: %s", node_id, " (fast)" if fast else "", response_text)
@@ -1586,7 +1620,7 @@ class TranscribingServer(AudioServer):
                         }
                     )
                 if actions:
-                    await self._dispatch_actions(actions, node_id, room_name)
+                    await self._dispatch_actions(actions, node_id, room_name, speaker)
 
         except asyncio.CancelledError:
             raise
@@ -1677,7 +1711,12 @@ class TranscribingServer(AudioServer):
         return str(resp.json()["text"])
 
     async def _call_llm(
-        self, text: str, room_id: str, session_id: str | None, speaker: str | None = None
+        self,
+        text: str,
+        room_id: str,
+        session_id: str | None,
+        speaker: str | None = None,
+        node_id: str | None = None,
     ) -> tuple[str, str, list[dict[str, Any]], bool, bool]:
         import httpx  # type: ignore[import-untyped]
 
@@ -1688,6 +1727,9 @@ class TranscribingServer(AudioServer):
             "speaker": speaker,
             # Connected room names so the model can target real rooms (announce/intercom).
             "rooms": sorted({s.room_id for s in self._nodes.values()}),
+            # The asking node's active timers/alarms/reminders, so the schedule
+            # skill / fast intents can answer status and cancel by id locally.
+            "schedules": self._schedule_payload(node_id) if node_id else [],
         }
         async with httpx.AsyncClient() as client:
             resp = await client.post(
@@ -1708,13 +1750,19 @@ class TranscribingServer(AudioServer):
         )
 
     async def _dispatch_actions(
-        self, actions: list[dict[str, Any]], source_node_id: str, source_room: str
+        self,
+        actions: list[dict[str, Any]],
+        source_node_id: str,
+        source_room: str,
+        source_speaker: str | None = None,
     ) -> None:
         """Actuate server-side actions returned by the LLM (e.g. announce).
 
         ``announce()`` keys on ``node_id``, but the LLM targets human room names, so
         names are resolved here. The asking node is excluded so it doesn't hear the
-        broadcast on top of its own spoken reply.
+        broadcast on top of its own spoken reply. ``source_speaker`` (identified at
+        capture time) is stored with schedule entries so a deferred command replays
+        with the authorizing voice's identity.
         """
         for action in actions:
             atype = action.get("type")
@@ -1753,8 +1801,215 @@ class TranscribingServer(AudioServer):
                         level=action.get("level"),
                         delta=action.get("delta"),
                     )
+            elif atype == "set_schedule":
+                self._action_set_schedule(action, source_node_id, source_room, source_speaker)
+            elif atype == "cancel_schedule":
+                self._scheduler.cancel([str(i) for i in (action.get("ids") or [])])
             else:
                 log.warning("[%s] unknown LLM action type: %r", source_node_id, atype)
+
+    # ------------------------------------------------------------------
+    # Timers / alarms / reminders (scheduler firing + delivery)
+    # ------------------------------------------------------------------
+
+    def _action_set_schedule(
+        self,
+        action: dict[str, Any],
+        source_node_id: str,
+        source_room: str,
+        source_speaker: str | None = None,
+    ) -> None:
+        """Store a schedule entry from a skill action (already spoken as confirmed,
+        so a bad spec is logged rather than answered)."""
+        room = str(action.get("room") or source_room)
+        node_id = source_node_id
+        if action.get("room"):  # explicit room ("wake me at 7 in the bedroom")
+            resolved = self._resolve_room_node(room)
+            if resolved is not None:
+                node_id = resolved
+            # else: keep the asking node as the fallback target; the room name is
+            # stored and re-resolved at fire time, so a node that joins later wins.
+        seconds = action.get("seconds")
+        speaker = source_speaker or ""
+        if speaker.lower() == self._unknown_speaker.lower():
+            speaker = ""
+        try:
+            self._scheduler.add(
+                str(action.get("kind", "")),
+                node_id,
+                room,
+                label=str(action.get("label", "")),
+                seconds=float(seconds) if seconds is not None else None,
+                at=str(action.get("at", "")),
+                days=[str(d) for d in (action.get("days") or [])],
+                speaker=speaker,
+            )
+        except ValueError as exc:
+            log.warning("[%s] rejected schedule action %r: %s", source_node_id, action, exc)
+
+    def _schedule_payload(self, node_id: str) -> list[dict[str, Any]]:
+        """The asking node's active entries, as injected into /process."""
+        return [
+            {
+                "id": e.id,
+                "kind": e.kind,
+                "label": e.label,
+                "room": e.room,
+                "at": e.at,
+                "days": e.days,
+                "seconds_left": int(e.seconds_left()),
+            }
+            for e in self._scheduler.entries(node_id)
+        ]
+
+    def list_schedules(self) -> list[dict[str, Any]]:
+        """All active entries (dashboard Scheduled view)."""
+        return [
+            {**e.to_dict(), "seconds_left": int(e.seconds_left())}
+            for e in self._scheduler.entries()
+        ]
+
+    def cancel_schedule_ids(self, ids: list[str]) -> int:
+        return len(self._scheduler.cancel(ids))
+
+    def _schedule_target(self, entry: Any) -> str | None:
+        """Resolve where an entry fires: its node if connected, else any connected
+        node now serving that room name (survives reprovisioned devices)."""
+        if entry.node_id in self._nodes:
+            return str(entry.node_id)
+        return self._resolve_room_node(entry.room) if entry.room else None
+
+    def _schedule_tone(self, node_id: str, kind: str) -> bytes | None:
+        """The lead-in tone for a timer/alarm announcement, per the node's
+        ``sound_timer``/``sound_alarm`` config (read live at fire time — no
+        restart to change it). Empty/null ⇒ voice only. Reminders have no tone."""
+        key_default = _SCHEDULE_TONE_KEYS.get(kind)
+        if key_default is None:
+            return None
+        key, default = key_default
+        try:
+            spec = self._effective_node_config(node_id).get(key, default)
+        except Exception:
+            spec = default
+        from . import tones
+
+        return tones.load_tone(spec)
+
+    async def _deliver_schedule(self, node_id: str, room: str, text: str, kind: str) -> None:
+        """Speak a schedule announcement, prepending the kind's tone when set.
+
+        The tone and voice ride one PCM stream (gapless), and the tone still
+        plays when TTS synthesis fails — an alarm must not depend on the TTS
+        service being healthy to make noise.
+        """
+        tone = self._schedule_tone(node_id, kind)
+        if tone is None:
+            await self._say(node_id, room, text)
+            return
+        pcm = await self._synthesize(text, _INTERCOM_VOICE_PROMPT)
+        await self._stream_pcm(node_id, tone + (pcm or b""))
+
+    async def _fire_schedule(self, entry: Any) -> None:
+        """Scheduler callback — must return quickly, so delivery is a task."""
+        node_id = self._schedule_target(entry)
+        if node_id is None:
+            log.warning(
+                "[%s] %s %r fired but no node is connected for the room — missed",
+                entry.room or entry.node_id,
+                entry.kind,
+                entry.label,
+            )
+            return
+        room = self._nodes[node_id].room_id if node_id in self._nodes else entry.room
+        if entry.kind == "alarm":
+            old = self._ring_tasks.pop(node_id, None)
+            if old is not None:
+                old.cancel()
+            self._ring_tasks[node_id] = asyncio.create_task(
+                self._ring_alarm(node_id, room, entry.at), name=f"ring-{node_id}"
+            )
+        elif entry.kind == "command":
+            asyncio.create_task(
+                self._run_scheduled_command(node_id, room, entry.label, entry.speaker),
+                name=f"cmd-{node_id}",
+            )
+        elif entry.kind == "reminder":
+            label = entry.label
+            if label and not re.match(r"^(?:to|that|about)\b", label):
+                label = f"to {label}"
+            text = f"You asked me to remind you {label}." if label else "This is your reminder."
+            asyncio.create_task(
+                self._deliver_schedule(node_id, room, text, "reminder"),
+                name=f"remind-{node_id}",
+            )
+        else:  # timer
+            name = f"{entry.label} timer" if entry.label else "timer"
+            asyncio.create_task(
+                self._deliver_schedule(node_id, room, f"Your {name} is done.", "timer"),
+                name=f"timer-{node_id}",
+            )
+
+    async def _run_scheduled_command(
+        self, node_id: str, room: str, command: str, speaker: str
+    ) -> None:
+        """Replay a deferred voice command through the normal intent pipeline.
+
+        "Turn on the lights in 30 seconds" fires as if "turn on the lights" had
+        just been spoken in that room: same fast path / LLM, same actions, same
+        spoken confirmation. The set-time speaker identity rides along so
+        speaker-gated skills see the voice that authorized it.
+        """
+        if not self._llm_url:
+            log.warning("[%s] scheduled command %r fired but no LLM is configured", room, command)
+            return
+        try:
+            response_text, voice_prompt, actions, _fast, _expect = await self._call_llm(
+                command, room, str(uuid.uuid4()), speaker or None, node_id=node_id
+            )
+            if response_text:
+                await self._run_tts(node_id, room, str(uuid.uuid4()), response_text, voice_prompt)
+            if actions:
+                await self._dispatch_actions(actions, node_id, room, speaker or None)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            log.error("[%s] scheduled command %r failed: %s", room, command, exc, exc_info=True)
+            await self._say(node_id, room, "Sorry — I couldn't run your scheduled command.")
+
+    async def _ring_alarm(self, node_id: str, room: str, at: str) -> None:
+        """Repeat the alarm tone + announcement until acknowledged (wake word),
+        the node drops, or the repeat cap — an alarm you can sleep through isn't
+        one."""
+        try:
+            hhmm = at or time.strftime("%H:%M")
+            h, m = int(hhmm[:2]), int(hhmm[3:])
+            spoken = f"{h % 12 or 12}:{m:02d} {'AM' if h < 12 else 'PM'}"
+            for _ in range(_ALARM_RING_REPEATS):
+                if node_id not in self._nodes:
+                    return
+                await self._deliver_schedule(
+                    node_id, room, f"It's {spoken}. This is your alarm.", "alarm"
+                )
+                await asyncio.sleep(_ALARM_RING_INTERVAL_S)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            log.warning("[%s] alarm ring failed: %s", node_id, exc)
+        finally:
+            self._ring_tasks.pop(node_id, None)
+
+    def _stop_ringing(self, node_id: str) -> None:
+        task = self._ring_tasks.pop(node_id, None)
+        if task is not None:
+            task.cancel()
+            log.info("[%s] alarm acknowledged", node_id)
+
+    async def serve(self) -> None:
+        self._scheduler.start()
+        try:
+            await super().serve()
+        finally:
+            self._scheduler.stop()
 
     # ------------------------------------------------------------------
     # Intercom call setup + consent gate
@@ -1896,6 +2151,9 @@ class TranscribingServer(AudioServer):
     def _cleanup_on_disconnect(self, node_id: str) -> None:
         self._end_enroll_session(node_id)
         self._followup_turns.pop(node_id, None)
+        task = self._ring_tasks.pop(node_id, None)
+        if task is not None:
+            task.cancel()
 
     async def _enroll_timeout(self, node_id: str) -> None:
         try:

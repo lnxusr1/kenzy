@@ -623,6 +623,15 @@ class Dashboard:
         if path == "/api/speakers":
             return self._json(200, await self._speakers_state())
 
+        if path == "/api/schedules":
+            # Active timers/alarms/reminders (deliberately auth-only, not gated by
+            # `logs`: these are future announcements the operator manages, and you
+            # can't cancel what you can't see).
+            return self._json(
+                200,
+                {"schedules": self._server.list_schedules(), "controls": self._dcfg.controls},
+            )
+
         if path == "/api/upgrade":
             return self._json(200, await self._upgrade_state())
 
@@ -1190,6 +1199,14 @@ class Dashboard:
             # version (visible in the fleet view). No progress stream from the node.
             ok = await self._server.upgrade_node(str(msg.get("node", "")), version)
             await ack(ok, None if ok else "node not connected")
+        elif mtype == "cancel_schedule":
+            if not self._dcfg.controls:
+                return await ack(False, "controls are disabled (set dashboard.controls: true)")
+            sid = str(msg.get("sid", "")).strip()
+            if not sid:
+                return await ack(False, "schedule id is required")
+            count = self._server.cancel_schedule_ids([sid])
+            await ack(count > 0, None if count else "schedule not found (already fired?)")
         elif mtype == "set_skill_disabled":
             if not self._dcfg.controls:
                 return await ack(False, "controls are disabled (set dashboard.controls: true)")

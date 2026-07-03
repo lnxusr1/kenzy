@@ -191,6 +191,16 @@ Because this is an authenticated, `controls`-gated operator action, it works reg
 of the speaker service's `allow_voice_enroll` setting (which only governs the hands-free
 "Hey Kenzy, enroll me as…" voice command). Requires `dashboard.controls: true`.
 
+## Scheduled
+
+The **Scheduled** tab lists the active **timers, alarms, and reminders** held by the
+server — kind, name/text, target room, when it fires (live countdown for timers), and
+any recurrence — with a per-entry **Cancel** button (requires `dashboard.controls`).
+Entries are set by voice (see [Timers, Alarms & Reminders](skills/builtin.md#timers-alarms-reminders))
+and persist across server restarts. The view is available to any logged-in user —
+deliberately not gated behind `dashboard.logs`, since these are future announcements
+the operator needs to see to manage.
+
 ## Activity
 
 With `dashboard.logs: true`, the **Activity** tab shows the recent voice interactions

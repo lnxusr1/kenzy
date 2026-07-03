@@ -60,6 +60,7 @@ CLAUDE.md
 /site/
 /www/
 screenshot_site.py
+synth_phrase.py
 
 build_pypi.sh
 publish.sh

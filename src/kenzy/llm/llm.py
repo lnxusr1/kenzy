@@ -58,6 +58,9 @@ class ProcessRequest(BaseModel):
     # Names of the rooms currently connected (sent by the server) so the model can
     # target real rooms for announcements / intercom and use their canonical names.
     rooms: list[str] = []
+    # The asking node's active timers/alarms/reminders (sent by the server) so the
+    # schedule skill / fast intents can answer status and cancel by id locally.
+    schedules: list[dict[str, Any]] = []
 
 
 class ProcessResponse(BaseModel):
@@ -251,8 +254,12 @@ async def process(req: ProcessRequest) -> ProcessResponse:
     display_speaker = raw_speaker if raw_speaker.lower() != "unknown" else None
     log.info("[%s/%s] %s", req.room_id or "?", display_speaker or "?", req.text)
 
-    # Request-scoped accumulator for any server-side actions a skill queues.
+    # Request-scoped accumulator for any server-side actions a skill queues, and
+    # the server-injected context (rooms, active schedules) skills may read.
     skill_registry.begin_actions()
+    skill_registry.begin_request(
+        {"rooms": req.rooms, "schedules": req.schedules, "room_id": req.room_id}
+    )
 
     # Deterministic fast path: try local/instant matchers before the LLM.
     fast = await skill_registry.dispatch_fast(req.text, req.room_id, raw_speaker)
@@ -268,7 +275,7 @@ async def process(req: ProcessRequest) -> ProcessResponse:
         )
 
     text, voice_prompt, expect_response = await _run_llm(
-        req.text, raw_speaker, req.room_id, available_rooms=req.rooms
+        req.text, raw_speaker, req.room_id, available_rooms=req.rooms, schedules=req.schedules
     )
     return ProcessResponse(
         text=text,
@@ -376,11 +383,30 @@ def _parse_response(content: str) -> tuple[str, str, bool]:
     return stripped, _voice_prompt, False
 
 
+def _schedule_context(schedules: list[dict[str, Any]]) -> str:
+    """Render the asking room's active schedule entries for the system prompt."""
+    lines = ["Active timers/alarms/reminders in this room (cancel via cancel_schedules):"]
+    for s in schedules:
+        kind = s.get("kind", "?")
+        label = s.get("label") or ""
+        when = s.get("at") or f"in {int(s.get('seconds_left', 0))}s"
+        days = ",".join(s.get("days") or [])
+        desc = f"- id={s.get('id')} {kind}"
+        if label:
+            desc += f" '{label}'"
+        desc += f" at {when}" if s.get("at") else f" fires {when}"
+        if days:
+            desc += f" (every {days})"
+        lines.append(desc)
+    return "\n".join(lines)
+
+
 async def _run_llm(
     text: str,
     speaker: str,
     room_id: str | None,
     available_rooms: list[str] | None = None,
+    schedules: list[dict[str, Any]] | None = None,
 ) -> tuple[str, str, bool]:
     from litellm import acompletion  # type: ignore[import-untyped]
 
@@ -399,6 +425,8 @@ async def _run_llm(
     system_content = f"{_system_prompt}\n\n{_build_context()}"
     if available_rooms:
         system_content += "\nConnected rooms: " + ", ".join(available_rooms)
+    if schedules:
+        system_content += "\n" + _schedule_context(schedules)
     system_content += f"\n{_JSON_INSTRUCTION}"
 
     messages: list[dict[str, Any]] = [

@@ -70,6 +70,29 @@ def take_actions() -> list[dict[str, Any]]:
 
 
 # ---------------------------------------------------------------------------
+# Request-scoped state (server-injected context)
+# ---------------------------------------------------------------------------
+# The server injects per-request context into /process (connected room names, the
+# asking node's active schedule entries, …). Skills and fast intents read it via
+# get_request() — the mirror of add_action(): actions flow out, context flows in.
+
+_request_ctx: contextvars.ContextVar[dict[str, Any]] = contextvars.ContextVar("kenzy_request")
+
+
+def begin_request(context: dict[str, Any]) -> None:
+    """Set the per-request context (called by the LLM service before dispatch)."""
+    _request_ctx.set(dict(context))
+
+
+def get_request(key: str, default: Any = None) -> Any:
+    """Read a server-injected request value (e.g. ``schedules``, ``rooms``)."""
+    try:
+        return _request_ctx.get().get(key, default)
+    except LookupError:
+        return default
+
+
+# ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
 

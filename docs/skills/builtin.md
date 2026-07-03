@@ -177,6 +177,40 @@ Apple Inc. (AAPL)
 
 ---
 
+## Timers, Alarms & Reminders
+
+**File:** `builtin_skills/schedule.py`
+
+Set timers, alarms, and spoken reminders by voice. Entries are stored **on the server** (`data/schedules.json`) so they survive a restart, and fire as spoken announcements in the room that set them — or another room you name ("wake me at 7 **in the bedroom**"). Everything is visible and cancellable in the dashboard's **Scheduled** tab.
+
+Say things like:
+
+- *"set a timer for 10 minutes"* · *"start a pizza timer for an hour and a half"*
+- *"how much time is left?"* · *"cancel the timer"* · *"what timers do I have?"*
+- *"wake me at 7"* · *"set an alarm for 6:30 pm every weekday"*
+- *"remind me in 20 minutes to flip the bread"* · *"remind me at 6:15 to take out the trash"*
+- *"turn on the porch light in 30 seconds"* · *"lock the front door at 10:30 pm"* — **any command can be deferred**: it replays at fire time exactly as if you'd just said it, in the same room
+
+The common phrasings are handled by a deterministic fast intent — instant, no model call. Fuzzier requests ("remind me tomorrow evening…", ambiguous times) fall through to the LLM tools below. A **timer** plays a tone and announces once when done; an **alarm rings repeatedly** — tone plus announcement, every ~25 seconds — **until you acknowledge it** by saying the wake word (capped at ~4 minutes so an empty house isn't lectured); a **reminder** speaks its text ("You asked me to remind you to take the dog out."). Alarms and clock reminders can recur — every day, weekdays, weekends, or specific days.
+
+The tones are per-room settings (`sound_timer` / `sound_alarm`, bundled defaults), editable in each node's dashboard config page like the other sounds — set one empty for voice-only. They're mixed in by the server, so changes apply immediately, and the alarm tone still sounds even if speech synthesis is down. See [Node Configuration](../configuration/node.md#sound-files).
+
+| Function | Description |
+|---|---|
+| `set_timer(duration_seconds, label)` | Countdown timer, optionally named |
+| `set_alarm(time, days, room)` | Clock alarm (`"HH:MM"`), optional recurrence + room |
+| `set_reminder(text, in_seconds, time, days, room)` | Spoken reminder, relative or clock-based |
+| `run_later(command, in_seconds, time)` | Defer any voice command — replayed through the normal pipeline at fire time |
+| `list_schedules()` | The asking room's active entries (with ids) |
+| `cancel_schedules(ids)` | Cancel entries by id |
+| `fast_schedule` (fast intent) | The instant tier for all the common phrasings above |
+
+With multiple timers running, a bare "cancel the timer" asks which one (and holds the mic open for your answer); "cancel my timers" cancels them all. Missed entries (server down at fire time) are spoken late if less than 5 minutes late, otherwise dropped; a missed recurring alarm just moves to its next occurrence.
+
+Deferred commands carry the **speaker identity from when they were set**, so a voice-gated action ("unlock the door in 10 minutes") is authorized by the voice that scheduled it. They are deliberately **one-shot** — "turn on the porch light *every day* at 8" is a standing automation, which is [Home Assistant's](home-assistant.md) job, and Kenzy will point you there.
+
+---
+
 ## Volume
 
 **File:** `builtin_skills/volume.py`

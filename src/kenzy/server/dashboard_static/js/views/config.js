@@ -22,6 +22,10 @@ const TYPES = {
   sound_waiting: "str",
   sound_connect: "str",
   sound_disconnect: "str",
+  // Timer/alarm lead-in tones: prepended by the SERVER at fire time, so they
+  // apply live (deliberately not in RESTART_KEYS, unlike the node-played sounds).
+  sound_timer: "str",
+  sound_alarm: "str",
 };
 
 // Keys that re-init audio hardware: a change is pulled on the node's next boot,
