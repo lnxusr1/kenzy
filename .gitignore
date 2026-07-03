@@ -29,13 +29,16 @@ coverage.xml
 ./models/
 
 # Runtime data
-data/speakers/
-data/home_assistant/
+/data/speakers/
+/data/home_assistant/
 
 # Operator/site-specific config — never commit (it holds your rooms, HA URL, location,
 # auth, etc.). Generic templates live in examples/. (.env is ignored above.)
-configs/hosts/
-configs/
+# Leading slash anchors these to the repo root so they only match the top-level
+# operator tree — NOT the packaged defaults under src/kenzy/data/configs/, which
+# ship as package data and must stay tracked.
+/configs/hosts/
+/configs/
 
 # IDE / editor
 .vscode/
@@ -51,12 +54,13 @@ Thumbs.db
 # Claude Code
 .claude/
 CLAUDE.md
-models/wakeword
-models/speaker
-design/
-site/
-www/
+/models/wakeword
+/models/speaker
+/design/
+/site/
+/www/
 screenshot_site.py
+synth_phrase.py
 
 build_pypi.sh
 publish.sh

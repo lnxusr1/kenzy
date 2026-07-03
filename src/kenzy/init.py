@@ -271,9 +271,23 @@ def main() -> None:
         help="Seed the config home's constraints.txt from this pip constraints file "
         "(dependency pins honored on install and every auto-upgrade).",
     )
+    parser.add_argument(
+        "--restore",
+        default=None,
+        metavar="BACKUP",
+        help="Restore a dashboard-downloaded backup archive (kenzy-backup-*.tar.gz) "
+        "into the config home instead of scaffolding. Refuses to overwrite existing "
+        "files unless --force. Secrets (.env) are never in a backup — set API keys "
+        "by hand, and run kenzy-setup to re-download models.",
+    )
     args = parser.parse_args()
 
     home = Path(args.home) if args.home else kenzy_home()
+
+    if args.restore:
+        _restore(Path(args.restore), home, force=args.force)
+        return
+
     scaffold(
         home,
         force=args.force,
@@ -283,6 +297,34 @@ def main() -> None:
         token=args.token,
         constraints=args.constraints,
     )
+
+
+def _restore(archive: Path, home: Path, *, force: bool) -> None:
+    """Unpack a backup archive into the config home (the --restore verb)."""
+    import sys
+
+    from kenzy.backup import RestoreError, read_manifest, restore_backup
+
+    if not archive.is_file():
+        sys.exit(f"kenzy-init: backup archive not found: {archive}")
+    manifest = read_manifest(archive)
+    if manifest:
+        import datetime
+
+        created = manifest.get("created")
+        when = (
+            datetime.datetime.fromtimestamp(float(created)).isoformat(timespec="seconds")
+            if isinstance(created, (int, float))
+            else "?"
+        )
+        print(f"Backup from kenzy {manifest.get('kenzy_version', '?')}, created {when}")
+    try:
+        restored = restore_backup(archive, home, force=force)
+    except RestoreError as exc:
+        sys.exit(f"kenzy-init: restore refused: {exc}")
+    print(f"Restored {len(restored)} file(s) into {home}")
+    print("Not included (by design): .env — add your API keys, then run kenzy-setup")
+    print("to re-download models, and restart the services.")
 
 
 if __name__ == "__main__":

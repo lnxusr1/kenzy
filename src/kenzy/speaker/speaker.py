@@ -32,6 +32,7 @@ from pydantic import BaseModel
 
 from kenzy import kenzy_version
 from kenzy.fastapi_auth import (
+    install_backup_endpoint,
     install_logs_endpoint,
     install_restart_endpoint,
     install_service_auth,
@@ -282,6 +283,11 @@ def main() -> None:
     )
     install_restart_endpoint(app)
     install_upgrade_endpoint(app, "speaker")
+    # Backup slice: the enrolled voice embeddings — the one part of a Kenzy
+    # deployment that cannot be regenerated. Served under the canonical archive
+    # path so the server's merged backup is complete even when this service
+    # runs on its own host.
+    install_backup_endpoint(app, lambda: [(_embeddings_dir, "data/speakers")])
 
     _embeddings_dir = Path(cfg.get("embeddings_dir", "data/speakers"))
     _embeddings_dir.mkdir(parents=True, exist_ok=True)

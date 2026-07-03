@@ -20,6 +20,8 @@ The LLM service processes transcribed text through a tool-calling loop and retur
 | `log_capture_level` | `"debug"` | How deep the dashboard log viewer can see, independent of `log_level` |
 | `model` | `"gpt-4o"` | LiteLLM model string (see [Model strings](#model-strings)) |
 | `base_url` | — | Provider base URL. Required for Ollama, LM Studio, and similar local providers. |
+| `fallback.model` | — | Optional **local fallback**: when the primary model call fails (cloud outage, provider error), the request is silently retried once against this model — e.g. `"ollama/qwen2.5:14b"`. If the fallback also fails, the user just hears the error cue. Unset = no fallback. |
+| `fallback.base_url` | — | The fallback model's endpoint, e.g. `"http://127.0.0.1:11434"` |
 | `max_tool_iterations` | `5` | Maximum skill call iterations per request before returning whatever the model has |
 
 ### Prompts
@@ -107,3 +109,6 @@ skills:
     base_url: "http://localhost:11434"
     ```
     No API key is required. Skill sub-calls (news summaries, HA resolution) also use this model unless overridden with a per-skill `model` key.
+
+!!! note "Custom endpoints never receive a cloud provider's API key"
+    `base_url` redirects model calls to a server you choose. Requests to it deliberately carry **none** of the provider keys from your environment (`OPENAI_API_KEY` etc.) — so a changed or mistyped endpoint can never leak a cloud credential. Local providers (Ollama, LM Studio) need no key and just work. If your custom endpoint is a **hosted proxy that requires auth** (a LiteLLM proxy, OpenRouter), put its key in `CUSTOM_LLM_API_KEY` in `.env` — that is the one credential ever sent to a `base_url`. (If you previously kept such a proxy key in `OPENAI_API_KEY`, move it there.)

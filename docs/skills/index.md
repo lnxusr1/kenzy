@@ -1,6 +1,8 @@
 # Skills
 
-Skills are the mechanism by which Kenzy takes actions in the world — fetching weather, reading news, controlling smart home devices, and more. Each skill is an async Python function decorated with `@skill`. The LLM calls skills as tools based on their docstrings and type signatures.
+Skills are Kenzy's abilities — checking the weather, reading the news, controlling your smart home, announcing to other rooms. A good set [ships built in](builtin.md) and works out of the box; the dashboard's **Skills** tab shows what's loaded and lets you switch any of them on or off with a click. If you can write a little Python, [adding your own](writing-skills.md) is a single small file.
+
+Technically, each skill is an async Python function decorated with `@skill`. The language model calls skills as tools, deciding when to use each one from its docstring and type signature.
 
 ## How skills work
 

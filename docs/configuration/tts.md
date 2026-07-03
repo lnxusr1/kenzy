@@ -27,6 +27,7 @@ Long responses are automatically split at sentence boundaries and concatenated, 
 | `openai.model` | `"gpt-4o-mini-tts"` | OpenAI TTS model |
 | `openai.voice` | `"sage"` | Voice persona (see below) |
 | `openai.speed` | `1.0` | Playback speed multiplier, 0.25–4.0 |
+| `openai.fallback` | `true` | On a cloud failure, silently retry with **local Kokoro** — only takes effect when the `kokoro` extra is installed (see below); otherwise the failure surfaces as the error cue. |
 
 ### Available voices
 

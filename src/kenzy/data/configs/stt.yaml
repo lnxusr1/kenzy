@@ -10,7 +10,12 @@ port: 8767
 log_level: "info"
 log_capture_level: "debug"  # how deep the dashboard log viewer can see (debug/trace); set via the dashboard
 
-# faster-whisper model configuration
+# Transcription backend: "whisper" (local faster-whisper, default — nothing leaves
+# the box) or "openai" (cloud; no local model, so it suits underpowered hosts, but
+# every captured utterance is sent to OpenAI and OPENAI_API_KEY must be set).
+provider: "whisper"
+
+# faster-whisper model configuration (provider: whisper)
 whisper:
   # Model size: tiny, base, small, medium, large-v2, large-v3
   model: "tiny"
@@ -20,3 +25,17 @@ whisper:
   compute_type: "int8"
   # Language code (e.g. "en"), or omit / set to null for auto-detect
   language: "en"
+
+# OpenAI cloud transcription (provider: openai) — reads OPENAI_API_KEY from the environment
+openai:
+  # Model: gpt-4o-mini-transcribe (default), gpt-4o-transcribe, or whisper-1
+  model: "gpt-4o-mini-transcribe"
+  # Language code (e.g. "en"), or omit / set to null for auto-detect
+  language: "en"
+  # HTTP timeout in seconds
+  timeout: 30.0
+  # On a cloud failure, silently retry with local faster-whisper (loaded on
+  # first need, using the whisper: settings above). Works offline only if the
+  # whisper model was previously cached; otherwise the failure surfaces as the
+  # error cue.
+  fallback: true

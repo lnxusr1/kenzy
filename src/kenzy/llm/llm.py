@@ -34,6 +34,7 @@ from pydantic import BaseModel
 
 from kenzy import kenzy_version
 from kenzy.fastapi_auth import (
+    install_backup_endpoint,
     install_logs_endpoint,
     install_restart_endpoint,
     install_service_auth,
@@ -58,6 +59,9 @@ class ProcessRequest(BaseModel):
     # Names of the rooms currently connected (sent by the server) so the model can
     # target real rooms for announcements / intercom and use their canonical names.
     rooms: list[str] = []
+    # The asking node's active timers/alarms/reminders (sent by the server) so the
+    # schedule skill / fast intents can answer status and cancel by id locally.
+    schedules: list[dict[str, Any]] = []
 
 
 class ProcessResponse(BaseModel):
@@ -148,6 +152,24 @@ _voice_prompt: str = "Respond in a friendly, conversational tone."
 _max_tool_iterations: int = 5
 _location: str = ""  # "City, State, Country" assembled at startup
 _timezone: str = ""  # IANA timezone string e.g. "America/Chicago"
+_skills_dir: Path | None = None  # resolved user skills overlay (backup slice)
+
+
+def _backup_items() -> list[tuple[Path, str]]:
+    """This host's backup slice: the user skills overlay + HA curation data.
+
+    Both live with the LLM service (not the server), so the server pulls them
+    via ``GET /backup`` to keep a multi-host deployment's archive complete.
+    """
+    from kenzy.config import kenzy_data_root
+
+    items: list[tuple[Path, str]] = [
+        (kenzy_data_root() / "data" / "home_assistant", "data/home_assistant")
+    ]
+    if _skills_dir is not None:
+        items.append((_skills_dir, "skills"))
+    return items
+
 
 # Appended to every system prompt — instructs the LLM to return structured output.
 # voice_prompt tells kenzy-tts how to speak the response (tone, pace, style).
@@ -161,12 +183,23 @@ final reply.
 Final reply format: a single raw JSON object and nothing else — no markdown, \
 no code fences, no explanation, no trailing characters after the closing brace.
 
-The object must contain exactly two fields:
+The object must contain two required fields and one optional field:
   "text": your spoken response (read aloud — plain prose, no markdown)
   "voice_prompt": a short TTS instruction describing tone, pace, and style
+  "expect_response" (optional, default false): whether to keep the microphone open
+      for the user's reply without requiring the wake word again.
+
+Set "expect_response" to true ONLY when your reply is deliberately incomplete and
+needs the user's immediate answer to finish what they asked for — for example the
+opening line of a knock-knock joke ("Knock knock." expects "Who's there?"). In every
+other case set it to false, and when in doubt use false. Do NOT set it true merely to
+offer more help ("Is there anything else?", "Let me know if you need anything"), for
+pleasantries or sign-offs, or to say you didn't understand and ask them to clarify.
 
 Example (output this format exactly):
-{"text": "The lights are on.", "voice_prompt": "Speak naturally at a conversational pace."}"""
+{"text": "The lights are on.", "voice_prompt": "Speak naturally at a conversational pace."}
+Example holding the floor:
+{"text": "Knock knock.", "voice_prompt": "Playful tone.", "expect_response": true}"""
 
 
 # ---------------------------------------------------------------------------
@@ -210,6 +243,7 @@ async def get_ha_curation() -> dict[str, Any]:
 
     curation = ha_model.load_curation()
     devices: list[dict[str, Any]] = []
+    lists: list[dict[str, str]] = []
     reachable = True
     try:
         raw = await ha_model.fetch_raw()
@@ -217,7 +251,11 @@ async def get_ha_curation() -> dict[str, Any]:
     except Exception as exc:
         reachable = False
         log.warning("HA device list unavailable for curation editor: %s", exc)
-    return {"curation": curation, "devices": devices, "reachable": reachable}
+    try:
+        lists = await ha_model.fetch_todo_lists()
+    except Exception as exc:
+        log.warning("HA todo lists unavailable for curation editor: %s", exc)
+    return {"curation": curation, "devices": devices, "lists": lists, "reachable": reachable}
 
 
 @app.post("/ha/curation")
@@ -240,8 +278,12 @@ async def process(req: ProcessRequest) -> ProcessResponse:
     display_speaker = raw_speaker if raw_speaker.lower() != "unknown" else None
     log.info("[%s/%s] %s", req.room_id or "?", display_speaker or "?", req.text)
 
-    # Request-scoped accumulator for any server-side actions a skill queues.
+    # Request-scoped accumulator for any server-side actions a skill queues, and
+    # the server-injected context (rooms, active schedules) skills may read.
     skill_registry.begin_actions()
+    skill_registry.begin_request(
+        {"rooms": req.rooms, "schedules": req.schedules, "room_id": req.room_id}
+    )
 
     # Deterministic fast path: try local/instant matchers before the LLM.
     fast = await skill_registry.dispatch_fast(req.text, req.room_id, raw_speaker)
@@ -256,11 +298,15 @@ async def process(req: ProcessRequest) -> ProcessResponse:
             fast=True,
         )
 
-    text, voice_prompt = await _run_llm(
-        req.text, raw_speaker, req.room_id, available_rooms=req.rooms
+    text, voice_prompt, expect_response = await _run_llm(
+        req.text, raw_speaker, req.room_id, available_rooms=req.rooms, schedules=req.schedules
     )
     return ProcessResponse(
-        text=text, voice_prompt=voice_prompt, actions=skill_registry.take_actions(), fast=False
+        text=text,
+        voice_prompt=voice_prompt,
+        expect_response=expect_response,
+        actions=skill_registry.take_actions(),
+        fast=False,
     )
 
 
@@ -287,8 +333,31 @@ def _build_context() -> str:
     return "\n".join(lines)
 
 
-def _parse_response(content: str) -> tuple[str, str]:
-    """Extract (text, voice_prompt) from a JSON response.
+# Closer / clarify phrases that chat models emit reflexively. Even when the model
+# sets expect_response=true, a reply matching one of these is a conversation-ender
+# (or a clarify re-prompt we deliberately skip for now), so the floor-hold is
+# suppressed. High-precision on purpose — a real floor-hold ("Who's there?") won't
+# match — so it never eats a legitimate multi-turn continuation.
+_CLOSER_RE = re.compile(
+    r"anything else|something else|(?:^|\b)(?:is|was) there (?:anything|something)"
+    r"|let me know|feel free to (?:ask|reach)|happy to help|glad to help"
+    r"|hope (?:that|this) helps|how (?:else )?can i (?:help|assist)"
+    r"|(?:didn'?t|did not|couldn'?t) (?:quite )?(?:understand|catch|get)"
+    r"|(?:can|could) you (?:please )?(?:clarify|repeat|rephrase)",
+    re.IGNORECASE,
+)
+
+
+def _suppress_floor_hold(text: str, expect_response: bool) -> bool:
+    """Force expect_response false for reflexive closer/clarify replies (LLM path)."""
+    if expect_response and _CLOSER_RE.search(text or ""):
+        log.info("Suppressing expect_response for closer/clarify reply: %r", text[:80])
+        return False
+    return expect_response
+
+
+def _parse_response(content: str) -> tuple[str, str, bool]:
+    """Extract (text, voice_prompt, expect_response) from a JSON response.
 
     Tries increasingly lenient strategies before falling back to raw text:
       1. Strict json.loads on the stripped content.
@@ -302,14 +371,22 @@ def _parse_response(content: str) -> tuple[str, str]:
     # Strategy 1: clean JSON.
     try:
         parsed = json.loads(stripped)
-        return str(parsed["text"]), str(parsed.get("voice_prompt", _voice_prompt))
+        return (
+            str(parsed["text"]),
+            str(parsed.get("voice_prompt", _voice_prompt)),
+            bool(parsed.get("expect_response", False)),
+        )
     except (json.JSONDecodeError, KeyError, TypeError):
         pass
 
     # Strategy 2: valid JSON followed by trailing garbage.
     try:
         parsed, _ = json.JSONDecoder().raw_decode(stripped)
-        return str(parsed["text"]), str(parsed.get("voice_prompt", _voice_prompt))
+        return (
+            str(parsed["text"]),
+            str(parsed.get("voice_prompt", _voice_prompt)),
+            bool(parsed.get("expect_response", False)),
+        )
     except (json.JSONDecodeError, KeyError, TypeError, ValueError):
         pass
 
@@ -318,12 +395,34 @@ def _parse_response(content: str) -> tuple[str, str]:
     if m:
         try:
             parsed = json.loads(m.group(0))
-            return str(parsed["text"]), str(parsed.get("voice_prompt", _voice_prompt))
+            return (
+                str(parsed["text"]),
+                str(parsed.get("voice_prompt", _voice_prompt)),
+                bool(parsed.get("expect_response", False)),
+            )
         except (json.JSONDecodeError, KeyError, TypeError):
             pass
 
     log.warning("LLM response could not be parsed as JSON — speaking raw content")
-    return stripped, _voice_prompt
+    return stripped, _voice_prompt, False
+
+
+def _schedule_context(schedules: list[dict[str, Any]]) -> str:
+    """Render the asking room's active schedule entries for the system prompt."""
+    lines = ["Active timers/alarms/reminders in this room (cancel via cancel_schedules):"]
+    for s in schedules:
+        kind = s.get("kind", "?")
+        label = s.get("label") or ""
+        when = s.get("at") or f"in {int(s.get('seconds_left', 0))}s"
+        days = ",".join(s.get("days") or [])
+        desc = f"- id={s.get('id')} {kind}"
+        if label:
+            desc += f" '{label}'"
+        desc += f" at {when}" if s.get("at") else f" fires {when}"
+        if days:
+            desc += f" (every {days})"
+        lines.append(desc)
+    return "\n".join(lines)
 
 
 async def _run_llm(
@@ -331,8 +430,11 @@ async def _run_llm(
     speaker: str,
     room_id: str | None,
     available_rooms: list[str] | None = None,
-) -> tuple[str, str]:
-    from litellm import acompletion  # type: ignore[import-untyped]
+    schedules: list[dict[str, Any]] | None = None,
+) -> tuple[str, str, bool]:
+    # Per-request fallback state: once the primary model fails, the whole tool
+    # loop stays on the configured local fallback (see skills.set_fallback).
+    fb_state: dict[str, Any] = {}
 
     # Build current user message — named speakers only in the prefix.
     parts = []
@@ -349,6 +451,8 @@ async def _run_llm(
     system_content = f"{_system_prompt}\n\n{_build_context()}"
     if available_rooms:
         system_content += "\nConnected rooms: " + ", ".join(available_rooms)
+    if schedules:
+        system_content += "\n" + _schedule_context(schedules)
     system_content += f"\n{_JSON_INSTRUCTION}"
 
     messages: list[dict[str, Any]] = [
@@ -362,14 +466,15 @@ async def _run_llm(
         "model": _model,
         "messages": messages,
     }
-    if _base_url:
-        kwargs["base_url"] = _base_url
+    # Custom endpoint (Ollama/LM Studio/proxy): never lets OPENAI_API_KEY ride
+    # to a dashboard-editable URL — see skills.endpoint_kwargs (F-14).
+    kwargs.update(skill_registry.endpoint_kwargs(_base_url))
     if tools:
         kwargs["tools"] = tools
         kwargs["tool_choice"] = "auto"
 
     for iteration in range(_max_tool_iterations):
-        response = await acompletion(**kwargs)
+        response = await skill_registry.acompletion_with_fallback(kwargs, fb_state)
         message = response.choices[0].message
 
         # Serialise the assistant turn back into the message list.
@@ -392,9 +497,10 @@ async def _run_llm(
         messages.append(assistant_msg)
 
         if not message.tool_calls:
-            spoken, vp = _parse_response(message.content or "")
+            spoken, vp, expect = _parse_response(message.content or "")
+            expect = _suppress_floor_hold(spoken, expect)
             _history.add(room_id or "", speaker, text, spoken)
-            return spoken, vp
+            return spoken, vp, expect
 
         # Execute each tool call and append results.
         log.debug(
@@ -422,9 +528,12 @@ async def _run_llm(
         kwargs["messages"] = messages
 
     log.warning("Reached max tool iterations (%d) — returning last content", _max_tool_iterations)
-    spoken, vp = _parse_response(message.content or "I wasn't able to complete that request.")
+    spoken, vp, expect = _parse_response(
+        message.content or "I wasn't able to complete that request."
+    )
+    expect = _suppress_floor_hold(spoken, expect)
     _history.add(room_id or "", speaker, text, spoken)
-    return spoken, vp
+    return spoken, vp, expect
 
 
 # ---------------------------------------------------------------------------
@@ -456,6 +565,9 @@ def main() -> None:
     )
     install_restart_endpoint(app)
     install_upgrade_endpoint(app, "llm")
+    # Backup slice: this host's user skills overlay + HA curation (they live with
+    # the LLM service, not the server), merged into the server's backup archive.
+    install_backup_endpoint(app, _backup_items)
 
     global \
         _model, \
@@ -464,7 +576,8 @@ def main() -> None:
         _voice_prompt, \
         _max_tool_iterations, \
         _location, \
-        _timezone
+        _timezone, \
+        _skills_dir
     _model = str(cfg.get("model", "gpt-4o"))
     _base_url = cfg.get("base_url") or None
     _system_prompt = str(cfg.get("system_prompt", _system_prompt))
@@ -492,6 +605,14 @@ def main() -> None:
 
     raw_dir = skills_cfg.get("dir", "skills")
     user_dir = Path(raw_dir) if Path(raw_dir).is_absolute() else kenzy_data_root() / raw_dir
+    _skills_dir = user_dir  # exposed via GET /backup (the server's merged archive)
+
+    # Optional local fallback model (silent retry on primary failure; if the
+    # fallback also fails the user just gets the spoken error cue).
+    fb = cfg.get("fallback") or {}
+    skill_registry.set_fallback(fb.get("model"), fb.get("base_url"))
+    if fb.get("model"):
+        log.info("LLM fallback: %s (base_url=%s)", fb["model"], fb.get("base_url") or "default")
 
     skill_registry.set_config(skills_cfg)
     skill_registry.load_skills(user_dir, disabled)

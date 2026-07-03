@@ -343,6 +343,10 @@ class _SoundPlayer:
         self._pending: np.ndarray[Any, Any] = self._chime  # audio to switch to on restart
         self._pos: int = len(self._audio)  # past end → silent
         self._restart: bool = False
+        # Like _restart, but swaps to _pending *immediately* (regardless of _pos)
+        # on the next callback. Used to cut a chime/waiting sound the instant TTS is
+        # ready, so a fast reply's audio always plays from the start (no clipped head).
+        self._interrupt: bool = False
         # "alert" audio (the ready chime) stays audible when muted; TTS/stream do not.
         self._alert: bool = True
         self._pending_alert: bool = True
@@ -377,7 +381,8 @@ class _SoundPlayer:
             outdata[:, 0] = self._ring.read(frames)
             self._apply_gain(outdata, alert=False)
             return
-        if self._restart and self._pos >= len(self._audio):
+        if self._interrupt or (self._restart and self._pos >= len(self._audio)):
+            self._interrupt = False
             self._restart = False
             self._audio = self._pending
             self._alert = self._pending_alert
@@ -417,10 +422,18 @@ class _SoundPlayer:
         self._pending_alert = True
         self._restart = True
 
-    def play_pcm(self, audio: np.ndarray[Any, Any]) -> None:
-        """Play arbitrary int16 mono PCM at _TTS_SAMPLE_RATE (honors mute)."""
+    def play_pcm(self, audio: np.ndarray[Any, Any], interrupt: bool = False) -> None:
+        """Play arbitrary int16 mono PCM at _TTS_SAMPLE_RATE (honors mute).
+
+        With ``interrupt=True`` the new audio replaces whatever is playing on the
+        very next callback (from the start), rather than waiting for the current
+        sound to drain — a single atomic swap, so a concurrently-queued chime can't
+        wedge between an abort and this call and clip the new audio's head.
+        """
         self._pending = audio.reshape(-1, 1)
         self._pending_alert = False
+        if interrupt:
+            self._interrupt = True
         self._restart = True
 
     def set_volume(self, volume: float) -> None:
@@ -434,11 +447,13 @@ class _SoundPlayer:
     def abort(self) -> None:
         """Stop playback immediately."""
         self._restart = False
+        self._interrupt = False
         self._pos = len(self._audio)
 
     def start_stream(self) -> None:
         """Switch to live streaming mode (a fresh, empty ring buffer)."""
         self._restart = False
+        self._interrupt = False
         self._ring.clear()
         self._streaming = True
 
@@ -509,6 +524,10 @@ class NodeClient:
         self._sound_connect: str | None = str(_sc) if _sc else None
         _sd = cfg.get("sound_disconnect", "disconnect.wav")
         self._sound_disconnect: str | None = str(_sd) if _sd else None
+        # End-of-dialog cue: played only when a multi-turn dialog concludes (never after
+        # a single turn). Off by default; set to a sound (e.g. "disconnect.wav") to enable.
+        _sde = cfg.get("sound_dialog_end")
+        self._sound_dialog_end: str | None = str(_sde) if _sde else None
         self._capture_rate: int = int(cfg.get("capture_sample_rate", protocol.SAMPLE_RATE))
         self._playback_rate: int = int(cfg.get("playback_sample_rate", _TTS_SERVER_RATE))
         # Playback volume (config key is 0–100; stored internally as 0.0–1.0) and mute.
@@ -547,6 +566,9 @@ class NodeClient:
         # Set when the server wants one utterance captured after the next TTS prompt
         # finishes (intercom consent answer, or a voice-enrollment sample).
         self._capture_after_prompt: bool = False
+        # Set when the server signals a multi-turn dialog ended while TTS is still
+        # playing; the end-of-dialog cue plays once that playback completes.
+        self._end_dialog_after_tts: bool = False
         self._ws: ClientConnection | None = None
         self._oww: Any = None  # openwakeword Model
         self._player: _SoundPlayer | None = None
@@ -581,6 +603,7 @@ class NodeClient:
         self._waiting_audio: np.ndarray[Any, Any] | None = None
         self._connect_audio: np.ndarray[Any, Any] | None = None
         self._disconnect_audio: np.ndarray[Any, Any] | None = None
+        self._dialog_end_audio: np.ndarray[Any, Any] | None = None
 
         self._silence_count: int = 0
         self._speech_frames: int = 0
@@ -651,6 +674,7 @@ class NodeClient:
         if self._player:
             self._player.abort()  # stop waiting sound if still playing
             self._player.play()
+        self._end_dialog_after_tts = False  # a new turn began; drop any stale end cue
         self._state = _STATE_STREAMING
         self._session_id = session_id
         self._silence_count = 0
@@ -676,7 +700,11 @@ class NodeClient:
             except Exception:
                 pass
         log.info("[%s] streaming ended (%s)", (sid or "?")[:8], reason)
-        if self._player and self._waiting_audio is not None:
+        # Only start the "processing" sound if we're still idle. On a fast reply the
+        # server's tts_start can arrive during the audio_end send above and flip us
+        # to TTS on the cmd loop; starting the waiting sound now would queue it behind
+        # (or clip) the reply. _begin_tts/_begin_streaming move us out of IDLE.
+        if self._state == _STATE_IDLE and self._player and self._waiting_audio is not None:
             self._player.play_pcm(self._waiting_audio)
 
     # ------------------------------------------------------------------
@@ -710,8 +738,9 @@ class NodeClient:
             if self._tts_sample_rate != self._playback_rate:
                 audio = _resample(audio, self._tts_sample_rate, self._playback_rate)
             if self._player:
-                self._player.abort()  # cut waiting sound immediately before TTS
-                self._player.play_pcm(audio)
+                # Atomic interrupt: cut the waiting sound and start TTS from the
+                # first sample in one swap, so a fast reply is never clipped.
+                self._player.play_pcm(audio, interrupt=True)
             # Stay in TTS state while audio plays; _tts_wait_done transitions to IDLE.
             self._tts_task = asyncio.create_task(self._tts_wait_done(), name="tts_wait")
             log.info("TTS playback started")
@@ -747,6 +776,13 @@ class NodeClient:
             self._capture_after_prompt = False
             log.info("Prompt finished — capturing the spoken reply")
             await self._begin_streaming(str(uuid.uuid4()))
+        # A multi-turn dialog ended during this reply: play the end-of-dialog cue now
+        # that the final line has finished (deferred so it never clips the reply).
+        elif completed and self._end_dialog_after_tts:
+            self._end_dialog_after_tts = False
+            if self._player is not None and self._dialog_end_audio is not None:
+                log.info("Multi-turn dialog ended — playing end-of-dialog cue")
+                self._player.play_pcm(self._dialog_end_audio, interrupt=True)
 
     async def _stop_tts_playback(self) -> None:
         """Cancel any in-progress TTS playback and return to IDLE."""
@@ -759,6 +795,7 @@ class NodeClient:
         elif self._player is not None:
             # No wait-done task running (interrupted before playback started).
             self._player.abort()
+        self._end_dialog_after_tts = False  # playback was cut; skip the stale end cue
         self._state = _STATE_IDLE
         self._session_id = None
 
@@ -916,6 +953,7 @@ class NodeClient:
             "sound_waiting",
             "sound_connect",
             "sound_disconnect",
+            "sound_dialog_end",
         }
 
         if initial:
@@ -951,6 +989,10 @@ class NodeClient:
                 sd = patch["sound_disconnect"]
                 self._sound_disconnect = str(sd) if sd else None
                 applied.append("sound_disconnect")
+            if "sound_dialog_end" in patch:
+                sde = patch["sound_dialog_end"]
+                self._sound_dialog_end = str(sde) if sde else None
+                applied.append("sound_dialog_end")
             deferred: list[str] = []
         else:
             deferred = sorted(restart_keys & patch.keys())
@@ -1095,6 +1137,16 @@ class NodeClient:
                 # Arm one-shot capture: the next TTS prompt's completion opens a
                 # capture window (used by voice enrollment, like the consent gate).
                 self._capture_after_prompt = True
+
+            elif mtype == protocol.MSG_END_DIALOG:
+                # A multi-turn dialog ended. Play the end cue after any in-progress TTS
+                # (the final reply) finishes, so it never clips the last line.
+                if self._dialog_end_audio is None:
+                    pass
+                elif self._state == _STATE_TTS:
+                    self._end_dialog_after_tts = True
+                elif self._player is not None:
+                    self._player.play_pcm(self._dialog_end_audio, interrupt=True)
 
     # ------------------------------------------------------------------
     # Audio loop – always running, routes frames by current state
@@ -1319,10 +1371,12 @@ class NodeClient:
 
         self._connect_audio = _chime(self._sound_connect)
         self._disconnect_audio = _chime(self._sound_disconnect)
+        self._dialog_end_audio = _chime(self._sound_dialog_end)
         log.info(
-            "Intercom chimes: connect=%s disconnect=%s",
+            "Intercom chimes: connect=%s disconnect=%s; end-of-dialog=%s",
             self._sound_connect or "off",
             self._sound_disconnect or "off",
+            self._sound_dialog_end or "off",
         )
 
         # Scale the blocksize so each callback still delivers ~80 ms of audio

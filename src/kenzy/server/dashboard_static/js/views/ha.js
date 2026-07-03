@@ -23,6 +23,9 @@ export function HaView() {
   const [dev, setDev] = useState({}); // entity_id -> {aliases, note, inGroup, exclude}
   const [defs, setDefs] = useState({}); // entity_id -> bool (in its room's default set)
   const [ex, setEx] = useState({ patterns: "", domains: "", areas: "" });
+  // Shopping/to-do lists: which todo entity is "the list" + spoken aliases per list.
+  const [listDefault, setListDefault] = useState("");
+  const [listAliases, setListAliases] = useState({}); // entity_id -> "csv"
   const [dirty, setDirty] = useState(false);
 
   function hydrate(d) {
@@ -53,6 +56,11 @@ export function HaView() {
       domains: ((cur.exclude && cur.exclude.domains) || []).join(", "),
       areas: ((cur.exclude && cur.exclude.areas) || []).join(", "),
     });
+    const lc = cur.lists || {};
+    setListDefault(lc.default || "");
+    const la = {};
+    for (const [id, arr] of Object.entries(lc.aliases || {})) la[id] = (arr || []).join(", ");
+    setListAliases(la);
     setDirty(false);
   }
 
@@ -117,6 +125,16 @@ export function HaView() {
       (rooms[area].defaults[type] = rooms[area].defaults[type] || []).push(id);
     }
     if (Object.keys(rooms).length) out.rooms = rooms;
+
+    const lists = {};
+    if (listDefault) lists.default = listDefault;
+    const lal = {};
+    for (const [id, csv] of Object.entries(listAliases)) {
+      const arr = splitCsv(csv);
+      if (arr.length) lal[id] = arr;
+    }
+    if (Object.keys(lal).length) lists.aliases = lal;
+    if (Object.keys(lists).length) out.lists = lists;
 
     return out;
   }
@@ -201,6 +219,36 @@ export function HaView() {
           <span class="mono">HA_API_KEY</span> and <span class="mono">skills.home_assistant.url</span>.
           The bulk exclusions below are still editable.</div>`
       : null}
+
+    <section class="section">
+      <header><h2>Lists</h2><span class="rule"></span></header>
+      <p class="micro">Shopping/to-do voice commands ("add milk to the list") use HA's
+        to-do lists. Pick which one a bare "the list" means, and add spoken aliases
+        ("the groceries"). No lists here? Add HA's <b>Local to-do</b> integration.</p>
+      ${(data.lists || []).length === 0
+        ? html`<div class="empty">No to-do lists found in Home Assistant.</div>`
+        : html`<div class="card pad ha-bulk">
+            <label class="micro">Default list ("the list")
+              <select disabled=${ro} value=${listDefault}
+                onChange=${(e) => { setListDefault(e.target.value); setDirty(true); }}>
+                <option value="">${(data.lists || []).length === 1 ? "(the only list)" : "(ask which list)"}</option>
+                ${(data.lists || []).map(
+                  (l) => html`<option value=${l.entity_id}>${l.name}</option>`,
+                )}
+              </select></label>
+            ${(data.lists || []).map(
+              (l) => html`
+                <label class="micro" key=${l.entity_id}>
+                  ${l.name} <span class="mono">${l.entity_id}</span> — aliases (comma-separated)
+                  <input disabled=${ro} placeholder="the groceries, grocery list"
+                    value=${listAliases[l.entity_id] || ""}
+                    onInput=${(e) => {
+                      setListAliases((m) => ({ ...m, [l.entity_id]: e.target.value }));
+                      setDirty(true);
+                    }} /></label>`,
+            )}
+          </div>`}
+    </section>
 
     <section class="section">
       <header><h2>Bulk exclusions</h2><span class="rule"></span></header>

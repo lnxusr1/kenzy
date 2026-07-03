@@ -2,6 +2,14 @@
 
 `kenzy-deploy` manages Kenzy installations across a fleet of remote hosts over SSH. It handles OS setup, Python virtualenv creation, package installation, systemd unit installation, and service management.
 
+!!! note "Do you need this page?"
+    Probably not for a home setup. Running the [installer](getting-started.md) once
+    on the server and once on each room device — and doing everything else from the
+    [dashboard](dashboard.md), including upgrades — covers most homes. `kenzy-deploy`
+    is for people who want to manage many machines from one seat over SSH, pin
+    versions per host, or push a source checkout to a fleet. It assumes comfort with
+    SSH keys, sudo, and YAML.
+
 ## Install modes
 
 `kenzy-deploy` supports two install modes, set by `install_mode` in `deploy.yaml` (top-level default, overridable per host, or with CLI flags):

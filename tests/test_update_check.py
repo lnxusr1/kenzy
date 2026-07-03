@@ -41,7 +41,7 @@ async def test_upgrade_state_update_available(monkeypatch):
         "latest": "3.1.2",
         "update_available": True,
         "checkable": True,
-        "controls": False,
+        "controls": True,  # defaults on when the key is absent
     }
 
 

@@ -34,14 +34,21 @@ import json
 import logging
 import os
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import httpx
 
 from kenzy.llm.builtin_skills import ha_model
-from kenzy.llm.skills import FastResult, fast_intent, get_config, skill  # type: ignore[import]
+from kenzy.llm.skills import (  # type: ignore[import]
+    FastResult,
+    acompletion_with_fallback,
+    endpoint_kwargs,
+    fast_intent,
+    get_config,
+    skill,
+)
 
 log = logging.getLogger(__name__)
 
@@ -55,9 +62,9 @@ _SYSTEM_PROMPT = """\
 You are a home automation resolver.  Given a device map (YAML) and a user \
 request, identify which devices to act on and what action to perform.
 
-The device map is structured as: area > room > type > device.
-Top-level keys are areas (e.g. downstairs, upstairs, outside).
-Second-level keys are rooms within that area.
+The device map is structured as: floor > area > type > device.
+Top-level keys are floors (e.g. downstairs, upstairs, outside).
+Second-level keys are areas (rooms) within that floor.
 Third-level keys are device types (lights, fans, locks, covers, climate).
 
 Device actions by type:
@@ -68,16 +75,17 @@ Device actions by type:
 - climate        : set_temperature  (°F, must be 65–85)
 
 Selection rules:
-- A location context (area + room) may be provided below the request. When it
-  is, ALL ambiguous device references must be resolved within that room first.
-  A device name that appears in multiple rooms (e.g. "the lamp") refers to the
-  one in the context room — do not match devices in other rooms.
-- If the user explicitly names a different room or area in their request, that
-  overrides the context room for that reference only.
-- Plural type with a room ("the lights", "the fans") means all devices of that
-  type in the context room (or the explicitly named room).
-- Area-level requests ("all the lights downstairs", "upstairs fans") select all
-  matching devices across every room in that area.
+- A location context (floor + area) may be provided below the request. When it
+  is, ALL ambiguous device references must be resolved within that area first.
+  A device name that appears in multiple areas (e.g. "the lamp") refers to the
+  one in the context area — do not match devices in other areas.
+- If the user explicitly names a different area or floor in their request, that
+  overrides the context area for that reference only.
+- Plural type with an area ("the lights", "the fans") means all devices of that
+  type in the context area (or the explicitly named area).
+- Floor-level requests ("the lights downstairs", "all the lights downstairs",
+  "upstairs fans") select all matching devices across EVERY area on that floor,
+  even when the context area is on that same floor.
 - If no specific device or type is mentioned and the room has a "default" list,
   use those devices.
 - Each "- " line is a Home Assistant entity_id (e.g. light.kitchen_island).
@@ -185,21 +193,19 @@ async def _ha_state(entity_id: str) -> dict[str, Any]:
 
 async def _resolve(request: str, yaml_text: str, room: str | None = None) -> dict[str, Any]:
     """Sub-LLM call: map the user request to device aliases + actions."""
-    from litellm import acompletion  # type: ignore[import-untyped]
-
     model    = get_config("home_assistant", "model",    "gpt-4o")
     base_url = get_config("home_assistant", "base_url") or None
 
     resolved_room = room or get_config("home_assistant", "default_room") or ""
-    resolved_area = _room_to_area(yaml_text).get(resolved_room, "") if resolved_room else ""
+    resolved_floor = _room_to_area(yaml_text).get(resolved_room, "") if resolved_room else ""
 
     user_content = f"Device map:\n{yaml_text}\n\nUser request: {request}"
     if resolved_room:
-        loc = f"Area: {resolved_area}, Room: {resolved_room}" if resolved_area else f"Room: {resolved_room}"
+        loc = f"Floor: {resolved_floor}, Area: {resolved_room}" if resolved_floor else f"Area: {resolved_room}"
         user_content += (
             f"\n\nLocation context: {loc}"
-            "\nScope all ambiguous device references to this room unless the"
-            " request explicitly names a different room or area."
+            "\nScope all ambiguous device references to this area unless the"
+            " request explicitly names a different area or floor."
         )
 
     kwargs: dict[str, Any] = {
@@ -209,17 +215,19 @@ async def _resolve(request: str, yaml_text: str, room: str | None = None) -> dic
             {"role": "user",   "content": user_content},
         ],
     }
-    if base_url:
-        kwargs["base_url"] = base_url
+    # Custom endpoint: OPENAI_API_KEY never rides to it (F-14; CUSTOM_LLM_API_KEY
+    # is the opt-in credential for hosted proxies).
+    kwargs.update(endpoint_kwargs(base_url))
 
     # json_object mode is supported by OpenAI and most hosted providers.
     # Omit for local/unknown providers — the system prompt instructs JSON output.
+    # Both attempts ride the silent local-fallback path (skills.set_fallback).
     try:
         kwargs["response_format"] = {"type": "json_object"}
-        response = await acompletion(**kwargs)
+        response = await acompletion_with_fallback(kwargs)
     except Exception:
         kwargs.pop("response_format", None)
-        response = await acompletion(**kwargs)
+        response = await acompletion_with_fallback(kwargs)
 
     return _extract_json(response.choices[0].message.content or "")
 
@@ -405,6 +413,10 @@ class _DeviceIndex:
     exclude:      set[str]                             # codes barred from groups
     room_phrases: dict[str, str]                       # "living room" → "living_room"
     device_map:   dict[str, str]                       # code → entity_id
+    # Floor scope: a spoken floor name ("downstairs") expands a bare-group command
+    # to every room on that floor. Empty when the topology has no floors.
+    floor_phrases: dict[str, str] = field(default_factory=dict)   # "downstairs" → "downstairs"
+    floor_rooms:   dict[str, list[str]] = field(default_factory=dict)  # floor → [rooms]
 
 
 def _norm(text: str) -> str:
@@ -431,14 +443,21 @@ def _index_from(
     rooms: dict[str, dict[str, list[str]]] = {}
     defaults: dict[str, dict[str, list[str]]] = {}
     room_phrases: dict[str, str] = {}
+    floor_phrases: dict[str, str] = {}
+    floor_rooms: dict[str, list[str]] = {}
 
     for _area, rms in data.items():
         if not isinstance(rms, dict):
             continue
+        # In the static files the top level is the floor (downstairs/upstairs/outside).
+        floor = _norm(str(_area)).replace(" ", "_")
+        floor_phrases[str(_area).replace("_", " ")] = floor
         for room, groups in rms.items():
             if not isinstance(groups, dict):
                 continue
             room_phrases[room.replace("_", " ")] = room
+            if room not in floor_rooms.setdefault(floor, []):
+                floor_rooms[floor].append(room)
             rt = rooms.setdefault(room, {})
             dflt = defaults.setdefault(room, {})
             for type_key, codes in groups.items():
@@ -472,7 +491,10 @@ def _index_from(
         for c in ov.get("exclude", []) or []:
             exclude.add(c)
 
-    return _DeviceIndex(rooms, defaults, spoken, aliases, exclude, room_phrases, device_map)
+    return _DeviceIndex(
+        rooms, defaults, spoken, aliases, exclude, room_phrases, device_map,
+        floor_phrases, floor_rooms,
+    )
 
 
 def _build_intents() -> Any:
@@ -534,11 +556,19 @@ def _index_from_model(model: ha_model.HAModel, curation: dict[str, Any]) -> _Dev
     exclude: set[str] = set()
     room_phrases: dict[str, str] = {}
     device_map: dict[str, str] = {}
+    floor_phrases: dict[str, str] = {}
+    floor_rooms: dict[str, list[str]] = {}
 
     for e in model.entities:
         type_key = _DOMAIN_TO_TYPE.get(e.domain, e.domain)
         room = e.area or "unplaced"
         room_phrases[room.replace("_", " ")] = room
+        # A real floor scope ("downstairs"); skip the synthetic no-floor bucket so
+        # unplaced areas don't become a spoken "home" floor.
+        if e.floor and e.floor != ha_model._NO_FLOOR:
+            floor_phrases[_norm(e.floor_name)] = e.floor
+            if room not in floor_rooms.setdefault(e.floor, []):
+                floor_rooms[e.floor].append(room)
         bucket = rooms.setdefault(room, {}).setdefault(type_key, [])
         if e.entity_id not in bucket:
             bucket.append(e.entity_id)
@@ -558,7 +588,10 @@ def _index_from_model(model: ha_model.HAModel, curation: dict[str, Any]) -> _Dev
             if isinstance(eids, list):
                 defaults.setdefault(rslug, {})[str(tk)] = [str(x) for x in eids]
 
-    return _DeviceIndex(rooms, defaults, spoken, aliases, exclude, room_phrases, device_map)
+    return _DeviceIndex(
+        rooms, defaults, spoken, aliases, exclude, room_phrases, device_map,
+        floor_phrases, floor_rooms,
+    )
 
 
 def _resolver_text(model: ha_model.HAModel, curation: dict[str, Any]) -> str:
@@ -679,6 +712,17 @@ def _extract_room(idx: _DeviceIndex, toks: list[str]) -> tuple[str | None, list[
     return None, toks
 
 
+def _extract_floor(idx: _DeviceIndex, toks: list[str]) -> tuple[str | None, list[str]]:
+    """Pull an explicit floor name ("downstairs") out of the token list."""
+    for sp in sorted(idx.floor_phrases, key=lambda p: -len(p.split())):
+        words = sp.split()
+        n = len(words)
+        for i in range(len(toks) - n + 1):
+            if toks[i:i + n] == words:
+                return idx.floor_phrases[sp], toks[:i] + toks[i + n:]
+    return None, toks
+
+
 def _fuzzy(idx: _DeviceIndex, room: str | None, phrase: str) -> str | None:
     from rapidfuzz import fuzz, process
 
@@ -714,6 +758,17 @@ def _stem_group(idx: _DeviceIndex, room: str, phrase: str) -> list[str] | None:
     return codes or None
 
 
+def _group_codes(
+    idx: _DeviceIndex, room: str, gtype: str, direction: str, has_all: bool
+) -> list[str]:
+    """Codes for a bare group in one room: curated default subset for an
+    ``activate`` (unless "all"), every device of that type otherwise."""
+    rt = idx.rooms.get(room, {})
+    if direction == "activate" and not has_all:
+        return list(idx.defaults.get(room, {}).get(gtype) or rt.get(gtype, []))
+    return list(rt.get(gtype, []))
+
+
 def _resolve_target(
     idx: _DeviceIndex, action: str, target: str, origin_room: str | None
 ) -> list[str] | None:
@@ -727,10 +782,33 @@ def _resolve_target(
     extracted, toks = _extract_room(idx, toks)
     explicit_room = extracted is not None
     room = extracted or _room_key(origin_room)
+    # A floor ("downstairs") only when no explicit room was named — a room is the
+    # more specific scope and wins.
+    floor: str | None = None
+    if not explicit_room:
+        floor, toks = _extract_floor(idx, toks)
     toks = [t for t in toks if t not in _FILLERS]
     phrase = " ".join(toks).strip()
     if not phrase:
         return None
+
+    # Floor scope ("the lights downstairs") aggregates a bare group across every
+    # room on that floor. Anything more specific than a bare group defers to the LLM
+    # rather than mis-resolving against the origin room, which may be another floor.
+    if floor is not None:
+        if phrase not in _GROUP_WORDS:
+            return None
+        gtype = _GROUP_WORDS[phrase]
+        if gtype not in types or action in _EXPLICIT_ONLY:
+            return None
+        codes = []
+        for r in idx.floor_rooms.get(floor, []):
+            for c in _group_codes(idx, r, gtype, direction, has_all):
+                if c not in codes:
+                    codes.append(c)
+        if not (has_all and direction == "deactivate"):
+            codes = [c for c in codes if c not in idx.exclude]
+        return codes or None
 
     # Overlay alias (room-scoped, then global).
     codes = idx.aliases.get((room, phrase)) or idx.aliases.get(("", phrase))
@@ -742,11 +820,7 @@ def _resolve_target(
         gtype = _GROUP_WORDS[phrase]
         if gtype not in types or action in _EXPLICIT_ONLY:
             return None
-        rt = idx.rooms.get(room, {})
-        if direction == "activate" and not has_all:
-            codes = idx.defaults.get(room, {}).get(gtype) or rt.get(gtype, [])
-        else:
-            codes = rt.get(gtype, [])
+        codes = _group_codes(idx, room, gtype, direction, has_all)
         # The in_group:false floor (name-only devices) applies to every group
         # command EXCEPT an explicit deactivate-all ("turn off all the lights"),
         # where "all" means literally all — only hard-excluded devices, already
@@ -798,11 +872,15 @@ def _confirm(action: str, idx: _DeviceIndex, codes: list[str], target: str) -> s
     # the awkward "the lamps in living room".
     toks = [w for w in _norm(target).split() if w not in _ARTICLES and w not in _ALL_WORDS]
     room, rest = _extract_room(idx, toks)
+    floor = None
+    if room is None:
+        floor, rest = _extract_floor(idx, rest)
     device_phrase = " ".join(w for w in rest if w not in _FILLERS).strip()
     if len(codes) == 1:
         device_phrase = idx.spoken.get(codes[0], device_phrase)
 
-    room_phrase = room.replace("_", " ") if room else ""
+    scope = room or floor
+    room_phrase = scope.replace("_", " ") if scope else ""
     what = " ".join(p for p in (room_phrase, device_phrase) if p).strip()
     if not what:
         what = "it" if len(codes) == 1 else "them"

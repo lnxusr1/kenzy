@@ -14,9 +14,11 @@ export const NODE_ENUMS = {
 // Backend service config → allowed values, keyed by dotted path within the config.
 export const SERVICE_ENUMS = {
   stt: {
+    provider: ["whisper", "openai"],
     "whisper.model": ["tiny", "base", "small", "medium", "large-v2", "large-v3"],
     "whisper.device": ["cpu", "cuda"],
     "whisper.compute_type": ["int8", "float16", "float32"],
+    "openai.model": ["gpt-4o-mini-transcribe", "gpt-4o-transcribe", "whisper-1"],
     log_level: LOG_LEVELS,
     log_capture_level: CAPTURE_LEVELS,
   },
@@ -26,7 +28,11 @@ export const SERVICE_ENUMS = {
     log_level: LOG_LEVELS,
     log_capture_level: CAPTURE_LEVELS,
   },
-  llm: { log_level: LOG_LEVELS, log_capture_level: CAPTURE_LEVELS },
+  llm: {
+    "skills.web_search.provider": ["duckduckgo", "searxng"],
+    log_level: LOG_LEVELS,
+    log_capture_level: CAPTURE_LEVELS,
+  },
   speaker: { log_level: LOG_LEVELS, log_capture_level: CAPTURE_LEVELS },
 };
 

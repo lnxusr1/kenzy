@@ -5,6 +5,7 @@ import { ConfigView } from "./views/config.js";
 import { ServicesView } from "./views/services.js";
 import { SkillsView } from "./views/skills.js";
 import { SpeakersView } from "./views/speakers.js";
+import { SchedulesView } from "./views/schedules.js";
 import { HaView } from "./views/ha.js";
 import { ActivityView } from "./views/activity.js";
 import { LogsView } from "./views/logs.js";
@@ -30,6 +31,7 @@ const NAV = [
   { id: "skills", label: "Skills", ico: "✦" },
   { id: "ha", label: "Home Assistant", ico: "⌂" },
   { id: "speakers", label: "Speakers", ico: "☻" },
+  { id: "schedules", label: "Scheduled", ico: "◷" },
   { id: "activity", label: "Activity", ico: "↗" },
   { id: "logs", label: "Logs", ico: "≡" },
   { id: "settings", label: "Settings", ico: "⚙" },
@@ -154,6 +156,8 @@ export function Shell({ user, onLogout }) {
                   ? html`<${HaView} />`
                   : view === "speakers"
                     ? html`<${SpeakersView} />`
+                  : view === "schedules"
+                    ? html`<${SchedulesView} />`
                   : view === "activity"
                     ? html`<${ActivityView} />`
                     : view === "logs"

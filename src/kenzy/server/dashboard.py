@@ -78,8 +78,10 @@ class DashboardConfig:
     auth_token: str | None = None
     auth_username: str | None = None
     auth_password_hash: str | None = None
-    logs: bool = False
-    controls: bool = False
+    # logs/controls default ON (matching the shipped server.yaml) so a partial config
+    # that just enables the dashboard gets the full experience; set false to opt out.
+    logs: bool = True
+    controls: bool = True
     # Optional Host allow-list (hostnames, no port) for DNS-rebinding defense on the
     # WS/mutation channel. Empty ⇒ no Host restriction (the Origin==Host check still
     # applies); set it when serving under a fixed hostname (F-6).
@@ -99,8 +101,8 @@ class DashboardConfig:
             auth_token=d.get("auth_token") or None,
             auth_username=auth.get("username") or def_user,
             auth_password_hash=auth.get("password_hash") or def_hash,
-            logs=bool(d.get("logs", False)),
-            controls=bool(d.get("controls", False)),
+            logs=bool(d.get("logs", True)),
+            controls=bool(d.get("controls", True)),
             allowed_hosts=tuple(str(h) for h in (d.get("allowed_hosts") or [])),
         )
 
@@ -240,6 +242,9 @@ class Dashboard:
         self._sessions: deque[dict[str, Any]] = deque(maxlen=200)
         if dcfg.logs:
             server.add_session_listener(self._on_session)
+        # Live-push for the Scheduled view: any schedule change (set by voice,
+        # fired, cancelled) pokes connected browsers to re-fetch /api/schedules.
+        server.add_schedule_listener(self._on_schedules_change)
 
     # ------------------------------------------------------------------
     # Auth — read-only GETs are LAN-open; mutations need a login cookie
@@ -484,7 +489,35 @@ class Dashboard:
             "can_set_password": self._config_path is not None and self._config_path.is_file(),
             # F-9: surface "still on the default password" so the SPA can nag.
             "default_password": self._default_password,
+            # Names (never values) of the env secrets currently set in the config
+            # home's .env, for the write-only API-keys editor's set/not-set badges.
+            "env_keys": self._env_key_names(),
         }
+
+    @staticmethod
+    def _env_key_names() -> list[str]:
+        """UPPER_SNAKE names with non-empty values in the config home's .env."""
+        from kenzy.config import kenzy_data_root
+
+        try:
+            text = (kenzy_data_root() / ".env").read_text()
+        except OSError:
+            return []
+        names: set[str] = set()
+        for line in text.splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            name, _, value = line.partition("=")
+            name = name.removeprefix("export ").strip()
+            if (
+                name
+                and name == name.upper()
+                and name.replace("_", "").isalnum()
+                and value.strip().strip("\"'")
+            ):
+                names.add(name)
+        return sorted(names)
 
     def _set_password(self, new_password: str) -> None:
         """Persist a new dashboard password to server.yaml and apply it live.
@@ -620,6 +653,38 @@ class Dashboard:
 
         if path == "/api/speakers":
             return self._json(200, await self._speakers_state())
+
+        if path == "/api/backup":
+            # Downloadable backup: the local config home merged with the stateful
+            # services' slices (complete even multi-host). By default .env/API keys
+            # and models/ stay out; ?secrets=1 and ?full=1 opt them in (the archive
+            # then carries live credentials / model bulk — the UI says so).
+            # Auth-gated like every /api read; restore is the kenzy-init CLI
+            # (this HTTP hook exposes no request body, so upload isn't a thing).
+            import time as _time
+
+            qs = parse_qs(urlsplit(request.path).query)
+
+            def _flag(key: str) -> bool:
+                return (qs.get(key) or ["0"])[0].lower() in ("1", "true", "yes")
+
+            data = await self._server.create_backup_archive(
+                include_secrets=_flag("secrets"), include_models=_flag("full")
+            )
+            headers = Headers()
+            headers["Content-Type"] = "application/gzip"
+            stamp = _time.strftime("%Y%m%d-%H%M%S")
+            headers["Content-Disposition"] = f'attachment; filename="kenzy-backup-{stamp}.tar.gz"'
+            return Response(200, "OK", headers, data)
+
+        if path == "/api/schedules":
+            # Active timers/alarms/reminders (deliberately auth-only, not gated by
+            # `logs`: these are future announcements the operator manages, and you
+            # can't cancel what you can't see).
+            return self._json(
+                200,
+                {"schedules": self._server.list_schedules(), "controls": self._dcfg.controls},
+            )
 
         if path == "/api/upgrade":
             return self._json(200, await self._upgrade_state())
@@ -813,6 +878,7 @@ class Dashboard:
             "controls": self._dcfg.controls,
             "curation": (info or {}).get("curation", {}),
             "devices": (info or {}).get("devices", []),
+            "lists": (info or {}).get("lists", []),
             "ha_reachable": bool((info or {}).get("reachable", False)),
         }
 
@@ -889,6 +955,7 @@ class Dashboard:
 
     async def _do_server_upgrade(self, connection: ServerConnection, version: str | None) -> None:
         """Run the server self-upgrade, push the result, and re-exec on success."""
+
         async def send(payload: dict[str, Any]) -> None:
             try:
                 await connection.send(json.dumps(payload))
@@ -1033,6 +1100,12 @@ class Dashboard:
         if self._clients:
             payload = json.dumps({"type": "session", "data": record})
             asyncio.create_task(self._broadcast_raw(payload))
+
+    def _on_schedules_change(self) -> None:
+        """Poke connected browsers that the schedule set changed (they re-fetch
+        the auth-gated /api/schedules — no entry data rides the push itself)."""
+        if self._clients:
+            asyncio.create_task(self._broadcast_raw(json.dumps({"type": "schedules"})))
 
     async def _broadcast_raw(self, payload: str) -> None:
         for ws in list(self._clients):
@@ -1188,6 +1261,25 @@ class Dashboard:
             # version (visible in the fleet view). No progress stream from the node.
             ok = await self._server.upgrade_node(str(msg.get("node", "")), version)
             await ack(ok, None if ok else "node not connected")
+        elif mtype == "set_secret":
+            # Write-only API-key entry: upserts the server host's .env; the value is
+            # never echoed back, served, or logged. Controls-gated (it's server
+            # config, not account self-service like set_password).
+            if not self._dcfg.controls:
+                return await ack(False, "controls are disabled (set dashboard.controls: true)")
+            try:
+                self._server.set_env_secret(str(msg.get("name", "")), str(msg.get("value", "")))
+            except (ValueError, OSError) as exc:
+                return await ack(False, str(exc))
+            await ack(True)
+        elif mtype == "cancel_schedule":
+            if not self._dcfg.controls:
+                return await ack(False, "controls are disabled (set dashboard.controls: true)")
+            sid = str(msg.get("sid", "")).strip()
+            if not sid:
+                return await ack(False, "schedule id is required")
+            count = self._server.cancel_schedule_ids([sid])
+            await ack(count > 0, None if count else "schedule not found (already fired?)")
         elif mtype == "set_skill_disabled":
             if not self._dcfg.controls:
                 return await ack(False, "controls are disabled (set dashboard.controls: true)")

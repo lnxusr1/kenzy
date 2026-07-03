@@ -1,11 +1,12 @@
 # Dashboard
 
-`kenzy-server` serves a web dashboard — a fleet manager for your
-Kenzy deployment. It is **on by default** in the shipped config (localhost-bound);
-set `dashboard.enabled: false` to turn it off, which adds zero overhead when disabled
-(nothing is mounted, no node-side cost). When enabled it gives you one place to see
-every room node and backend service, configure nodes, control them, send
-announcements, and read logs.
+The dashboard is the web page where you run your Kenzy home: see every room and
+service at a glance, name rooms, pick and tune microphones, enroll voices, send
+announcements, read logs, and install updates — all from a browser, no terminal
+needed after install. It's served by `kenzy-server` and is **on by default**,
+reachable from any machine on your network at `http://<server>:8770`. (Set
+`dashboard.enabled: false` to turn it off entirely — when disabled, nothing is
+mounted and it adds zero overhead.)
 
 !!! warning "Keep it on the LAN"
     Login runs over **plaintext HTTP** and defaults to `admin` / `password`. Bind the
@@ -14,20 +15,20 @@ announcements, and read logs.
 
 ## Enabling it
 
-In `configs/server.yaml`:
+The shipped config already has it on. The relevant block in `configs/server.yaml`:
 
 ```yaml
 dashboard:
   enabled: true
-  bind: "127.0.0.1"     # or a LAN address; never the public internet
+  bind: "0.0.0.0"       # reachable on your LAN (the default); "127.0.0.1" = this machine only
   port: 8770
   controls: true        # allow edits/actions (false = read-only)
-  logs: true            # enable the log viewer
+  logs: true            # enable the log viewer + Activity tab
 ```
 
-Restart `kenzy-server` and open `http://<bind>:<port>/dashboard` (e.g.
-`http://127.0.0.1:8770/dashboard`). See the full key reference in
-[Server Configuration](configuration/server.md#dashboard).
+Open `http://<server>:8770` in a browser (the same machine can use
+`http://localhost:8770`). After changing this block, restart `kenzy-server`. See the
+full key reference in [Server Configuration](configuration/server.md#dashboard).
 
 ## Logging in
 
@@ -60,7 +61,7 @@ When `controls` is on, an **announce** composer lets you type a message and spea
 aloud on every connected node at once (synthesised once via kenzy-tts, streamed to all
 rooms — a one-way public-address broadcast). You can also trigger this by voice
 ("tell everyone dinner's ready"); for a live *two-way* call between rooms, see the
-intercom skill in [Built-in Skills](skills/builtin.md#intercom-builtin_skillsintercompy).
+intercom skill in [Built-in Skills](skills/builtin.md#intercom).
 
 ## Configuring a node
 
@@ -171,8 +172,10 @@ you don't list devices here. Each entity row has:
 - **exclude** — remove it from voice control entirely
 
 plus **bulk exclusions** (patterns/domains/areas) for things like smart-plug status LEDs
-that show up as controllable lights. Saving writes `curation.yaml` and refreshes the
-topology immediately. The tab needs `kenzy-llm` reachable and `dashboard.controls: true`
+that show up as controllable lights, and a **Lists** section for the shopping/to-do
+voice layer — pick which HA to-do list a bare "the list" means and give lists spoken
+aliases ("the groceries"); see [Built-in Skills → Lists](skills/builtin.md#lists).
+Saving writes `curation.yaml` and refreshes the topology immediately. The tab needs `kenzy-llm` reachable and `dashboard.controls: true`
 to edit (read-only otherwise). See [Home Assistant](skills/home-assistant.md).
 
 ## Speakers
@@ -189,6 +192,16 @@ enrolls them through the room's mic (enrolling an existing name adds more sample
 Because this is an authenticated, `controls`-gated operator action, it works regardless
 of the speaker service's `allow_voice_enroll` setting (which only governs the hands-free
 "Hey Kenzy, enroll me as…" voice command). Requires `dashboard.controls: true`.
+
+## Scheduled
+
+The **Scheduled** tab lists the active **timers, alarms, and reminders** held by the
+server — kind, name/text, target room, when it fires (live countdown for timers), and
+any recurrence — with a per-entry **Cancel** button (requires `dashboard.controls`).
+Entries are set by voice (see [Timers, Alarms & Reminders](skills/builtin.md#timers-alarms-reminders))
+and persist across server restarts. The view is available to any logged-in user —
+deliberately not gated behind `dashboard.logs`, since these are future announcements
+the operator needs to see to manage.
 
 ## Activity
 
@@ -231,8 +244,24 @@ persisted. Refresh during/after the window to view the captured detail. Requires
 ## Settings
 
 The **Settings** page shows system info (Kenzy version, server and dashboard binds, mDNS
-discovery), an **update check**, the **node join token**, and lets you **change the
-dashboard password** and edit a **scoped subset of the server's own configuration**.
+discovery), an **update check**, a **backup download**, the **node join token**, and lets
+you **change the dashboard password** and edit a **scoped subset of the server's own
+configuration**.
+
+The **Backup** section downloads a `.tar.gz` of the deployment's state — node/service
+settings, voice profiles (fetched from the speaker host when remote), HA curation,
+custom skills — restorable with `kenzy-init --restore`. Two opt-in toggles widen the
+scope: **include secrets** (`.env` — the archive then carries live API keys) and
+**include everything** (`models/`). See [Backup & Restore](backup-restore.md).
+
+The **API keys** section is a **write-only** secret editor: pick a key
+(`OPENAI_API_KEY`, `HA_API_KEY`, `HF_TOKEN`, or a custom name), paste a value, and it's
+written to the server host's `.env` — values are never displayed, served, or logged;
+the page only shows which names are *set*. Restart the affected services (Services
+tab) to apply. It writes the server's own `.env`, which co-located services share; on
+a multi-host setup, remote hosts keep their own `.env` (`kenzy-deploy` syncs it).
+Requires `dashboard.controls`. Remember the dashboard runs over plain HTTP — enter
+keys from a machine on your own network.
 
 The **Updates** section compares the installed version against the latest `kenzy` release
 on PyPI and flags when one is available. It's checked lazily (only when you open Settings,

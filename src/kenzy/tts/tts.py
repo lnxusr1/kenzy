@@ -61,6 +61,7 @@ _client: Any = None
 _model: str = "gpt-4o-mini-tts"
 _voice: str = "sage"
 _speed: float = 1.0
+_openai_fallback: bool = True  # silent local-Kokoro retry on cloud failure (if installed)
 
 # Kokoro
 _kokoro_pipeline: Any = None
@@ -202,11 +203,33 @@ def _synthesise(text: str, voice_prompt: str) -> bytes:
         return _synthesise_kokoro(text)
 
     # OpenAI path: split at sentence boundaries to respect the 4096-char limit.
-    chunks = _split_text(text)
-    if len(chunks) == 1:
-        return _synthesise_openai(chunks[0], voice_prompt)
-    log.debug("TTS: splitting %d chars into %d chunks", len(text), len(chunks))
-    return b"".join(_synthesise_openai(chunk, voice_prompt) for chunk in chunks)
+    try:
+        chunks = _split_text(text)
+        if len(chunks) == 1:
+            return _synthesise_openai(chunks[0], voice_prompt)
+        log.debug("TTS: splitting %d chars into %d chunks", len(text), len(chunks))
+        return b"".join(_synthesise_openai(chunk, voice_prompt) for chunk in chunks)
+    except Exception as exc:
+        if not _openai_fallback:
+            raise
+        # Silent local fallback: Kokoro, if the extra is installed (lazy first
+        # load). If it isn't — or the load fails — the exception propagates and
+        # the server plays the pre-recorded error cue instead.
+        log.warning("OpenAI TTS failed (%s) — falling back to local Kokoro", exc)
+        _ensure_fallback_kokoro()
+        return _synthesise_kokoro(text)
+
+
+def _ensure_fallback_kokoro() -> None:
+    """Lazily bring up a Kokoro pipeline for cloud-failure fallback (defaults:
+    ``af_heart`` voice). Raises when the ``kokoro`` extra isn't installed."""
+    global _kokoro_pipeline
+    if _kokoro_pipeline is not None:
+        return
+    from kokoro import KPipeline  # type: ignore[import-untyped]
+
+    log.warning("Loading Kokoro fallback pipeline (first cloud-TTS failure)…")
+    _kokoro_pipeline = KPipeline(lang_code=_kokoro_voice[0], device=_resolve_device("auto"))
 
 
 # ---------------------------------------------------------------------------
@@ -216,7 +239,7 @@ def _synthesise(text: str, voice_prompt: str) -> bytes:
 
 def main() -> None:
     global _provider
-    global _client, _model, _voice, _speed
+    global _client, _model, _voice, _speed, _openai_fallback
     global _kokoro_pipeline, _kokoro_voice, _kokoro_speed
 
     import uvicorn  # type: ignore[import-untyped]
@@ -279,8 +302,15 @@ def main() -> None:
         _model = str(ocfg.get("model", "gpt-4o-mini-tts"))
         _voice = str(ocfg.get("voice", "sage"))
         _speed = float(ocfg.get("speed", 1.0))
+        _openai_fallback = bool(ocfg.get("fallback", True))
         _client = OpenAI()
-        log.info("TTS provider: openai  model=%s voice=%s speed=%.2f", _model, _voice, _speed)
+        log.info(
+            "TTS provider: openai  model=%s voice=%s speed=%.2f (local-Kokoro fallback %s)",
+            _model,
+            _voice,
+            _speed,
+            "on" if _openai_fallback else "off",
+        )
 
     uvicorn.run(
         app,

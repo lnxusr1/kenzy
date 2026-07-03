@@ -11,6 +11,7 @@ import logging
 import os
 import sys
 from collections.abc import Awaitable, Callable
+from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
@@ -89,6 +90,28 @@ def install_restart_endpoint(app: FastAPI) -> None:
         return {"status": "restarting"}
 
     app.add_api_route("/restart", restart, methods=["POST"])
+
+
+def install_backup_endpoint(app: FastAPI, items_fn: Callable[[], list[tuple[Path, str]]]) -> None:
+    """Expose ``GET /backup`` — this service's state slice as a tar.gz.
+
+    ``items_fn`` returns ``(path, archive-prefix)`` pairs, evaluated per request
+    (the dirs are configured at startup and may be created later). The server
+    merges these slices into the one downloadable backup archive so a multi-host
+    deployment is still complete (speaker embeddings, the LLM host's
+    skills/curation). Protected by the service-token middleware like every route
+    except /health.
+    """
+
+    async def backup() -> Response:
+        from kenzy.backup import archive_entries, collect_paths
+
+        return Response(
+            content=archive_entries(collect_paths(items_fn()), None),
+            media_type="application/gzip",
+        )
+
+    app.add_api_route("/backup", backup, methods=["GET"])
 
 
 def install_upgrade_endpoint(app: FastAPI, extra: str) -> None:

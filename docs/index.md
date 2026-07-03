@@ -1,33 +1,68 @@
 # KENZY
 
-Kenzy is a distributed home voice assistant built as six independently deployable microservices. Wake-word detection runs locally on low-power room nodes (Orange Pi Zero 3 / 3W or Raspberry Pi 3 / 4 / 5). Audio streams over WebSocket to a central server that runs the full speech-to-text → LLM → text-to-speech pipeline and streams synthesized speech back to the room.
+Kenzy is a voice assistant for your whole home that runs on **your own hardware**.
+You talk to it naturally — *"hey Kenzie, turn off the lights downstairs, I'm ready
+for bed"* — and it understands you the way a person would, because it's powered by a
+real language model (one you choose: a cloud provider or a model running locally).
+Your rooms share one assistant, it can control your smart home through Home
+Assistant, and it can recognize **who** is talking.
 
-## Key features
+## What you can do with it
 
-- **Distributed** — each service runs independently; deploy only what you need on each host
-- **Wake-word activation** — always-on local detection with no cloud dependency for the trigger
-- **Speaker identification** — knows who is speaking; used for personalization and access control
-- **Multi-room voice** — broadcast announcements to every room by voice ("tell everyone dinner's ready"), or place a live two-way **intercom** call between rooms (the receiving room must verbally accept)
-- **Extensible skills** — add new capabilities by dropping a Python file in `skills/`; no registration required
-- **LLM-agnostic** — works with OpenAI, Anthropic, Ollama, LM Studio, and any provider supported by LiteLLM
-- **Conversation history** — per-room rolling context window so follow-up questions resolve naturally
-- **Web dashboard** — an opt-in fleet manager: live health, per-node config + room rename, controls, announcements, and logs in one place
+- **Ask it things, naturally** — no memorized phrases. "What time is it?", "Is it
+  going to rain tomorrow?", "What's in the news?"
+- **Control your smart home by voice** — Kenzy connects to Home Assistant and
+  understands your devices by the names you actually use ("the lamp by the chair").
+- **Talk to the whole house** — "tell everyone dinner's ready" speaks it in every
+  room; "call the living room" starts a live two-way intercom (the other room has to
+  say "yes" first).
+- **Get answers that know who's asking** — enroll your voice and Kenzy can tell
+  family members apart, and can require a recognized voice for sensitive actions
+  like unlocking a door.
+- **Manage it all from a web page** — the built-in dashboard shows every room and
+  service, and is where you name rooms, tune microphones, and update everything with
+  a click.
 
-## Services at a glance
+## What it looks like in your home
+
+One computer runs the "brain" (the server and the speech/language services). Each
+room gets a small, cheap device — a Raspberry Pi with a USB speakerphone — that
+listens for the wake word and plays the replies. You can also start with
+**everything on a single computer** to try it out.
+
+Kenzy is a self-hosted project for people comfortable running Linux on their own
+machine. You don't need to be a programmer — the installer is one command and
+day-to-day management happens in the dashboard — but you should be comfortable
+opening a terminal and editing a text file. If that's you, you'll be talking to
+Kenzy in under an hour.
+
+**→ Start here: [Getting Started](getting-started.md)**
+
+## Under the hood (you don't need this to get started)
+
+Kenzy is built as six small services that you can run together on one machine or
+spread across several:
 
 | Service | Command | Port | Role |
 |---|---|---|---|
-| **node** | `kenzy-node` | — | Wake word, audio capture, TTS playback |
-| **server** | `kenzy-server` | 8765 | WebSocket hub, pipeline orchestrator |
-| **stt** | `kenzy-stt` | 8767 | Speech-to-text via faster-whisper |
-| **tts** | `kenzy-tts` | 8769 | Text-to-speech via OpenAI TTS |
-| **llm** | `kenzy-llm` | 8766 | LLM + skill tool-calling via LiteLLM |
-| **speaker** | `kenzy-speaker` | 8768 | Speaker identification via SpeechBrain |
+| **node** | `kenzy-node` | — | Room device: wake word, audio capture, playback |
+| **server** | `kenzy-server` | 8765 | The hub: connects rooms and runs the pipeline |
+| **stt** | `kenzy-stt` | 8767 | Speech-to-text (local faster-whisper, or OpenAI cloud) |
+| **tts** | `kenzy-tts` | 8769 | Text-to-speech (OpenAI, or local Kokoro) |
+| **llm** | `kenzy-llm` | 8766 | The language model + skills (any LiteLLM provider) |
+| **speaker** | `kenzy-speaker` | 8768 | Voice identification (runs locally) |
+
+Voice identification always runs on your hardware, and speech recognition does by
+default. Every stage is your choice — run the speech, language, and voice services
+fully local, use a cloud provider (the easiest start, and the lightest on your
+hardware), or mix and match per service. See [Architecture](architecture.md) for
+how it all fits together.
 
 ## Quick links
 
-- [Getting Started](getting-started.md) — install, configure, and run your first session
-- [Architecture](architecture.md) — how the pieces fit together
-- [Dashboard](dashboard.md) — the opt-in web fleet manager
-- [Skills](skills/index.md) — extend Kenzy with custom capabilities
-- [Deployment](deployment.md) — push to a fleet of remote hosts with `kenzy-deploy`
+- [Getting Started](getting-started.md) — install it and have your first conversation
+- [Troubleshooting](troubleshooting.md) — when something doesn't work
+- [Dashboard](dashboard.md) — the web page where you manage everything
+- [Home Assistant](skills/home-assistant.md) — voice-control your smart home
+- [Speaker Enrollment](speaker-enrollment.md) — teach Kenzy who's who
+- [Skills](skills/index.md) — add new abilities with a small Python file

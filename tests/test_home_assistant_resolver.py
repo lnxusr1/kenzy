@@ -129,6 +129,52 @@ def test_lock_bare_group_allowed(ha):
 
 
 # ---------------------------------------------------------------------------
+# Floor-level scope ("downstairs")
+# ---------------------------------------------------------------------------
+
+
+def test_turn_off_lights_downstairs_spans_all_rooms(ha):
+    # "downstairs" is a floor: turn off must gather lights from every room on it,
+    # not just the origin room (regression: floors were unmodeled → deferred/wrong).
+    idx = ha._get_index()
+    codes = ha._resolve_target(idx, "turn_off", "lights downstairs", "office")
+    assert "of_floor_lamps" in codes            # office
+    assert "kt_island_pendant_lights" in codes  # kitchen
+    assert "lr_floor_lamp" in codes             # living room
+    # …and nothing from an off-floor room.
+    assert not any(c.startswith("mb_") for c in codes)  # master_bedroom is upstairs
+
+
+def test_floor_scope_ignores_origin_room(ha):
+    # Same command from an upstairs node still targets downstairs.
+    idx = ha._get_index()
+    from_office = ha._resolve_target(idx, "turn_off", "lights downstairs", "office")
+    from_bedroom = ha._resolve_target(idx, "turn_off", "lights downstairs", "master_bedroom")
+    assert set(from_office) == set(from_bedroom)
+
+
+def test_floor_turn_on_uses_room_defaults(ha):
+    # Activate over a floor uses each room's curated default subset, so it's a
+    # subset of the deactivate-all set.
+    idx = ha._get_index()
+    on = ha._resolve_target(idx, "turn_on", "lights downstairs", "office")
+    off = ha._resolve_target(idx, "turn_off", "lights downstairs", "office")
+    assert set(on) <= set(off)
+
+
+def test_floor_specific_device_defers(ha):
+    # Floor + a non-group phrase is ambiguous (which room's lamp?) → defer to LLM.
+    idx = ha._get_index()
+    assert ha._resolve_target(idx, "turn_on", "lamp downstairs", "office") is None
+
+
+def test_floor_confirmation_phrasing(ha):
+    idx = ha._get_index()
+    codes = ha._resolve_target(idx, "turn_off", "lights downstairs", "office")
+    assert ha._confirm("turn_off", idx, codes, "lights downstairs") == "Turned off the downstairs lights."
+
+
+# ---------------------------------------------------------------------------
 # Specific device resolution (rapidfuzz)
 # ---------------------------------------------------------------------------
 

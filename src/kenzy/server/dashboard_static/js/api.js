@@ -50,6 +50,12 @@ export async function getSpeakers() {
   return await r.json();
 }
 
+export async function getSchedules() {
+  const r = await fetch("/api/schedules");
+  if (!r.ok) throw new Error(`schedules ${r.status}`);
+  return await r.json();
+}
+
 export async function getHaCuration() {
   const r = await fetch("/api/ha/curation");
   if (!r.ok) throw new Error(`ha curation ${r.status}`);

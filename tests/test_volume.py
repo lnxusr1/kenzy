@@ -29,6 +29,7 @@ def _bare_player() -> _SoundPlayer:
     p._streaming = False
     p._ring = _StreamBuffer()
     p._restart = False
+    p._interrupt = False
     p._alert = False
     p._pending_alert = False
     sample = np.full((4, 1), 10000, dtype=np.int16)
@@ -115,6 +116,53 @@ def test_set_volume_and_muted_clamp():
     assert p._volume == 1.0
     p.set_volume(-1.0)
     assert p._volume == 0.0
+
+
+# ---------------------------------------------------------------------------
+# Interrupt vs. gated restart (the fast-reply "clipped TTS head" fix)
+# ---------------------------------------------------------------------------
+
+
+def test_interrupt_playback_starts_from_first_sample_mid_sound():
+    # A "waiting" sound is mid-play (pos 3 of 10). An interrupting play_pcm (TTS)
+    # must swap on the very next callback and play from index 0 — not the tail.
+    p = _bare_player()
+    p._audio = np.arange(1, 11, dtype=np.int16).reshape(-1, 1)  # waiting sound
+    p._pos = 3
+    tts = np.full((6, 1), 777, dtype=np.int16)
+
+    p.play_pcm(tts, interrupt=True)
+    out = np.zeros((4, 1), dtype=np.int16)
+    p._callback(out, 4, None, None)
+
+    assert out.flatten().tolist() == [777, 777, 777, 777]  # TTS from the start
+    assert p._pos == 4
+
+
+def test_non_interrupt_restart_is_gated_until_current_sound_drains():
+    # Without interrupt, a queued sound waits for the current one to finish, so the
+    # in-progress audio keeps playing (this is what makes the chime→waiting handoff
+    # tidy) — the fast path relies on interrupt instead.
+    p = _bare_player()
+    p._audio = np.arange(1, 11, dtype=np.int16).reshape(-1, 1)
+    p._pos = 3
+    tts = np.full((6, 1), 777, dtype=np.int16)
+
+    p.play_pcm(tts)  # no interrupt
+    out = np.zeros((4, 1), dtype=np.int16)
+    p._callback(out, 4, None, None)
+
+    assert out.flatten().tolist() == [4, 5, 6, 7]  # still the current sound
+    assert p._restart is True  # swap still pending
+
+
+def test_abort_clears_pending_interrupt():
+    p = _bare_player()
+    tts = np.full((4, 1), 777, dtype=np.int16)
+    p.play_pcm(tts, interrupt=True)
+    p.abort()
+    assert p._interrupt is False
+    assert p._restart is False
     p.set_muted(True)
     assert p._muted is True
 

@@ -58,6 +58,15 @@ node_defaults:
   speech_min_ms: 500
   no_speech_timeout_ms: 15000
   hard_cap_ms: 30000
+  # Lead-in tones for timer/alarm announcements. Played by the SERVER (prepended
+  # to the spoken announcement), so changes apply live — no node restart. A bare
+  # name is a bundled sound; a path is read on the server host; empty = voice only.
+  sound_timer: "timer.wav"
+  sound_alarm: "alarm.wav"
+  # Spoken failure cue when a request can't be processed (STT/LLM/TTS failure).
+  # Pre-recorded (not synthesized) so it still plays when TTS itself is down;
+  # same server-side/live semantics as the tones above. Empty = stay silent.
+  sound_error: "error.wav"
 
 # kenzy-speaker service — omit or set url to null to disable
 speaker:

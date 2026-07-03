@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "kenzy"
-version = "3.4.1"
+version = "3.5.0"
 description = "Distributed home voice-assistant: kenzy-node, kenzy-server, kenzy-stt, kenzy-tts, kenzy-llm, kenzy-speaker"
 requires-python = ">=3.11"
 readme = "README.md"
@@ -60,6 +60,8 @@ stt = [
     "fastapi>=0.100.0",
     "uvicorn>=0.23.0",
     "faster-whisper>=1.0.0",
+    "openai>=1.0.0",
+    "python-dotenv>=1.0.0",
     "zeroconf>=0.130",
 ]
 
@@ -94,6 +96,7 @@ llm = [
     "yfinance>=0.2.0",
     "feedparser>=6.0.0",
     "trafilatura>=1.6.0",
+    "ddgs>=9.0.0",
     "padacioso>=1.0.0",
     "rapidfuzz>=3.0.0",
     "zeroconf>=0.130",
