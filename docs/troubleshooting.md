@@ -179,8 +179,8 @@ later with `kenzy-init --restore` ([details](backup-restore.md)).
 The installer removes everything it created:
 
 ```bash
-curl -fsSL https://kenzy.dev/install.sh | bash -s -- --uninstall           # keep settings
-curl -fsSL https://kenzy.dev/install.sh | bash -s -- --uninstall --purge   # remove settings too
+curl -fsSL https://kenzy.ai/install.sh | bash -s -- --uninstall           # keep settings
+curl -fsSL https://kenzy.ai/install.sh | bash -s -- --uninstall --purge   # remove settings too
 ```
 
 Then run the install again. Your enrolled voices and settings live in

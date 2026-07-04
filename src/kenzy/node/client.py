@@ -712,11 +712,12 @@ class NodeClient:
     # ------------------------------------------------------------------
 
     async def _begin_tts(self, session_id: str, sample_rate: int, channels: int) -> None:
-        while not self._tts_q.empty():
-            try:
-                self._tts_q.get_nowait()
-            except asyncio.QueueEmpty:
-                break
+        # Deliberately NO queue drain here: _recv_loop enqueues binary frames the
+        # instant they arrive, so this session's own head frames may already be in
+        # _tts_q before the cmd loop processes tts_start — draining now would eat
+        # them (the clipped-first-word bug). Stale frames from an *aborted* session
+        # are cleared at abort time (_stop_tts_playback); the completion path
+        # consumes the queue, so it's always clean by the time a session starts.
         self._tts_sample_rate = sample_rate
         self._state = _STATE_TTS
         self._session_id = session_id
@@ -795,6 +796,13 @@ class NodeClient:
         elif self._player is not None:
             # No wait-done task running (interrupted before playback started).
             self._player.abort()
+        # Discard this aborted session's undelivered frames so they can't leak into
+        # the next session (session start must never drain — see _begin_tts).
+        while not self._tts_q.empty():
+            try:
+                self._tts_q.get_nowait()
+            except asyncio.QueueEmpty:
+                break
         self._end_dialog_after_tts = False  # playback was cut; skip the stale end cue
         self._state = _STATE_IDLE
         self._session_id = None
@@ -1650,6 +1658,14 @@ class NodeClient:
                 await asyncio.gather(recv_task, cmd_task, return_exceptions=True)
             except asyncio.CancelledError:
                 pass
+            # A connection that died mid-TTS leaves undelivered frames behind; drop
+            # them so they can't prefix the next session's audio after reconnect
+            # (session start must never drain — see _begin_tts).
+            while not self._tts_q.empty():
+                try:
+                    self._tts_q.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
             self._ws = None
 
     # ------------------------------------------------------------------

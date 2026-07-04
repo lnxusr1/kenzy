@@ -144,11 +144,23 @@ async def test_dispatch_skips_raising_matcher(clean_fast_registry):
         ("what day is it", "date"),
         ("date", "date"),
         ("what time and date is it", "both"),
+        ("can you tell me the time", "time"),
+        ("what time is it right now", "time"),
         # Negatives that must NOT be hijacked:
         ("set a timer for five minutes", None),
         ("what's the weather today", None),
         ("turn on the lights", None),
         ("is it cold outside", None),
+        # Announce phrasings that merely MENTION time (the reported bug —
+        # "tell" + "time" as a word-bag used to answer the clock):
+        ("tell the house it's time for dinner", None),
+        ("tell everyone it's time for dinner", None),
+        ("announce to the house it's time for dinner", None),
+        ("tell the kids it's time to go", None),
+        # Time as the object of a different question / with a qualifier:
+        ("what time do we eat", None),
+        ("what time is it in london", None),
+        ("what time does the game start", None),
     ],
 )
 def test_datetime_classify(utterance, expected):

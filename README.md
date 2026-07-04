@@ -43,7 +43,7 @@ Kenzy installs from PyPI — the default configs, built-in skills, and `.env.exa
 ship as package data, so a service runs from a bare install with no source checkout:
 
 ```bash
-pipx install "kenzy[node]"           # or use the one-line installer at kenzy.dev/install.sh
+pipx install "kenzy[node]"           # or use the one-line installer at kenzy.ai/install.sh
 kenzy-setup                          # download wake-word / speaker-ID models (run once)
 kenzy-init                           # scaffold a config home (~/.config/kenzy)
 ```
@@ -109,7 +109,7 @@ kenzy-deploy status     # check service health
 kenzy-deploy uninstall  # stop, remove units + venv (--purge also removes the install dir)
 ```
 
-Prerequisites on each remote host: SSH key auth and passwordless sudo. Backend services are deployed in **pull mode** (they fetch config from the server) and per-node config lives in the server-owned central store (`configs/nodes/`, `configs/services/`), so a deployed fleet is managed from the dashboard. See the [deployment docs](https://docs.kenzy.dev/deployment/) for the central-config model, per-host `node_id`, and `--reseed`.
+Prerequisites on each remote host: SSH key auth and passwordless sudo. Backend services are deployed in **pull mode** (they fetch config from the server) and per-node config lives in the server-owned central store (`configs/nodes/`, `configs/services/`), so a deployed fleet is managed from the dashboard. See the [deployment docs](https://docs.kenzy.ai/deployment/) for the central-config model, per-host `node_id`, and `--reseed`.
 
 ## Dashboard
 
@@ -129,7 +129,7 @@ All `/api` reads and actions require login; mutating actions also need `controls
 defaults to `admin` / `password` — change it with `kenzy-passwd` (server host only) or
 from the Settings page. It is plaintext HTTP on a LAN bind, so **do not port-forward it**.
 The Settings page also shows the **node join token** to copy when provisioning new nodes.
-See the [Dashboard guide](https://docs.kenzy.dev/dashboard/).
+See the [Dashboard guide](https://docs.kenzy.ai/dashboard/).
 
 ## Configuration
 

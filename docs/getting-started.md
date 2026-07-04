@@ -38,7 +38,7 @@ If anything doesn't behave the way a step says it should, jump to
 Plug in your speakerphone first (so setup can find it), then run:
 
 ```bash
-curl -fsSL https://kenzy.dev/install.sh | bash
+curl -fsSL https://kenzy.ai/install.sh | bash
 ```
 
 When it asks what to install, choose **all** (everything on this machine). The
@@ -125,7 +125,7 @@ thinking still happens on your server.
 3. On the new device, run:
 
     ```bash
-    curl -fsSL https://kenzy.dev/install.sh | bash -s -- --profile node --token PASTE_TOKEN_HERE
+    curl -fsSL https://kenzy.ai/install.sh | bash -s -- --profile node --token PASTE_TOKEN_HERE
     ```
 
 That's the whole install. The node finds your server on the network by itself,
@@ -173,7 +173,7 @@ matching environment variables) to run it unattended:
 
 ```bash
 # A room node, no prompts
-curl -fsSL https://kenzy.dev/install.sh | bash -s -- --profile node --token <token> --yes
+curl -fsSL https://kenzy.ai/install.sh | bash -s -- --profile node --token <token> --yes
 ```
 
 | Flag | Variable | Default | Purpose |

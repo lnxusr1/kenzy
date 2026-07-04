@@ -19,7 +19,7 @@
 
 CLI overrides: `--local` forces `source` for every host; `--version X` overrides the pinned PyPI version.
 
-Run `kenzy-deploy` from a directory whose `configs/deploy.yaml` it can find: the rsync base ("config-root") is derived from the `deploy.yaml` location (`<root>/configs/deploy.yaml` → `<root>`), **not** `pyproject.toml` — so `pypi` mode works from an operational tree (config + skills + data) with no source checkout, while `source` mode still expects a repo checkout there. The [`install.sh`](https://kenzy.dev/install.sh) one-liner sets up a control machine, or use a git checkout.
+Run `kenzy-deploy` from a directory whose `configs/deploy.yaml` it can find: the rsync base ("config-root") is derived from the `deploy.yaml` location (`<root>/configs/deploy.yaml` → `<root>`), **not** `pyproject.toml` — so `pypi` mode works from an operational tree (config + skills + data) with no source checkout, while `source` mode still expects a repo checkout there. The [`install.sh`](https://kenzy.ai/install.sh) one-liner sets up a control machine, or use a git checkout.
 
 ## Prerequisites
 

@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [3.5.1]
+
+### Fixed
+
+- **"Tell the house it's time for dinner" no longer answers the clock.** The time/date fast intent gated on a bag of words ("tell"/"what" + "time" anywhere in the utterance), so announce phrasings that merely *mention* time were hijacked into a current-time answer. The classifier now matches anchored whole-utterance patterns — "time" must *be* the question, not the object of a larger command — and qualified questions ("what time is it in London", "what time does the game start") correctly fall through to the LLM, which can actually answer them.
+
+- **Announcements no longer clip the first word.** A race in the node's receive path: binary TTS frames are queued the instant they arrive off the socket, while `tts_start` waits for the command loop — so an announcement's own leading frames could land in the queue first and be eaten by `_begin_tts`'s stale-frame drain (intermittent, worst on busy Pis and on `announce()`'s tight multi-node burst). Queue cleanup now happens only where genuinely stale data can exist — session abort and connection teardown — so the head frames always survive to playback. Regression-tested (`tests/test_tts_head_clipping.py`).
+
 ## [3.5.0]
 
 ### Changed
@@ -11,7 +19,7 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
-- **A complete example skill.** `examples/skills/example_skill.py` is one runnable, heavily commented file demonstrating the whole authoring surface — an LLM tool, an instant fast intent, per-skill config, server-injected context, and a server action — with try-it steps in its header. It's loaded by the test suite through the real overlay loader, so it stays correct as the API evolves. Linked from the [Writing Skills](https://docs.kenzy.dev/skills/writing-skills/) guide.
+- **A complete example skill.** `examples/skills/example_skill.py` is one runnable, heavily commented file demonstrating the whole authoring surface — an LLM tool, an instant fast intent, per-skill config, server-injected context, and a server action — with try-it steps in its header. It's loaded by the test suite through the real overlay loader, so it stays correct as the API evolves. Linked from the [Writing Skills](https://docs.kenzy.ai/skills/writing-skills/) guide.
 - **Silent local fallback for the cloud stages.** Each cloud-backed stage can now retry locally when the cloud call fails — silently, with no double error handling: if the fallback fails too, the user just gets the spoken error cue. **LLM:** an optional `fallback.model`/`fallback.base_url` in the LLM config (e.g. a local Ollama model) — the whole tool-calling request pins to the fallback after the first primary failure, so a multi-step request doesn't re-pay the cloud timeout per step, and skill sub-calls (news summaries, the HA resolver) ride the same path. **TTS:** with `openai.fallback: true` (the default), a cloud synthesis failure retries with local Kokoro when the `kokoro` extra is installed (lazy first load). **STT:** with `openai.fallback: true` (the default), a cloud transcription failure retries with local faster-whisper, loaded lazily on first need. Fallback calls never carry cloud credentials (same rule as custom endpoints).
 - **Kenzy says so when a request fails.** A mid-pipeline failure (STT, LLM, or TTS down/erroring) used to be a log line — from the couch, indistinguishable from being ignored. The node now plays a **pre-recorded** spoken cue ("I'm sorry, but I'm having trouble processing your request at the moment"), pre-recorded in Kenzy's own voice precisely because it must work when TTS is the broken part. Configurable per node like the other sounds (`sound_error`; a path is read on the server host; empty = stay silent), applied live with no restart. A failed reply also releases any held multi-turn conversation.
 - **"Running Fully Local" guide.** The docs now articulate what the architecture always supported: every voice-pipeline stage — wake word, STT, reasoning, TTS, speaker ID — running on your own hardware with nothing spoken at home leaving your network. Stage-by-stage recipe (Ollama for the LLM, Kokoro for the voice, whisper already the STT default), the honest hardware note (the LLM is the stage that wants a GPU), which skills still make outbound requests and how to disable them, and a pull-the-plug verification checklist.

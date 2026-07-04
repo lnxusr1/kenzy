@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "kenzy"
-version = "3.5.0"
+version = "3.5.1"
 description = "Distributed home voice-assistant: kenzy-node, kenzy-server, kenzy-stt, kenzy-tts, kenzy-llm, kenzy-speaker"
 requires-python = ">=3.11"
 readme = "README.md"
@@ -138,8 +138,8 @@ kenzy-setup   = "kenzy.setup:main"
 kenzy-init    = "kenzy.init:main"
 
 [project.urls]
-Homepage = "https://kenzy.dev"
-Documentation = "https://docs.kenzy.dev"
+Homepage = "https://kenzy.ai"
+Documentation = "https://docs.kenzy.ai"
 Repository = "https://github.com/lnxusr1/kenzy"
 Changelog = "https://github.com/lnxusr1/kenzy/blob/main/CHANGELOG.md"
 
