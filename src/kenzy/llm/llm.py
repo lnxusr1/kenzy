@@ -62,6 +62,10 @@ class ProcessRequest(BaseModel):
     # The asking node's active timers/alarms/reminders (sent by the server) so the
     # schedule skill / fast intents can answer status and cancel by id locally.
     schedules: list[dict[str, Any]] = []
+    # Rooms whose speakers lack echo cancellation (hardware_aec: false) — the
+    # alarm/intercom skills refuse these targets in the reply itself, instead of
+    # confirming and then failing when the server actuates the action.
+    no_aec_rooms: list[str] = []
 
 
 class ProcessResponse(BaseModel):
@@ -255,7 +259,19 @@ async def get_ha_curation() -> dict[str, Any]:
         lists = await ha_model.fetch_todo_lists()
     except Exception as exc:
         log.warning("HA todo lists unavailable for curation editor: %s", exc)
-    return {"curation": curation, "devices": devices, "lists": lists, "reachable": reachable}
+    import os
+
+    return {
+        "curation": curation,
+        "devices": devices,
+        "lists": lists,
+        "reachable": reachable,
+        # Editor state hints: the tab stays editable when the skill is off
+        # (curation is stageable config), but it says so honestly; with no HA
+        # credential at all it shows onboarding guidance instead of an error.
+        "skill_disabled": skill_registry.is_disabled("home_assistant"),
+        "configured": bool(os.environ.get("HA_API_KEY")),
+    }
 
 
 @app.post("/ha/curation")
@@ -282,7 +298,12 @@ async def process(req: ProcessRequest) -> ProcessResponse:
     # the server-injected context (rooms, active schedules) skills may read.
     skill_registry.begin_actions()
     skill_registry.begin_request(
-        {"rooms": req.rooms, "schedules": req.schedules, "room_id": req.room_id}
+        {
+            "rooms": req.rooms,
+            "schedules": req.schedules,
+            "room_id": req.room_id,
+            "no_aec_rooms": req.no_aec_rooms,
+        }
     )
 
     # Deterministic fast path: try local/instant matchers before the LLM.

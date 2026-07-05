@@ -536,6 +536,19 @@ class NodeClient:
         self._volume: float = _volume_to_gain(cfg.get("volume", 100))
         self._muted: bool = bool(cfg.get("muted", False))
 
+        # Hardware capability, declared not detected: whether this room's speaker
+        # does acoustic echo cancellation. False ⇒ strict half-duplex — wake hits
+        # are ignored while the node is emitting any audio (she can't hear you
+        # over herself), and the server disables intercom / degrades alarms for
+        # this node. Default true matches the published hardware guidance.
+        self._hardware_aec: bool = bool(cfg.get("hardware_aec", True))
+
+        # System-metrics sampler (dashboard fleet card): stdlib procfs reads,
+        # None-safe on non-Linux. Sent every ~30 s while connected.
+        from kenzy.node.sysinfo import MetricsSampler
+
+        self._sys_sampler = MetricsSampler()
+
         # Timing thresholds, all stored as frame counts (min 1 to avoid ≥0 always-true).
         self._vad_enabled: bool = bool(cfg.get("vad_enabled", True))
         self._silence_frames: int = max(int(cfg.get("silence_ms", 400)) // protocol.FRAME_MS, 1)
@@ -919,6 +932,10 @@ class NodeClient:
             self._hard_cap_frames = max(int(patch["hard_cap_ms"]) // fm, 1)
             applied.append("hard_cap_ms")
 
+        if "hardware_aec" in patch:
+            self._hardware_aec = bool(patch["hardware_aec"])
+            applied.append("hardware_aec")
+
         if "volume" in patch:
             self._volume = _volume_to_gain(patch["volume"])
             if self._player is not None:
@@ -1011,6 +1028,23 @@ class NodeClient:
             log.info("Server config needs restart (not applied live): %s", ", ".join(deferred))
         if not applied and not deferred:
             log.debug("Server config had no applicable keys")
+
+    async def _metrics_loop(self, ws: ClientConnection) -> None:
+        """Report system metrics (cpu/ram/disk/temp) every ~30 s while connected.
+
+        First sample goes out quickly so a fresh connection's fleet card isn't
+        blank for half a minute. Exits quietly on any send failure — the recv
+        loop owns detecting the dead connection.
+        """
+        delay = 2.0
+        while True:
+            await asyncio.sleep(delay)
+            delay = 30.0
+            m = self._sys_sampler.sample()
+            try:
+                await ws.send(protocol.metrics(**m))
+            except Exception:
+                return
 
     async def _recv_loop(self, ws: ClientConnection) -> None:
         # Explicit recv() instead of `async for` so that task cancellation
@@ -1188,6 +1222,17 @@ class NodeClient:
                     continue
                 for name, score in scores.items():
                     if score >= self._wakeword_threshold:
+                        if (
+                            not self._hardware_aec
+                            and self._player is not None
+                            and self._player.active
+                        ):
+                            # Half-duplex hardware (hardware_aec: false): the mic
+                            # hears our own output at full volume, so a wake hit
+                            # during ANY local playback is untrustworthy — ignore
+                            # it. Wake works again the instant playback ends.
+                            log.debug("Wake hit ignored (no AEC, playback active)")
+                            break
                         log.info("Wake word '%s' score=%.3f", name, score)
                         if self._state == _STATE_IDLE:
                             await self._begin_streaming(str(uuid.uuid4()))
@@ -1643,9 +1688,11 @@ class NodeClient:
 
         recv_task = asyncio.create_task(self._recv_loop(ws), name="recv")
         cmd_task = asyncio.create_task(self._cmd_loop(), name="cmd")
+        metrics_task = asyncio.create_task(self._metrics_loop(ws), name="metrics")
         try:
             await asyncio.wait({recv_task, cmd_task}, return_when=asyncio.FIRST_COMPLETED)
         finally:
+            metrics_task.cancel()
             # Close the socket first so _recv_loop's ws.recv() unblocks via
             # ConnectionClosed rather than being hard-cancelled mid-handshake.
             try:

@@ -54,6 +54,7 @@ discovery:
 # sound_timer: timer.wav          # tone before a timer announcement (played by the server; null = voice only)
 # sound_alarm: alarm.wav          # tone before each alarm ring (played by the server; null = voice only)
 # sound_error: error.wav          # spoken cue when a request fails (played by the server; null = silent)
+# hardware_aec: true              # false = speaker has no echo cancellation: wake ignored during playback; intercom/alarm ring disabled
 # wakeword_models: []             # paths to .tflite/.onnx; empty = bundled
 # wakeword_threshold: 0.5         # confidence [0-1] to fire the wake word
 # wakeword_vad_threshold: 0.0     # Silero VAD gate [0-1]; 0 disables

@@ -47,9 +47,13 @@ change takes effect immediately and signs out other sessions.
 The landing page lists:
 
 - **Room nodes** — one card per connected node, showing its room name, a short node
-  id, IP address, installed Kenzy **version**, and live status (idle / streaming). Cards
-  flagged **⚑ unconfigured** have no saved per-node config yet. A **Configure** button
-  opens the node editor.
+  id, IP address, installed Kenzy **version**, live status (idle / streaming), and a
+  **system** row with the node's CPU, RAM, and disk usage plus its temperature
+  (refreshed every ~30 seconds; the temperature turns red at 80°C — Raspberry Pi
+  throttling territory, usually a sign the node wants a heatsink or better airflow).
+  Cards flagged **⚑ unconfigured** have no saved per-node config yet; rooms with
+  `hardware_aec: false` carry a **no AEC** badge. A **Configure** button opens the
+  node editor.
 - **Backend services** — STT, TTS, LLM, and Speaker health (from each service's
   `/health`), with a few details (version, model, voice, provider).
 

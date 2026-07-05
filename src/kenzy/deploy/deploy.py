@@ -381,8 +381,7 @@ def _set_remote_node_id(host: HostConfig) -> None:
     code = shlex.quote(_NODE_ID_PATCH)
     r = _ssh(
         host,
-        f"{shlex.quote(host.python_bin)} -c {code} "
-        f"{shlex.quote(cfg)} {shlex.quote(host.node_id)}",
+        f"{shlex.quote(host.python_bin)} -c {code} {shlex.quote(cfg)} {shlex.quote(host.node_id)}",
         check=False,
     )
     if r.returncode == 0:
@@ -933,8 +932,7 @@ def cmd_uninstall(hosts: list[HostConfig], *, purge: bool, assume_yes: bool) -> 
     for host in hosts:
         _header(
             host.name,
-            f"uninstall  {host.address}  services={host.services}"
-            + ("  (purge)" if purge else ""),
+            f"uninstall  {host.address}  services={host.services}" + ("  (purge)" if purge else ""),
         )
 
         units = [_unit_name(s) for s in host.services]

@@ -31,6 +31,16 @@ function shortId(id) {
   return id && id.length > 12 ? id.slice(0, 8) + "…" : id;
 }
 
+function fmtMetrics(m) {
+  if (!m) return null;
+  const parts = [];
+  if (m.cpu != null) parts.push(`cpu ${m.cpu}%`);
+  if (m.ram != null) parts.push(`ram ${m.ram}%`);
+  if (m.disk != null) parts.push(`disk ${m.disk}%`);
+  if (m.temp != null) parts.push(`${m.temp}°C`);
+  return parts.length ? parts.join(" · ") : null;
+}
+
 function NodeCard({ node, onConfigure }) {
   const streaming = node.streaming;
   const audioFailed = node.audio_ok === false;
@@ -50,7 +60,13 @@ function NodeCard({ node, onConfigure }) {
         <dt>session</dt><dd>${node.session_id || "—"}</dd>
         <dt>link</dt><dd>${node.connected ? "connected" : "down"}</dd>
         <dt>version</dt><dd>${node.version || "—"}</dd>
+        ${fmtMetrics(node.metrics)
+          ? html`<dt>system</dt><dd class=${node.metrics.temp != null && node.metrics.temp >= 80 ? "hot" : ""}>${fmtMetrics(node.metrics)}</dd>`
+          : null}
       </dl>
+      ${node.aec === false
+        ? html`<div class="unclaimed" title="hardware_aec: false — no echo cancellation: voice interrupt during playback, intercom, and alarm ring loops are disabled for this room">◌ no AEC — half-duplex room</div>`
+        : null}
       ${audioFailed
         ? html`<div class="unclaimed" title=${node.audio_error || ""}>⚠ audio failed — check the device, then Restart</div>`
         : null}

@@ -581,3 +581,19 @@ button { font: inherit; cursor: pointer; }
 }
 
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+
+/* Node metrics (fleet card): flag a hot SoC (≥80°C — Pi throttle territory). */
+dd.hot { color: var(--led-down); font-weight: 600; }
+
+/* Skills accordion: group headers are the page's table of contents — visually
+   distinct from member rows, clickable to expand. */
+.sk-group { margin-bottom: var(--s4); }
+.sk-group-head {
+  cursor: pointer;
+  background: color-mix(in srgb, var(--panel) 60%, var(--bg));
+  border-bottom: 1px solid var(--border);
+  user-select: none;
+}
+.sk-group-head:hover { background: color-mix(in srgb, var(--panel) 80%, var(--bg)); }
+.sk-chev { display: inline-block; width: 1em; color: var(--muted, inherit); font-size: 0.85em; }
+.sk-group .sk-list .sk-row { padding-left: var(--s5, 1.1rem); }

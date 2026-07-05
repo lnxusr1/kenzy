@@ -211,6 +211,31 @@ def _entries(kind: str | None = None) -> list[dict[str, Any]]:
     return [e for e in items if kind is None or e.get("kind") == kind]
 
 
+def _alarm_blocked_room(room: str | None) -> str | None:
+    """If the alarm's target room lacks AEC, return its display name, else None.
+
+    An alarm's ring loop is stopped by the wake word heard OVER the ringing —
+    impossible without echo cancellation — so such rooms refuse at set time
+    (with a spoken alternative) rather than confirm something that can't work.
+    Target = the explicit room, or the asking room when none was given.
+    """
+    target = (room or get_request("room_id") or "").strip().lower()
+    if not target:
+        return None
+    for r in get_request("no_aec_rooms") or []:
+        if str(r).strip().lower() == target:
+            return str(r)
+    return None
+
+
+def _alarm_refusal(blocked: str, here: bool) -> str:
+    where = "This room's speaker" if here else f"The {blocked} speaker"
+    return (
+        f"{where} can't run alarms — without echo cancellation it couldn't hear "
+        "you stop the ringing. I can set a timer or a reminder instead."
+    )
+
+
 def _known_room(name: str) -> str | None:
     wanted = name.strip().lower()
     for r in get_request("rooms") or []:
@@ -279,6 +304,9 @@ async def set_alarm(time: str, days: str = "", room: str = "") -> str:
         if _known_room(room) is None:
             return f"Error: no connected room named {room!r}."
         action["room"] = _known_room(room)
+    blocked = _alarm_blocked_room(action.get("room"))
+    if blocked is not None:
+        return _alarm_refusal(blocked, here=not room.strip())
     add_action(action)
     suffix = f" {_fmt_days(day_list)}" if day_list else ""
     return f"Scheduled: alarm at {_fmt_clock(time.strip())}{suffix}."
@@ -574,6 +602,9 @@ def _handle_set_alarm(text: str) -> FastResult | None:
     }
     if room:
         action["room"] = room
+    blocked = _alarm_blocked_room(room)
+    if blocked is not None:
+        return FastResult.handled(_alarm_refusal(blocked, here=not room), _VOICE)
     add_action(action)
     reply = f"Alarm set for {_fmt_clock(hhmm)}"
     if days:

@@ -245,6 +245,7 @@ class Dashboard:
         # Live-push for the Scheduled view: any schedule change (set by voice,
         # fired, cancelled) pokes connected browsers to re-fetch /api/schedules.
         server.add_schedule_listener(self._on_schedules_change)
+        server.add_metrics_listener(self._on_state_change)  # refresh cards on metrics ticks
 
     # ------------------------------------------------------------------
     # Auth — read-only GETs are LAN-open; mutations need a login cookie
@@ -355,6 +356,11 @@ class Dashboard:
                     "audio_ok": bool(session.audio_ok),
                     "audio_error": session.audio_error,
                     "version": session.kenzy_version,
+                    # Declared hardware capability: false ⇒ half-duplex room
+                    # (no voice-interrupt during playback; intercom/alarms off).
+                    "aec": self._server._node_aec(node_id),
+                    # Latest node system metrics (cpu/ram/disk %, temp °C).
+                    "metrics": session.metrics,
                 }
             )
         return nodes
@@ -880,6 +886,8 @@ class Dashboard:
             "devices": (info or {}).get("devices", []),
             "lists": (info or {}).get("lists", []),
             "ha_reachable": bool((info or {}).get("reachable", False)),
+            "skill_disabled": bool((info or {}).get("skill_disabled", False)),
+            "configured": bool((info or {}).get("configured", True)),
         }
 
     async def _set_ha_curation(self, curation: dict[str, Any]) -> tuple[bool, str | None]:
@@ -898,19 +906,33 @@ class Dashboard:
             "controls": self._dcfg.controls,
             "skills": (info or {}).get("skills", []),
             "fast_intents": (info or {}).get("fast_intents", []),
+            # Module-level view (group toggles): dropping this leaves the UI unable
+            # to show module state — "Enable all" never appears (found live).
+            "modules": (info or {}).get("modules", []),
         }
 
     async def _set_skill_disabled(self, name: str, disabled: bool) -> tuple[bool, str | None]:
-        """Toggle one skill: persist to the llm override and live-apply (no restart)."""
+        """Toggle one skill OR a whole module: persist + live-apply (no restart).
+
+        Module toggles operate on the module's members too — critically for
+        enable: a module can read as disabled because every member was switched
+        off individually, in which case discarding just the module name would be
+        a silent no-op (the "Enable all does nothing" bug)."""
         info = await self._llm_skills_request("GET")
         if info is None:
             return False, "LLM service not reachable"
-        current = {
-            s["name"]
-            for s in info.get("skills", []) + info.get("fast_intents", [])
-            if s.get("disabled")
-        }
-        if disabled:
+        entries = info.get("skills", []) + info.get("fast_intents", [])
+        current = {s["name"] for s in entries if s.get("disabled")}
+        module_names = {m.get("name") for m in info.get("modules", [])}
+        if name in module_names:
+            members = {s["name"] for s in entries if s.get("module") == name}
+            if disabled:
+                current -= members  # member entries are redundant under the module's
+                current.add(name)
+            else:
+                current -= members  # clear however the module got disabled
+                current.discard(name)
+        elif disabled:
             current.add(name)
         else:
             current.discard(name)

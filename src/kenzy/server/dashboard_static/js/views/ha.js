@@ -157,6 +157,12 @@ export function HaView() {
     return html`<div class="empty">The LLM service isn't reachable, so Home Assistant curation
       can't be edited. Check <span class="mono">llm.url</span> and that
       <span class="mono">kenzy-llm</span> is running.</div>`;
+  if (data.configured === false)
+    return html`<div class="empty">Home Assistant isn't connected yet. Add
+      <span class="mono">HA_API_KEY</span> under Settings → API keys, set the
+      <span class="mono">home_assistant.url</span> in the llm service config
+      (Services → llm), restart kenzy-llm — and this screen fills with your
+      devices, rooms, and lists.</div>`;
 
   const controls = data.controls;
   const devices = data.devices || [];
@@ -198,6 +204,13 @@ export function HaView() {
   };
 
   return html`
+    ${data.skill_disabled
+      ? html`<div class="banner warn">
+          ⚠ The <b>home assistant</b> module is <b>disabled</b> (Skills tab), so voice
+          control and lists are off — nothing on this screen takes effect until it's
+          re-enabled. Edits still save, so you can stage changes here first.
+        </div>`
+      : null}
     <div class="stats">
       <div class="tile"><div class="micro">Entities</div><div class="k">${devices.length}</div></div>
       <div class="tile"><div class="micro">Voice-controllable</div><div class="k">${included}</div></div>

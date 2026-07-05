@@ -10,7 +10,13 @@ so the model can say something like "Calling the living room…".
 
 from __future__ import annotations
 
-from kenzy.llm.skills import add_action, skill  # type: ignore[import]
+from kenzy.llm.skills import add_action, get_request, skill  # type: ignore[import]
+
+
+def _no_aec(room: str) -> bool:
+    return room.strip().lower() in {
+        str(r).strip().lower() for r in (get_request("no_aec_rooms") or [])
+    }
 
 
 @skill
@@ -26,5 +32,11 @@ async def connect_room(room: str) -> str:
     room = room.strip()
     if not room:
         return "No room was given to call."
+    # Two-way live audio needs echo cancellation at BOTH ends — refuse in the
+    # reply itself rather than confirm a call the server would have to reject.
+    here = str(get_request("room_id") or "")
+    for end, label in ((room, f"the {room}"), (here, "this room")):
+        if end and _no_aec(end):
+            return f"Live calls need an echo-cancelling speaker, and {label} doesn't have one."
     add_action({"type": "start_intercom", "room": room})
     return f"Calling {room}."

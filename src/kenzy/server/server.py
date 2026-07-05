@@ -78,6 +78,7 @@ _ALLOWED_OVERRIDE_KEYS = frozenset(
         "log_level",
         "log_capture_level",
         "volume",
+        "hardware_aec",
     }
 )
 # Server-owned keys stored in the per-node override file and pushed via config-pull,
@@ -240,6 +241,8 @@ class NodeSession:
     # Installed kenzy package version the node reported in `hello` (None = legacy node
     # that didn't send one). For the dashboard's per-host version view.
     kenzy_version: str | None = field(default=None)
+    # Latest periodic system metrics (cpu/ram/disk/temp; None = never reported).
+    metrics: dict[str, Any] | None = field(default=None)
 
     async def send_json(self, payload: dict[str, Any]) -> None:
         await self.ws.send(json.dumps(payload))
@@ -286,6 +289,7 @@ class AudioServer:
         # Observers notified when the node registry/state changes (the dashboard
         # registers one for live push). Empty by default ⇒ zero overhead.
         self._state_listeners: list[Callable[[], None]] = []
+        self._metrics_listeners: list[Callable[[], None]] = []
         # Pull-based logs: when the dashboard's `logs` flag is on it sets this, and
         # nodes are told (config `keep_logs`) to keep a buffer. Off ⇒ no node cost.
         self._capture_node_logs: bool = False
@@ -309,6 +313,19 @@ class AudioServer:
     def add_state_listener(self, fn: Callable[[], None]) -> None:
         """Register a callback fired (in-loop) when the node registry/state changes."""
         self._state_listeners.append(fn)
+
+    def add_metrics_listener(self, fn: Callable[[], None]) -> None:
+        """Observe node metrics updates (dashboard live refresh). Kept separate
+        from state listeners so 30-second metrics ticks never wake the MQTT/HA
+        bridge; zero overhead when nothing subscribes."""
+        self._metrics_listeners.append(fn)
+
+    def _notify_metrics(self) -> None:
+        for fn in self._metrics_listeners:
+            try:
+                fn()
+            except Exception:
+                log.exception("metrics listener failed")
 
     def _notify_state(self) -> None:
         for fn in self._state_listeners:
@@ -369,6 +386,20 @@ class AudioServer:
     # ------------------------------------------------------------------
     # Config-pull: effective per-node config = defaults + per-room override
     # ------------------------------------------------------------------
+
+    def _node_aec(self, node_id: str) -> bool:
+        """Whether a node's room has an echo-cancelling speaker (hardware_aec,
+        default true). Declared per node in config — it can't be detected."""
+        try:
+            return bool(self._effective_node_config(node_id).get("hardware_aec", True))
+        except Exception:
+            return True
+
+    def _no_aec_rooms(self) -> list[str]:
+        """Connected room names lacking AEC — injected into /process so skills
+        refuse alarm/intercom requests conversationally, in the reply itself,
+        instead of confirming and then failing after the fact."""
+        return sorted({s.room_id for nid, s in self._nodes.items() if not self._node_aec(nid)})
 
     def _effective_node_config(self, node_id: str) -> dict[str, Any]:
         """Merge central ``node_defaults`` with ``configs/nodes/<node_id>.yaml``.
@@ -1002,6 +1033,12 @@ class AudioServer:
                     session.audio_error,
                 )
             self._notify_state()
+
+        elif mtype == protocol.MSG_METRICS:
+            session.metrics = {
+                k: msg.get(k) for k in ("cpu", "ram", "disk", "temp") if msg.get(k) is not None
+            }
+            self._notify_metrics()
 
         elif mtype == protocol.MSG_TUNE_SAMPLE:
             self._notify_tune(
@@ -1804,6 +1841,9 @@ class TranscribingServer(AudioServer):
             # The asking node's active timers/alarms/reminders, so the schedule
             # skill / fast intents can answer status and cancel by id locally.
             "schedules": self._schedule_payload(node_id) if node_id else [],
+            # Rooms whose speakers lack AEC (hardware_aec: false) — alarm and
+            # intercom skills refuse these targets in the reply itself.
+            "no_aec_rooms": self._no_aec_rooms(),
         }
         async with httpx.AsyncClient() as client:
             resp = await client.post(
@@ -2050,6 +2090,21 @@ class TranscribingServer(AudioServer):
             return
         room = self._nodes[node_id].room_id if node_id in self._nodes else entry.room
         if entry.kind == "alarm":
+            if not self._node_aec(node_id):
+                # Half-duplex room: a ring loop can't be voice-stopped (the wake
+                # word is the only off-switch, and it can't be heard over the
+                # ringing) — degrade to a single timer-style delivery. A silent
+                # miss would be the worst failure an alarm can have.
+                hhmm = entry.at or time.strftime("%H:%M")
+                h, m = int(hhmm[:2]), int(hhmm[3:])
+                spoken = f"{h % 12 or 12}:{m:02d} {'AM' if h < 12 else 'PM'}"
+                asyncio.create_task(
+                    self._deliver_schedule(
+                        node_id, room, f"It's {spoken}. This is your alarm.", "alarm"
+                    ),
+                    name=f"alarm-once-{node_id}",
+                )
+                return
             old = self._ring_tasks.pop(node_id, None)
             if old is not None:
                 old.cancel()
@@ -2327,6 +2382,17 @@ class TranscribingServer(AudioServer):
             await self._say(caller_id, caller_room, f"I couldn't reach the {target_room}.")
             return
         receiver = self._nodes[receiver_id]
+        # Two-way live audio is impossible without echo cancellation (feedback
+        # loop) — refuse cleanly when either endpoint lacks it. Backstop: the
+        # connect_room skill already refuses in-reply via no_aec_rooms.
+        if not self._node_aec(caller_id) or not self._node_aec(receiver_id):
+            which = caller_room if not self._node_aec(caller_id) else receiver.room_id
+            await self._say(
+                caller_id,
+                caller_room,
+                f"Live calls need an echo-cancelling speaker, and the {which} doesn't have one.",
+            )
+            return
         caller = self._nodes.get(caller_id)
         busy = (
             receiver_id in self._pending_calls

@@ -114,6 +114,4 @@ skills:
     # Model used for the device-resolution sub-call (defaults to gpt-4o).
     # model: "gpt-4o"
     # base_url: null   # set for local providers (Ollama, LM Studio, etc.)
-    device_ids_yaml: "data/home_assistant/device_ids.yaml"
-    device_ids_json: "data/home_assistant/device_ids.json"
     default_room: "living_room"

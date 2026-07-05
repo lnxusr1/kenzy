@@ -60,6 +60,22 @@ The node service runs on each room device. It captures microphone audio, detects
 | `sound_timer` | `"timer.wav"` | Tone played before a **timer** announcement. Unlike the other sounds, this is prepended by the **server** at fire time — a path is read on the server host, and changes apply **live** (no node restart). Empty/`null` = voice only. |
 | `sound_alarm` | `"alarm.wav"` | Tone played before **each alarm ring** — same server-side, live-apply behavior as `sound_timer`. The tone still plays even if TTS synthesis fails. Empty/`null` = voice only. |
 | `sound_error` | `"error.wav"` | Spoken cue when a request **fails** mid-pipeline ("I'm sorry, but I'm having trouble…"). Pre-recorded — not synthesized — so it still plays when TTS itself is the broken part. Same server-side, live-apply semantics. Empty/`null` = stay silent on failure. |
+| `hardware_aec` | `true` | Whether this room's speaker does **acoustic echo cancellation** (declared, not detected — Kenzy can't tell from the audio). Set `false` for a non-AEC speaker and the room runs **half-duplex**: see the table below for exactly what changes. Live-applied; shown as a "no AEC" badge on the room's fleet card. |
+
+### Rooms without echo cancellation (`hardware_aec: false`)
+
+Kenzy assumes an echo-cancelling speakerphone (see the hardware guide) — it's
+what lets her hear you *while she's making sound*. On a speaker without AEC,
+her own audio floods the microphone, so features that depend on
+listening-during-playback are turned off **cleanly** rather than left to
+misbehave:
+
+| Feature | Without AEC |
+|---|---|
+| Voice interrupt while Kenzy is speaking/playing | Off — the wake word works again the instant playback ends |
+| Intercom (live two-way calls) | Unavailable — Kenzy politely refuses (a two-way call without echo cancellation is a feedback loop) |
+| Alarms | Refused at set time with an offer of a timer or reminder instead (an alarm's ring loop can only be silenced by voice — impossible over the ringing). An already-set alarm still fires, once, timer-style |
+| Timers, reminders, announcements, all voice commands, multi-turn dialogs | **Work normally** |
 
 !!! note "Zero-config nodes (discovery + config-pull)"
     A node needs no operational local config. With `server_url` unset it finds the server via mDNS, generates a stable `node_id` on first run (or one assigned at install via `kenzy-init --node-id`), and **blocks until the server answers** — it connects, sends `hello`, and waits for the server's `config` frame before initializing audio. That effective config is the server's `node_defaults` plus any per-node override in `configs/nodes/<node_id>.yaml`. **Hardware keys** (`audio_device`, sample rates, `wakeword_models`/VAD gate, sounds) are applied as the audio stack is built on this first pull; a *later* change to a hardware key needs a restart (one click in the dashboard). **Live-tunable keys** (wake-word threshold, silence RMS, VAD timing) apply immediately on every push. So a room device can run with an essentially empty `node.yaml`, and everything — including its room name — is configured from the [dashboard](../dashboard.md) and centralised on the server. Pre-seed a node by creating `configs/nodes/<node_id>.yaml` on the server before the device first connects. See [Server Configuration](server.md#discovery-and-config-pull).

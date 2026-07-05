@@ -27,6 +27,9 @@ const TYPES = {
   sound_timer: "str",
   sound_alarm: "str",
   sound_error: "str",
+  // Declared hardware capability (can't be detected): false ⇒ half-duplex room —
+  // wake ignored during playback; intercom and alarm ring loops disabled.
+  hardware_aec: "bool",
 };
 
 // Keys that re-init audio hardware: a change is pulled on the node's next boot,

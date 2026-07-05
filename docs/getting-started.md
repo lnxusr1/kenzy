@@ -17,10 +17,13 @@ If anything doesn't behave the way a step says it should, jump to
   services well.)
 - **A microphone and speaker.** Strongly recommended: a **USB conference
   speakerphone** (e.g. an Anker PowerConf or similar). These have built-in echo
-  cancellation, which matters — without it, Kenzy hears its own voice through the
-  speaker and can interrupt itself. A webcam mic plus desktop speakers will limp
-  along for a first test, but a speakerphone is the single best purchase for this
-  project.
+  cancellation (AEC), which matters — it's what lets Kenzy hear you while she's
+  making sound. A webcam mic plus desktop speakers will limp along for a first
+  test, but a speakerphone is the single best purchase for this project. Using a
+  speaker **without** echo cancellation? Set `hardware_aec: false` for that room
+  and Kenzy adapts honestly — intercom and alarm ring-loops are disabled there
+  (with a polite spoken explanation) instead of misbehaving; everything else
+  works normally. See [rooms without echo cancellation](configuration/node.md#rooms-without-echo-cancellation-hardware_aec-false).
 - **An OpenAI API key** (from [platform.openai.com](https://platform.openai.com)).
   The default setup uses OpenAI for the "thinking" and the voice — the easiest way
   to start. You can switch to other providers, or to fully local models, later
