@@ -22,10 +22,6 @@ All notable changes to this project will be documented in this file.
 
 - **Announcements no longer clip the first word.** A race in the node's receive path: binary TTS frames are queued the instant they arrive off the socket, while `tts_start` waits for the command loop — so an announcement's own leading frames could land in the queue first and be eaten by `_begin_tts`'s stale-frame drain (intermittent, worst on busy Pis and on `announce()`'s tight multi-node burst). Queue cleanup now happens only where genuinely stale data can exist — session abort and connection teardown — so the head frames always survive to playback. Regression-tested (`tests/test_tts_head_clipping.py`).
 
-### Development
-
-- **`dev_stack.py`** (repo root, not packaged): run the whole stack as local processes in one terminal — prefixed/colorized per-service logs, one Ctrl-C stops everything gracefully. Services config-pull from the local server by default (so the dashboard's Services editor applies to a dev stack); `--local` pins them to packaged configs, `--only`/`--skip`/`--node` select what runs.
-
 ## [3.5.0]
 
 ### Changed
