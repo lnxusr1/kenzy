@@ -114,15 +114,13 @@ Respond with a JSON object — no markdown, no extra text:
 # ---------------------------------------------------------------------------
 
 
-def _project_root() -> Path:
-    """Operational-tree root that holds ``data/home_assistant/`` (KENZY_HOME-aware)."""
-    from kenzy.config import kenzy_data_root
+def _area_to_floor(yaml_text: str) -> dict[str, str]:
+    """Build a child→parent lookup from the resolver text's top two levels.
 
-    return kenzy_data_root()
-
-
-def _room_to_area(yaml_text: str) -> dict[str, str]:
-    """Build a room→area lookup from the area>room>type>device YAML structure."""
+    Against the live resolver text (floor > area > type > entity) this maps
+    **area → floor** — exactly how ``_resolve`` uses it for the
+    location-context line. (The historic name ``_room_to_area`` described the
+    old static-file nesting and lied about the live shape.)"""
     import yaml as _yaml
 
     mapping: dict[str, str] = {}
@@ -191,7 +189,7 @@ async def _resolve(request: str, yaml_text: str, room: str | None = None) -> dic
     base_url = get_config("home_assistant", "base_url") or None
 
     resolved_room = room or get_config("home_assistant", "default_room") or ""
-    resolved_floor = _room_to_area(yaml_text).get(resolved_room, "") if resolved_room else ""
+    resolved_floor = _area_to_floor(yaml_text).get(resolved_room, "") if resolved_room else ""
 
     user_content = f"Device map:\n{yaml_text}\n\nUser request: {request}"
     if resolved_room:
@@ -449,9 +447,12 @@ def _auto_spoken(code: str) -> str:
     return " ".join(parts)
 
 
-# NOTE: retained although production now builds indexes only from the live model
-# (_index_from_model): the resolver test-suite drives the resolution engine from
-# the static-format fixtures in data/home_assistant/ via this builder.
+# TODO(3.6.0): relocate into tests/test_home_assistant_resolver.py — production
+# builds indexes only from the live model (_index_from_model); this builder's
+# sole remaining consumer is the resolver test-suite, which feeds the (fully
+# live) resolution engine the rich static-format fixture corpus in
+# data/home_assistant/. Moving the adapter to the tests leaves this module
+# all-live-path without orphaning the fixtures.
 def _index_from(
     yaml_text: str, device_map: dict[str, str], overlay: dict[str, Any]
 ) -> _DeviceIndex:

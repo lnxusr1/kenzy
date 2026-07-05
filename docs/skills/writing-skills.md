@@ -283,8 +283,8 @@ For deterministic intent/slot parsing beyond simple keyword checks, the `llm` ex
 Toggle it off in the dashboard's **Skills** tab — applied live, no restart, and
 persisted. The tab groups skills by their source **module** (file), with a
 "Disable all" toggle per group — that's how you turn off a whole feature like
-Home Assistant, which is really several skills (`handle_home_control`,
-`get_device_states`, the list tools) plus their fast intents.
+Home Assistant, which is really a skill (`handle_home_control`) plus its fast
+intent, or lists, which is five skills plus theirs.
 
 In `llm.yaml`, `skills.disabled` accepts either level:
 

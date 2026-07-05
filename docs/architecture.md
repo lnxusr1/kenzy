@@ -43,6 +43,8 @@ Control messages are JSON text frames. Audio is raw int16 PCM binary frames at 1
 | `ack` | server → node | Confirms `audio_start` was received |
 | `tts_start` | server → node | Begins TTS playback; includes `sample_rate` and `channels` |
 | `tts_end` | server → node | Ends TTS playback |
+| `status` | node → server | Node health (e.g. audio init failed) and late-arriving device-probe results |
+| `metrics` | node → server | System metrics every ~30 s (CPU/RAM/disk %, temperature) for the dashboard's fleet cards |
 | `call_request` | server → node | Ring the node for an incoming intercom call (no audio bridged yet) |
 | `call_cancel` | server → node | Caller cancelled before the receiver accepted |
 | `intercom_start` | server → node | Consent accepted — begin a live two-way call with the peer room |
