@@ -30,6 +30,7 @@ MSG_SET_ROOM = "set_room"
 MSG_REQUEST_LOGS = "request_logs"
 MSG_LOGS = "logs"
 MSG_STATUS = "status"  # node→server: report node health (e.g. audio init failed)
+MSG_METRICS = "metrics"  # node→server: periodic system metrics (cpu/ram/disk/temp)
 MSG_TUNE_START = "tune_start"  # server→node: begin a bounded calibration window
 MSG_TUNE_STOP = "tune_stop"  # server→node: end calibration early
 MSG_TUNE_SAMPLE = "tune_sample"  # node→server: one calibration sample (rms/wake/vad)
@@ -160,6 +161,17 @@ def status(
     if devices is not None:
         payload["devices"] = devices
     return json.dumps(payload)
+
+
+def metrics(
+    cpu: float | None = None,
+    ram: float | None = None,
+    disk: float | None = None,
+    temp: float | None = None,
+) -> str:
+    """Node→server periodic system metrics (percentages / °C; None = unavailable
+    on this platform). Shown on the dashboard's fleet card."""
+    return json.dumps({"type": MSG_METRICS, "cpu": cpu, "ram": ram, "disk": disk, "temp": temp})
 
 
 def tune_start(seconds: float = 20.0) -> str:

@@ -1,6 +1,6 @@
 /* ============================================================================
    Kenzy brand over Material for MkDocs — petrol ink + golden "signal" accent,
-   matching kenzy.dev (tokens mirror kenzy-promo-www/assets/css/styles.css).
+   matching kenzy.ai (tokens mirror kenzy-promo-www/assets/css/styles.css).
    ========================================================================== */
 
 :root {
@@ -33,7 +33,7 @@
   --md-typeset-a-color:         var(--kenzy-signal-soft);
 }
 
-/* Golden signal line under the header — the datasheet accent from kenzy.dev. */
+/* Golden signal line under the header — the datasheet accent from kenzy.ai. */
 .md-header {
   border-bottom: 2px solid var(--kenzy-signal);
 }

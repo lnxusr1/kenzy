@@ -109,6 +109,22 @@ _FAST_REGISTRY: list[tuple[int, str, Callable[..., Any]]] = []
 # the same set is seeded from skills.disabled at load.  A name disables both the
 # @skill and any same-named @fast_intent.
 _DISABLED: set[str] = set()
+# name (skill or fast intent) → source module (file stem, e.g. "home_assistant").
+# The module is the unit that MEANS a feature: skills.disabled accepts module
+# names too, disabling every @skill and @fast_intent the file defines at once
+# (the dashboard's group toggle, and what gates like is_disabled("home_assistant")
+# query). Function-level entries still work for surgical disables.
+_MODULES: dict[str, str] = {}
+
+
+def _module_of(func: Any) -> str:
+    return str(getattr(func, "__module__", "") or "").rsplit(".", 1)[-1]
+
+
+def _inactive(name: str) -> bool:
+    """True when a skill/fast-intent is off — by its own name or its module's."""
+    return name in _DISABLED or _MODULES.get(name, "") in _DISABLED
+
 
 # Per-name invocation counts (skill executes + fast-intent handles), for the
 # dashboard's skill-registry view.  Best-effort, in-memory, reset on restart.
@@ -271,6 +287,7 @@ def skill(func: Callable[..., Any]) -> Callable[..., Any]:
     if not asyncio.iscoroutinefunction(func):
         raise TypeError(f"@skill requires an async function: {func.__name__}")
     _REGISTRY[func.__name__] = (func, _generate_schema(func))
+    _MODULES[func.__name__] = _module_of(func)
     return func
 
 
@@ -331,6 +348,7 @@ def fast_intent(
             raise TypeError(f"@fast_intent requires an async function: {func.__name__}")
         _FAST_REGISTRY.append((priority, func.__name__, func))
         _FAST_REGISTRY.sort(key=lambda t: t[0], reverse=True)
+        _MODULES[func.__name__] = _module_of(func)
         return func
 
     return wrap(_func) if _func is not None else wrap
@@ -347,7 +365,7 @@ async def dispatch_fast(
     pipeline.
     """
     for _priority, name, func in _FAST_REGISTRY:
-        if name in _DISABLED:
+        if _inactive(name):
             continue
         try:
             result: FastResult | None = await func(utterance, room_id, speaker)
@@ -428,7 +446,7 @@ def load_skills(user_dir: Path | None, disabled: list[str]) -> None:
     set_disabled(disabled)
 
     log.info("Skills active: %s", sorted(_active_skill_names()))
-    fast_active = [t[1] for t in _FAST_REGISTRY if t[1] not in _DISABLED]
+    fast_active = [t[1] for t in _FAST_REGISTRY if not _inactive(t[1])]
     if fast_active:
         log.info("Fast intents active: %s", fast_active)
     if _DISABLED:
@@ -436,22 +454,48 @@ def load_skills(user_dir: Path | None, disabled: list[str]) -> None:
 
 
 def _active_skill_names() -> list[str]:
-    return [name for name in _REGISTRY if name not in _DISABLED]
+    return [name for name in _REGISTRY if not _inactive(name)]
 
 
 def set_disabled(names: list[str]) -> None:
     """Replace the runtime-disabled set (live, no reload). Idempotent."""
     global _DISABLED
+    if isinstance(names, str):  # a bare string would iterate as characters
+        names = [names]
     _DISABLED = {str(n) for n in names}
+    _warn_unknown_disabled()
+
+
+def _warn_unknown_disabled() -> None:
+    """Log loudly when a skills.disabled entry matches nothing — a typo (or a
+    name from a newer/older version) silently disabling nothing is a debugging
+    trap (found the hard way: "home_assistant" was a no-op before modules)."""
+    if not (_REGISTRY or _FAST_REGISTRY):
+        return  # nothing loaded yet — validation happens after load
+    known = set(_REGISTRY) | {t[1] for t in _FAST_REGISTRY} | set(_MODULES.values())
+    unknown = _DISABLED - known
+    if unknown:
+        log.warning(
+            "skills.disabled entries match no skill, fast intent, or module "
+            "(check for typos): %s — known modules: %s",
+            sorted(unknown),
+            sorted(set(_MODULES.values())),
+        )
 
 
 def is_disabled(name: str) -> bool:
-    """Whether a skill/fast-intent name is currently disabled (live-toggled).
+    """Whether a skill, fast intent, or whole MODULE is currently disabled.
 
-    Lets one skill gate on another — e.g. the lists skill refuses to touch
-    Home Assistant when the ``home_assistant`` skill is switched off.
+    For a module name (e.g. "home_assistant"): true when the module itself is
+    listed in skills.disabled, or when every @skill it defines has been
+    individually disabled — so feature gates (lists' HA gate, the dashboard's
+    HA-tab banner) reflect the operator's intent regardless of which toggles
+    they used. For a function name: its own entry or its module's counts.
     """
-    return name in _DISABLED
+    if name in _DISABLED or _MODULES.get(name, "") in _DISABLED:
+        return True
+    members = [n for n, m in _MODULES.items() if m == name and n in _REGISTRY]
+    return bool(members) and all(n in _DISABLED for n in members)
 
 
 def registry_info() -> dict[str, Any]:
@@ -463,8 +507,9 @@ def registry_info() -> dict[str, Any]:
         skills.append(
             {
                 "name": name,
+                "module": _MODULES.get(name, ""),
                 "description": desc.strip().split("\n")[0][:200],
-                "disabled": name in _DISABLED,
+                "disabled": _inactive(name),
                 "calls": _COUNTS.get(name, 0),
                 "fast": any(t[1] == name for t in _FAST_REGISTRY),
             }
@@ -472,14 +517,21 @@ def registry_info() -> dict[str, Any]:
     fast = [
         {
             "name": name,
+            "module": _MODULES.get(name, ""),
             "priority": priority,
-            "disabled": name in _DISABLED,
+            "disabled": _inactive(name),
             "calls": _COUNTS.get(name, 0),
             "skill": name in _REGISTRY,
         }
         for priority, name, _ in _FAST_REGISTRY
     ]
-    return {"skills": skills, "fast_intents": fast}
+    modules = sorted({m for m in _MODULES.values() if m})
+    return {
+        "skills": skills,
+        "fast_intents": fast,
+        # Module-level view for the dashboard's group toggles.
+        "modules": [{"name": m, "disabled": is_disabled(m)} for m in modules],
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -489,14 +541,14 @@ def registry_info() -> dict[str, Any]:
 
 def get_tools() -> list[dict[str, Any]]:
     """Return the tool definitions to pass to LiteLLM (disabled skills excluded)."""
-    return [schema for name, (_, schema) in _REGISTRY.items() if name not in _DISABLED]
+    return [schema for name, (_, schema) in _REGISTRY.items() if not _inactive(name)]
 
 
 async def execute(name: str, arguments: dict[str, Any]) -> str:
     """Call a registered skill and return its string result."""
     if name not in _REGISTRY:
         return f"Unknown skill: {name!r}"
-    if name in _DISABLED:  # not advertised in get_tools(), but guard anyway
+    if _inactive(name):  # not advertised in get_tools(), but guard anyway
         return f"Skill {name!r} is disabled."
     func, _ = _REGISTRY[name]
     try:

@@ -19,11 +19,13 @@ def clean_registry():
         list(reg._FAST_REGISTRY),
         set(reg._DISABLED),
         dict(reg._COUNTS),
+        dict(reg._MODULES),
     )
     reg._REGISTRY.clear()
     reg._FAST_REGISTRY.clear()
     reg._DISABLED.clear()
     reg._COUNTS.clear()
+    reg._MODULES.clear()
     try:
         yield
     finally:
@@ -34,6 +36,8 @@ def clean_registry():
         reg._DISABLED.update(saved[2])
         reg._COUNTS.clear()
         reg._COUNTS.update(saved[3])
+        reg._MODULES.clear()
+        reg._MODULES.update(saved[4])
 
 
 def _register_demo():
@@ -148,3 +152,85 @@ async def test_dashboard_set_skill_disabled_persists_and_applies(tmp_path, monke
 
     saved = yaml.safe_load((tmp_path / "llm.yaml").read_text())
     assert saved["skills"]["disabled"] == ["weather"]
+
+
+# ---------------------------------------------------------------------------
+# Module-aware disabling (there is no skill literally named "home_assistant" —
+# the MODULE is the unit that means the feature; found via the dashboard)
+# ---------------------------------------------------------------------------
+
+
+async def test_module_disable_gates_members_and_fast_intents(clean_registry, monkeypatch):
+    import kenzy.llm.skills as sk
+
+    @sk.skill
+    async def fake_control(x: str) -> str:
+        """Fake HA control."""
+        return "ok"
+
+    @sk.fast_intent(priority=5)
+    async def fake_fast(utterance, room_id, speaker):
+        return sk.FastResult.handled("fast!", "v")
+
+    # Simulate both living in a module file called fake_ha.py
+    monkeypatch.setitem(sk._MODULES, "fake_control", "fake_ha")
+    monkeypatch.setitem(sk._MODULES, "fake_fast", "fake_ha")
+
+    sk.set_disabled(["fake_ha"])  # module name, not a function name
+    assert sk.is_disabled("fake_ha") is True
+    assert sk.is_disabled("fake_control") is True  # member inherits
+    assert all(t["function"]["name"] != "fake_control" for t in sk.get_tools())
+    assert "disabled" in await sk.execute("fake_control", {"x": "1"})
+    r = await sk.dispatch_fast("anything", None, None)
+    assert r is None  # fast intent silenced by its module
+
+    sk.set_disabled([])
+    assert sk.is_disabled("fake_ha") is False
+    assert (await sk.dispatch_fast("anything", None, None)).is_handled
+
+
+async def test_all_members_disabled_means_module_disabled(clean_registry, monkeypatch):
+    import kenzy.llm.skills as sk
+
+    @sk.skill
+    async def m_one(x: str) -> str:
+        """One."""
+        return "1"
+
+    @sk.skill
+    async def m_two(x: str) -> str:
+        """Two."""
+        return "2"
+
+    monkeypatch.setitem(sk._MODULES, "m_one", "featmod")
+    monkeypatch.setitem(sk._MODULES, "m_two", "featmod")
+
+    sk.set_disabled(["m_one"])
+    assert sk.is_disabled("featmod") is False  # partially off ≠ off
+    sk.set_disabled(["m_one", "m_two"])
+    assert sk.is_disabled("featmod") is True  # every member off ⇒ module off
+
+
+def test_registry_info_reports_modules(clean_registry, monkeypatch):
+    import kenzy.llm.skills as sk
+
+    info = sk.registry_info()
+    assert "modules" in info
+    for s in info["skills"]:
+        assert "module" in s
+
+
+async def test_unknown_disabled_entry_warns(clean_registry, caplog):
+    import logging
+
+    import kenzy.llm.skills as sk
+
+    _register_demo()
+    with caplog.at_level(logging.WARNING, logger="kenzy.llm.skills"):
+        sk.set_disabled(["definitely_not_a_skill"])
+    assert any("match no skill" in r.message for r in caplog.records)
+
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="kenzy.llm.skills"):
+        sk.set_disabled(["demo_skill"])  # valid → silent
+    assert not any("match no skill" in r.message for r in caplog.records)

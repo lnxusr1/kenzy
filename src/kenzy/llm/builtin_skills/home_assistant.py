@@ -5,9 +5,10 @@ Device topology (entities, names, domains, area/floor placement) is pulled
 **live from Home Assistant** by :mod:`kenzy.llm.builtin_skills.ha_model` and
 cached; the only hand-authored input is ``curation.yaml`` (aliases, per-device
 notes, room group-defaults, voice-control exclusions). ``_ensure_view`` builds a
-``_DeviceIndex`` + resolver text from that merged view; if HA is unreachable and
-the legacy ``device_ids.yaml`` / ``device_ids.json`` files exist, it falls back
-to them.
+``_DeviceIndex`` + resolver text from that merged view; if HA is unreachable
+with nothing cached, requests fail honestly ("could not load device map") —
+there is no static fallback (retired 3.5.1: a stale hand-built map can resolve
+but never actuate when HA is down).
 
 On each home control request:
   1. Fast path: padacioso intent parse + local resolution to entity IDs, executed
@@ -113,15 +114,15 @@ Respond with a JSON object — no markdown, no extra text:
 # ---------------------------------------------------------------------------
 
 
-def _project_root() -> Path:
-    """Operational-tree root that holds ``data/home_assistant/`` (KENZY_HOME-aware)."""
-    from kenzy.config import kenzy_data_root
-    return kenzy_data_root()
+def _area_to_floor(yaml_text: str) -> dict[str, str]:
+    """Build a child→parent lookup from the resolver text's top two levels.
 
-
-def _room_to_area(yaml_text: str) -> dict[str, str]:
-    """Build a room→area lookup from the area>room>type>device YAML structure."""
+    Against the live resolver text (floor > area > type > entity) this maps
+    **area → floor** — exactly how ``_resolve`` uses it for the
+    location-context line. (The historic name ``_room_to_area`` described the
+    old static-file nesting and lied about the live shape.)"""
     import yaml as _yaml
+
     mapping: dict[str, str] = {}
     try:
         data = _yaml.safe_load(yaml_text)
@@ -133,15 +134,6 @@ def _room_to_area(yaml_text: str) -> dict[str, str]:
     except Exception:
         pass
     return mapping
-
-
-def _load_device_files() -> tuple[str, dict[str, str]]:
-    root      = _project_root()
-    yaml_path = root / get_config("home_assistant", "device_ids_yaml", "data/home_assistant/device_ids.yaml")
-    json_path = root / get_config("home_assistant", "device_ids_json", "data/home_assistant/device_ids.json")
-    yaml_text: str           = yaml_path.read_text()
-    device_map: dict[str, str] = json.loads(json_path.read_text())
-    return yaml_text, device_map
 
 
 def _extract_json(content: str) -> dict[str, Any]:
@@ -160,7 +152,7 @@ def _extract_json(content: str) -> dict[str, Any]:
 
 
 def _conn() -> tuple[str, dict[str, str]]:
-    base  = get_config("home_assistant", "url", "http://homeassistant.local:8123")
+    base = get_config("home_assistant", "url", "http://homeassistant.local:8123")
     token = os.environ.get("HA_API_KEY", "")
     return base.rstrip("/"), {
         "Authorization": f"Bearer {token}",
@@ -193,15 +185,19 @@ async def _ha_state(entity_id: str) -> dict[str, Any]:
 
 async def _resolve(request: str, yaml_text: str, room: str | None = None) -> dict[str, Any]:
     """Sub-LLM call: map the user request to device aliases + actions."""
-    model    = get_config("home_assistant", "model",    "gpt-4o")
+    model = get_config("home_assistant", "model", "gpt-4o")
     base_url = get_config("home_assistant", "base_url") or None
 
     resolved_room = room or get_config("home_assistant", "default_room") or ""
-    resolved_floor = _room_to_area(yaml_text).get(resolved_room, "") if resolved_room else ""
+    resolved_floor = _area_to_floor(yaml_text).get(resolved_room, "") if resolved_room else ""
 
     user_content = f"Device map:\n{yaml_text}\n\nUser request: {request}"
     if resolved_room:
-        loc = f"Floor: {resolved_floor}, Area: {resolved_room}" if resolved_floor else f"Area: {resolved_room}"
+        loc = (
+            f"Floor: {resolved_floor}, Area: {resolved_room}"
+            if resolved_floor
+            else f"Area: {resolved_room}"
+        )
         user_content += (
             f"\n\nLocation context: {loc}"
             "\nScope all ambiguous device references to this area unless the"
@@ -209,10 +205,10 @@ async def _resolve(request: str, yaml_text: str, room: str | None = None) -> dic
         )
 
     kwargs: dict[str, Any] = {
-        "model":    model,
+        "model": model,
         "messages": [
             {"role": "system", "content": _SYSTEM_PROMPT},
-            {"role": "user",   "content": user_content},
+            {"role": "user", "content": user_content},
         ],
     }
     # Custom endpoint: OPENAI_API_KEY never rides to it (F-14; CUSTOM_LLM_API_KEY
@@ -238,7 +234,9 @@ async def _resolve(request: str, yaml_text: str, room: str | None = None) -> dic
 
 
 @skill
-async def handle_home_control(request: str, speaker: str | None = None, room: str | None = None) -> str:
+async def handle_home_control(
+    request: str, speaker: str | None = None, room: str | None = None
+) -> str:
     """Control or query smart home devices: lights, fans, locks, covers, thermostats.
 
     Use for any request involving home devices — turning lights on or off,
@@ -277,7 +275,7 @@ async def handle_home_control(request: str, speaker: str | None = None, room: st
     if not devices:
         return result.get("response_text") or "No matching devices found."
 
-    if (blocked := _secure_blocked(devices, speaker)):
+    if blocked := _secure_blocked(devices, speaker):
         return blocked
 
     status_lines = await _apply_devices(devices, device_map)
@@ -301,9 +299,7 @@ def _secure_blocked(devices: list[dict[str, Any]], speaker: str | None) -> str |
     return None
 
 
-async def _apply_devices(
-    devices: list[dict[str, Any]], device_map: dict[str, str]
-) -> list[str]:
+async def _apply_devices(devices: list[dict[str, Any]], device_map: dict[str, str]) -> list[str]:
     """Execute resolved device actions against Home Assistant.
 
     Returns status lines for any get_status actions (empty for pure control).
@@ -312,11 +308,11 @@ async def _apply_devices(
     status_lines: list[str] = []
 
     for dev in devices:
-        alias  = str(dev.get("id", ""))
+        alias = str(dev.get("id", ""))
         action = str(dev.get("action", ""))
         # In the live-HA path the id is already an entity_id (device_map is an
         # identity map); in the static path it's a friendly code mapped to one.
-        ha_id  = device_map.get(alias) or (alias if "." in alias else None)
+        ha_id = device_map.get(alias) or (alias if "." in alias else None)
 
         if not ha_id:
             log.warning("Unknown device alias %r — skipping", alias)
@@ -324,16 +320,14 @@ async def _apply_devices(
 
         try:
             if action == "get_status":
-                state  = await _ha_state(ha_id)
-                s      = state.get("state", "unknown")
-                attrs  = state.get("attributes", {})
-                name   = attrs.get("friendly_name", ha_id)
-                temp   = attrs.get("current_temperature")
+                state = await _ha_state(ha_id)
+                s = state.get("state", "unknown")
+                attrs = state.get("attributes", {})
+                name = attrs.get("friendly_name", ha_id)
+                temp = attrs.get("current_temperature")
                 target = attrs.get("temperature")
                 if temp is not None:
-                    status_lines.append(
-                        f"{name}: {s}, current {temp}°F, target {target}°F"
-                    )
+                    status_lines.append(f"{name}: {s}, current {temp}°F, target {target}°F")
                 else:
                     status_lines.append(f"{name}: {s}")
 
@@ -363,31 +357,46 @@ _FAST_VOICE = "Speak naturally and briefly."
 
 # Spoken group words → yaml type key.
 _GROUP_WORDS = {
-    "light": "lights", "lights": "lights",
-    "fan": "fans", "fans": "fans",
-    "door": "lock", "doors": "lock", "lock": "lock", "locks": "lock",
-    "cover": "covers", "covers": "covers", "blind": "covers", "blinds": "covers",
-    "shade": "covers", "shades": "covers", "curtain": "covers", "curtains": "covers",
+    "light": "lights",
+    "lights": "lights",
+    "fan": "fans",
+    "fans": "fans",
+    "door": "lock",
+    "doors": "lock",
+    "lock": "lock",
+    "locks": "lock",
+    "cover": "covers",
+    "covers": "covers",
+    "blind": "covers",
+    "blinds": "covers",
+    "shade": "covers",
+    "shades": "covers",
+    "curtain": "covers",
+    "curtains": "covers",
 }
 
 # action name → (HA service, target type keys, direction).
 # direction "activate" uses the room's curated default subset for a bare group;
 # "deactivate" always acts on every device of that type in the room.
 _CONTROL: dict[str, tuple[str, set[str], str]] = {
-    "turn_on":     ("turn_on",     {"lights", "fans"}, "activate"),
-    "turn_off":    ("turn_off",    {"lights", "fans"}, "deactivate"),
-    "toggle":      ("toggle",      {"lights", "fans"}, "activate"),
-    "lock":        ("lock",        {"lock"},   "deactivate"),
-    "unlock":      ("unlock",      {"lock"},   "activate"),
-    "open_cover":  ("open_cover",  {"covers"}, "activate"),
+    "turn_on": ("turn_on", {"lights", "fans"}, "activate"),
+    "turn_off": ("turn_off", {"lights", "fans"}, "deactivate"),
+    "toggle": ("toggle", {"lights", "fans"}, "activate"),
+    "lock": ("lock", {"lock"}, "deactivate"),
+    "unlock": ("unlock", {"lock"}, "activate"),
+    "open_cover": ("open_cover", {"covers"}, "activate"),
     "close_cover": ("close_cover", {"covers"}, "deactivate"),
 }
 # Unsafe directions must name a specific device — never act on a bare group.
 _EXPLICIT_ONLY = {"unlock", "open_cover"}
 
 _DOMAIN_TO_TYPE = {
-    "light": "lights", "switch": "lights", "fan": "fans",
-    "cover": "covers", "lock": "lock", "climate": "climate",
+    "light": "lights",
+    "switch": "lights",
+    "fan": "fans",
+    "cover": "covers",
+    "lock": "lock",
+    "climate": "climate",
 }
 
 _ARTICLES = {"the", "a", "an", "my", "our", "your", "some", "please"}
@@ -398,25 +407,29 @@ _FUZZ_CUTOFF = 82
 # Past tense: the HA REST call completes before TTS playback even begins, so the
 # device is already on/off/locked by the time the confirmation is spoken.
 _VERB = {
-    "turn_on": "Turned on", "turn_off": "Turned off", "toggle": "Toggled",
-    "lock": "Locked", "unlock": "Unlocked",
-    "open_cover": "Opened", "close_cover": "Closed",
+    "turn_on": "Turned on",
+    "turn_off": "Turned off",
+    "toggle": "Toggled",
+    "lock": "Locked",
+    "unlock": "Unlocked",
+    "open_cover": "Opened",
+    "close_cover": "Closed",
 }
 
 
 @dataclass
 class _DeviceIndex:
-    rooms:        dict[str, dict[str, list[str]]]      # room → type_key → [codes]
-    defaults:     dict[str, dict[str, list[str]]]      # room → type_key → [codes]
-    spoken:       dict[str, str]                       # code → spoken name
-    aliases:      dict[tuple[str, str], list[str]]     # (room, phrase) → [codes]
-    exclude:      set[str]                             # codes barred from groups
-    room_phrases: dict[str, str]                       # "living room" → "living_room"
-    device_map:   dict[str, str]                       # code → entity_id
+    rooms: dict[str, dict[str, list[str]]]  # room → type_key → [codes]
+    defaults: dict[str, dict[str, list[str]]]  # room → type_key → [codes]
+    spoken: dict[str, str]  # code → spoken name
+    aliases: dict[tuple[str, str], list[str]]  # (room, phrase) → [codes]
+    exclude: set[str]  # codes barred from groups
+    room_phrases: dict[str, str]  # "living room" → "living_room"
+    device_map: dict[str, str]  # code → entity_id
     # Floor scope: a spoken floor name ("downstairs") expands a bare-group command
     # to every room on that floor. Empty when the topology has no floors.
-    floor_phrases: dict[str, str] = field(default_factory=dict)   # "downstairs" → "downstairs"
-    floor_rooms:   dict[str, list[str]] = field(default_factory=dict)  # floor → [rooms]
+    floor_phrases: dict[str, str] = field(default_factory=dict)  # "downstairs" → "downstairs"
+    floor_rooms: dict[str, list[str]] = field(default_factory=dict)  # floor → [rooms]
 
 
 def _norm(text: str) -> str:
@@ -434,6 +447,12 @@ def _auto_spoken(code: str) -> str:
     return " ".join(parts)
 
 
+# TODO(3.6.0): relocate into tests/test_home_assistant_resolver.py — production
+# builds indexes only from the live model (_index_from_model); this builder's
+# sole remaining consumer is the resolver test-suite, which feeds the (fully
+# live) resolution engine the rich static-format fixture corpus in
+# data/home_assistant/. Moving the adapter to the tests leaves this module
+# all-live-path without orphaning the fixtures.
 def _index_from(
     yaml_text: str, device_map: dict[str, str], overlay: dict[str, Any]
 ) -> _DeviceIndex:
@@ -492,8 +511,15 @@ def _index_from(
             exclude.add(c)
 
     return _DeviceIndex(
-        rooms, defaults, spoken, aliases, exclude, room_phrases, device_map,
-        floor_phrases, floor_rooms,
+        rooms,
+        defaults,
+        spoken,
+        aliases,
+        exclude,
+        room_phrases,
+        device_map,
+        floor_phrases,
+        floor_rooms,
     )
 
 
@@ -501,29 +527,49 @@ def _build_intents() -> Any:
     from padacioso import IntentContainer  # type: ignore[import-untyped]
 
     c = IntentContainer()
-    c.add_intent("turn_on", [
-        "[please] turn on [the] {device}", "[please] switch on [the] {device}",
-        "[please] cut on [the] {device}",
-    ])
-    c.add_intent("turn_off", [
-        "[please] turn off [the] {device}", "[please] switch off [the] {device}",
-        "[please] cut off [the] {device}", "[please] kill [the] {device}",
-    ])
+    c.add_intent(
+        "turn_on",
+        [
+            "[please] turn on [the] {device}",
+            "[please] switch on [the] {device}",
+            "[please] cut on [the] {device}",
+        ],
+    )
+    c.add_intent(
+        "turn_off",
+        [
+            "[please] turn off [the] {device}",
+            "[please] switch off [the] {device}",
+            "[please] cut off [the] {device}",
+            "[please] kill [the] {device}",
+        ],
+    )
     c.add_intent("toggle", ["[please] toggle [the] {device}"])
     c.add_intent("lock", ["[please] lock [the] {device}"])
     c.add_intent("unlock", ["[please] unlock [the] {device}"])
-    c.add_intent("open_cover", [
-        "[please] open [the] {device}", "[please] raise [the] {device}",
-    ])
-    c.add_intent("close_cover", [
-        "[please] close [the] {device}", "[please] shut [the] {device}",
-        "[please] lower [the] {device}",
-    ])
-    c.add_intent("set_temperature", [
-        "set [the] {device} to {value} [degrees]",
-        "change [the] {device} to {value} [degrees]",
-        "set [the] {device} [to] {value} degrees",
-    ])
+    c.add_intent(
+        "open_cover",
+        [
+            "[please] open [the] {device}",
+            "[please] raise [the] {device}",
+        ],
+    )
+    c.add_intent(
+        "close_cover",
+        [
+            "[please] close [the] {device}",
+            "[please] shut [the] {device}",
+            "[please] lower [the] {device}",
+        ],
+    )
+    c.add_intent(
+        "set_temperature",
+        [
+            "set [the] {device} to {value} [degrees]",
+            "change [the] {device} to {value} [degrees]",
+            "set [the] {device} [to] {value} degrees",
+        ],
+    )
     return c
 
 
@@ -589,16 +635,22 @@ def _index_from_model(model: ha_model.HAModel, curation: dict[str, Any]) -> _Dev
                 defaults.setdefault(rslug, {})[str(tk)] = [str(x) for x in eids]
 
     return _DeviceIndex(
-        rooms, defaults, spoken, aliases, exclude, room_phrases, device_map,
-        floor_phrases, floor_rooms,
+        rooms,
+        defaults,
+        spoken,
+        aliases,
+        exclude,
+        room_phrases,
+        device_map,
+        floor_phrases,
+        floor_rooms,
     )
 
 
 def _resolver_text(model: ha_model.HAModel, curation: dict[str, Any]) -> str:
     """Render the live topology as the floor>area>type>entity text the LLM reads."""
     notes = {
-        eid: str(dev.get("note") or "")
-        for eid, dev in (curation.get("devices", {}) or {}).items()
+        eid: str(dev.get("note") or "") for eid, dev in (curation.get("devices", {}) or {}).items()
     }
     tree: dict[str, dict[str, dict[str, list[ha_model.Entity]]]] = {}
     for e in model.entities:
@@ -622,15 +674,6 @@ def _resolver_text(model: ha_model.HAModel, curation: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def _load_static_view() -> None:
-    """Offline / legacy fallback: build the view from the static device_ids files."""
-    global _INDEX, _RESOLVER_TEXT, _VIEW_TS
-    yaml_text, device_map = _load_device_files()
-    _INDEX = _index_from(yaml_text, device_map, _load_overlay())
-    _RESOLVER_TEXT = yaml_text
-    _VIEW_TS = None
-
-
 async def _ensure_view() -> None:
     """Refresh the cached resolver index + text from live HA topology.
 
@@ -642,10 +685,11 @@ async def _ensure_view() -> None:
         model = await ha_model.get_model()
     except Exception as exc:
         if _INDEX is not None:
-            return  # keep the existing (live-stale or static) view
-        log.warning("HA topology unavailable (%s); using static device files", exc)
-        _load_static_view()
-        return
+            return  # keep the existing (stale) view — better than nothing mid-outage
+        # No cached topology and HA unreachable: fail honestly. (The old static
+        # device_ids fallback was retired in 3.5.1 — resolving against a stale
+        # hand-built map is pointless when actuation needs HA up anyway.)
+        raise RuntimeError(f"Home Assistant topology unavailable: {exc}") from exc
 
     if _INDEX is None or _RESOLVER_TEXT is None or _VIEW_TS != model.fetched_at:
         curation = ha_model.load_curation()
@@ -658,20 +702,6 @@ def _get_resolver_text() -> str:
     if _RESOLVER_TEXT is None:
         raise RuntimeError("resolver text not initialized; call _ensure_view() first")
     return _RESOLVER_TEXT
-
-
-def _load_overlay() -> dict[str, Any]:
-    root = _project_root()
-    rel = get_config("home_assistant", "device_overlay", "data/home_assistant/device_overlay.yaml")
-    path = root / rel
-    if not path.exists():
-        return {}
-    import yaml as _yaml
-    try:
-        return _yaml.safe_load(path.read_text()) or {}
-    except Exception as exc:
-        log.warning("Could not load device overlay %s: %s", path, exc)
-        return {}
 
 
 def _get_index() -> _DeviceIndex:
@@ -707,8 +737,8 @@ def _extract_room(idx: _DeviceIndex, toks: list[str]) -> tuple[str | None, list[
         words = sp.split()
         n = len(words)
         for i in range(len(toks) - n + 1):
-            if toks[i:i + n] == words:
-                return idx.room_phrases[sp], toks[:i] + toks[i + n:]
+            if toks[i : i + n] == words:
+                return idx.room_phrases[sp], toks[:i] + toks[i + n :]
     return None, toks
 
 
@@ -718,8 +748,8 @@ def _extract_floor(idx: _DeviceIndex, toks: list[str]) -> tuple[str | None, list
         words = sp.split()
         n = len(words)
         for i in range(len(toks) - n + 1):
-            if toks[i:i + n] == words:
-                return idx.floor_phrases[sp], toks[:i] + toks[i + n:]
+            if toks[i : i + n] == words:
+                return idx.floor_phrases[sp], toks[:i] + toks[i + n :]
     return None, toks
 
 
@@ -733,9 +763,7 @@ def _fuzzy(idx: _DeviceIndex, room: str | None, phrase: str) -> str | None:
     if not codes:
         return None
     choices = {idx.spoken.get(c, c): c for c in codes}
-    match = process.extractOne(
-        phrase, list(choices), scorer=fuzz.WRatio, score_cutoff=_FUZZ_CUTOFF
-    )
+    match = process.extractOne(phrase, list(choices), scorer=fuzz.WRatio, score_cutoff=_FUZZ_CUTOFF)
     return choices[match[0]] if match else None
 
 
@@ -849,9 +877,7 @@ def _resolve_target(
     return None
 
 
-def _resolve_climate(
-    idx: _DeviceIndex, target: str, origin_room: str | None
-) -> list[str] | None:
+def _resolve_climate(idx: _DeviceIndex, target: str, origin_room: str | None) -> list[str] | None:
     toks = [t for t in _norm(target).split() if t not in _ARTICLES]
     room, _toks = _extract_room(idx, toks)
     room = room or _room_key(origin_room)
@@ -889,9 +915,7 @@ def _confirm(action: str, idx: _DeviceIndex, codes: list[str], target: str) -> s
 
 
 @fast_intent(priority=50)
-async def fast_home_control(
-    utterance: str, room_id: str | None, speaker: str | None
-) -> FastResult:
+async def fast_home_control(utterance: str, room_id: str | None, speaker: str | None) -> FastResult:
     """Deterministic home control: instant, no LLM, defers hard cases."""
     try:
         await _ensure_view()
@@ -931,7 +955,7 @@ async def fast_home_control(
 
     svc = _CONTROL[name][0]
     devices = [{"id": c, "action": svc} for c in codes]
-    if (blocked := _secure_blocked(devices, speaker)):
+    if blocked := _secure_blocked(devices, speaker):
         return FastResult.handled(blocked, _FAST_VOICE)
     await _apply_devices(devices, idx.device_map)
     return FastResult.handled(_confirm(name, idx, codes, target), _FAST_VOICE)

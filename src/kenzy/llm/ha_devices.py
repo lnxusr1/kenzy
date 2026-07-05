@@ -48,9 +48,7 @@ def _print_tree(entities: list[ha_model.ClassifiedEntity], show_excluded: bool) 
         for area in sorted(tree[floor]):
             print(f"  {area}")
             for domain in sorted(tree[floor][area]):
-                shown = [
-                    e for e in tree[floor][area][domain] if show_excluded or e.included
-                ]
+                shown = [e for e in tree[floor][area][domain] if show_excluded or e.included]
                 if not shown:
                     continue
                 print(f"    {domain}")

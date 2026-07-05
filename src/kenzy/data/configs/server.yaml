@@ -67,6 +67,12 @@ node_defaults:
   # Pre-recorded (not synthesized) so it still plays when TTS itself is down;
   # same server-side/live semantics as the tones above. Empty = stay silent.
   sound_error: "error.wav"
+  # Whether this room's speaker does acoustic echo cancellation (the published
+  # hardware guidance recommends AEC speakerphones — declared here because it
+  # can't be detected). Set false for a non-AEC speaker and the room becomes
+  # half-duplex: wake words are ignored while Kenzy is making sound, intercom is
+  # unavailable, and alarms deliver once instead of ringing until acknowledged.
+  hardware_aec: true
 
 # kenzy-speaker service — omit or set url to null to disable
 speaker:

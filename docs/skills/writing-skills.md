@@ -281,13 +281,20 @@ For deterministic intent/slot parsing beyond simple keyword checks, the `llm` ex
 ## Disabling a skill temporarily
 
 Toggle it off in the dashboard's **Skills** tab — applied live, no restart, and
-persisted. Or list the function name under `skills.disabled` in `llm.yaml`:
+persisted. The tab groups skills by their source **module** (file), with a
+"Disable all" toggle per group — that's how you turn off a whole feature like
+Home Assistant, which is really a skill (`handle_home_control`) plus its fast
+intent, or lists, which is five skills plus theirs.
+
+In `llm.yaml`, `skills.disabled` accepts either level:
 
 ```yaml
 skills:
   disabled:
-    - my_skill
+    - my_skill        # one function
+    - home_assistant  # a whole module: every @skill AND @fast_intent in the file
 ```
 
-The skill stays loaded but is gated out of the tool list and the fast path. A name
-disables both its `@skill` and any `@fast_intent` of the same name.
+A disabled skill stays loaded but is gated out of the tool list and the fast
+path. Disabling a module silences its fast intents too; disabling a lone
+function silences only that function.

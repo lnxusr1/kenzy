@@ -112,7 +112,7 @@ The skill needs HA's REST API (on by default) and a long-lived token in `HA_API_
 
 ### Offline / legacy fallback
 
-If HA is unreachable **and** the old static `device_ids.yaml` / `device_ids.json` files are present, the skill falls back to them so an offline dev box still resolves. A successful live pull always supersedes the static files. New installs don't need them.
+If HA is unreachable and no topology has been fetched yet, home-control requests fail with a clear "could not load device map" answer. (Older releases fell back to hand-built static `device_ids` files here; that fallback was retired in 3.5.1 — a stale map could *resolve* devices but never *actuate* them with HA down, so the honest error is more useful. Once one live pull has succeeded, the cached topology carries the skill through brief HA outages.)
 
 ## Supported actions
 

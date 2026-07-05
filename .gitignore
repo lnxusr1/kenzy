@@ -64,3 +64,4 @@ synth_phrase.py
 
 build_pypi.sh
 publish.sh
+dev_stack.py

@@ -47,9 +47,13 @@ change takes effect immediately and signs out other sessions.
 The landing page lists:
 
 - **Room nodes** — one card per connected node, showing its room name, a short node
-  id, IP address, installed Kenzy **version**, and live status (idle / streaming). Cards
-  flagged **⚑ unconfigured** have no saved per-node config yet. A **Configure** button
-  opens the node editor.
+  id, IP address, installed Kenzy **version**, live status (idle / streaming), and a
+  **system** row with the node's CPU, RAM, and disk usage plus its temperature
+  (refreshed every ~30 seconds; the temperature turns red at 80°C — Raspberry Pi
+  throttling territory, usually a sign the node wants a heatsink or better airflow).
+  Cards flagged **⚑ unconfigured** have no saved per-node config yet; rooms with
+  `hardware_aec: false` carry a **no AEC** badge. A **Configure** button opens the
+  node editor.
 - **Backend services** — STT, TTS, LLM, and Speaker health (from each service's
   `/health`), with a few details (version, model, voice, provider).
 
@@ -149,13 +153,22 @@ environment and are never shown or stored here. Requires `dashboard.controls: tr
 
 ## Skills
 
-The **Skills** tab lists the skills and deterministic fast intents loaded by
-`kenzy-llm`, each with a one-line description and an **invocation count** (how often it
-has run since the service started). With `dashboard.controls: true`, each skill has an
-**Enable / Disable** toggle: disabling one takes effect **immediately, without restarting
-the service** (the skill stays loaded but is gated out of the tool list, `execute`, and
-the fast path), and is **persisted** to `configs/services/llm.yaml` (`skills.disabled`)
-so it survives a restart. Disabling a skill also disables any same-named fast intent.
+The **Skills** tab shows everything loaded by `kenzy-llm`, grouped into
+**collapsible modules** — one accordion group per skill file (`home assistant`,
+`lists`, `schedule`, …), because a "feature" is usually several skills plus
+their fast intents. Each group header shows a skill/fast-intent count and a
+**Disable all / Enable all** toggle for the whole module; expand a group to see
+its member skills, each with a one-line description, an **invocation count**,
+and its own individual toggle.
+
+All toggles take effect **immediately, without restarting the service** (a
+disabled skill stays loaded but is gated out of the tool list and the fast
+path) and **persist** to `configs/services/llm.yaml` (`skills.disabled`, which
+accepts function names and module names). Group headers also carry honesty
+badges: a module that *depends* on another (lists requires `home_assistant` —
+they're stored in HA's to-do entities) is marked **inactive** while its
+dependency is off, and modules with wider blast radius say what else they power
+(disabling `home_assistant` also idles the Home Assistant screen and lists).
 Without `controls`, the tab is read-only.
 
 ## Home Assistant
@@ -177,6 +190,12 @@ voice layer — pick which HA to-do list a bare "the list" means and give lists 
 aliases ("the groceries"); see [Built-in Skills → Lists](skills/builtin.md#lists).
 Saving writes `curation.yaml` and refreshes the topology immediately. The tab needs `kenzy-llm` reachable and `dashboard.controls: true`
 to edit (read-only otherwise). See [Home Assistant](skills/home-assistant.md).
+
+Two states the tab is honest about: with the `home_assistant` module **disabled**
+(Skills tab), a warning banner says nothing here takes effect until it's
+re-enabled — but the screen stays editable, so you can stage curation before
+flipping the feature on. And with no `HA_API_KEY` configured at all, the tab
+shows step-by-step connection guidance instead of an error.
 
 ## Speakers
 

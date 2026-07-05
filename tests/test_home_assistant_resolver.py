@@ -1,7 +1,8 @@
 """Tests for the deterministic Home Assistant resolver (parsing + resolution).
 
-These exercise the offline resolution logic against the real device_ids files.
-The Home Assistant network boundary (_apply_devices) is mocked.
+These drive the resolution engine from the static-format fixture files in
+data/home_assistant/ (which exist ONLY as test fixtures since the production
+static fallback was retired). The HA network boundary (_apply_devices) is mocked.
 """
 
 from __future__ import annotations
@@ -23,15 +24,7 @@ ROOT = Path(__file__).resolve().parents[1]
 def ha(monkeypatch):
     """Load the bundled home_assistant skill by path with the index from real files."""
     # Resolve paths relative to project root regardless of cwd.
-    reg.set_config(
-        {
-            "home_assistant": {
-                "device_ids_yaml": str(ROOT / "data/home_assistant/device_ids.yaml"),
-                "device_ids_json": str(ROOT / "data/home_assistant/device_ids.json"),
-                "device_overlay": str(ROOT / "data/home_assistant/device_overlay.yaml"),
-            }
-        }
-    )
+    reg.set_config({})  # isolate from other tests' config
     path = ROOT / "src" / "kenzy" / "llm" / "builtin_skills" / "home_assistant.py"
     spec = importlib.util.spec_from_file_location("home_assistant", path)
     assert spec and spec.loader
@@ -39,8 +32,8 @@ def ha(monkeypatch):
     sys.modules["home_assistant"] = mod
     spec.loader.exec_module(mod)
     mod._reset_cache()
-    # _load_device_files joins get_config paths onto the project root; the config
-    # above already gives absolute paths, so build the index directly from files.
+    # The static files are pure TEST FIXTURES now (the production fallback was
+    # retired in 3.5.1) — build the index directly from them via _index_from.
     yaml_text = (ROOT / "data/home_assistant/device_ids.yaml").read_text()
     device_map = json.loads((ROOT / "data/home_assistant/device_ids.json").read_text())
     overlay_path = ROOT / "data/home_assistant/device_overlay.yaml"
@@ -138,9 +131,9 @@ def test_turn_off_lights_downstairs_spans_all_rooms(ha):
     # not just the origin room (regression: floors were unmodeled → deferred/wrong).
     idx = ha._get_index()
     codes = ha._resolve_target(idx, "turn_off", "lights downstairs", "office")
-    assert "of_floor_lamps" in codes            # office
+    assert "of_floor_lamps" in codes  # office
     assert "kt_island_pendant_lights" in codes  # kitchen
-    assert "lr_floor_lamp" in codes             # living room
+    assert "lr_floor_lamp" in codes  # living room
     # …and nothing from an off-floor room.
     assert not any(c.startswith("mb_") for c in codes)  # master_bedroom is upstairs
 
@@ -171,7 +164,10 @@ def test_floor_specific_device_defers(ha):
 def test_floor_confirmation_phrasing(ha):
     idx = ha._get_index()
     codes = ha._resolve_target(idx, "turn_off", "lights downstairs", "office")
-    assert ha._confirm("turn_off", idx, codes, "lights downstairs") == "Turned off the downstairs lights."
+    assert (
+        ha._confirm("turn_off", idx, codes, "lights downstairs")
+        == "Turned off the downstairs lights."
+    )
 
 
 # ---------------------------------------------------------------------------

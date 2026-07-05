@@ -29,11 +29,38 @@ _DATE_TEMPLATES = [
     "It's {date}.",
 ]
 
-# An interrogative must be present so we never hijack commands like
-# "set a timer" or statements that merely mention the time.
-_INTERROGATIVES = {"what", "whats", "tell", "current", "currently"}
-_TIME_WORDS = {"time", "oclock"}
-_DATE_WORDS = {"date"}
+# Anchored whole-utterance patterns — high precision or miss. A bag-of-words
+# gate ("tell"/"what" + "time" anywhere) hijacked commands that merely *mention*
+# time ("tell the house it's time for dinner" answered the clock); anchoring
+# means "time" must BE the question, not the object of a larger command. A
+# trailing qualifier also misses ("what time is it in london" → LLM, which can
+# actually answer it). Courtesy wrappers are stripped first.
+_COURTESY_PREFIX = re.compile(
+    r"^(?:(?:hey |ok )?kenzy[,\s]+|please\s+|can you\s+|could you\s+|would you\s+|will you\s+)+"
+)
+_BOTH_RE = re.compile(
+    r"^(?:whats?|what is) (?:the )?(?:time and date|date and time)(?: is it)?(?: today)?$"
+)
+_TIME_RE = re.compile(
+    r"^(?:"
+    r"(?:whats?|what is)(?: the)?(?: current)? time(?: is it)?(?: right now| now| today)?"
+    r"|tell me (?:the time|what time it is)"
+    r"|(?:do you have|have you got|got) the time"
+    r"|current time"
+    r"|time"
+    r")$"
+)
+_DATE_RE = re.compile(
+    r"^(?:"
+    r"(?:whats?|what is)(?: the)?(?: todays)? date(?: today)?"
+    r"|whats todays date"
+    r"|what day is it(?: today)?"
+    r"|what day of the week is it"
+    r"|tell me (?:the date|todays date)"
+    r"|todays date"
+    r"|date"
+    r")$"
+)
 
 
 def _now() -> datetime.datetime:
@@ -42,6 +69,7 @@ def _now() -> datetime.datetime:
     if name:
         try:
             import zoneinfo
+
             tz = zoneinfo.ZoneInfo(name)
         except Exception:
             tz = None
@@ -60,20 +88,15 @@ def classify(utterance: str) -> str | None:
     Pure and side-effect free so it can be unit-tested without config or clocks.
     """
     text = _normalize(utterance)
-    words = set(text.split())
+    text = _COURTESY_PREFIX.sub("", text).removesuffix(" please").strip()
 
-    is_time = bool(words & _TIME_WORDS)
-    is_date = bool(words & _DATE_WORDS) or "what day" in text or "day is it" in text
-    if not (is_time or is_date):
-        return None
-
-    # Gate on an interrogative (or a bare "time"/"date") to avoid false hits.
-    if not (words & _INTERROGATIVES) and text not in ("time", "date"):
-        return None
-
-    if is_time and is_date:
+    if _BOTH_RE.match(text):
         return "both"
-    return "time" if is_time else "date"
+    if _TIME_RE.match(text):
+        return "time"
+    if _DATE_RE.match(text):
+        return "date"
+    return None
 
 
 @fast_intent(priority=100)

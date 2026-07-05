@@ -1,8 +1,8 @@
 site_name: KENZY
 site_description: Distributed home voice assistant
-site_url: https://docs.kenzy.dev/
+site_url: https://docs.kenzy.ai/
 #repo_url: https://github.com/lnxusr1/kenzy/
-copyright: "Copyright © 2026. All rights reserved. <a href='https://kenzy.dev'>Kenzy.dev</a>"
+copyright: "Copyright © 2026. All rights reserved. <a href='https://kenzy.ai'>Kenzy.ai</a>"
 docs_dir: docs
 
 theme:
@@ -13,7 +13,7 @@ theme:
     text: IBM Plex Sans
     code: IBM Plex Mono
   palette:
-    # Light (default) — petrol ink on paper, matching kenzy.dev
+    # Light (default) — petrol ink on paper, matching kenzy.ai
     - media: "(prefers-color-scheme: light)"
       scheme: default
       primary: custom
@@ -41,11 +41,11 @@ theme:
 extra:
   generator: false
   # Header logo/wordmark links back to the main site (nav "Home" covers the docs root).
-  homepage: https://kenzy.dev
+  homepage: https://kenzy.ai
   social:
     - icon: material/home
-      name: kenzy.dev — main site
-      link: https://kenzy.dev
+      name: kenzy.ai — main site
+      link: https://kenzy.ai
     - icon: fontawesome/brands/github
       name: Kenzy on GitHub
       link: https://github.com/lnxusr1/kenzy

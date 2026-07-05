@@ -92,7 +92,7 @@ Starts a live two-way voice call to another room. Say *"call the living room"* a
 |---|---|
 | `connect_room(room)` | Ring `room` for a live intercom call (the other room must verbally accept) |
 
-Like `announce`, this queues a server action. The server rings the target room, plays a spoken consent prompt, and bridges audio **only on a clear spoken "yes"** (default-deny on silence/ambiguity/timeout). During an active call a wake word at either end ends it immediately. Requires a speakerphone with hardware echo cancellation.
+Like `announce`, this queues a server action. The server rings the target room, plays a spoken consent prompt, and bridges audio **only on a clear spoken "yes"** (default-deny on silence/ambiguity/timeout). During an active call a wake word at either end ends it immediately. Requires a speakerphone with hardware echo cancellation at **both** ends — a room whose node is marked [`hardware_aec: false`](../configuration/node.md#rooms-without-echo-cancellation-hardware_aec-false) can't join a call (two-way audio without AEC is a feedback loop), and Kenzy politely says so instead of connecting.
 
 ---
 
@@ -207,6 +207,8 @@ Apple Inc. (AAPL)
 **File:** `builtin_skills/schedule.py`
 
 Set timers, alarms, and spoken reminders by voice. Entries are stored **on the server** (`data/schedules.json`) so they survive a restart, and fire as spoken announcements in the room that set them — or another room you name ("wake me at 7 **in the bedroom**"). Everything is visible and cancellable in the dashboard's **Scheduled** tab.
+
+One hardware caveat: an alarm's ring loop is silenced by the wake word — heard *over the ringing* — so **alarms need an echo-cancelling speaker**. Setting an alarm for a room marked [`hardware_aec: false`](../configuration/node.md#rooms-without-echo-cancellation-hardware_aec-false) is refused with an offer of a timer or reminder instead; an alarm that already exists for such a room still fires, once, timer-style. Timers and reminders work in every room.
 
 Say things like:
 
