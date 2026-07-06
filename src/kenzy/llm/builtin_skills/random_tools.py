@@ -8,8 +8,9 @@ the user explicitly wants a random or chance-based outcome.
 from __future__ import annotations
 
 import random
+import re
 
-from kenzy.llm.skills import skill  # type: ignore[import]
+from kenzy.llm.skills import FastResult, fast_intent, skill  # type: ignore[import]
 
 
 @skill
@@ -83,3 +84,47 @@ async def yes_no_maybe() -> str:
     those directly without calling this tool.
     """
     return random.choice(["Yes", "No", "Maybe"])
+
+
+# ---------------------------------------------------------------------------
+# Fast path — the canonical bare forms only. Anything with a tail ("flip a coin
+# to decide whether I should paint the house") falls through to the LLM, which
+# can reason about it. No model call, no network for the common phrasings.
+# ---------------------------------------------------------------------------
+
+_COIN_RE = re.compile(r"^(?:flip (?:a )?coin|heads or tails|coin flip|toss (?:a )?coin)$")
+# "roll a die", "roll dice", "roll 3 dice", "roll a d20", "roll d20", "roll 3d6".
+_DICE_NDM_RE = re.compile(r"^roll (\d+)d(\d+)$")  # D&D notation: N dice of M sides
+_DICE_RE = re.compile(r"^roll (?:(\d+) )?(?:a )?(?:dice|die|d(\d+))$")
+_NUMBER_RE = re.compile(
+    r"^(?:pick|choose|give me|random) (?:a )?(?:random )?number "
+    r"(?:between|from) (-?\d+) (?:and|to) (-?\d+)$"
+)
+_VOICE = "Speak naturally at a conversational pace."
+
+
+@fast_intent(priority=40)
+async def fast_random(utterance: str, room_id: str | None, speaker: str | None) -> FastResult:
+    """Instant coin flips, dice rolls, and number picks — bare forms only."""
+    text = re.sub(r"[^\w\s]", "", utterance).strip().lower()
+    text = re.sub(r"\s+", " ", text)
+
+    if _COIN_RE.match(text):
+        return FastResult.handled(await flip_coin(), _VOICE)
+
+    m = _DICE_NDM_RE.match(text)
+    if m:
+        return FastResult.handled(
+            await roll_dice(sides=int(m.group(2)), rolls=int(m.group(1))), _VOICE
+        )
+    m = _DICE_RE.match(text)
+    if m:
+        rolls = int(m.group(1)) if m.group(1) else 1
+        sides = int(m.group(2)) if m.group(2) else 6
+        return FastResult.handled(await roll_dice(sides=sides, rolls=rolls), _VOICE)
+
+    m = _NUMBER_RE.match(text)
+    if m:
+        return FastResult.handled(await pick_number(int(m.group(1)), int(m.group(2))), _VOICE)
+
+    return FastResult.miss()

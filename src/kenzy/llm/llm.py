@@ -154,6 +154,13 @@ _base_url: str | None = None
 _system_prompt: str = "You are Kenzy, a helpful home assistant. Be concise."
 _voice_prompt: str = "Respond in a friendly, conversational tone."
 _max_tool_iterations: int = 5
+# Extra LiteLLM parameters merged into every primary model call (llm.yaml
+# `params:`) — the latency knobs live here: reasoning_effort ("none"/"minimal"
+# stops a reasoning-capable model thinking before a two-sentence reply),
+# service_tier, temperature, max_tokens, … Credential/routing keys are
+# stripped: endpoint_kwargs stays the only authority on those (F-14).
+_params: dict[str, Any] = {}
+_PARAMS_BLOCKED = frozenset({"api_key", "base_url", "api_base", "model", "messages", "tools"})
 _location: str = ""  # "City, State, Country" assembled at startup
 _timezone: str = ""  # IANA timezone string e.g. "America/Chicago"
 _skills_dir: Path | None = None  # resolved user skills overlay (backup slice)
@@ -193,17 +200,26 @@ The object must contain two required fields and one optional field:
   "expect_response" (optional, default false): whether to keep the microphone open
       for the user's reply without requiring the wake word again.
 
-Set "expect_response" to true ONLY when your reply is deliberately incomplete and
-needs the user's immediate answer to finish what they asked for — for example the
-opening line of a knock-knock joke ("Knock knock." expects "Who's there?"). In every
-other case set it to false, and when in doubt use false. Do NOT set it true merely to
-offer more help ("Is there anything else?", "Let me know if you need anything"), for
-pleasantries or sign-offs, or to say you didn't understand and ask them to clarify.
+Set "expect_response" to true when your reply cannot be complete without the user's
+immediate answer — in either of these cases:
+  (a) your reply is deliberately incomplete and sets up their line — e.g. the opening
+      of a knock-knock joke ("Knock knock." expects "Who's there?"); or
+  (b) your reply is itself a genuine question you are actively waiting for them to
+      answer as part of what they asked for — they asked you to quiz them, to ask them
+      a question, to play a back-and-forth game, or you offered a real either/or choice
+      that needs their pick. If you just asked the user a question and want their reply,
+      hold the floor — do not end the exchange as if the task were only to ask it.
+In every other case set it to false, and when in doubt use false. Do NOT set it true
+merely to offer more help ("Is there anything else?", "Let me know if you need
+anything"), for pleasantries or sign-offs, or to ask the user to clarify a request you
+could otherwise just carry out.
 
 Example (output this format exactly):
 {"text": "The lights are on.", "voice_prompt": "Speak naturally at a conversational pace."}
-Example holding the floor:
-{"text": "Knock knock.", "voice_prompt": "Playful tone.", "expect_response": true}"""
+Example holding the floor (incomplete setup):
+{"text": "Knock knock.", "voice_prompt": "Playful tone.", "expect_response": true}
+Example holding the floor (a question you're waiting on):
+{"text": "What's your favorite color?", "voice_prompt": "Curious.", "expect_response": true}"""
 
 
 # ---------------------------------------------------------------------------
@@ -487,8 +503,13 @@ async def _run_llm(
         "model": _model,
         "messages": messages,
     }
+    kwargs.update(_params)  # operator latency/behavior knobs (llm.yaml params:)
+    # Portability for those knobs: providers that don't support a param get it
+    # dropped instead of erroring (e.g. reasoning_effort on Ollama or gpt-4o).
+    kwargs.setdefault("drop_params", True)
     # Custom endpoint (Ollama/LM Studio/proxy): never lets OPENAI_API_KEY ride
-    # to a dashboard-editable URL — see skills.endpoint_kwargs (F-14).
+    # to a dashboard-editable URL — see skills.endpoint_kwargs (F-14). Applied
+    # AFTER params so credentials/routing can't be overridden from that block.
     kwargs.update(skill_registry.endpoint_kwargs(_base_url))
     if tools:
         kwargs["tools"] = tools
@@ -627,6 +648,21 @@ def main() -> None:
     raw_dir = skills_cfg.get("dir", "skills")
     user_dir = Path(raw_dir) if Path(raw_dir).is_absolute() else kenzy_data_root() / raw_dir
     _skills_dir = user_dir  # exposed via GET /backup (the server's merged archive)
+
+    global _params
+    raw_params = cfg.get("params") or {}
+    if isinstance(raw_params, dict):
+        # Empty string = "don't send this parameter at all" (the dashboard's
+        # escape hatch — e.g. models where an explicit reasoning_effort routes
+        # slower than omitting it).
+        _params = {
+            k: v for k, v in raw_params.items() if k not in _PARAMS_BLOCKED and v not in ("", None)
+        }
+        dropped = set(raw_params) - set(_params)
+        if dropped:
+            log.warning("llm params: ignoring reserved keys %s", sorted(dropped))
+        if _params:
+            log.info("LLM params: %s", _params)
 
     # Optional local fallback model (silent retry on primary failure; if the
     # fallback also fails the user just gets the spoken error cue).

@@ -79,6 +79,9 @@ _ALLOWED_OVERRIDE_KEYS = frozenset(
         "log_capture_level",
         "volume",
         "hardware_aec",
+        "dialog_no_speech_timeout_ms",
+        "dialog_onset_ms",
+        "dialog_onset_vad_threshold",
     }
 )
 # Server-owned keys stored in the per-node override file and pushed via config-pull,
@@ -290,6 +293,8 @@ class AudioServer:
         # registers one for live push). Empty by default ⇒ zero overhead.
         self._state_listeners: list[Callable[[], None]] = []
         self._metrics_listeners: list[Callable[[], None]] = []
+        # node_id → (override mtime, parsed override) — see _effective_node_config.
+        self._node_cfg_cache: dict[str, tuple[float | None, dict[str, Any]]] = {}
         # Pull-based logs: when the dashboard's `logs` flag is on it sets this, and
         # nodes are told (config `keep_logs`) to keep a buffer. Off ⇒ no node cost.
         self._capture_node_logs: bool = False
@@ -412,18 +417,32 @@ class AudioServer:
 
         from kenzy.config import kenzy_data_root
 
-        effective: dict[str, Any] = dict(self._node_defaults)
         override = kenzy_data_root() / "configs" / "nodes" / f"{node_id}.yaml"
-        if override.is_file():
-            try:
-                data = yaml.safe_load(override.read_text()) or {}
-                if isinstance(data, dict):
-                    effective.update(data)
-                log.info("[%s] applied per-node override %s", node_id, override)
-            except Exception as exc:
-                log.warning("[%s] failed to read override %s: %s", node_id, override, exc)
+        # mtime-cached: this runs on every dashboard state broadcast (and metrics
+        # ticks broadcast), so it must not re-parse YAML per node per snapshot.
+        try:
+            mtime: float | None = override.stat().st_mtime
+        except OSError:
+            mtime = None
+        cached = self._node_cfg_cache.get(node_id)
+        if cached is not None and cached[0] == mtime:
+            data = cached[1]  # cache ONLY the file read — everything below always runs
         else:
-            log.info("[%s] no per-node override (%s) — sending defaults only", node_id, override)
+            data = {}
+            if mtime is not None:
+                try:
+                    loaded = yaml.safe_load(override.read_text()) or {}
+                    if isinstance(loaded, dict):
+                        data = loaded
+                    log.info("[%s] applied per-node override %s", node_id, override)
+                except Exception as exc:
+                    log.warning("[%s] failed to read override %s: %s", node_id, override, exc)
+            else:
+                log.info(
+                    "[%s] no per-node override (%s) — sending defaults only", node_id, override
+                )
+            self._node_cfg_cache[node_id] = (mtime, data)
+        effective: dict[str, Any] = {**self._node_defaults, **data}
         # Transient overlay (e.g. a temporary TRACE log boost): wins over stored
         # config but is never persisted.
         transient = self._transient_node_cfg.get(node_id)
@@ -500,6 +519,7 @@ class AudioServer:
         the same file but aren't part of the editable grid, so they're preserved
         across an editor save rather than wiped.
         """
+        self._node_cfg_cache.pop(node_id, None)  # override changing — drop the cache
         if not isinstance(mapping, dict):
             raise ValueError("override must be a mapping")
         unknown = sorted(k for k in mapping if k not in _ALLOWED_OVERRIDE_KEYS)
@@ -1034,6 +1054,11 @@ class AudioServer:
                 )
             self._notify_state()
 
+        elif mtype == protocol.MSG_FOLLOWUP_TIMEOUT:
+            # A held-floor reply window expired silently on the node (which plays
+            # its own end cue) — clear the dialog state server-side.
+            self._followup_timed_out(session.node_id)
+
         elif mtype == protocol.MSG_METRICS:
             session.metrics = {
                 k: msg.get(k) for k in ("cpu", "ram", "disk", "temp") if msg.get(k) is not None
@@ -1272,6 +1297,9 @@ class AudioServer:
     def cancel_schedule_ids(self, ids: list[str]) -> int:
         """Cancel schedule entries by id; returns how many were removed."""
         return 0
+
+    def _followup_timed_out(self, node_id: str) -> None:
+        """A node's follow-up window expired. Base server holds no dialog state."""
 
     def add_schedule_listener(self, cb: Callable[[], None]) -> None:
         """Observe schedule-set changes (add/cancel/fire). Base server: no-op."""
@@ -1687,11 +1715,12 @@ class TranscribingServer(AudioServer):
                     # play the pre-recorded cue so the user isn't left in silence.
                     await self._play_error_cue(node_id)
 
-                # A held dialog that just concluded with its final spoken reply: play the
-                # end-of-dialog cue on the node (after this TTS). Only fires when we were
-                # actually holding the floor — never after a plain single-turn reply.
+                # A held dialog that concluded with a final spoken reply ends
+                # SILENTLY — the reply itself is the closure (stage 1 sound
+                # language: the end cue means only "I stopped waiting", which the
+                # node now plays itself when a follow-up window expires).
                 if was_holding and not rearmed:
-                    await self._play_dialog_end(node_id)
+                    log.debug("[%s] dialog closed by final reply (no cue)", node_id)
 
                 # Record the completed pipeline for the dashboard (only when something
                 # is listening, so no transcript is kept when observability is off).
@@ -1752,7 +1781,8 @@ class TranscribingServer(AudioServer):
             node = self._nodes.get(node_id)
             if node is not None:
                 try:
-                    await node.ws.send(protocol.expect_utterance())
+                    # cue=False: her question is the cue — dialog turns open silently.
+                    await node.ws.send(protocol.expect_utterance(cue=False))
                     self._followup_turns[node_id] = turns + 1
                     log.info("[%s] holding floor for follow-up (turn %d)", node_id, turns + 1)
                     return True
@@ -1760,6 +1790,9 @@ class TranscribingServer(AudioServer):
                     log.warning("[%s] could not arm follow-up capture: %s", node_id, exc)
         self._end_followup_dialog(node_id)
         return False
+
+    def _followup_timed_out(self, node_id: str) -> None:
+        self._end_followup_dialog(node_id)
 
     def _end_followup_dialog(self, node_id: str) -> None:
         """Clear the per-node follow-up turn counter (a held dialog is over).
@@ -1770,16 +1803,6 @@ class TranscribingServer(AudioServer):
         """
         if self._followup_turns.pop(node_id, None):
             log.info("[%s] multi-turn dialog ended", node_id)
-
-    async def _play_dialog_end(self, node_id: str) -> None:
-        """Tell the node to play its end-of-dialog cue (best effort)."""
-        node = self._nodes.get(node_id)
-        if node is None:
-            return
-        try:
-            await node.ws.send(protocol.end_dialog())
-        except Exception as exc:
-            log.debug("[%s] could not send end-of-dialog cue: %s", node_id, exc)
 
     async def _call_speaker(self, pcm: bytes, room_id: str) -> str:
         import base64
@@ -2286,7 +2309,9 @@ class TranscribingServer(AudioServer):
             self._end_enroll_session(node_id)
             return
         try:
-            await node.ws.send(protocol.expect_utterance())
+            # cue=True: enrollment is a record-after-the-tone flow — the chime
+            # does real work here (stage 1 keeps it on purpose).
+            await node.ws.send(protocol.expect_utterance(cue=True))
         except Exception:
             self._end_enroll_session(node_id)
             return

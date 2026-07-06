@@ -2,6 +2,28 @@
 
 All notable changes to this project will be documented in this file.
 
+## [3.6.0]
+
+### Changed
+
+- **Dialogs stopped beeping at you.** Multi-turn conversations ("tell me a knock-knock joke") used to run wait-your-turn ceremony on every exchange: her line, *ding*, your line, *hold music*, her line, *ding*… The whole mid-dialog soundtrack is gone. Kenzy's question is the cue — when she stops talking in a dialog, she's listening, every time, silently. No chime between turns, no waiting sound between turns, and a dialog that ends with a spoken reply ends **silently** (the reply is the closure). The end cue now means exactly one thing — "I stopped waiting" — and plays only when you leave a held dialog unanswered (~8 seconds, tunable via `dialog_no_speech_timeout_ms`). The wake beep is untouched: it marks the privacy boundary and stays. Voice enrollment keeps its record-after-the-tone chime (the protocol's new `expect_utterance` `cue` flag decides per flow); intercom consent answers now open silently too.
+- **A clink can't start (or cut off) a dialog turn.** Follow-up capture used to open hot with raw energy detection — a cough or dish could trip it, and then "silence" would end the turn on garbage. Turns now start on **sustained, speech-classified audio** (~300 ms, Silero-gated) — or on a short *complete* utterance: a speech burst of ≥ ~160 ms that ends in silence counts as an answer, so one-word replies like "Boo" or "yes" land instantly instead of timing out (a clink is a single-frame blip and still can't start a turn). The onset is buffered and flushed so your first word survives whole, and the proven RMS machinery still endpoints the finish. Until real speech shows up, the node sends the server *nothing* — a silent window expires locally (`followup_timeout` + the end cue) as a session that never happened. Falls back to sustained-energy gating if the VAD model is missing. New live-tunable keys: `dialog_onset_ms`, `dialog_onset_vad_threshold`.
+
+### Added
+
+- **Instant greetings and a conversational bail-out.** "Hello," "good morning," "goodnight," "howdy," "what's up" now get a warm, varied reply the instant you finish — no model round-trip — and, like the rest of the fast path, they work with no internet at all. "Never mind" / "forget it" gets a quick "Okay, no problem" and cleanly ends a held dialog. (Gratitude — "thanks" — is deliberately *not* fast-pathed: speech-to-text hallucinates those words from noise, so a canned "you're welcome" would fire on phantoms; the LLM handles thanks harmlessly.)
+- **More everyday commands skip the model.** Coin flips, dice rolls, and number picks ("flip a coin", "roll a d20", "roll 3d6", "pick a number between 1 and 10") now answer instantly with no LLM call — the logic was always deterministic, so there was no reason to consult one. And common weather questions ("what's the weather", "temperature outside", "what's the forecast for the week") route straight to the weather service, skipping the model's tool-selection step (a noticeable speed-up, though it still fetches). All of these match the bare phrasing only — "flip a coin to decide whether I should repaint" or "weather in Paris" keep going to the LLM, which can actually reason about them.
+- **`params:` in the LLM config — the latency knobs.** Extra parameters merged into every model call: anything LiteLLM accepts (`reasoning_effort`, `service_tier`, `temperature`, `max_tokens`, …), with unsupported ones dropped per-provider so the block is safe with local and non-reasoning backends. `reasoning_effort` and `service_tier` get dashboard dropdowns; both ship as `""` = **don't send the parameter** (models with adaptive defaults, like gpt-5.1, gain nothing from an explicit reasoning value — set `none`…`high` only to force a level on models whose default reasoning is heavier). Credential and routing keys are ignored in this block by design.
+
+### Fixed
+
+- **Back-to-back TTS sessions can no longer bleed into each other.** TTS audio frames now travel through the node's command queue alongside `tts_start`/`tts_end`, so wire order is preserved end-to-end — previously, frames of a next stream (e.g. a timer firing right behind an announcement) could race ahead of the previous stream's end and be appended to the wrong session's audio. One queue, one order; stale frames outside a live session are dropped. (Intercom audio keeps its direct low-latency path.)
+- **The dashboard no longer re-parses per-node YAML on every broadcast.** Effective node config reads are mtime-cached (invalidated on writes), so metrics ticks and state changes stop costing filesystem work per node per snapshot.
+
+### Development
+
+- `_index_from` (the static-format device-map builder) moved out of the Home Assistant skill into the resolver test-suite — production builds device indexes only from the live HA topology; the static-format files remain purely as the tests' fixture corpus.
+
 ## [3.5.1]
 
 ### Added
@@ -17,6 +39,7 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- **Kenzy waits after asking you a question.** When her reply *was* a genuine question she's waiting on — you asked her to quiz you, ask you something, or play a back-and-forth — she sometimes ended the exchange anyway, treating "ask a question" as complete once asked. The floor-hold guidance now covers a reply that is itself a question you're waiting to answer, while still not holding for reflexive offers of more help or sign-offs.
 - **The default system prompt no longer references a nonexistent tool.** It instructed the model to "only call `get_device_states`" for status questions — a tool that doesn't exist (status checks are `handle_home_control`'s job, and its description says so). Reworded so the model isn't reserving a phantom. If you've customized `system_prompt` in your llm override, check it for the same inherited line.
 - **"Tell the house it's time for dinner" no longer answers the clock.** The time/date fast intent gated on a bag of words ("tell"/"what" + "time" anywhere in the utterance), so announce phrasings that merely *mention* time were hijacked into a current-time answer. The classifier now matches anchored whole-utterance patterns — "time" must *be* the question, not the object of a larger command — and qualified questions ("what time is it in London", "what time does the game start") correctly fall through to the LLM, which can actually answer them.
 

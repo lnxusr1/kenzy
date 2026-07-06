@@ -73,6 +73,12 @@ node_defaults:
   # half-duplex: wake words are ignored while Kenzy is making sound, intercom is
   # unavailable, and alarms deliver once instead of ringing until acknowledged.
   hardware_aec: true
+  # Dialog turns (multi-turn conversations): the reply window while Kenzy holds
+  # the floor, and the sustained-speech onset that starts a turn (a clink or
+  # cough must not). All live-applied.
+  dialog_no_speech_timeout_ms: 8000
+  dialog_onset_ms: 300
+  dialog_onset_vad_threshold: 0.5
 
 # kenzy-speaker service — omit or set url to null to disable
 speaker:

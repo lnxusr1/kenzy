@@ -22,7 +22,9 @@ from __future__ import annotations
 
 import httpx
 
-from kenzy.llm.skills import get_config, skill  # type: ignore[import]
+import re
+
+from kenzy.llm.skills import FastResult, fast_intent, get_config, skill  # type: ignore[import]
 
 _NWS_AGENT = "kenzy-home-assistant/1.0"
 
@@ -78,8 +80,8 @@ async def _get_nws_urls(lat: float, lon: float) -> dict[str, str]:
         station_id = sr.json()["features"][0]["properties"]["stationIdentifier"]
 
     result: dict[str, str] = {
-        "forecast":     props["forecast"],
-        "station_id":   station_id,
+        "forecast": props["forecast"],
+        "station_id": station_id,
     }
     _url_cache[key] = result
     return result
@@ -141,13 +143,13 @@ async def get_current_weather(location: str | None = None) -> str:
             r.raise_for_status()
             obs = r.json()["properties"]
 
-        desc     = obs.get("textDescription") or "conditions unknown"
-        temp_c   = (obs.get("temperature") or {}).get("value")
-        humid    = (obs.get("relativeHumidity") or {}).get("value")
-        wind_ms  = (obs.get("windSpeed") or {}).get("value")
+        desc = obs.get("textDescription") or "conditions unknown"
+        temp_c = (obs.get("temperature") or {}).get("value")
+        humid = (obs.get("relativeHumidity") or {}).get("value")
+        wind_ms = (obs.get("windSpeed") or {}).get("value")
 
         temp_str = f"{_c_to_f(temp_c):.0f}°F" if temp_c is not None else "temp unknown"
-        parts    = [f"{label}: {desc}, {temp_str}"]
+        parts = [f"{label}: {desc}, {temp_str}"]
         if humid is not None:
             parts.append(f"humidity {humid:.0f}%")
         if wind_ms is not None:
@@ -180,12 +182,58 @@ async def get_weather_forecast(location: str | None = None, periods: int = 4) ->
             all_periods = r.json()["properties"]["periods"]
 
         lines = [f"Forecast for {label}:"]
-        for p in all_periods[:min(periods, len(all_periods))]:
+        for p in all_periods[: min(periods, len(all_periods))]:
             lines.append(
-                f"  {p['name']}: {p['shortForecast']}, "
-                f"{p['temperature']}°{p['temperatureUnit']}"
+                f"  {p['name']}: {p['shortForecast']}, {p['temperature']}°{p['temperatureUnit']}"
             )
         return "\n".join(lines)
 
     except Exception as exc:
         return f"Could not get forecast for {label}: {exc}"
+
+
+# ---------------------------------------------------------------------------
+# Fast DISPATCH — skips the LLM's tool-selection round-trip for the everyday
+# phrasings and calls the right weather function directly. It still fetches
+# (National Weather Service), so it's noticeably faster, not instant. Anchored
+# whole-utterance: a NAMED location ("weather in Paris") or a reasoning question
+# ("should I bring an umbrella") has a tail and falls through to the LLM, which
+# can geocode / reason.
+# ---------------------------------------------------------------------------
+
+_FORECAST_RE = re.compile(
+    r"^(?:"
+    r"whats the (?:weather )?forecast"
+    r"(?: for (?:today|the day|the week|tomorrow|the next few days|next week))?"
+    r"|whats the weather (?:for )?(?:tomorrow|this week|next week|the next few days|the rest of the week)"
+    r"|hows the (?:week|weather) looking"
+    r"|whats the forecast look like"
+    r")$"
+)
+_CURRENT_RE = re.compile(
+    r"^(?:"
+    r"whats the weather(?: like| outside| right now| now)?"
+    r"|hows the weather(?: outside)?"
+    r"|whats the temperature(?: outside| right now| now)?"
+    r"|how (?:hot|cold|warm) is it(?: outside)?"
+    r"|is it (?:hot|cold|warm)(?: outside)?"
+    r")$"
+)
+_WEATHER_VOICE = "Speak naturally at a conversational pace."
+
+
+@fast_intent(priority=48)
+async def fast_weather(utterance: str, room_id: str | None, speaker: str | None) -> FastResult:
+    """Everyday weather/forecast queries → the weather skill directly (no LLM
+    tool-selection). Home location only; named places defer to the LLM."""
+    text = re.sub(r"[^\w\s]", "", utterance).strip().lower()
+    text = re.sub(r"\s+", " ", text)
+    # STT renders the contraction either way ("what's" → whats, "what is") —
+    # fold to the contracted form the patterns expect.
+    text = re.sub(r"\bwhat is\b", "whats", text)
+    text = re.sub(r"\bhow is\b", "hows", text)
+    if _FORECAST_RE.match(text):
+        return FastResult.handled(await get_weather_forecast(), _WEATHER_VOICE)
+    if _CURRENT_RE.match(text):
+        return FastResult.handled(await get_current_weather(), _WEATHER_VOICE)
+    return FastResult.miss()

@@ -163,6 +163,8 @@ Add or replace any category by editing the `feeds` map. Any RSS 2.0 or Atom feed
 
 **File:** `builtin_skills/random_tools.py`
 
+The common bare forms ("flip a coin", "roll a d20", "roll 3d6", "pick a number between 1 and 10") are handled by a fast intent (`fast_random`) with no model call. Anything with a tail that needs reasoning ("flip a coin to decide whether I should…") falls through to the LLM.
+
 Utility skills for randomness and selection.
 
 | Function | Description |
@@ -175,6 +177,21 @@ Utility skills for randomness and selection.
 
 !!! note
     `yes_no_maybe` and `pick_from_list` include explicit docstring clauses that instruct the LLM not to use them for factual or deterministic questions.
+
+---
+
+## Social
+
+**File:** `builtin_skills/social.py`
+
+Instant greetings and a conversational bail-out — fast intents, no model call, no network (they work offline).
+
+| Matcher | Description |
+|---|---|
+| `fast_greeting` (fast intent) | "hello", "good morning/afternoon/evening", "goodnight", "howdy", "what's up" → a warm, varied reply (time-specific greetings echo the right part of day) |
+| `fast_nevermind` (fast intent) | "never mind" / "forget it" → "Okay, no problem" — and ends a held multi-turn dialog cleanly |
+
+Both match the **whole utterance** only, so a greeting with a request attached ("hello, turn on the lights") or a list edit ("forget the eggs on the list") falls through to the right skill. "Thanks/thank you" is intentionally left to the LLM — speech-to-text hallucinates those from background noise, so a fast "you're welcome" would fire on phantom transcriptions.
 
 ---
 
@@ -257,6 +274,8 @@ The volume level **persists** (it's part of the node's server-owned config, also
 ## Weather
 
 **File:** `builtin_skills/weather.py`
+
+Everyday phrasings ("what's the weather", "temperature outside", "what's the forecast for the week") are **fast-dispatched** by `fast_weather` — routed straight to the current/forecast function without the LLM's tool-selection round-trip (faster, though it still fetches from the weather service). A named location ("weather in Paris") or a reasoning question ("should I bring an umbrella?") falls through to the LLM.
 
 Provides current conditions and multi-day forecasts using the [National Weather Service API](https://www.weather.gov/documentation/services-web-api) (US only, no API key required). Geocoding uses Nominatim (OpenStreetMap).
 

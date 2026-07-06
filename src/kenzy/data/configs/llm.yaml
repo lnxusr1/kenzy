@@ -28,6 +28,20 @@ model: "gpt-5.1"
 #   model: "ollama/qwen2.5:14b"
 #   base_url: "http://127.0.0.1:11434"
 
+# Extra parameters passed to every model call — the latency knobs. Anything
+# LiteLLM accepts; unsupported ones are dropped per-provider (drop_params), so
+# these are safe with non-reasoning models and local backends too.
+# (Credential/routing keys like api_key/base_url are ignored here.)
+params:
+  # How long the model may "think" before speaking. "" = don't send the
+  # parameter (models with adaptive defaults, like gpt-5.1, gain nothing from
+  # an explicit value); "none" forces no reasoning on models whose default
+  # reasoning is heavier. ("" | none | minimal | low | medium | high)
+  reasoning_effort: ""
+  # OpenAI service tier: "priority" is the paid low-latency tier (if your
+  # account has it). "" = don't send the parameter.
+  service_tier: ""
+
 # Maximum tool-call iterations before returning whatever the LLM has.
 max_tool_iterations: 5
 

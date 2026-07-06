@@ -551,6 +551,14 @@ class NodeClient:
 
         # Timing thresholds, all stored as frame counts (min 1 to avoid ≥0 always-true).
         self._vad_enabled: bool = bool(cfg.get("vad_enabled", True))
+        fm_ = protocol.FRAME_MS
+        # Dialog-turn tuning (stage 1): the reply window during a held floor and
+        # the sustained-speech onset gate that starts a turn.
+        self._dialog_no_speech_frames: int = max(
+            int(cfg.get("dialog_no_speech_timeout_ms", 8000)) // fm_, 1
+        )
+        self._dialog_onset_frames: int = max(int(cfg.get("dialog_onset_ms", 300)) // fm_, 1)
+        self._dialog_onset_vad: float = float(cfg.get("dialog_onset_vad_threshold", 0.5))
         self._silence_frames: int = max(int(cfg.get("silence_ms", 400)) // protocol.FRAME_MS, 1)
         self._speech_min_frames: int = max(
             int(cfg.get("speech_min_ms", 500)) // protocol.FRAME_MS, 1
@@ -579,6 +587,23 @@ class NodeClient:
         # Set when the server wants one utterance captured after the next TTS prompt
         # finishes (intercom consent answer, or a voice-enrollment sample).
         self._capture_after_prompt: bool = False
+        # Whether the armed capture should chime when it opens (expect_utterance's
+        # cue flag): True = record-after-the-tone (enrollment); False = a
+        # conversational follow-up — her question is the cue (stage 1).
+        self._capture_cue: bool = True
+        # The current capture session is a dialog follow-up: opened silently,
+        # onset-gated, 8s window, no waiting sound between turns.
+        self._followup_active: bool = False
+        # Onset gating (follow-ups only): buffer mic frames and send nothing until
+        # ~dialog_onset_ms of SUSTAINED speech — a clink or cough must not start a
+        # turn, and a silent window must expire without ever bothering the server.
+        self._onset_pending: bool = False
+        self._onset_run: int = 0
+        self._onset_elapsed: int = 0
+        self._onset_burst: int = 0  # length of the most recent speech burst
+        self._onset_gap: int = 0  # silent frames since that burst ended
+        self._onset_buf: list[np.ndarray[Any, np.dtype[np.int16]]] = []
+        self._dialog_vad: Any = None  # lazy standalone Silero VAD; False = unavailable
         # Set when the server signals a multi-turn dialog ended while TTS is still
         # playing; the end-of-dialog cue plays once that playback completes.
         self._end_dialog_after_tts: bool = False
@@ -683,21 +708,148 @@ class NodeClient:
     # Streaming helpers
     # ------------------------------------------------------------------
 
-    async def _begin_streaming(self, session_id: str) -> None:
+    def _dialog_vad_score(self, flat: np.ndarray[Any, Any]) -> float | None:
+        """Silero VAD score for the dialog onset gate (lazy standalone instance,
+        like calibration's). None = model unavailable → caller falls back to RMS."""
+        if self._dialog_vad is False:
+            return None
+        if self._dialog_vad is None:
+            try:
+                import openwakeword  # type: ignore[import-untyped]
+
+                self._dialog_vad = openwakeword.VAD()
+            except Exception as exc:
+                log.warning("VAD unavailable for dialog onset (%s) — using RMS fallback", exc)
+                self._dialog_vad = False
+                return None
+        try:
+            self._dialog_vad(flat)
+            buf = self._dialog_vad.prediction_buffer
+            return float(buf[-1]) if buf else 0.0
+        except Exception:
+            return 0.0
+
+    async def _handle_onset_frame(self, flat: np.ndarray[Any, np.dtype[np.int16]]) -> None:
+        """One mic frame during a pending follow-up window (nothing sent yet).
+
+        A turn STARTS only on ~dialog_onset_ms of consecutive speech-classified
+        frames — a clink or cough can't start (and then instantly end) a turn.
+        Silero gates the start; the normal RMS machinery endpoints the finish
+        once the turn is running. On expiry the server gets followup_timeout and
+        the user gets the local end cue ("I stopped waiting").
+        """
+        if not self._onset_pending:  # already confirmed/expired — idempotent
+            return
+        self._onset_elapsed += 1
+        self._onset_buf.append(flat)
+        if len(self._onset_buf) > self._dialog_onset_frames + 8:
+            self._onset_buf.pop(0)
+
+        score = self._dialog_vad_score(flat)
+        if score is None:  # no VAD model — degrade to sustained-energy gating
+            rms = float(np.sqrt(np.mean(flat.astype(np.float32) ** 2)))
+            speech = rms >= self._silence_rms
+        else:
+            speech = score >= self._dialog_onset_vad
+        if speech:
+            self._onset_run += 1
+            self._onset_burst = max(self._onset_burst, self._onset_run)
+            self._onset_gap = 0
+        else:
+            self._onset_run = 0
+            if self._onset_burst:
+                self._onset_gap += 1
+
+        # Two ways a turn starts (a single-frame blip is neither):
+        #  a) sustained speech reaches dialog_onset_ms — a longer answer, mid-word;
+        #  b) a short COMPLETE utterance: a burst of ≥ ~160 ms that then ended in
+        #     silence ("Boo", "yes"). Consecutive-frames-only rejected any word
+        #     shorter than the onset window — found live on a knock-knock punchline.
+        min_burst = max(2, self._dialog_onset_frames // 2)
+        confirmed = self._onset_run >= self._dialog_onset_frames or (
+            self._onset_burst >= min_burst and self._onset_gap >= 2
+        )
+        if confirmed:
+            # The user answered. Open the real session and flush the onset buffer
+            # so their first word survives whole.
+            self._onset_pending = False
+            sid = self._session_id or str(uuid.uuid4())
+            self._session_id = sid
+            try:
+                msg, _ = protocol.audio_start(sid, self._room_id)
+                if self._ws is None:
+                    raise ConnectionError("no websocket")
+                await self._ws.send(msg)
+                for f in self._onset_buf:
+                    await self._ws.send(f.tobytes())
+            except Exception as exc:
+                log.warning("Could not open follow-up session: %s", exc)
+                self._state = _STATE_IDLE
+                self._session_id = None
+                self._followup_active = False
+                self._onset_buf = []
+                return
+            # Seed the endpointing counters with observed truth — and mark
+            # speech_min as SATISFIED: its anti-blip job is already done, by a
+            # better classifier (the Silero onset gate). Without this, a short
+            # complete answer ("Boo") never arms silence-endpointing and drags
+            # to the no_speech timeout — found live, again on the knock-knock.
+            self._speech_frames = max(self._onset_run, self._onset_burst, self._speech_min_frames)
+            self._silence_count = self._onset_gap
+            self._frame_count = len(self._onset_buf)
+            self._onset_buf = []
+            log.info("[%s] follow-up answer detected — streaming", sid[:8])
+            return
+
+        if self._onset_elapsed >= self._dialog_no_speech_frames:
+            # Window expired in silence: the dialog is over. The server never saw
+            # a session; it just needs its floor state cleared.
+            self._onset_pending = False
+            self._state = _STATE_IDLE
+            self._session_id = None
+            self._followup_active = False
+            self._onset_buf = []
+            if self._ws is not None:
+                try:
+                    await self._ws.send(protocol.followup_timeout())
+                except Exception:
+                    pass
+            if self._player is not None and self._dialog_end_audio is not None:
+                self._player.play_pcm(self._dialog_end_audio, interrupt=True)
+            log.info("Follow-up window expired — dialog ended (end cue)")
+
+    async def _begin_streaming(self, session_id: str, followup: bool = False) -> None:
         if self._player:
             self._player.abort()  # stop waiting sound if still playing
-            self._player.play()
+            if not followup or self._capture_cue:
+                self._player.play()  # wake sessions + record-after-the-tone flows chime
         self._end_dialog_after_tts = False  # a new turn began; drop any stale end cue
         self._state = _STATE_STREAMING
         self._session_id = session_id
+        self._followup_active = followup
         self._silence_count = 0
         self._speech_frames = 0
         self._frame_count = 0
-        msg, _ = protocol.audio_start(session_id, self._room_id)
         if self._ws is None:
             self._state = _STATE_IDLE
             self._session_id = None
+            self._followup_active = False
             return
+        if followup:
+            # Stage 1 onset gate: send NOTHING yet. Frames buffer locally until
+            # ~dialog_onset_ms of sustained speech confirms a real answer (then
+            # audio_start + the buffered onset flush), or the reply window expires
+            # (then followup_timeout + the local end cue — the server never hears
+            # a session that never happened).
+            self._onset_pending = True
+            self._onset_run = 0
+            self._onset_elapsed = 0
+            self._onset_burst = 0
+            self._onset_gap = 0
+            self._onset_buf = []
+            log.info("[%s] follow-up window open (onset-gated)", session_id[:8])
+            return
+        msg, _ = protocol.audio_start(session_id, self._room_id)
         await self._ws.send(msg)
         log.info("[%s] streaming started", session_id[:8])
 
@@ -705,14 +857,26 @@ class NodeClient:
         if self._state != _STATE_STREAMING:
             return
         sid = self._session_id
+        was_followup = self._followup_active
+        was_pending = self._onset_pending
         self._state = _STATE_IDLE
         self._session_id = None
+        self._followup_active = False
+        self._onset_pending = False
+        self._onset_buf = []
         if self._ws is not None and sid is not None:
             try:
-                await self._ws.send(protocol.audio_end(sid, reason))
+                if was_pending:
+                    # No audio_start was ever sent — there's no session to end.
+                    # Tell the server the held floor is over instead.
+                    await self._ws.send(protocol.followup_timeout())
+                else:
+                    await self._ws.send(protocol.audio_end(sid, reason))
             except Exception:
                 pass
         log.info("[%s] streaming ended (%s)", (sid or "?")[:8], reason)
+        if was_followup:
+            return  # dialog turns get a silent processing beat — never hold music
         # Only start the "processing" sound if we're still idle. On a fast reply the
         # server's tts_start can arrive during the audio_end send above and flip us
         # to TTS on the cmd loop; starting the waiting sound now would queue it behind
@@ -789,7 +953,7 @@ class NodeClient:
         if completed and self._capture_after_prompt:
             self._capture_after_prompt = False
             log.info("Prompt finished — capturing the spoken reply")
-            await self._begin_streaming(str(uuid.uuid4()))
+            await self._begin_streaming(str(uuid.uuid4()), followup=True)
         # A multi-turn dialog ended during this reply: play the end-of-dialog cue now
         # that the final line has finished (deferred so it never clips the reply).
         elif completed and self._end_dialog_after_tts:
@@ -932,6 +1096,16 @@ class NodeClient:
             self._hard_cap_frames = max(int(patch["hard_cap_ms"]) // fm, 1)
             applied.append("hard_cap_ms")
 
+        if "dialog_no_speech_timeout_ms" in patch:
+            self._dialog_no_speech_frames = max(int(patch["dialog_no_speech_timeout_ms"]) // fm, 1)
+            applied.append("dialog_no_speech_timeout_ms")
+        if "dialog_onset_ms" in patch:
+            self._dialog_onset_frames = max(int(patch["dialog_onset_ms"]) // fm, 1)
+            applied.append("dialog_onset_ms")
+        if "dialog_onset_vad_threshold" in patch:
+            self._dialog_onset_vad = float(patch["dialog_onset_vad_threshold"])
+            applied.append("dialog_onset_vad_threshold")
+
         if "hardware_aec" in patch:
             self._hardware_aec = bool(patch["hardware_aec"])
             applied.append("hardware_aec")
@@ -1058,12 +1232,17 @@ class NodeClient:
             if isinstance(raw, bytes):
                 if self._state == _STATE_INTERCOM and self._player is not None:
                     # Live peer audio (16 kHz mono) → resample to the playback rate and
-                    # feed the streaming buffer.
+                    # feed the streaming buffer. (Stays out of the cmd queue: latency.)
                     audio = np.frombuffer(raw, dtype=np.int16)
                     self._player.feed(_resample(audio, protocol.SAMPLE_RATE, self._playback_rate))
                     continue
+                # TTS frames ride the COMMAND queue so their order relative to
+                # tts_start/tts_end is preserved end-to-end: back-to-back streams
+                # (end₁, start₂, frames₂ on the wire) used to race — frames₂ could
+                # reach _tts_q before the cmd loop processed end₁, bleeding one
+                # session's head into another's tail. One queue, one order.
                 try:
-                    self._tts_q.put_nowait(raw)
+                    self._cmd_q.put_nowait({"type": "_pcm", "raw": raw})
                 except asyncio.QueueFull:
                     pass  # drop under backpressure
                 continue
@@ -1080,6 +1259,16 @@ class NodeClient:
         while True:
             msg = await self._cmd_q.get()
             mtype = msg.get("type")
+
+            if mtype == "_pcm":
+                # In-order TTS audio (see _recv_loop). Only a live TTS session may
+                # buffer frames; anything else is stale leftovers from an abort.
+                if self._state == _STATE_TTS:
+                    try:
+                        self._tts_q.put_nowait(msg["raw"])
+                    except asyncio.QueueFull:
+                        pass
+                continue
 
             if mtype == protocol.MSG_CONFIG:
                 self._apply_pulled_config(msg.get("config") or {})
@@ -1111,6 +1300,7 @@ class NodeClient:
                 # spoken prompt next; when it finishes playing, _tts_wait_done opens a
                 # capture window for the yes/no answer. No audio is bridged yet.
                 self._capture_after_prompt = True
+                self._capture_cue = False  # the consent prompt is the cue; no beep on top
                 log.info("Incoming call from '%s' — prompting for consent", msg.get("from_room"))
 
             elif mtype == protocol.MSG_CALL_CANCEL:
@@ -1177,8 +1367,11 @@ class NodeClient:
 
             elif mtype == protocol.MSG_EXPECT_UTTERANCE:
                 # Arm one-shot capture: the next TTS prompt's completion opens a
-                # capture window (used by voice enrollment, like the consent gate).
+                # capture window. cue=True chimes when it opens (enrollment's
+                # record-after-the-tone); cue=False opens silently (dialog turns,
+                # where the prompt itself is the cue). Absent = legacy chime.
                 self._capture_after_prompt = True
+                self._capture_cue = bool(msg.get("cue", True))
 
             elif mtype == protocol.MSG_END_DIALOG:
                 # A multi-turn dialog ended. Play the end cue after any in-progress TTS
@@ -1236,6 +1429,21 @@ class NodeClient:
                         log.info("Wake word '%s' score=%.3f", name, score)
                         if self._state == _STATE_IDLE:
                             await self._begin_streaming(str(uuid.uuid4()))
+                        elif self._state == _STATE_STREAMING and self._onset_pending:
+                            # Wake word instead of an answer: the user is starting
+                            # over. Abandon the held floor (server clears its turn
+                            # counter) and open a fresh wake session, chime and all.
+                            self._onset_pending = False
+                            self._onset_buf = []
+                            self._followup_active = False
+                            self._state = _STATE_IDLE
+                            self._session_id = None
+                            if self._ws is not None:
+                                try:
+                                    await self._ws.send(protocol.followup_timeout())
+                                except Exception:
+                                    pass
+                            await self._begin_streaming(str(uuid.uuid4()))
                         elif self._state == _STATE_STREAMING and self._ws is not None:
                             if self._player:
                                 self._player.play()
@@ -1274,11 +1482,16 @@ class NodeClient:
                     await self._end_intercom(reason="connection_error")
                 continue
 
+            if self._state == _STATE_STREAMING and self._onset_pending:
+                await self._handle_onset_frame(flat)
+                continue
+
             if self._state == _STATE_STREAMING:
                 if self._ws is None:
                     # Lost connection mid-stream; reset state cleanly.
                     self._state = _STATE_IDLE
                     self._session_id = None
+                    self._followup_active = False
                     continue
 
                 try:

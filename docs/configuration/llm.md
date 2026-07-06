@@ -22,6 +22,9 @@ The LLM service processes transcribed text through a tool-calling loop and retur
 | `base_url` | — | Provider base URL. Required for Ollama, LM Studio, and similar local providers. |
 | `fallback.model` | — | Optional **local fallback**: when the primary model call fails (cloud outage, provider error), the request is silently retried once against this model — e.g. `"ollama/qwen2.5:14b"`. If the fallback also fails, the user just hears the error cue. Unset = no fallback. |
 | `fallback.base_url` | — | The fallback model's endpoint, e.g. `"http://127.0.0.1:11434"` |
+| `params.reasoning_effort` | `""` | How long the model may "think" before speaking. Empty = **don't send the parameter** (models with adaptive defaults, like gpt-5.1, gain nothing from an explicit value). Set `none`…`high` to force a level on models whose default reasoning is heavier. Ignored harmlessly by providers that don't support it. |
+| `params.service_tier` | `""` | OpenAI service tier — `"priority"` is the paid low-latency tier if your account has it. Empty = don't send. |
+| `params.*` | — | Anything else LiteLLM accepts (`service_tier: "priority"` for OpenAI's paid low-latency tier, `temperature`, `max_tokens`, …), merged into every model call. Unsupported parameters are dropped per-provider. Credential/routing keys (`api_key`, `base_url`, …) are ignored here by design. |
 | `max_tool_iterations` | `5` | Maximum skill call iterations per request before returning whatever the model has |
 
 ### Prompts

@@ -30,6 +30,11 @@ export const SERVICE_ENUMS = {
   },
   llm: {
     "skills.web_search.provider": ["duckduckgo", "searxng"],
+    // Latency knob: how long the model may "think" before speaking. A voice
+    // assistant defaults to none; unsupported providers drop it harmlessly.
+    // "" = don't send the parameter at all.
+    "params.reasoning_effort": ["", "none", "minimal", "low", "medium", "high"],
+    "params.service_tier": ["", "auto", "default", "flex", "priority"],
     log_level: LOG_LEVELS,
     log_capture_level: CAPTURE_LEVELS,
   },

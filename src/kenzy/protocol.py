@@ -35,6 +35,7 @@ MSG_TUNE_START = "tune_start"  # server→node: begin a bounded calibration wind
 MSG_TUNE_STOP = "tune_stop"  # server→node: end calibration early
 MSG_TUNE_SAMPLE = "tune_sample"  # node→server: one calibration sample (rms/wake/vad)
 MSG_EXPECT_UTTERANCE = "expect_utterance"  # server→node: capture one utterance after the next TTS
+MSG_FOLLOWUP_TIMEOUT = "followup_timeout"  # node→server: held-floor reply window expired silently
 MSG_END_DIALOG = "end_dialog"  # server→node: a multi-turn dialog ended — play the end cue
 # Intercom (live two-way call between two rooms; gated by the receiver's consent).
 MSG_CALL_REQUEST = "call_request"  # server→node: ring the receiver (no audio yet)
@@ -182,10 +183,23 @@ def tune_stop() -> str:
     return json.dumps({"type": MSG_TUNE_STOP})
 
 
-def expect_utterance() -> str:
-    """Tell the node to auto-capture one utterance after the next TTS prompt finishes
-    (used by the consent gate, voice enrollment, and multi-turn follow-ups)."""
-    return json.dumps({"type": MSG_EXPECT_UTTERANCE})
+def expect_utterance(cue: bool = True) -> str:
+    """Arm one-shot capture after the next TTS prompt finishes playing.
+
+    ``cue`` controls whether the node plays its ready chime when the capture
+    window opens: True for record-after-the-tone flows (voice enrollment),
+    False for conversational follow-ups (her question IS the cue — a beep on
+    top reads as "wait, was I supposed to wait?"). Absent = True, so an older
+    server keeps today's chime behavior on a newer node.
+    """
+    return json.dumps({"type": MSG_EXPECT_UTTERANCE, "cue": bool(cue)})
+
+
+def followup_timeout() -> str:
+    """Node→server: a held-floor reply window expired with no speech — the
+    dialog is over (the server clears its turn counter). The node plays its own
+    end-of-dialog cue locally ("I stopped waiting")."""
+    return json.dumps({"type": MSG_FOLLOWUP_TIMEOUT})
 
 
 def end_dialog() -> str:
