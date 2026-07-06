@@ -55,6 +55,9 @@ discovery:
 # sound_alarm: alarm.wav          # tone before each alarm ring (played by the server; null = voice only)
 # sound_error: error.wav          # spoken cue when a request fails (played by the server; null = silent)
 # hardware_aec: true              # false = speaker has no echo cancellation: wake ignored during playback; intercom/alarm ring disabled
+# dialog_no_speech_timeout_ms: 8000  # reply window during a held dialog (server-owned, live)
+# dialog_onset_ms: 300               # sustained speech needed to start a dialog turn (live)
+# dialog_onset_vad_threshold: 0.5    # Silero gate for dialog onset (live)
 # wakeword_models: []             # paths to .tflite/.onnx; empty = bundled
 # wakeword_threshold: 0.5         # confidence [0-1] to fire the wake word
 # wakeword_vad_threshold: 0.0     # Silero VAD gate [0-1]; 0 disables

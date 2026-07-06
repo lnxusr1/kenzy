@@ -20,6 +20,78 @@ from kenzy.llm import skills as reg
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def _index_from(mod, yaml_text, device_map, overlay):
+    """Build a _DeviceIndex from the static-format fixture files.
+
+    Relocated from home_assistant.py (3.6.0): production builds indexes only
+    from the live HA model; this adapter exists solely so the resolver tests can
+    feed the (fully live) resolution engine the rich fixture corpus in
+    data/home_assistant/. It reaches into the loaded module for the engine's
+    own helpers so it can never drift from the real index shape.
+    """
+    data = yaml.safe_load(yaml_text) or {}
+    rooms = {}
+    defaults = {}
+    room_phrases = {}
+    floor_phrases = {}
+    floor_rooms = {}
+
+    for _area, rms in data.items():
+        if not isinstance(rms, dict):
+            continue
+        floor = mod._norm(str(_area)).replace(" ", "_")
+        floor_phrases[str(_area).replace("_", " ")] = floor
+        for room, groups in rms.items():
+            if not isinstance(groups, dict):
+                continue
+            room_phrases[room.replace("_", " ")] = room
+            if room not in floor_rooms.setdefault(floor, []):
+                floor_rooms[floor].append(room)
+            rt = rooms.setdefault(room, {})
+            dflt = defaults.setdefault(room, {})
+            for type_key, codes in groups.items():
+                if not isinstance(codes, list):
+                    continue
+                if type_key == "default":
+                    for c in codes:
+                        domain = (device_map.get(c, "") or "").split(".")[0]
+                        tk = mod._DOMAIN_TO_TYPE.get(domain)
+                        if tk:
+                            dflt.setdefault(tk, []).append(c)
+                else:
+                    bucket = rt.setdefault(type_key, [])
+                    for c in codes:
+                        if c not in bucket:
+                            bucket.append(c)
+
+    spoken = {code: mod._auto_spoken(code) for code in device_map}
+    aliases = {}
+    exclude = set()
+
+    for room, ov in (overlay.get("rooms", {}) if overlay else {}).items():
+        if not isinstance(ov, dict):
+            continue
+        for phrase, target in (ov.get("aliases", {}) or {}).items():
+            codes = [target] if isinstance(target, str) else list(target)
+            aliases[(room, mod._norm(phrase))] = codes
+        for tk, codes in (ov.get("defaults", {}) or {}).items():
+            defaults.setdefault(room, {})[tk] = list(codes)
+        for c in ov.get("exclude", []) or []:
+            exclude.add(c)
+
+    return mod._DeviceIndex(
+        rooms,
+        defaults,
+        spoken,
+        aliases,
+        exclude,
+        room_phrases,
+        device_map,
+        floor_phrases,
+        floor_rooms,
+    )
+
+
 @pytest.fixture
 def ha(monkeypatch):
     """Load the bundled home_assistant skill by path with the index from real files."""
@@ -38,7 +110,7 @@ def ha(monkeypatch):
     device_map = json.loads((ROOT / "data/home_assistant/device_ids.json").read_text())
     overlay_path = ROOT / "data/home_assistant/device_overlay.yaml"
     overlay = yaml.safe_load(overlay_path.read_text()) if overlay_path.exists() else {}
-    mod._INDEX = mod._index_from(yaml_text, device_map, overlay or {})
+    mod._INDEX = _index_from(mod, yaml_text, device_map, overlay or {})
     mod._RESOLVER_TEXT = yaml_text
 
     # These tests exercise the offline resolution engine against the static

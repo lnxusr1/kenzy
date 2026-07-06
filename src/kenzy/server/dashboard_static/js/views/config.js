@@ -30,6 +30,10 @@ const TYPES = {
   // Declared hardware capability (can't be detected): false ⇒ half-duplex room —
   // wake ignored during playback; intercom and alarm ring loops disabled.
   hardware_aec: "bool",
+  // Dialog-turn tuning (stage 1 conversational flow): all live.
+  dialog_no_speech_timeout_ms: "num",
+  dialog_onset_ms: "num",
+  dialog_onset_vad_threshold: "num",
 };
 
 // Keys that re-init audio hardware: a change is pulled on the node's next boot,

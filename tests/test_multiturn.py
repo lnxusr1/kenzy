@@ -88,16 +88,39 @@ async def test_no_end_cue_on_single_turn(monkeypatch):
     assert _end_dialog_count(ws) == 0
 
 
-async def test_end_cue_after_final_reply_of_held_dialog(monkeypatch):
+async def test_natural_close_is_silent_no_end_cue(monkeypatch):
+    """Stage 1 sound language: a dialog that ends with a final spoken reply gets
+    NO end cue — the reply is the closure. (The cue now means only "I stopped
+    waiting" and is played by the NODE when a follow-up window expires.)"""
     srv, ws = _server_with_node()
-    # Turn 1 holds the floor — no end cue yet.
     _mock_pipeline(srv, monkeypatch, response="Knock knock.", expect=True)
     await srv._transcribe("k", "kitchen", "sid", b"1234")
     assert _end_dialog_count(ws) == 0
-    # Turn 2 is the final reply (no hold) — end cue sent once, after the reply.
     _mock_pipeline(srv, monkeypatch, response="Lettuce in, it's cold!", expect=False)
     await srv._transcribe("k", "kitchen", "sid", b"1234")
-    assert _end_dialog_count(ws) == 1
+    assert _end_dialog_count(ws) == 0  # natural close: silent
+    assert "k" not in srv._followup_turns
+
+
+async def test_followup_arms_with_silent_cue(monkeypatch):
+    """Dialog follow-ups open silently: expect_utterance carries cue=false."""
+    import json
+
+    srv, ws = _server_with_node()
+    _mock_pipeline(srv, monkeypatch, response="Knock knock.", expect=True)
+    await srv._transcribe("k", "kitchen", "sid", b"1234")
+    arms = [
+        json.loads(m)
+        for m in ws.sent
+        if isinstance(m, str) and '"expect_utterance"' in m
+    ]
+    assert arms and arms[-1]["cue"] is False
+
+
+async def test_followup_timeout_message_clears_floor():
+    srv, ws = _server_with_node()
+    srv._followup_turns["k"] = 2
+    srv._followup_timed_out("k")
     assert "k" not in srv._followup_turns
 
 
