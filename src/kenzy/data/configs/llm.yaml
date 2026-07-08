@@ -17,8 +17,11 @@ log_capture_level: "debug"  # how deep the dashboard log viewer can see (debug/t
 # API keys are read automatically from environment variables (.env).
 model: "gpt-5.1"
 
-# base_url is only needed for local providers (Ollama, LM Studio, etc.)
-# base_url: "http://localhost:11434"
+# base_url — only needed for local providers (Ollama, LM Studio, vLLM, a hosted
+# proxy). Leave empty to use the model's own provider (OpenAI/Anthropic/etc.).
+# Shipped as a real (empty) key so it's editable from the dashboard's Services
+# tab. (A custom base_url never receives your OpenAI key — see CUSTOM_LLM_API_KEY.)
+base_url: ""
 
 # Optional LOCAL fallback model: when the primary model call fails (cloud
 # outage, provider error), the request is silently retried once against this

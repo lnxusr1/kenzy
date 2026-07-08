@@ -6,6 +6,7 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- **The LLM `base_url` is editable from the dashboard now.** It's the endpoint you point at a local model (Ollama, LM Studio) or a proxy — and the security design always treated it as dashboard-editable (which is why your OpenAI key never travels to it) — but it shipped commented out, so it never actually appeared in the Services → llm editor. Now a real (empty) key, so you can set it without hand-editing a file. Consistency pass on the node sound settings too: every sound with a bundled default shows that default in the editor instead of a bare "default".
 - **Intercom now rings on the caller's end.** After "Ok, calling the kitchen," there used to be dead silence while the other room was rung and asked to accept — you only knew the call had connected if the other person happened to speak. The caller now hears a **ringback loop** (`sound_ringback`, a `ringback.wav` you can customize per node) during that wait, which stops the moment the call connects (the connect chime takes over), is declined, or times out. Fills the one silent gap in the call-setup flow.
 
 ### Fixed

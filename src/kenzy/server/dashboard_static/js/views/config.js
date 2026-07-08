@@ -55,6 +55,19 @@ const RESTART_KEYS = new Set([
 // Bounds for "range" (slider) fields (default = the node's value when unset).
 const RANGES = { volume: { min: 0, max: 100, step: 1, default: 100 } };
 
+// Node-code defaults the SERVER can't see (they live in the node's Python, not
+// in node_defaults), so the editor can show the real default as the placeholder
+// instead of a bare "default". Keep in sync with the cfg.get() defaults in
+// node/client.py. (sound_dialog_end is intentionally absent — it has no default;
+// it's off unless set.)
+const DEFAULTS = {
+  sound_ready: "ready.wav",
+  sound_waiting: "waiting.wav",
+  sound_connect: "connect.wav",
+  sound_disconnect: "disconnect.wav",
+  sound_ringback: "ringback.wav",
+};
+
 export function ConfigView({ node, onBack }) {
   const [info, setInfo] = useState(null);
   const [over, setOver] = useState({});
@@ -166,6 +179,7 @@ export function ConfigView({ node, onBack }) {
   const row = (k) => {
     const t = TYPES[k] || "str";
     const inherited = info.config[k];
+    const effDefault = inherited ?? DEFAULTS[k]; // what's used if left blank
     const cur = over[k];
     const set = cur !== undefined;
     const opts = nodeEnum(k);
@@ -212,11 +226,11 @@ export function ConfigView({ node, onBack }) {
       // Keep the raw string while typing — coercing to Number() per keystroke turns
       // "0." into 0 and snaps the field back, making decimals impossible to enter.
       input = html`<input type="number" step="any" inputmode="decimal" disabled=${!info.controls}
-        value=${set ? cur : ""} placeholder=${inherited ?? "default"}
+        value=${set ? cur : ""} placeholder=${effDefault ?? "default"}
         onInput=${(e) => setKey(k, e.target.value === "" ? undefined : e.target.value)} />`;
     } else {
       input = html`<input disabled=${!info.controls} value=${set ? cur : ""}
-        placeholder=${inherited ?? "default"}
+        placeholder=${effDefault ?? "default"}
         onInput=${(e) => setKey(k, e.target.value === "" ? undefined : e.target.value)} />`;
     }
     const restart = RESTART_KEYS.has(k);
@@ -227,7 +241,7 @@ export function ConfigView({ node, onBack }) {
                 title=${restart
                   ? "Audio hardware key — applied on the node's next boot or via Restart"
                   : "Applied live on save"}>${restart ? "restart" : "live"}</span>
-          <span class="micro">${set ? "override" : `inherits ${fmt(inherited)}`}</span></div>
+          <span class="micro">${set ? "override" : `inherits ${fmt(effDefault)}`}</span></div>
         <div class="cfg-input">${input}</div>
       </div>`;
   };
@@ -243,7 +257,7 @@ export function ConfigView({ node, onBack }) {
           : null}
         <div class="name-row">
           <div class="cfg-key"><span class="mono">room name</span>
-            <span class="micro">server-owned; stored &amp; pulled on connect, and sent to the assistant</span></div>
+            <span class="micro">server-owned; stored & pulled on connect, and sent to the assistant</span></div>
           <div class="name-input">
             <input disabled=${!info.controls} value=${room}
                    placeholder="kitchen" maxlength="64"
