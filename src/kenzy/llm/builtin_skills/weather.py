@@ -20,9 +20,9 @@ Config in llm.yaml:
 
 from __future__ import annotations
 
-import httpx
-
 import re
+
+import httpx
 
 from kenzy.llm.skills import FastResult, fast_intent, get_config, skill  # type: ignore[import]
 
@@ -111,6 +111,18 @@ async def _resolve(location: str | None) -> tuple[float, float, str] | None:
     return coords[0], coords[1], location
 
 
+def _spoken_conditions(text: str) -> str:
+    """Make NWS's terse Title-Case ``shortForecast`` read naturally aloud.
+
+    NWS returns strings like "Chance Showers And Thunderstorms then Partly
+    Cloudy" — no "of", run-on "And". Insert the implied "of" after a leading
+    probability word and lowercase the connector so TTS speaks a sentence, not
+    a headline.
+    """
+    text = re.sub(r"\b(Slight Chance|Chance)\b(?! of\b)", r"\1 of", text)
+    return text.replace(" And ", " and ")
+
+
 def _c_to_f(c: float) -> float:
     return c * 9 / 5 + 32
 
@@ -148,12 +160,12 @@ async def get_current_weather(location: str | None = None) -> str:
         humid = (obs.get("relativeHumidity") or {}).get("value")
         wind_ms = (obs.get("windSpeed") or {}).get("value")
 
-        temp_str = f"{_c_to_f(temp_c):.0f}°F" if temp_c is not None else "temp unknown"
+        temp_str = f"{_c_to_f(temp_c):.0f} degrees" if temp_c is not None else "temperature unknown"
         parts = [f"{label}: {desc}, {temp_str}"]
         if humid is not None:
             parts.append(f"humidity {humid:.0f}%")
         if wind_ms is not None:
-            parts.append(f"wind {wind_ms * 2.237:.0f} mph")
+            parts.append(f"wind {wind_ms * 2.237:.0f} miles per hour")
         return ", ".join(parts) + "."
 
     except Exception as exc:
@@ -184,7 +196,7 @@ async def get_weather_forecast(location: str | None = None, periods: int = 4) ->
         lines = [f"Forecast for {label}:"]
         for p in all_periods[: min(periods, len(all_periods))]:
             lines.append(
-                f"  {p['name']}: {p['shortForecast']}, {p['temperature']}°{p['temperatureUnit']}"
+                f"{p['name']}: {_spoken_conditions(p['shortForecast'])}, {p['temperature']} degrees."
             )
         return "\n".join(lines)
 

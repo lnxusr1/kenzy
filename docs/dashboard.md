@@ -240,6 +240,8 @@ recent window. It's a bounded in-memory ring (no disk, ~200 entries) that update
 because entries include transcripts it's gated by the same `dashboard.logs` flag as the
 log viewer, and nothing is recorded when that's off.
 
+The latency bars share **one time scale** across all shown interactions (the legend notes what full width represents), so segment widths are directly comparable run-to-run — a slow LLM call is visibly wider than a fast one, and fast-path replies show as slivers.
+
 ## Logs
 
 With `dashboard.logs: true`, the **Logs** tab pulls a bounded in-memory buffer from a

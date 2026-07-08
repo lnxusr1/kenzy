@@ -524,6 +524,8 @@ class NodeClient:
         self._sound_connect: str | None = str(_sc) if _sc else None
         _sd = cfg.get("sound_disconnect", "disconnect.wav")
         self._sound_disconnect: str | None = str(_sd) if _sd else None
+        _rb = cfg.get("sound_ringback", "ringback.wav")
+        self._sound_ringback: str | None = str(_rb) if _rb else None
         # End-of-dialog cue: played only when a multi-turn dialog concludes (never after
         # a single turn). Off by default; set to a sound (e.g. "disconnect.wav") to enable.
         _sde = cfg.get("sound_dialog_end")
@@ -641,6 +643,12 @@ class NodeClient:
         self._waiting_audio: np.ndarray[Any, Any] | None = None
         self._connect_audio: np.ndarray[Any, Any] | None = None
         self._disconnect_audio: np.ndarray[Any, Any] | None = None
+        self._ringback_audio: np.ndarray[Any, Any] | None = None
+        # Intercom ringback: a loop played on the CALLER while the target room is
+        # rung. Armed after the "calling…" reply finishes; stopped on connect,
+        # a spoken decline/timeout, wake, or disconnect.
+        self._ringback_after_tts: bool = False
+        self._ringback_task: asyncio.Task[None] | None = None
         self._dialog_end_audio: np.ndarray[Any, Any] | None = None
 
         self._silence_count: int = 0
@@ -819,6 +827,7 @@ class NodeClient:
             log.info("Follow-up window expired — dialog ended (end cue)")
 
     async def _begin_streaming(self, session_id: str, followup: bool = False) -> None:
+        self._stop_ringback()
         if self._player:
             self._player.abort()  # stop waiting sound if still playing
             if not followup or self._capture_cue:
@@ -889,6 +898,7 @@ class NodeClient:
     # ------------------------------------------------------------------
 
     async def _begin_tts(self, session_id: str, sample_rate: int, channels: int) -> None:
+        self._stop_ringback()  # a spoken reply (decline/timeout) supersedes ringing
         # Deliberately NO queue drain here: _recv_loop enqueues binary frames the
         # instant they arrive, so this session's own head frames may already be in
         # _tts_q before the cmd loop processes tts_start — draining now would eat
@@ -950,7 +960,11 @@ class NodeClient:
             log.info("TTS playback complete")
         # If a prompt asked us to capture one utterance (intercom consent or voice
         # enrollment), start capturing now that the prompt has finished playing.
-        if completed and self._capture_after_prompt:
+        if completed and self._ringback_after_tts:
+            self._ringback_after_tts = False
+            log.info("Calling reply finished — starting ringback")
+            self._start_ringback()
+        elif completed and self._capture_after_prompt:
             self._capture_after_prompt = False
             log.info("Prompt finished — capturing the spoken reply")
             await self._begin_streaming(str(uuid.uuid4()), followup=True)
@@ -964,6 +978,7 @@ class NodeClient:
 
     async def _stop_tts_playback(self) -> None:
         """Cancel any in-progress TTS playback and return to IDLE."""
+        self._stop_ringback()
         if self._tts_task and not self._tts_task.done():
             self._tts_task.cancel()
             try:
@@ -987,6 +1002,32 @@ class NodeClient:
     # ------------------------------------------------------------------
     # Intercom (live two-way call)
     # ------------------------------------------------------------------
+
+    async def _ringback_loop(self) -> None:
+        """Replay the ringback clip on a cadence (its own length, so the WAV's
+        trailing silence paces the rings) until cancelled by an outcome."""
+        period = 5.0
+        if self._ringback_audio is not None and self._playback_rate > 0:
+            period = max(1.0, len(self._ringback_audio) / self._playback_rate)
+        try:
+            while True:
+                if self._player is not None and self._ringback_audio is not None:
+                    self._player.play_pcm(self._ringback_audio, interrupt=True)
+                await asyncio.sleep(period)
+        except asyncio.CancelledError:
+            raise
+
+    def _start_ringback(self) -> None:
+        if self._ringback_task is not None or self._ringback_audio is None:
+            return
+        self._ringback_task = asyncio.create_task(self._ringback_loop(), name="ringback")
+
+    def _stop_ringback(self) -> None:
+        self._ringback_after_tts = False
+        task = self._ringback_task
+        self._ringback_task = None
+        if task is not None and not task.done():
+            task.cancel()
 
     async def _begin_intercom(self, peer_room: str) -> None:
         """Enter a live call: stream mic out continuously, play peer audio live."""
@@ -1152,6 +1193,7 @@ class NodeClient:
             "sound_waiting",
             "sound_connect",
             "sound_disconnect",
+            "sound_ringback",
             "sound_dialog_end",
         }
 
@@ -1311,7 +1353,17 @@ class NodeClient:
                     await self._end_streaming(reason="call_cancelled")
                 log.info("Call cancelled")
 
+            elif mtype == protocol.MSG_CALL_RINGING:
+                # Caller side: ring while the target room is asked to accept. If
+                # the "calling…" reply is still playing, start when it finishes;
+                # otherwise start now.
+                if self._state == _STATE_TTS:
+                    self._ringback_after_tts = True
+                else:
+                    self._start_ringback()
+
             elif mtype == protocol.MSG_INTERCOM_START:
+                self._stop_ringback()
                 await self._begin_intercom(str(msg.get("peer_room", "")))
 
             elif mtype == protocol.MSG_INTERCOM_END:
@@ -1637,6 +1689,7 @@ class NodeClient:
 
         self._connect_audio = _chime(self._sound_connect)
         self._disconnect_audio = _chime(self._sound_disconnect)
+        self._ringback_audio = _chime(self._sound_ringback)
         self._dialog_end_audio = _chime(self._sound_dialog_end)
         log.info(
             "Intercom chimes: connect=%s disconnect=%s; end-of-dialog=%s",
@@ -1918,6 +1971,7 @@ class NodeClient:
                 await asyncio.gather(recv_task, cmd_task, return_exceptions=True)
             except asyncio.CancelledError:
                 pass
+            self._stop_ringback()
             # A connection that died mid-TTS leaves undelivered frames behind; drop
             # them so they can't prefix the next session's audio after reconnect
             # (session start must never drain — see _begin_tts).

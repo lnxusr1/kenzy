@@ -239,7 +239,7 @@ function BackupPanel() {
       Download the deployment's state — node/service settings, rooms, Home Assistant
       curation, <b>enrolled voice profiles</b>, dependency pins, and custom skills
       (state on the speaker/LLM hosts is fetched and merged automatically). Restore
-      with ${" "}<span class="mono">kenzy-init --restore &lt;file&gt;</span>.
+      with ${" "}<span class="mono">kenzy-init --restore ${"<file>"}</span>.
     </p>
     <label class="micro" style="display:block">
       <input type="checkbox" checked=${secrets} onChange=${(e) => setSecrets(e.target.checked)} />
