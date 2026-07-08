@@ -353,3 +353,51 @@ def test_empty_param_values_mean_omit(monkeypatch):
         k: v for k, v in raw.items() if k not in svc._PARAMS_BLOCKED and v not in ("", None)
     }
     assert filtered == {"temperature": 0.4}
+
+
+# ---------------------------------------------------------------------------
+# Intercom ringback (3.6.1): the caller loops a ring tone while the room is rung
+# ---------------------------------------------------------------------------
+
+
+async def test_ringback_loops_then_stops_on_connect():
+    import numpy as np
+
+    c, ws, player = _client()
+    c._playback_rate = 24000
+    c._ringback_audio = np.ones(24000, dtype=np.int16)  # 1s clip → ~1s period
+
+    c._start_ringback()
+    await asyncio.sleep(0.05)
+    assert c._ringback_task is not None
+    plays_before = len(player.pcm_plays)
+    assert plays_before >= 1  # rings immediately
+
+    # A connect (intercom_start) stops it.
+    c._stop_ringback()
+    await asyncio.sleep(0.01)
+    assert c._ringback_task is None
+
+
+async def test_ringback_armed_during_calling_reply_starts_after():
+    import numpy as np
+
+    c, ws, player = _client()
+    c._playback_rate = 24000
+    c._ringback_audio = np.ones(12000, dtype=np.int16)
+    c._state = _STATE_TTS  # "calling the kitchen" is playing
+
+    # call_ringing while in TTS only arms; it must not start mid-reply.
+    c._ringback_after_tts = True
+    assert c._ringback_task is None
+
+    # When begin_tts is called for a NEW reply (decline/timeout), ringback is cleared.
+    c._stop_ringback()
+    assert not c._ringback_after_tts
+
+
+async def test_ringback_silent_when_no_clip():
+    c, ws, player = _client()
+    c._ringback_audio = None
+    c._start_ringback()
+    assert c._ringback_task is None  # nothing to loop → no task

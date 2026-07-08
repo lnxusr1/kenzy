@@ -168,3 +168,22 @@ async def test_dispatch_start_intercom_action(tmp_path, monkeypatch):
     monkeypatch.setattr(s, "start_intercom", fake_start)
     await s._dispatch_actions([{"type": "start_intercom", "room": "den"}], "c", "kitchen")
     assert calls == [("c", "kitchen", "den")]
+
+
+# ---------------------------------------------------------------------------
+# Caller ringback (3.6.1): the caller hears it connecting while the room is rung
+# ---------------------------------------------------------------------------
+
+
+async def test_caller_gets_ringback_on_start(tmp_path, monkeypatch):
+    s, says = _server_with_two(monkeypatch, tmp_path)
+    await s.start_intercom("c", "kitchen", "living room")
+    # The caller is told to start the ringback loop while the receiver is rung.
+    assert protocol.MSG_CALL_RINGING in _types(s._nodes["c"].ws)
+    s._pending_calls["r"][2].cancel()
+
+
+async def test_ringback_not_sent_when_target_unreachable(tmp_path, monkeypatch):
+    s, says = _server_with_two(monkeypatch, tmp_path)
+    await s.start_intercom("c", "kitchen", "bedroom")  # no such room
+    assert protocol.MSG_CALL_RINGING not in _types(s._nodes["c"].ws)

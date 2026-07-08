@@ -36,6 +36,7 @@ MSG_TUNE_STOP = "tune_stop"  # server→node: end calibration early
 MSG_TUNE_SAMPLE = "tune_sample"  # node→server: one calibration sample (rms/wake/vad)
 MSG_EXPECT_UTTERANCE = "expect_utterance"  # server→node: capture one utterance after the next TTS
 MSG_FOLLOWUP_TIMEOUT = "followup_timeout"  # node→server: held-floor reply window expired silently
+MSG_CALL_RINGING = "call_ringing"  # server→caller: play the ringback loop while the callee is rung
 MSG_END_DIALOG = "end_dialog"  # server→node: a multi-turn dialog ended — play the end cue
 # Intercom (live two-way call between two rooms; gated by the receiver's consent).
 MSG_CALL_REQUEST = "call_request"  # server→node: ring the receiver (no audio yet)
@@ -200,6 +201,14 @@ def followup_timeout() -> str:
     dialog is over (the server clears its turn counter). The node plays its own
     end-of-dialog cue locally ("I stopped waiting")."""
     return json.dumps({"type": MSG_FOLLOWUP_TIMEOUT})
+
+
+def call_ringing() -> str:
+    """Server→caller: start the intercom ringback loop while the target room is
+    rung and asked to accept. The caller node loops its ``sound_ringback`` until
+    the call connects (intercom_start), is declined/times out (a spoken reply),
+    or is cancelled — so the caller isn't left in silence during the wait."""
+    return json.dumps({"type": MSG_CALL_RINGING})
 
 
 def end_dialog() -> str:

@@ -71,6 +71,7 @@ _ALLOWED_OVERRIDE_KEYS = frozenset(
         "sound_waiting",
         "sound_connect",
         "sound_disconnect",
+        "sound_ringback",
         "sound_dialog_end",
         "sound_timer",
         "sound_alarm",
@@ -2437,6 +2438,14 @@ class TranscribingServer(AudioServer):
         )
         self._pending_calls[receiver_id] = (caller_id, caller_room, timeout)
         log.info("Intercom ring: %s → %s", caller_room, receiver.room_id)
+        # Ringback on the caller's end so they hear it connecting (their node
+        # starts it after the "calling…" reply finishes; connect/decline/timeout
+        # all stop it). Best-effort — silence is the pre-3.6.1 behavior.
+        if caller is not None:
+            try:
+                await caller.ws.send(protocol.call_ringing())
+            except Exception as exc:
+                log.debug("[%s] could not start caller ringback: %s", caller_id, exc)
         # Spoken consent prompt; the receiver auto-captures the answer once it finishes.
         prompt = (
             f"The {caller_room} would like to start a voice chat. "

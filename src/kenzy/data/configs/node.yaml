@@ -51,6 +51,7 @@ discovery:
 # sound_waiting: null             # processing sound (path, or null = silent)
 # sound_connect: connect.wav      # chime when an intercom call connects (null = off)
 # sound_disconnect: disconnect.wav # chime when an intercom call ends (null = off)
+# sound_ringback: ringback.wav    # loop the CALLER hears while ringing a room (null = silent)
 # sound_timer: timer.wav          # tone before a timer announcement (played by the server; null = voice only)
 # sound_alarm: alarm.wav          # tone before each alarm ring (played by the server; null = voice only)
 # sound_error: error.wav          # spoken cue when a request fails (played by the server; null = silent)

@@ -22,6 +22,7 @@ const TYPES = {
   sound_waiting: "str",
   sound_connect: "str",
   sound_disconnect: "str",
+  sound_ringback: "str",
   // Timer/alarm tones + the failure cue: streamed by the SERVER, so they apply
   // live (deliberately not in RESTART_KEYS, unlike the node-played sounds).
   sound_timer: "str",
@@ -48,6 +49,7 @@ const RESTART_KEYS = new Set([
   "sound_waiting",
   "sound_connect",
   "sound_disconnect",
+  "sound_ringback",
 ]);
 
 // Bounds for "range" (slider) fields (default = the node's value when unset).
