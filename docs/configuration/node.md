@@ -77,6 +77,7 @@ misbehave:
 | Feature | Without AEC |
 |---|---|
 | Voice interrupt while Kenzy is speaking/playing | Off — the wake word works again the instant playback ends |
+| Talk-over (barge-in during a dialog) | Off — she can't hear you over herself; you answer after she finishes (3.6.0 strict turns). With AEC, you can talk over her and she yields |
 | Intercom (live two-way calls) | Unavailable — Kenzy politely refuses (a two-way call without echo cancellation is a feedback loop) |
 | Alarms | Refused at set time with an offer of a timer or reminder instead (an alarm's ring loop can only be silenced by voice — impossible over the ringing). An already-set alarm still fires, once, timer-style |
 | Timers, reminders, announcements, all voice commands, multi-turn dialogs | **Work normally** |

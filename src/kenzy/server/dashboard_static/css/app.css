@@ -124,6 +124,8 @@ button { font: inherit; cursor: pointer; }
 .section > header { display: flex; align-items: baseline; gap: var(--s3); margin-bottom: var(--s4); }
 .section > header h2 { margin: 0; font-size: 13px; letter-spacing: .16em; text-transform: uppercase; color: var(--text-dim); }
 .section > header .rule { flex: 1; height: 1px; background: var(--border); }
+.docs-link { font-size: 12px; color: var(--accent); text-decoration: none; white-space: nowrap; }
+.docs-link:hover { text-decoration: underline; }
 
 /* ---- Node grid ---- */
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: var(--s4); }
@@ -321,6 +323,14 @@ button { font: inherit; cursor: pointer; }
   background: var(--panel); padding: var(--s3) var(--s4);
 }
 .cfg-row.overridden { box-shadow: inset 3px 0 0 var(--accent); }
+/* Logical grouping: a labelled header row spanning the grid. */
+.cfg-group { display: contents; }
+.cfg-group-head {
+  background: var(--bg); padding: var(--s2) var(--s4);
+  font-size: 11px; letter-spacing: .04em; text-transform: uppercase;
+  color: var(--text-dim); font-weight: 600;
+}
+.cfg-help { font-size: 11px; color: var(--text-dim); line-height: 1.35; }
 .cfg-key { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .applies {
   align-self: flex-start; font-family: var(--font-mono); font-size: 9px; letter-spacing: .1em;

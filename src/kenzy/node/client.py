@@ -69,6 +69,11 @@ _STATE_STREAMING = "streaming"
 _STATE_TTS = "tts"
 _STATE_INTERCOM = "intercom"  # live two-way call: stream mic out, play peer audio live
 
+# Barge-in onset floor multiplier on silence_rms_threshold while a reply plays —
+# the RMS fallback must clear AEC residual of Kenzy's own voice. Internal
+# constant (not config): promoted to a key only on real-hardware evidence.
+_BARGE_RMS_FACTOR = 2.5
+
 # Rate at which the server sends TTS PCM (fixed by the TTS service).
 _TTS_SERVER_RATE = 24_000
 
@@ -355,6 +360,9 @@ class _SoundPlayer:
         # callback (GIL-atomic scalar reads, no mutex — same discipline as _restart).
         self._volume: float = max(0.0, min(1.0, volume))
         self._muted: bool = muted
+        # Barge-in duck (stage 2): a transient multiplier on output while a
+        # possible interruption is being confirmed. 1.0 = normal.
+        self._duck: float = 1.0
 
         # Live streaming mode (intercom / media): when on, the callback drains a
         # ring buffer instead of the one-shot _audio array. Off by default.
@@ -408,7 +416,7 @@ class _SoundPlayer:
         if self._muted:
             gain = _MUTED_ALERT_FLOOR if alert else 0.0
         else:
-            gain = self._volume
+            gain = self._volume * self._duck
         if gain == 1.0:
             return
         if gain == 0.0:
@@ -439,6 +447,13 @@ class _SoundPlayer:
     def set_volume(self, volume: float) -> None:
         """Set output gain (0.0–1.0); clamped."""
         self._volume = max(0.0, min(1.0, float(volume)))
+
+    def duck(self, factor: float = 0.25) -> None:
+        """Drop output to ``factor`` of normal (barge-in "go ahead" signal)."""
+        self._duck = max(0.0, min(1.0, float(factor)))
+
+    def unduck(self) -> None:
+        self._duck = 1.0
 
     def set_muted(self, muted: bool) -> None:
         """Mute/unmute all non-alert audio (the ready chime stays audible)."""
@@ -606,6 +621,11 @@ class NodeClient:
         self._onset_gap: int = 0  # silent frames since that burst ended
         self._onset_buf: list[np.ndarray[Any, np.dtype[np.int16]]] = []
         self._dialog_vad: Any = None  # lazy standalone Silero VAD; False = unavailable
+        # Barge-in (stage 2): listen while a floor-holding reply plays and yield
+        # if the user answers early. Only when hardware_aec (echo-cancelled feed).
+        self._barge_run: int = 0
+        self._barge_buf: list[np.ndarray[Any, np.dtype[np.int16]]] = []
+        self._barge_ducked: bool = False
         # Set when the server signals a multi-turn dialog ended while TTS is still
         # playing; the end-of-dialog cue plays once that playback completes.
         self._end_dialog_after_tts: bool = False
@@ -826,7 +846,84 @@ class NodeClient:
                 self._player.play_pcm(self._dialog_end_audio, interrupt=True)
             log.info("Follow-up window expired — dialog ended (end cue)")
 
+    async def _handle_barge_frame(self, flat: np.ndarray[Any, np.dtype[np.int16]]) -> None:
+        """One mic frame WHILE a floor-holding reply is playing (stage 2 duplex).
+
+        The user often answers before Kenzy finishes asking. On sustained speech
+        over her voice (AEC feed, raised onset floor to reject her own residual):
+        duck at first suspicion (a "go ahead" volume drop), and on confirmation
+        stop the reply and open the answer session early — flushing the pre-roll
+        so nothing said during the duck is lost. A false alarm just un-ducks.
+        """
+        if self._state != _STATE_TTS or not self._capture_after_prompt:
+            return  # already confirmed / no longer a floor-holding reply
+        self._barge_buf.append(flat)
+        if len(self._barge_buf) > self._dialog_onset_frames + 8:
+            self._barge_buf.pop(0)
+
+        score = self._dialog_vad_score(flat)
+        if score is None:  # no VAD model → raised-energy fallback
+            rms = float(np.sqrt(np.mean(flat.astype(np.float32) ** 2)))
+            speech = rms >= self._silence_rms * _BARGE_RMS_FACTOR
+        else:
+            speech = score >= self._dialog_onset_vad
+        if speech:
+            self._barge_run += 1
+        else:
+            self._barge_run = 0
+            if self._barge_ducked:  # suspicion evaporated — resume the reply
+                self._barge_ducked = False
+                if self._player is not None:
+                    self._player.unduck()
+
+        if self._barge_run == 1 and not self._barge_ducked:
+            self._barge_ducked = True
+            if self._player is not None:
+                self._player.duck()  # "I hear you, go ahead"
+
+        if self._barge_run >= self._dialog_onset_frames:
+            # Confirmed: the user is answering. Stop the reply, open the session
+            # early (onset already proven), flush the pre-roll so the first word
+            # spoken during the duck survives whole.
+            log.info("Barge-in confirmed — yielding to the user's answer")
+            preroll = list(self._barge_buf)
+            self._barge_run = 0
+            self._barge_buf = []
+            self._barge_ducked = False
+            self._capture_after_prompt = False
+            if self._player is not None:
+                self._player.unduck()
+            await self._stop_tts_playback()  # cuts her reply, back to IDLE
+            sid = str(uuid.uuid4())
+            self._state = _STATE_STREAMING
+            self._session_id = sid
+            self._followup_active = True
+            self._silence_count = 0
+            # speech_min already satisfied by the confirmed barge-in (Silero) —
+            # otherwise silence-endpointing never arms (same fix as the onset path).
+            self._speech_frames = self._speech_min_frames
+            self._frame_count = len(preroll)
+            if self._ws is not None:
+                try:
+                    msg, _ = protocol.audio_start(sid, self._room_id)
+                    await self._ws.send(msg)
+                    for f in preroll:
+                        await self._ws.send(f.tobytes())
+                except Exception as exc:
+                    log.warning("Could not open barge-in session: %s", exc)
+                    self._state = _STATE_IDLE
+                    self._session_id = None
+                    self._followup_active = False
+
+    def _reset_barge(self) -> None:
+        self._barge_run = 0
+        self._barge_buf = []
+        if self._barge_ducked and self._player is not None:
+            self._player.unduck()
+        self._barge_ducked = False
+
     async def _begin_streaming(self, session_id: str, followup: bool = False) -> None:
+        self._reset_barge()
         self._stop_ringback()
         if self._player:
             self._player.abort()  # stop waiting sound if still playing
@@ -899,6 +996,7 @@ class NodeClient:
 
     async def _begin_tts(self, session_id: str, sample_rate: int, channels: int) -> None:
         self._stop_ringback()  # a spoken reply (decline/timeout) supersedes ringing
+        self._reset_barge()
         # Deliberately NO queue drain here: _recv_loop enqueues binary frames the
         # instant they arrive, so this session's own head frames may already be in
         # _tts_q before the cmd loop processes tts_start — draining now would eat
@@ -979,6 +1077,7 @@ class NodeClient:
     async def _stop_tts_playback(self) -> None:
         """Cancel any in-progress TTS playback and return to IDLE."""
         self._stop_ringback()
+        self._reset_barge()
         if self._tts_task and not self._tts_task.done():
             self._tts_task.cancel()
             try:
@@ -1532,6 +1631,14 @@ class NodeClient:
                 except Exception as exc:
                     log.warning("Intercom audio send failed: %s", exc)
                     await self._end_intercom(reason="connection_error")
+                continue
+
+            if (
+                self._state == _STATE_TTS
+                and self._capture_after_prompt  # a floor-holding reply is playing
+                and self._hardware_aec  # can hear over her own voice
+            ):
+                await self._handle_barge_frame(flat)
                 continue
 
             if self._state == _STATE_STREAMING and self._onset_pending:

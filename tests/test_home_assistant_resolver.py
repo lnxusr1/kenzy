@@ -403,3 +403,24 @@ def test_confirmation_phrasing(ha, action, target, origin, expected):
     idx = ha._get_index()
     codes = ha._resolve_target(idx, action, target, origin)
     assert ha._confirm(action, idx, codes, target) == expected
+
+
+def test_thermo_clamp_reads_config(monkeypatch):
+    import importlib.util
+    from pathlib import Path
+    import sys
+    from kenzy.llm import skills as reg
+
+    root = Path(__file__).resolve().parents[1]
+    path = root / "src" / "kenzy" / "llm" / "builtin_skills" / "home_assistant.py"
+    spec = importlib.util.spec_from_file_location("home_assistant_thermo", path)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["home_assistant_thermo"] = mod
+    spec.loader.exec_module(mod)
+
+    reg.set_config({"home_assistant": {"thermo_min": 60, "thermo_max": 80}})
+    assert mod._thermo_min() == 60.0
+    assert mod._thermo_max() == 80.0
+    reg.set_config({})  # falls back to the packaged defaults
+    assert mod._thermo_min() == mod._THERMO_MIN
+    assert mod._thermo_max() == mod._THERMO_MAX

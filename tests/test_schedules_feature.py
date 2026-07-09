@@ -295,8 +295,16 @@ async def test_dispatch_set_and_cancel_schedule(tmp_path, monkeypatch):
 
     # Explicit room resolves to that room's node.
     await s._dispatch_actions(
-        [{"type": "set_schedule", "kind": "alarm", "at": "07:00", "days": ["mon"],
-          "room": "bedroom", "label": ""}],  # fmt: skip
+        [
+            {
+                "type": "set_schedule",
+                "kind": "alarm",
+                "at": "07:00",
+                "days": ["mon"],
+                "room": "bedroom",
+                "label": "",
+            }
+        ],  # fmt: skip
         "n-off",
         "office",
     )
@@ -323,8 +331,15 @@ async def test_dispatch_set_and_cancel_schedule(tmp_path, monkeypatch):
 async def test_dispatch_stores_speaker_and_command_replays_it(tmp_path, monkeypatch):
     s = _server(tmp_path, monkeypatch)
     await s._dispatch_actions(
-        [{"type": "set_schedule", "kind": "command", "label": "turn on the lights",
-          "seconds": 60, "days": []}],  # fmt: skip
+        [
+            {
+                "type": "set_schedule",
+                "kind": "command",
+                "label": "turn on the lights",
+                "seconds": 60,
+                "days": [],
+            }
+        ],  # fmt: skip
         "n-off",
         "office",
         "alice",
@@ -400,7 +415,7 @@ async def test_fire_timer_prepends_tone_and_voice(tmp_path, monkeypatch):
     t = s._scheduler.add("timer", "n-off", "office", label="pizza", seconds=60)
     await s._fire_schedule(t)
     await asyncio.sleep(0)  # let the delivery task run
-    (node_id, pcm), = streamed
+    ((node_id, pcm),) = streamed
     tone = tones.load_tone("timer.wav")
     assert node_id == "n-off" and tone
     assert pcm.startswith(tone) and pcm.endswith(b"VOICE:Your pizza timer is done.")
@@ -481,7 +496,7 @@ async def test_alarm_rings_until_acknowledged(tmp_path, monkeypatch):
         said.append(text)
 
     monkeypatch.setattr(s, "_deliver_schedule", fake_deliver)
-    monkeypatch.setattr(server_mod, "_ALARM_RING_INTERVAL_S", 0.01)
+    s._alarm_ring_interval = 0.01  # ring behavior is now instance config, not a module constant
 
     a = s._scheduler.add("alarm", "n-off", "office", at="07:00")
     await s._fire_schedule(a)
@@ -533,3 +548,29 @@ def test_load_tone_converts_rate_and_channels(tmp_path):
     pcm = tones.load_tone(str(mono44))
     assert pcm is not None
     assert abs(len(pcm) // 2 - 24000) <= 2
+
+
+def test_alarm_ring_config_overrides_defaults(tmp_path, monkeypatch):
+    """Promoted A-list constants: alarm ring repeats/interval read from config."""
+    from kenzy.server.server import TranscribingServer
+
+    s = TranscribingServer(
+        {"alarm": {"ring_repeats": 3, "ring_interval": 10}, "dialog": {"max_turns": 9}}
+    )
+    assert s._alarm_ring_repeats == 3
+    assert s._alarm_ring_interval == 10.0
+    assert s._max_followup_turns == 9
+
+
+def test_alarm_ring_defaults_when_unset():
+    from kenzy.server.server import (
+        TranscribingServer,
+        _ALARM_RING_INTERVAL_S,
+        _ALARM_RING_REPEATS,
+        _MAX_FOLLOWUP_TURNS,
+    )
+
+    s = TranscribingServer({})
+    assert s._alarm_ring_repeats == _ALARM_RING_REPEATS
+    assert s._alarm_ring_interval == _ALARM_RING_INTERVAL_S
+    assert s._max_followup_turns == _MAX_FOLLOWUP_TURNS

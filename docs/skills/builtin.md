@@ -75,6 +75,7 @@ Set under `skills.home_assistant` in `llm.yaml`:
 | `cache_ttl` | `300` | Seconds to cache the live HA topology pull |
 | `domains` | `light, switch, fan, cover, lock, climate` | Entity domains exposed to voice control |
 | `default_room` | `""` | Room assumed when the user does not specify one |
+| `thermo_min` / `thermo_max` | `65` / `85` | Comfort clamp (°F) for relative "make it warmer/cooler" thermostat adjustments |
 
 The device inventory is pulled live from Home Assistant — there are no device-map files to maintain. See [Home Assistant](home-assistant.md).
 

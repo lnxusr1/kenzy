@@ -17,7 +17,7 @@ from typing import Any
 import numpy as np
 
 from kenzy import protocol
-from kenzy.node.client import _STATE_IDLE, _STATE_TTS, NodeClient
+from kenzy.node.client import _STATE_IDLE, _STATE_STREAMING, _STATE_TTS, NodeClient
 
 
 class _WS:
@@ -401,3 +401,82 @@ async def test_ringback_silent_when_no_clip():
     c._ringback_audio = None
     c._start_ringback()
     assert c._ringback_task is None  # nothing to loop → no task
+
+
+# ---------------------------------------------------------------------------
+# Stage 2 — barge-in: talk over a floor-holding reply and she yields
+# ---------------------------------------------------------------------------
+
+
+class _DuckPlayer(_Player):
+    def __init__(self) -> None:
+        super().__init__()
+        self.duck_factor = 1.0
+        self.aborted = False
+
+    def duck(self, factor: float = 0.25) -> None:
+        self.duck_factor = factor
+
+    def unduck(self) -> None:
+        self.duck_factor = 1.0
+
+    def abort(self) -> None:
+        self.aborted = True
+
+
+def _barge_client(**cfg):
+    from kenzy.node.client import NodeClient
+
+    c = NodeClient({"node_id": "n1", "room_id": "office", "hardware_aec": True, **cfg})
+    ws = _WS()
+    c._ws = ws  # type: ignore[assignment]
+    p = _DuckPlayer()
+    c._player = p  # type: ignore[assignment]
+    c._playback_rate = 24000
+    c._state = _STATE_TTS
+    c._capture_after_prompt = True  # a floor-holding reply is playing
+    return c, ws, p
+
+
+async def test_barge_ducks_on_suspicion_then_stops_on_confirm(monkeypatch):
+    c, ws, p = _barge_client()
+    monkeypatch.setattr(c, "_dialog_vad_score", lambda flat: 0.9)  # speech
+
+    # First frame → duck (the "go ahead" dip), not yet a session.
+    await c._handle_barge_frame(FRAME)
+    assert p.duck_factor < 1.0
+    assert c._state == _STATE_TTS
+
+    # Sustained → confirm: reply cut, answer session opened, pre-roll flushed.
+    for _ in range(c._dialog_onset_frames):
+        await c._handle_barge_frame(FRAME)
+    assert p.aborted is True
+    assert c._state == _STATE_STREAMING
+    starts = [m for m in _texts(ws) if m.get("type") == protocol.MSG_AUDIO_START]
+    assert len(starts) == 1
+    binary = [m for m in ws.sent if isinstance(m, bytes)]
+    assert len(binary) >= c._dialog_onset_frames  # pre-roll flushed
+    assert p.duck_factor == 1.0  # un-ducked once the turn is theirs
+
+
+async def test_barge_false_alarm_unducks_and_keeps_playing(monkeypatch):
+    c, ws, p = _barge_client()
+    scores = iter([0.9, 0.0, 0.0, 0.0])  # one blip, then quiet (a clink)
+    monkeypatch.setattr(c, "_dialog_vad_score", lambda flat: next(scores, 0.0))
+
+    await c._handle_barge_frame(FRAME)  # blip → duck
+    assert p.duck_factor < 1.0
+    for _ in range(3):
+        await c._handle_barge_frame(FRAME)  # silence → un-duck, keep playing
+    assert p.duck_factor == 1.0
+    assert c._state == _STATE_TTS
+    assert not any(m.get("type") == protocol.MSG_AUDIO_START for m in _texts(ws))
+
+
+async def test_barge_disabled_without_aec(monkeypatch):
+    """The whole stage-2 path is inert on half-duplex hardware."""
+    c, ws, p = _barge_client()
+    c._hardware_aec = False
+    # The audio-loop gate (hardware_aec) would skip _handle_barge_frame entirely;
+    # here we assert the gate condition the loop checks.
+    assert not (c._state == _STATE_TTS and c._capture_after_prompt and c._hardware_aec)

@@ -1,7 +1,7 @@
 import { html, useState, useEffect } from "../html.js";
 import { useFleet, send, notify } from "../store.js";
 import { getSettings } from "../api.js";
-import { serviceEnum } from "../schema.js";
+import { serviceEnum, serviceHelp, groupByParent, groupBySections, SERVICE_SECTIONS, fieldVisible } from "../schema.js";
 
 // --- nested ⇄ flat (dotted path) helpers for the generic editor -------------
 
@@ -114,20 +114,38 @@ function ServiceEditor({ name, onBack }) {
     );
   }
 
-  const keys = Object.keys(orig).sort();
-  const row = (k) => {
+  // Only render fields whose dependency (e.g. provider) is currently satisfied,
+  // then group them by parent path so related settings sit together.
+  const visibleKeys = Object.keys(orig)
+    .filter((k) => fieldVisible(name, k, vals))
+    .sort();
+  const groups = SERVICE_SECTIONS[name]
+    ? groupBySections(visibleKeys, SERVICE_SECTIONS[name])
+    : groupByParent(visibleKeys);
+  // Show just the leaf when the group header already gives the parent (e.g.
+  // "model" under the "whisper" group); show the full dotted path otherwise (a
+  // "tts.url" peer key in a semantic group would be a context-less "url").
+  const label = (k, group) =>
+    k.includes(".") && k.slice(0, k.lastIndexOf(".")) === group ? k.slice(k.lastIndexOf(".") + 1) : k;
+  const row = (k, group) => {
     const t = typeOf(orig[k]);
     const v = vals[k];
     const overridden = k in ovFlat;
     const opts = serviceEnum(name, k);
+    const help = serviceHelp(name, k);
     let input;
     if (opts) {
       input = html`<select disabled=${!info.controls} onChange=${(e) => setKey(k, e.target.value)}>
-        ${opts.map((o) => html`<option value=${o} selected=${v === o}>${o}</option>`)}
+        ${opts.map((o) => html`<option value=${o} selected=${v === o}>${o || "(unset)"}</option>`)}
       </select>`;
-    } else if (t === "bool") {
+    } else if (t === "bool" || orig[k] === null) {
+      // Booleans render as an on/off chooser; a null-valued key gets a "default"
+      // option too (consistent with the node editor's inherit state).
+      const nullable = orig[k] === null;
       input = html`<select disabled=${!info.controls}
-        onChange=${(e) => setKey(k, e.target.value === "true")}>
+        onChange=${(e) =>
+          setKey(k, e.target.value === "" ? null : e.target.value === "true")}>
+        ${nullable ? html`<option value="" selected=${v == null}>default</option>` : null}
         <option value="true" selected=${v === true}>on</option>
         <option value="false" selected=${v === false}>off</option>
       </select>`;
@@ -161,24 +179,31 @@ function ServiceEditor({ name, onBack }) {
     }
     return html`
       <div class=${"cfg-row" + (overridden ? " overridden" : "")}>
-        <div class="cfg-key"><span class="mono">${k}</span>
-          <span class="micro">${overridden ? "override" : "default"}</span></div>
+        <div class="cfg-key"><span class="mono" title=${k}>${label(k, group)}</span>
+          ${overridden ? html`<span class="micro">override</span>` : null}
+          ${help ? html`<span class="cfg-help">${help}</span>` : null}</div>
         <div class="cfg-input">${input}</div>
       </div>`;
   };
+
+  const groupBlock = ([g, ks]) => html`
+    <div class="cfg-group">
+      ${g === "General" ? null : html`<div class="cfg-group-head mono">${g}</div>`}
+      ${ks.map((k) => row(k, g))}
+    </div>`;
 
   return html`
     <div class="cfg">
       <button class="btn-ghost back" onClick=${onBack}>← Services</button>
       <div class="section">
-        <header><h2>${name}</h2><span class="rule"></span></header>
+        <header><h2>${name}</h2><span class="rule"></span><a class="docs-link" href=${`https://docs.kenzy.ai/configuration/${name}/`} target="_blank" rel="noopener">Docs ↗</a></header>
         ${!info.controls
           ? html`<div class="banner">Editing is read-only — set <code class="mono">dashboard.controls: true</code> in server.yaml to enable.</div>`
           : null}
         <p class="micro">Saved to <span class="mono">configs/services/${name}.yaml</span> on the server;
           the service restarts to apply. Secrets are read from the service host's environment and are never shown or stored here.
           ${info.reachable ? "" : " This service has no configured URL, so it can't be auto-restarted — restart it manually."}</p>
-        <div class="cfg-grid">${keys.map(row)}</div>
+        <div class="cfg-grid">${groups.map(groupBlock)}</div>
         <div class="cfg-actions">
           <button class="btn-primary" disabled=${!info.controls || saving} onClick=${save}>
             ${saving ? "Saving…" : "Save & restart"}</button>

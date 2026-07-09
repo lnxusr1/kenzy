@@ -36,7 +36,6 @@ import logging
 import os
 import re
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any
 
 import httpx
@@ -53,8 +52,18 @@ from kenzy.llm.skills import (  # type: ignore[import]
 
 log = logging.getLogger(__name__)
 
+# Comfort clamp for relative "make it warmer/cooler" adjustments — the packaged
+# defaults; overridable per-home via skills.home_assistant.thermo_min/max.
 _THERMO_MIN = 65.0
 _THERMO_MAX = 85.0
+
+
+def _thermo_min() -> float:
+    return float(get_config("home_assistant", "thermo_min", _THERMO_MIN))
+
+
+def _thermo_max() -> float:
+    return float(get_config("home_assistant", "thermo_max", _THERMO_MAX))
 
 # Actions that require a recognized (non-unknown) speaker.
 _SECURE_ACTIONS = {"lock", "unlock", "open_cover", "close_cover"}
@@ -332,7 +341,7 @@ async def _apply_devices(devices: list[dict[str, Any]], device_map: dict[str, st
                     status_lines.append(f"{name}: {s}")
 
             elif action == "set_temperature":
-                temp = max(_THERMO_MIN, min(_THERMO_MAX, float(dev.get("temperature", 70))))
+                temp = max(_thermo_min(), min(_thermo_max(), float(dev.get("temperature", 70))))
                 await _ha_service(ha_id, "set_temperature", {"temperature": temp})
 
             else:
@@ -868,7 +877,7 @@ async def fast_home_control(utterance: str, room_id: str | None, speaker: str | 
         codes = _resolve_climate(idx, target, origin) if value is not None else None
         if not codes:
             return FastResult.miss()
-        temp = max(_THERMO_MIN, min(_THERMO_MAX, float(value)))  # type: ignore[arg-type]
+        temp = max(_thermo_min(), min(_thermo_max(), float(value)))  # type: ignore[arg-type]
         devices = [{"id": c, "action": "set_temperature", "temperature": temp} for c in codes]
         await _apply_devices(devices, idx.device_map)
         return FastResult.handled(f"Set the temperature to {int(temp)} degrees.", _FAST_VOICE)

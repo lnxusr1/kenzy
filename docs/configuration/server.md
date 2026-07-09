@@ -76,7 +76,9 @@ Web fleet manager served by `kenzy-server`. **On by default in the shipped confi
 |---|---|---|
 | `speaker.url` | — | URL of the kenzy-speaker `/identify` endpoint. Omit to disable speaker ID. |
 | `speaker.timeout` | `10.0` | HTTP timeout in seconds |
-| `speaker.unknown_speaker` | `"unknown"` | Name used when no enrolled speaker is identified |
+| `dialog.max_turns` | `6` | Max consecutive follow-up turns Kenzy holds the floor for in a multi-turn dialog before auto-ending |
+| `alarm.ring_repeats` | `10` | How many times a firing alarm re-rings before giving up (a wake word stops it sooner) |
+| `alarm.ring_interval` | `25` | Seconds between alarm re-rings |
 
 ### LLM service
 
@@ -136,7 +138,6 @@ stt:
 speaker:
   url: "http://127.0.0.1:8768/identify"
   timeout: 10.0
-  unknown_speaker: "unknown"
 
 llm:
   url: "http://127.0.0.1:8766/process"
