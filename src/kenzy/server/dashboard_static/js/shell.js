@@ -107,7 +107,8 @@ export function Shell({ user, onLogout }) {
       <${Toasts} />
       <div class="scrim" onClick=${() => setNavOpen(false)}></div>
       <aside class="sidebar">
-        <div class="brand"><span class="wordmark"><span class="glyph"></span><span class="name">Kenzy</span></span></div>
+        <div class="brand"><a href="#" class="wordmark" aria-label="Kenzy — go to Fleet"
+          onClick=${(e) => { e.preventDefault(); go("fleet"); }}><span class="glyph"></span><span class="name">Kenzy</span></a></div>
         <nav class="nav">
           ${NAV.map((n) => {
             // Logs and Activity are gated by the server's `dashboard.logs` flag

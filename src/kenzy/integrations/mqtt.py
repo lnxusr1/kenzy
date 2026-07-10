@@ -160,6 +160,10 @@ def discovery_messages(
         "manufacturer": "Kenzy",
         "model": "node",
     }
+    if room:
+        # HA assigns the device to this area only while it has none (creating the
+        # area if needed); a manual assignment in HA always wins and is never reset.
+        device["suggested_area"] = room
     availability = [
         {"topic": bridge_availability_topic(base_topic)},
         {"topic": f"{base_topic}/{slug}/availability"},

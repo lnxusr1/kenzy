@@ -48,6 +48,9 @@ button { font: inherit; cursor: pointer; }
   padding: var(--s5) var(--s4);
 }
 .sidebar .brand { padding: 0 var(--s2) var(--s5); }
+/* The wordmark is the conventional "home" link (→ Fleet). */
+.sidebar .brand a.wordmark { text-decoration: none; }
+.sidebar .brand a.wordmark:hover .name { color: var(--accent); }
 .nav { display: flex; flex-direction: column; gap: 2px; flex: 1; }
 .nav a {
   display: flex; align-items: center; gap: var(--s3);
