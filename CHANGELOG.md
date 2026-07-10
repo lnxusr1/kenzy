@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [3.7.2]
+
+### Fixed
+
+- **The `experimental` flag is truly off by default again.** The 3.7.1 package accidentally shipped a `server.local.yaml` containing `experimental: true` inside the bundled default configs (a dashboard toggle on a dev machine wrote its override next to the packaged `server.yaml`, and the file got committed). Impact was narrow — only a server running with *no config home at all* (bare `pip install`, no `kenzy-init`) picked it up, and the flag currently only recolors the dashboard favicon — but it's gone from the package now. The underlying hole is also closed: the server's override file is never read from or written to the packaged data directory — a dashboard edit on a packaged-default server now lands in the config home (`$KENZY_HOME`/`~/.config/kenzy`), same as every other redirected write.
+
 ## [3.7.1]
 
 ### Changed

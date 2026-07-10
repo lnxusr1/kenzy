@@ -185,8 +185,14 @@ _REGISTER_TTL = 90.0
 
 def _server_override_path(config_path: str | Path) -> Path:
     """Dashboard-written server settings live beside server.yaml, layered over it
-    (keeps the hand-edited server.yaml + its comments untouched)."""
-    return Path(config_path).parent / "server.local.yaml"
+    (keeps the hand-edited server.yaml + its comments untouched). When the server
+    runs off the packaged default config, the override lives in the config home
+    instead — the package data dir is never written (a dashboard edit must not
+    land inside site-packages) nor read (an override accidentally baked into a
+    wheel must not flip settings on)."""
+    from kenzy.config import writable_config_path
+
+    return writable_config_path("server.local", Path(config_path).parent / "server.local.yaml")
 
 
 def load_server_config(config_path: str | Path) -> dict[str, Any]:

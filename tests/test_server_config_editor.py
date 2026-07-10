@@ -50,6 +50,32 @@ def test_load_server_config_no_override(tmp_path):
     assert load_server_config(cfg) == {"host": "0.0.0.0", "port": 8765}
 
 
+def test_override_never_lives_in_the_packaged_data_dir(tmp_path, monkeypatch):
+    """A server running off the packaged default config must read/write its
+    override in the config home — an override baked into the wheel (the 3.7.1
+    `experimental: true` accident) must be ignored, and dashboard edits must
+    not land inside site-packages."""
+    import kenzy.config as kconfig
+
+    pkg = tmp_path / "pkg"
+    pkg.mkdir()
+    home = tmp_path / "home"
+    (home / "configs").mkdir(parents=True)
+    monkeypatch.setattr(kconfig, "_PACKAGED_CONFIGS", pkg)
+    monkeypatch.setenv("KENZY_HOME", str(home))
+
+    _write(pkg / "server.yaml", {"host": "0.0.0.0"})
+    _write(pkg / "server.local.yaml", {"experimental": True})  # wheel-baked poison
+
+    # Redirected to the config home; the packaged copy is never read.
+    assert _server_override_path(pkg / "server.yaml") == home / "configs" / "server.local.yaml"
+    assert "experimental" not in load_server_config(pkg / "server.yaml")
+
+    # A config-home override still applies to a packaged-default server.
+    _write(home / "configs" / "server.local.yaml", {"experimental": True})
+    assert load_server_config(pkg / "server.yaml")["experimental"] is True
+
+
 def _dash(tmp_path, cfg: dict) -> Dashboard:
     cfgfile = tmp_path / "server.yaml"
     _write(cfgfile, cfg)
