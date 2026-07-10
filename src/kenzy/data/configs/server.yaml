@@ -3,6 +3,12 @@
 # Logging level for the kenzy logger (debug, info, warning, error)
 log_level: "info"
 
+# Opt this server into experimental features that aren't ready to ship
+# officially. Also switches the dashboard favicon to the experimental mark (gold
+# tile, petrol K, corner badge dot) so the browser tab is tellable from
+# production at a glance. Editable from the dashboard's Settings tab.
+# experimental: true
+
 # Network interface to bind (0.0.0.0 = all interfaces)
 host: "0.0.0.0"
 

@@ -48,6 +48,9 @@ button { font: inherit; cursor: pointer; }
   padding: var(--s5) var(--s4);
 }
 .sidebar .brand { padding: 0 var(--s2) var(--s5); }
+/* The wordmark is the conventional "home" link (→ Fleet). */
+.sidebar .brand a.wordmark { text-decoration: none; }
+.sidebar .brand a.wordmark:hover .name { color: var(--accent); }
 .nav { display: flex; flex-direction: column; gap: 2px; flex: 1; }
 .nav a {
   display: flex; align-items: center; gap: var(--s3);
@@ -95,6 +98,11 @@ button { font: inherit; cursor: pointer; }
 .hamburger { display: none; background: transparent; border: 1px solid var(--border); border-radius: var(--radius); color: var(--text); width: 38px; height: 38px; font-size: 18px; }
 
 .content { padding: var(--s6); display: grid; gap: var(--s6); align-content: start; }
+/* Grid items default to min-width:auto and won't shrink below their min-content,
+   so any section with wide/non-wrapping content (e.g. the Skills tab's truncated
+   descriptions) forces the whole page wider than a phone viewport. Let them
+   shrink so inner ellipsis/wrapping can do its job. */
+.content > * { min-width: 0; }
 
 /* ---- Connection pill ---- */
 .pill {
@@ -535,10 +543,23 @@ button { font: inherit; cursor: pointer; }
 .sk-row:last-child { border-bottom: 0; }
 .sk-row.disabled { opacity: .55; }
 .sk-main { min-width: 0; flex: 1; }
-.sk-name { display: flex; align-items: center; gap: var(--s3); }
+/* Wrap on narrow screens: the header packs a chevron, title, module filename,
+   counts and badges — without wrapping it forces the whole tab wider than a
+   phone viewport (horizontal scroll). min-width:0 lets it shrink inside sk-main. */
+.sk-name { display: flex; align-items: center; gap: var(--s3); min-width: 0; flex-wrap: wrap; }
+/* Long function names (handle_home_control) are one unbreakable token; let them
+   break only when they'd otherwise overrun the call-count/toggle box on a phone. */
+.sk-name .mono { overflow-wrap: anywhere; min-width: 0; }
 .sk-name .badge { margin-left: 0; }
 .sk-desc { margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sk-meta { display: flex; align-items: center; gap: var(--s4); flex-shrink: 0; }
+/* On phones, stack the call-count/toggle BELOW the skill name so a long function
+   name gets the full row width instead of colliding with the toggle box. */
+@media (max-width: 520px) {
+  .sk-list .sk-row { flex-direction: column; align-items: stretch; gap: var(--s2); }
+  .sk-list .sk-meta { justify-content: flex-end; }
+  .sk-list .sk-meta .btn-ghost { flex: none; }
+}
 .sk-toggle.off { color: var(--led-up); border-color: color-mix(in srgb, var(--led-up) 50%, transparent); }
 
 /* ---- Speaker profiles ---- */

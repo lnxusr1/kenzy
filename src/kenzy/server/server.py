@@ -144,6 +144,9 @@ def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any
 # lockout/secret-risky keys — server/dashboard bind+port, dashboard.auth.*, and
 # discovery.token stay file/CLI-managed (see design/centralized-config.md M4).
 _SERVER_EDITABLE: dict[str, str] = {
+    # Opt-in to not-yet-official features (also swaps the dashboard favicon colors
+    # + badge so an experimental instance's tab stands out).
+    "experimental": "bool",
     "dashboard.logs": "bool",
     "dashboard.controls": "bool",
     "stt.url": "str",

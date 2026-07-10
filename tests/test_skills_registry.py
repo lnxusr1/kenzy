@@ -56,6 +56,25 @@ def _register_demo():
     return demo_skill, demo_skill_fast
 
 
+async def test_execute_wraps_bare_string_for_array_params(clean_registry):
+    """A model sending "items": "broccoli" for a list[str] param must become
+    ["broccoli"], not eight one-letter items (the grocery-list bug)."""
+    seen: dict[str, object] = {}
+
+    @reg.skill
+    async def list_taker(items: list[str], note: str = "") -> str:
+        "Takes a list."
+        seen["items"], seen["note"] = items, note
+        return "ok"
+
+    await reg.execute("list_taker", {"items": "broccoli", "note": "x"})
+    assert seen["items"] == ["broccoli"]  # wrapped, not exploded
+    assert seen["note"] == "x"  # string params untouched
+
+    await reg.execute("list_taker", {"items": ["milk", "eggs"]})
+    assert seen["items"] == ["milk", "eggs"]  # real arrays pass through
+
+
 async def test_disabled_skill_excluded_from_tools_and_execute(clean_registry):
     _register_demo()
     assert any(t["function"]["name"] == "demo_skill" for t in reg.get_tools())

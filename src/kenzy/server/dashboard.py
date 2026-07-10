@@ -46,7 +46,30 @@ _CONTENT_TYPES = {
     ".js": "text/javascript; charset=utf-8",
     ".css": "text/css; charset=utf-8",
     ".json": "application/json",
+    ".svg": "image/svg+xml",
 }
+
+_BRAND_PETROL = b"#013249"
+_BRAND_GOLD = b"#ffb500"
+
+# Corner badge for the experimental favicon: the "something's different here" dot.
+# The gold under-stroke (paint-order) is invisible against the tile but carves a
+# separating gap where the dot overlaps the K's leg, so it reads as "K." not a blob.
+_EXPERIMENTAL_BADGE = (
+    b'<circle cx="25" cy="25" r="5" fill="#013249" stroke="#ffb500"'
+    b' stroke-width="2.2" paint-order="stroke"/>'
+)
+
+
+def _experimental_favicon(svg: bytes) -> bytes:
+    """Experimental-mode favicon: brand colors swapped (gold tile, petrol K) plus a
+    corner badge dot, so the tab is tellable from production at a glance."""
+    swapped = (
+        svg.replace(_BRAND_PETROL, b"\x00")
+        .replace(_BRAND_GOLD, _BRAND_PETROL)
+        .replace(b"\x00", _BRAND_GOLD)
+    )
+    return swapped.replace(b"</svg>", _EXPERIMENTAL_BADGE + b"</svg>")
 
 
 def _default_dashboard_auth() -> tuple[str | None, str | None]:
@@ -191,6 +214,10 @@ class Dashboard:
         self._service_urls = _service_targets(cfg)
         self._discovery = cfg.get("discovery", {}) or {}
         self._cfg = cfg  # effective server config (server.yaml ← server.local.yaml)
+        # `experimental` opts this server into features not yet ready to ship
+        # officially. Today it drives only the favicon color swap below, so an
+        # experimental instance's tab is tellable from production at a glance.
+        self._experimental = bool(cfg.get("experimental", False))
         # Path to server.yaml, so the Settings page can persist a password change
         # (None when the server was started without a resolvable config file).
         self._config_path = Path(config_path) if config_path else None
@@ -564,8 +591,7 @@ class Dashboard:
             status, "OK" if status == 200 else "ERR", headers, json.dumps(payload).encode()
         )
 
-    @staticmethod
-    def _static(path: str) -> Response:
+    def _static(self, path: str) -> Response:
         name = "index.html" if path in ("/", "/dashboard", "/dashboard/") else path.lstrip("/")
         target = (_STATIC_DIR / name).resolve()
         # Contain within the static dir (no path traversal).
@@ -575,7 +601,10 @@ class Dashboard:
             return Response(404, "Not Found", headers, b"not found")
         headers = Headers()
         headers["Content-Type"] = _CONTENT_TYPES.get(target.suffix, "application/octet-stream")
-        return Response(200, "OK", headers, target.read_bytes())
+        body = target.read_bytes()
+        if name == "favicon.svg" and self._experimental:
+            body = _experimental_favicon(body)
+        return Response(200, "OK", headers, body)
 
     async def process_request(
         self, connection: ServerConnection, request: Request

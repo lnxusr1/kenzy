@@ -193,6 +193,7 @@ export const SERVICE_SECTIONS = {
 };
 
 export const SERVER_SECTIONS = [
+  ["Server", (k) => !k.includes(".")], // top-level keys (experimental, …)
   ["Dashboard", (k) => k.startsWith("dashboard.")],
   ["Backend services", (k) => ["stt.", "tts.", "llm.", "speaker."].some((p) => k.startsWith(p))],
   ["Dialog & alarms", (k) => k.startsWith("dialog.") || k.startsWith("alarm.")],

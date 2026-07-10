@@ -12,6 +12,7 @@ The server is the central WebSocket hub. It accepts connections from room nodes,
 | `host` | `"0.0.0.0"` | Bind address. `0.0.0.0` listens on all interfaces. |
 | `port` | `8765` | WebSocket port |
 | `log_level` | `"info"` | Log verbosity |
+| `experimental` | `false` | Opt this server into experimental features that aren't ready to ship officially (none gated yet — reserved for future previews). Also switches the dashboard favicon to the experimental mark — gold tile, petrol "K", corner badge dot — so the browser tab is distinguishable from production at a glance. Editable from the dashboard's Settings tab. |
 
 ### Discovery and config-pull
 

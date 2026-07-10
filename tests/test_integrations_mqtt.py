@@ -71,12 +71,19 @@ def test_discovery_emits_one_retained_config_per_entity() -> None:
     assert payload["unique_id"] == "kenzy_kitchen_state"
     assert payload["state_topic"] == "kenzy/kitchen/state"
     assert payload["device"]["identifiers"] == ["kenzy_kitchen"]
+    # the room name doubles as HA's suggested area (only applied while unset in HA)
+    assert payload["device"]["suggested_area"] == "Kitchen"
     # availability gated on BOTH the bridge and the node being online
     assert payload["availability_mode"] == "all"
     assert {a["topic"] for a in payload["availability"]} == {
         "kenzy/bridge/availability",
         "kenzy/kitchen/availability",
     }
+
+
+def test_discovery_no_suggested_area_without_room() -> None:
+    msgs = discovery_messages("n1", None, base_topic="kenzy", discovery_prefix="homeassistant")
+    assert "suggested_area" not in json.loads(msgs[0].payload)["device"]
 
 
 def test_discovery_never_includes_text_entities() -> None:

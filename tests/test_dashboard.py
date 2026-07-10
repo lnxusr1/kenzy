@@ -44,6 +44,25 @@ def test_service_targets_derives_health_urls():
     assert "tts" not in targets
 
 
+def test_favicon_marks_experimental_mode():
+    server = AudioServer({})
+    prod = Dashboard(server, {}, DashboardConfig())._static("/favicon.svg").body
+    exp_dash = Dashboard(server, {"experimental": True}, DashboardConfig())
+    exp = exp_dash._static("/favicon.svg").body
+    assert prod != exp
+    # Exact color swap: petrol square / gold K becomes gold square / petrol K…
+    assert b'rect width="32" height="32" rx="7" fill="#013249"' in prod
+    assert b'rect width="32" height="32" rx="7" fill="#ffb500"' in exp
+    assert b'stroke="#ffb500"' in prod and b'stroke="#013249"' in exp
+    # …plus the corner badge dot (injected after the swap so it keeps its own colors).
+    assert b"<circle" not in prod
+    assert b'<circle cx="25" cy="25" r="5" fill="#013249"' in exp
+    assert exp.rstrip().endswith(b"</svg>")
+    # Explicit false (or absent) leaves the shipped favicon untouched.
+    off = Dashboard(server, {"experimental": False}, DashboardConfig())
+    assert off._static("/favicon.svg").body == prod
+
+
 def test_mutation_auth_bearer_and_failclosed():
     server = AudioServer({})
     d = Dashboard(server, {}, DashboardConfig(auth_token="secret"))

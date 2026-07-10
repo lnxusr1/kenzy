@@ -544,15 +544,28 @@ def get_tools() -> list[dict[str, Any]]:
     return [schema for name, (_, schema) in _REGISTRY.items() if not _inactive(name)]
 
 
+def _coerce_arguments(schema: dict[str, Any], arguments: dict[str, Any]) -> dict[str, Any]:
+    """Repair known model deviations from the tool schema before calling the skill.
+
+    Models sometimes pass a bare string where the schema says array ("items":
+    "broccoli") — without this, list-typed parameters iterate per character
+    downstream (broccoli → 8 one-letter groceries)."""
+    props = schema.get("function", {}).get("parameters", {}).get("properties", {})
+    return {
+        key: [val] if props.get(key, {}).get("type") == "array" and isinstance(val, str) else val
+        for key, val in arguments.items()
+    }
+
+
 async def execute(name: str, arguments: dict[str, Any]) -> str:
     """Call a registered skill and return its string result."""
     if name not in _REGISTRY:
         return f"Unknown skill: {name!r}"
     if _inactive(name):  # not advertised in get_tools(), but guard anyway
         return f"Skill {name!r} is disabled."
-    func, _ = _REGISTRY[name]
+    func, schema = _REGISTRY[name]
     try:
-        result = await func(**arguments)
+        result = await func(**_coerce_arguments(schema, arguments))
         _COUNTS[name] = _COUNTS.get(name, 0) + 1
         return str(result)
     except Exception as exc:

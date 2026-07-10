@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## [3.7.1]
+
+### Changed
+
+- **The "Kenzy" wordmark in the dashboard sidebar is now a home link** — clicking it returns you to the Fleet page, the way a top-left logo conventionally does.
+
+### Added
+
+- **The dashboard has a favicon** — a small Kenzy mark (gold "K" on the petrol brand square), so the browser tab is no longer blank. Served locally, so it works offline like the rest of the dashboard.
+- **An `experimental` flag in `server.yaml`** — set it `true` to opt a server into features that aren't ready to ship officially (nothing is gated by it yet; it's the switch future preview features will hang off). It's editable from the dashboard's Settings tab, and it has one immediate, visible effect: the dashboard favicon switches to the experimental mark — colors swapped (petrol "K" on a gold tile) with a corner badge dot — so an experimental instance's browser tab is tellable from production at a glance.
+- **Kenzy nodes sort themselves into Home Assistant areas.** The MQTT integration now sends each node's room name as the device's *suggested area*, so a node lands in the matching HA area automatically (HA creates the area if it doesn't exist — works best when your Kenzy room names match your HA area names). It's only a suggestion: HA applies it while the device has no area, and an area you've assigned by hand is never touched. Existing devices without an area pick theirs up on the next bridge reconnect or server restart.
+
+### Fixed
+
+- **"Add broccoli to the grocery list" no longer adds b, r, o, c, c, o, l, i.** When the model called a list-taking skill with a bare string instead of an array (a schema deviation models occasionally make), the string was iterated per character — so a single item became one entry per letter. Tool arguments are now repaired against the skill's schema before the call: a string sent for an array parameter is wrapped into a one-item list. Fixed at the registry level, so every list-taking skill (lists, schedules, announcements) is covered, not just the one that got caught.
+- **The Skills tab now works on phones.** Two mobile issues: (1) the whole tab was stuck in a desktop-width horizontal scroll — the dashboard's content sections are laid out in a grid, and grid items don't shrink below their content by default, so the truncated skill descriptions forced the page wider than a phone screen; content sections can now shrink to fit. (2) When a skill group was expanded, long function names like `handle_home_control` overlapped the call-count/toggle box; on phones the row now stacks — the name gets the full width, with the count and toggle beneath it. Desktop layout is unchanged.
+
 ## [3.7.0]
 
 ### Added
