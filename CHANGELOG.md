@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [3.7.1]
+
+### Added
+
+- **The dashboard has a favicon** — a small Kenzy mark (gold "K" on the petrol brand square), so the browser tab is no longer blank. Served locally, so it works offline like the rest of the dashboard.
+
+### Fixed
+
+- **The Skills tab now works on phones.** Two mobile issues: (1) the whole tab was stuck in a desktop-width horizontal scroll — the dashboard's content sections are laid out in a grid, and grid items don't shrink below their content by default, so the truncated skill descriptions forced the page wider than a phone screen; content sections can now shrink to fit. (2) When a skill group was expanded, long function names like `handle_home_control` overlapped the call-count/toggle box; on phones the row now stacks — the name gets the full width, with the count and toggle beneath it. Desktop layout is unchanged.
+
 ## [3.7.0]
 
 ### Added
