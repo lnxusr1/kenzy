@@ -109,11 +109,7 @@ async def test_followup_arms_with_silent_cue(monkeypatch):
     srv, ws = _server_with_node()
     _mock_pipeline(srv, monkeypatch, response="Knock knock.", expect=True)
     await srv._transcribe("k", "kitchen", "sid", b"1234")
-    arms = [
-        json.loads(m)
-        for m in ws.sent
-        if isinstance(m, str) and '"expect_utterance"' in m
-    ]
+    arms = [json.loads(m) for m in ws.sent if isinstance(m, str) and '"expect_utterance"' in m]
     assert arms and arms[-1]["cue"] is False
 
 
@@ -194,13 +190,48 @@ def test_parse_response_reads_expect_response():
     assert expect is False
 
 
-def test_suppress_floor_hold_for_closers():
-    from kenzy.llm import llm
+# ---------------------------------------------------------------------------
+# Structured outputs (3.7.0): expect_response is a required schema field, so
+# the model can't silently drop it — reliability fixed at the mechanism, not by
+# parsing the reply text.
+# ---------------------------------------------------------------------------
 
-    # Reflexive closers are suppressed even if the model set the flag.
-    assert llm._suppress_floor_hold("Done. Is there anything else?", True) is False
-    assert llm._suppress_floor_hold("Sorry, I didn't quite understand.", True) is False
-    # A genuine floor-hold is preserved.
-    assert llm._suppress_floor_hold("Who's there?", True) is True
-    # Never promotes false → true.
-    assert llm._suppress_floor_hold("Is there anything else?", False) is False
+
+def test_response_schema_requires_expect_response():
+    from kenzy.llm.llm import _response_format
+
+    rf = _response_format()
+    schema = rf["json_schema"]["schema"]
+    assert rf["json_schema"]["strict"] is True
+    assert "expect_response" in schema["required"]
+    assert schema["properties"]["expect_response"]["type"] == "boolean"
+    assert schema["additionalProperties"] is False
+
+
+async def test_run_llm_passes_response_format(monkeypatch):
+    import litellm
+
+    from kenzy.llm import llm as svc
+
+    seen: dict = {}
+
+    async def fake(**kwargs):
+        seen.update(kwargs)
+
+        class _R:
+            class _C:
+                class _M:
+                    content = '{"text": "hi", "voice_prompt": "v", "expect_response": true}'
+                    tool_calls = None
+
+                message = _M()
+
+            choices = [_C()]
+
+        return _R()
+
+    monkeypatch.setattr(litellm, "acompletion", fake)
+    _, _, expect = await svc._run_llm("hello", "john", "office")
+    assert "response_format" in seen
+    assert seen["response_format"]["json_schema"]["name"] == "kenzy_reply"
+    assert expect is True  # the schema-guaranteed field is honored

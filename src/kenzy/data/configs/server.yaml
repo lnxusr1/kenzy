@@ -84,7 +84,18 @@ node_defaults:
 speaker:
   url: "http://127.0.0.1:8768/identify"
   timeout: 10.0
-  unknown_speaker: "unknown"
+  # unknown_speaker lives in the speaker SERVICE config (speaker.yaml), not here.
+
+# Multi-turn dialog: how many consecutive follow-up turns Kenzy will hold the
+# floor for before auto-ending the exchange.
+dialog:
+  max_turns: 6
+
+# Alarm ringing: how many times a firing alarm re-rings, and the gap between
+# rings, before it gives up (a wake word stops it sooner).
+alarm:
+  ring_repeats: 10
+  ring_interval: 25
 
 # kenzy-llm service — omit or set url to null to disable
 llm:

@@ -133,3 +133,6 @@ skills:
     # model: "gpt-4o"
     # base_url: null   # set for local providers (Ollama, LM Studio, etc.)
     default_room: "living_room"
+    # Comfort clamp (°F) for relative "make it warmer/cooler" adjustments.
+    thermo_min: 65
+    thermo_max: 85

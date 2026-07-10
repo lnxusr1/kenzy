@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## [3.7.0]
+
+### Added
+
+- **Talk over Kenzy and she yields — real full-duplex turn-taking.** When Kenzy asks you something and holds the floor for your answer, you no longer have to wait for her to finish (or say the wake word) before replying. She now listens *while she's speaking*, and the instant you start answering, her voice ducks — that quick volume drop is the "go ahead" — and once your speech is confirmed (~300 ms) she stops and it's your turn, with a pre-roll buffer so nothing you said during the duck is lost. A false trigger — a clink, the dog — just un-ducks and she finishes her sentence, so a stray noise costs a half-second dip, never a truncated reply. This happens **only inside a dialog she started** (an expecting-a-reply moment); outside a dialog the wake word remains the only way in, keeping "when is the mic open" legible. Requires an echo-cancelling speakerphone (it's listening over her own voice) — on a `hardware_aec: false` room the feature is simply inert and the 3.6.0 strict-turn behavior applies.
+
+
+
+### Changed
+
+- **The config editors are far easier to use.** Settings across the node config, the backend Services editors, and the server Settings tab are now **grouped into logical sections** (node: Audio, Wake word, Capture/VAD, Dialog, Sounds…; speaker: Model / Identification / Enroll; server: Backend services, Dialog & alarms, Discovery, Integrations; plus each backend's provider blocks) instead of one long alphabetical list, each field carries a **one-line description**, and **irrelevant fields hide themselves**: pick `whisper` and the OpenAI settings disappear (and vice-versa), pick a TTS provider and only its options show, turn VAD off and the VAD-only timings vanish. Booleans stay on/off choosers, with a "default" option where a value can be unset — consistent across every editor. Each editor also carries a **"Docs ↗" link** to the full reference, and the field descriptions were rewritten to drop jargon (loudness/voice-detection instead of RMS/VAD) and state ranges.
+- **A few behaviors that were hardcoded are now configurable.** The thermostat comfort clamp for "make it warmer/cooler" (`skills.home_assistant.thermo_min`/`thermo_max`, default 65–85°F), how persistently a firing alarm re-rings (`alarm.ring_repeats`/`ring_interval`, default 10× / 25 s), and how many follow-up turns a multi-turn dialog holds the floor for (`dialog.max_turns`, default 6) can all be set from config / the dashboard now.
+
+### Fixed
+
+- **`unknown_speaker` is no longer duplicated across two configs.** The name for an unidentified speaker was editable in *both* the server settings and the speaker service settings — and the server actually compared the service's result against its *own* copy, so setting them differently would silently break speaker handling. It now lives in one place (the speaker service config); the server reads the same value the service uses. One setting, one source of truth.
+- **She holds the floor more reliably.** Whether Kenzy keeps the mic open for your reply is a flag in her structured response, and the model dropped it intermittently — so a knock-knock joke would sometimes end on the setup line, or the last of several requested questions wouldn't wait. Fixed at the output mechanism: the reply is now requested as a **strict JSON schema** where the floor-hold flag is a required field, so the model has to decide it every turn instead of silently omitting it. Providers that don't support structured outputs fall back to the previous prompt-based behavior automatically. (This also let us delete the old text-matching heuristic that force-closed replies containing phrases like "anything else?" — the model's schema-required flag now decides, so no reply-parsing is needed.)
+
 ## [3.6.1]
 
 ### Added

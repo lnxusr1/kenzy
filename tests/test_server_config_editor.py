@@ -60,12 +60,12 @@ def _dash(tmp_path, cfg: dict) -> Dashboard:
 def test_write_override_validates_and_persists(tmp_path):
     dash = _dash(tmp_path, {"dashboard": {"enabled": True}})
     dash._write_server_override(
-        {"dashboard.logs": True, "stt.timeout": "45", "speaker.unknown_speaker": "guest"}
+        {"dashboard.logs": True, "stt.timeout": "45", "discovery.instance": "my-server"}
     )
     written = yaml.safe_load((tmp_path / "server.local.yaml").read_text())
     assert written["dashboard"]["logs"] is True
     assert written["stt"]["timeout"] == 45.0  # coerced to num
-    assert written["speaker"]["unknown_speaker"] == "guest"
+    assert written["discovery"]["instance"] == "my-server"
 
 
 def test_write_override_rejects_unknown_keys(tmp_path):

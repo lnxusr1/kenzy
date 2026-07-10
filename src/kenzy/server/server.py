@@ -154,7 +154,9 @@ _SERVER_EDITABLE: dict[str, str] = {
     "llm.timeout": "num",
     "speaker.url": "str",
     "speaker.timeout": "num",
-    "speaker.unknown_speaker": "str",
+    "dialog.max_turns": "num",
+    "alarm.ring_repeats": "num",
+    "alarm.ring_interval": "num",
     "discovery.enabled": "bool",
     "discovery.instance": "str",
     # Home Assistant / MQTT integration (no secrets — broker creds are env-only).
@@ -1509,7 +1511,21 @@ class TranscribingServer(AudioServer):
         spcfg: dict[str, Any] = cfg.get("speaker", {})
         self._speaker_url: str | None = str(spcfg["url"]) if spcfg.get("url") else None
         self._speaker_timeout: float = float(spcfg.get("timeout", 10.0))
-        self._unknown_speaker: str = str(spcfg.get("unknown_speaker", "unknown"))
+        # The unidentified-speaker name is owned by the speaker SERVICE (it's what
+        # /identify returns). Read it from that service's effective config — the
+        # same value the service pulls — so the server's fallback AND its
+        # "is this unknown?" comparison use one source of truth.
+        self._unknown_speaker: str = str(
+            self._effective_service_config("speaker").get("unknown_speaker", "unknown")
+        )
+
+        # Dialog depth + alarm-ring behavior (operator-tunable; defaults are the
+        # module constants). Restart to apply (edited via the Settings tab).
+        dcfg: dict[str, Any] = cfg.get("dialog", {}) or {}
+        self._max_followup_turns: int = int(dcfg.get("max_turns", _MAX_FOLLOWUP_TURNS))
+        acfg: dict[str, Any] = cfg.get("alarm", {}) or {}
+        self._alarm_ring_repeats: int = int(acfg.get("ring_repeats", _ALARM_RING_REPEATS))
+        self._alarm_ring_interval: float = float(acfg.get("ring_interval", _ALARM_RING_INTERVAL_S))
 
         # Remember which service URLs came from static config; auto-registration
         # (GET /register) fills the rest and must never overwrite a configured one.
@@ -1778,7 +1794,7 @@ class TranscribingServer(AudioServer):
         the prompt plays — no wake word. Otherwise the exchange is over: end it.
         """
         turns = self._followup_turns.get(node_id, 0)
-        if hold and turns < _MAX_FOLLOWUP_TURNS:
+        if hold and turns < self._max_followup_turns:
             node = self._nodes.get(node_id)
             if node is not None:
                 try:
@@ -2191,13 +2207,13 @@ class TranscribingServer(AudioServer):
             hhmm = at or time.strftime("%H:%M")
             h, m = int(hhmm[:2]), int(hhmm[3:])
             spoken = f"{h % 12 or 12}:{m:02d} {'AM' if h < 12 else 'PM'}"
-            for _ in range(_ALARM_RING_REPEATS):
+            for _ in range(self._alarm_ring_repeats):
                 if node_id not in self._nodes:
                     return
                 await self._deliver_schedule(
                     node_id, room, f"It's {spoken}. This is your alarm.", "alarm"
                 )
-                await asyncio.sleep(_ALARM_RING_INTERVAL_S)
+                await asyncio.sleep(self._alarm_ring_interval)
         except asyncio.CancelledError:
             raise
         except Exception as exc:

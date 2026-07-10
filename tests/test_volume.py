@@ -25,6 +25,7 @@ def _bare_player() -> _SoundPlayer:
     """A _SoundPlayer without opening a real output stream (no audio hardware)."""
     p = _SoundPlayer.__new__(_SoundPlayer)
     p._volume = 1.0
+    p._duck = 1.0
     p._muted = False
     p._streaming = False
     p._ring = _StreamBuffer()

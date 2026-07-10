@@ -222,6 +222,43 @@ Example holding the floor (a question you're waiting on):
 {"text": "What's your favorite color?", "voice_prompt": "Curious.", "expect_response": true}"""
 
 
+# The same three-field contract as a JSON schema. Passed as `response_format` so
+# providers that support structured outputs (OpenAI/gpt-5.x, etc.) MUST emit all
+# three fields — including expect_response, which the model otherwise drops
+# intermittently, silently defaulting the floor-hold to false. This fixes the
+# reliability at the output mechanism instead of parsing the reply text. The
+# prompt instruction above stays as the fallback for providers that don't support
+# it (drop_params removes response_format for them; _parse_response still copes).
+_RESPONSE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "text": {"type": "string", "description": "The spoken response, read aloud."},
+        "voice_prompt": {
+            "type": "string",
+            "description": "A short TTS style instruction (tone, pace).",
+        },
+        "expect_response": {
+            "type": "boolean",
+            "description": (
+                "Keep the mic open for the user's immediate reply without the wake "
+                "word. True only when the reply is deliberately incomplete (a joke "
+                "setup) or is itself a question you are waiting for them to answer; "
+                "false otherwise, and when in doubt."
+            ),
+        },
+    },
+    "required": ["text", "voice_prompt", "expect_response"],
+    "additionalProperties": False,
+}
+
+
+def _response_format() -> dict[str, Any]:
+    return {
+        "type": "json_schema",
+        "json_schema": {"name": "kenzy_reply", "strict": True, "schema": _RESPONSE_SCHEMA},
+    }
+
+
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
@@ -370,29 +407,6 @@ def _build_context() -> str:
     return "\n".join(lines)
 
 
-# Closer / clarify phrases that chat models emit reflexively. Even when the model
-# sets expect_response=true, a reply matching one of these is a conversation-ender
-# (or a clarify re-prompt we deliberately skip for now), so the floor-hold is
-# suppressed. High-precision on purpose — a real floor-hold ("Who's there?") won't
-# match — so it never eats a legitimate multi-turn continuation.
-_CLOSER_RE = re.compile(
-    r"anything else|something else|(?:^|\b)(?:is|was) there (?:anything|something)"
-    r"|let me know|feel free to (?:ask|reach)|happy to help|glad to help"
-    r"|hope (?:that|this) helps|how (?:else )?can i (?:help|assist)"
-    r"|(?:didn'?t|did not|couldn'?t) (?:quite )?(?:understand|catch|get)"
-    r"|(?:can|could) you (?:please )?(?:clarify|repeat|rephrase)",
-    re.IGNORECASE,
-)
-
-
-def _suppress_floor_hold(text: str, expect_response: bool) -> bool:
-    """Force expect_response false for reflexive closer/clarify replies (LLM path)."""
-    if expect_response and _CLOSER_RE.search(text or ""):
-        log.info("Suppressing expect_response for closer/clarify reply: %r", text[:80])
-        return False
-    return expect_response
-
-
 def _parse_response(content: str) -> tuple[str, str, bool]:
     """Extract (text, voice_prompt, expect_response) from a JSON response.
 
@@ -507,6 +521,10 @@ async def _run_llm(
     # Portability for those knobs: providers that don't support a param get it
     # dropped instead of erroring (e.g. reasoning_effort on Ollama or gpt-4o).
     kwargs.setdefault("drop_params", True)
+    # Structured outputs: force the three-field reply schema so expect_response is
+    # always present (reliable floor-holding). Dropped for providers that don't
+    # support it, which fall back to the prompt-described JSON.
+    kwargs.setdefault("response_format", _response_format())
     # Custom endpoint (Ollama/LM Studio/proxy): never lets OPENAI_API_KEY ride
     # to a dashboard-editable URL — see skills.endpoint_kwargs (F-14). Applied
     # AFTER params so credentials/routing can't be overridden from that block.
@@ -540,7 +558,6 @@ async def _run_llm(
 
         if not message.tool_calls:
             spoken, vp, expect = _parse_response(message.content or "")
-            expect = _suppress_floor_hold(spoken, expect)
             _history.add(room_id or "", speaker, text, spoken)
             return spoken, vp, expect
 
@@ -573,7 +590,6 @@ async def _run_llm(
     spoken, vp, expect = _parse_response(
         message.content or "I wasn't able to complete that request."
     )
-    expect = _suppress_floor_hold(spoken, expect)
     _history.add(room_id or "", speaker, text, spoken)
     return spoken, vp, expect
 

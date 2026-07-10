@@ -1,6 +1,6 @@
 import { html, useState, useEffect } from "../html.js";
 import { send, notify } from "../store.js";
-import { nodeEnum } from "../schema.js";
+import { nodeEnum, nodeHelp, NODE_GROUPS } from "../schema.js";
 import { AudioWizard } from "./audio-wizard.js";
 
 // Editor field types per key (the server's allow-list).
@@ -241,16 +241,45 @@ export function ConfigView({ node, onBack }) {
                 title=${restart
                   ? "Audio hardware key — applied on the node's next boot or via Restart"
                   : "Applied live on save"}>${restart ? "restart" : "live"}</span>
-          <span class="micro">${set ? "override" : `inherits ${fmt(effDefault)}`}</span></div>
+          <span class="micro">${set ? "override" : `inherits ${fmt(effDefault)}`}</span>
+          ${nodeHelp(k) ? html`<span class="cfg-help">${nodeHelp(k)}</span>` : null}</div>
         <div class="cfg-input">${input}</div>
       </div>`;
   };
+
+  // VAD-only timing keys are moot when voice-activity detection is off.
+  const vadOn = (over.vad_enabled ?? info.config.vad_enabled) !== false;
+  const vadGated = new Set([
+    "silence_ms",
+    "speech_min_ms",
+    "no_speech_timeout_ms",
+    "hard_cap_ms",
+  ]);
+  const visible = (k) => (vadGated.has(k) ? vadOn : true);
+
+  // Group the editable keys into logical sections (NODE_GROUPS order); anything
+  // not listed falls into "Other".
+  const editable = info.editable.filter(visible);
+  const grouped = [];
+  const seen = new Set();
+  for (const [label, ks] of NODE_GROUPS) {
+    const present = ks.filter((k) => editable.includes(k));
+    present.forEach((k) => seen.add(k));
+    if (present.length) grouped.push([label, present]);
+  }
+  const other = editable.filter((k) => !seen.has(k));
+  if (other.length) grouped.push(["Other", other]);
+  const groupBlock = ([label, ks]) => html`
+    <div class="cfg-group">
+      <div class="cfg-group-head mono">${label}</div>
+      ${ks.map(row)}
+    </div>`;
 
   return html`
     <div class="cfg">
       <button class="btn-ghost back" onClick=${onBack}>← Fleet</button>
       <div class="section">
-        <header><h2>${info.room || "Node"}</h2><span class="rule"></span></header>
+        <header><h2>${info.room || "Node"}</h2><span class="rule"></span><a class="docs-link" href="https://docs.kenzy.ai/configuration/node/" target="_blank" rel="noopener">Docs ↗</a></header>
         <p class="micro mono node-sub">node ${info.node_id}${info.connected ? "" : " · offline"}</p>
         ${!info.controls
           ? html`<div class="banner">Editing is read-only — set <code class="mono">dashboard.controls: true</code> in server.yaml to enable.</div>`
@@ -272,7 +301,7 @@ export function ConfigView({ node, onBack }) {
         <p class="micro">Badges: <span class="applies live">live</span> applies on save ·
           <span class="applies restart">restart</span> audio keys apply on the node's next boot or via Restart below.</p>
         ${audioSection()}
-        <div class="cfg-grid">${info.editable.map(row)}</div>
+        <div class="cfg-grid">${grouped.map(groupBlock)}</div>
         <div class="cfg-actions">
           <button class="btn-primary" disabled=${!info.controls || saving} onClick=${() => save()}>
             ${saving ? "Saving…" : "Save & apply"}</button>

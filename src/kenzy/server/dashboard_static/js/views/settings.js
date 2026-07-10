@@ -1,4 +1,5 @@
 import { html, useState, useEffect } from "../html.js";
+import { groupBySections, SERVER_SECTIONS } from "../schema.js";
 import { getSettings } from "../api.js";
 import { send, notify } from "../store.js";
 
@@ -94,7 +95,7 @@ function ServerSettings() {
         onInput=${(e) => set(f.key, e.target.value)} />`;
     return html`<div class=${"cfg-row" + (f.overridden ? " overridden" : "")}>
       <div class="cfg-key"><span class="mono">${f.key}</span>
-        <span class="micro">${f.overridden ? "overridden" : "server.yaml"}</span></div>
+        ${f.overridden ? html`<span class="micro">override</span>` : null}</div>
       <div class="cfg-input">${input}</div></div>`;
   };
 
@@ -102,7 +103,10 @@ function ServerSettings() {
     <p class="micro">Written to <span class="mono">server.local.yaml</span> (layered over
       server.yaml) and applied by <b>restarting the server</b>. Bind/port, login, and the
       discovery token stay file/CLI-managed for safety.</p>
-    <div class="cfg-grid">${data.fields.map(row)}</div>
+    <div class="cfg-grid">${groupBySections(data.fields, SERVER_SECTIONS, (f) => f.key).map(
+      ([label, fields]) => html`<div class="cfg-group">
+        <div class="cfg-group-head mono">${label}</div>${fields.map(row)}</div>`,
+    )}</div>
     <div class="cfg-actions">
       <button class="btn-primary" disabled=${busy} onClick=${save}>
         ${busy ? "Saving…" : "Save & restart server"}</button>
@@ -414,7 +418,7 @@ export function SettingsView({ onLogout }) {
       </section>
 
       <section class="section">
-        <header><h2>Server configuration</h2><span class="rule"></span></header>
+        <header><h2>Server configuration</h2><span class="rule"></span><a class="docs-link" href="https://docs.kenzy.ai/configuration/server/" target="_blank" rel="noopener">Docs ↗</a></header>
         <div class="card pad"><${ServerSettings} /></div>
       </section>
     </div>`;
