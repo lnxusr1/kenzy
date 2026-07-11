@@ -28,6 +28,7 @@ import importlib.util
 import inspect
 import logging
 import sys
+import types
 import typing
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -237,8 +238,11 @@ def _py_to_json_type(annotation: Any) -> dict[str, Any]:
     if origin is list:
         return {"type": "array", "items": _py_to_json_type(args[0]) if args else {}}
 
-    if origin is typing.Union:
-        # Optional[X] → treat as X (None handled by not being required)
+    # Optional[X] → treat as X (None handled by not being required). PEP 604
+    # unions (`X | None`) have their own origin, types.UnionType — missing it
+    # sent `list[str] | None` params to the string fallback, so the model was
+    # TOLD to pass a string ("broccoli" → eight one-letter groceries).
+    if origin is typing.Union or origin is types.UnionType:
         non_none = [a for a in args if a is not type(None)]
         if len(non_none) == 1:
             return _py_to_json_type(non_none[0])

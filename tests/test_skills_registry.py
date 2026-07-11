@@ -56,6 +56,29 @@ def _register_demo():
     return demo_skill, demo_skill_fast
 
 
+async def test_pep604_optional_list_schema_and_coercion(clean_registry):
+    """`items: list[str] | None` must advertise as an array in the tool schema.
+    The PEP 604 union origin (types.UnionType) used to miss the Union branch and
+    fall through to the string fallback — so the model was *instructed* to pass
+    "broccoli" as a string, which list() then exploded into letters. The array
+    schema also lets execute()'s string-wrapping guard engage."""
+    seen: dict[str, object] = {}
+
+    @reg.skill
+    async def maker(name: str, items: list[str] | None = None) -> str:
+        "Creates a thing."
+        seen["items"] = items
+        return "ok"
+
+    (schema,) = [t for t in reg.get_tools() if t["function"]["name"] == "maker"]
+    props = schema["function"]["parameters"]["properties"]
+    assert props["items"] == {"type": "array", "items": {"type": "string"}}
+    assert schema["function"]["parameters"]["required"] == ["name"]  # None default → optional
+
+    await reg.execute("maker", {"name": "Groceries", "items": "broccoli"})
+    assert seen["items"] == ["broccoli"]
+
+
 async def test_execute_wraps_bare_string_for_array_params(clean_registry):
     """A model sending "items": "broccoli" for a list[str] param must become
     ["broccoli"], not eight one-letter items (the grocery-list bug)."""

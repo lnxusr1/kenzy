@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [3.7.3]
+
+### Fixed
+
+- **The letter-by-letter grocery list, actually fixed this time.** 3.7.1's registry guard assumed the model was deviating from the tool schema — but the schema itself was wrong: parameters annotated with modern union syntax (`items: list[str] | None`) fell through the schema generator's `typing.Union` check (PEP 604 unions have a different runtime origin, `types.UnionType`) and were advertised to the model as plain strings. So the model was *instructed* to pass `"broccoli"` as a string, the guard saw a string-typed parameter and correctly left it alone, and `create_list` exploded it into eight one-letter items. Union-syntax annotations now generate the same schema as `Optional[...]` always did — `create_list.items` correctly advertises as an array (the only list-typed parameter affected), and the 3.7.1 guard now engages as designed for any model that still sends a bare string.
+- **Dashboard-edited server settings no longer vanish on `kenzy-deploy upgrade`.** Settings saved from the dashboard's Settings tab (backend URLs, MQTT integration, dialog/alarm tuning…) live in `configs/server.local.yaml` on the server host — but unlike the per-node and per-service override stores, that file wasn't protected from deploy's config syncs, so every upgrade deleted it and silently reverted those settings. It's now excluded from the overwriting rsyncs in both source and pypi modes, same as the rest of the dashboard-owned state. (Settings survive restarts either way; it was specifically upgrades that wiped them.)
+
 ## [3.7.2]
 
 ### Fixed

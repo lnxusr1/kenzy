@@ -182,7 +182,13 @@ RSYNC_EXCLUDES: list[str] = [
     # clobber) so a re-deploy never overwrites live dashboard edits.
     "/configs/nodes/",
     "/configs/services/",
+    # Dashboard-written server settings (Settings tab) — host-owned like the
+    # central store; excluded ⇒ also protected from --delete on upgrade.
+    "/configs/server.local.yaml",
 ]
+
+# Same protection for the pypi-mode configs-only sync (paths relative to configs/).
+_CONFIG_SYNC_EXCLUDES: list[str] = ["nodes/", "services/", "server.local.yaml"]
 
 # Backend services that pull their effective config from the server at boot
 # (serviceboot). Their systemd units run arg-less so they fetch GET /config/<svc>
@@ -616,8 +622,9 @@ def _sync_tree(host: HostConfig, local_path: Path, *, reseed: bool = False) -> b
     """
     if host.install_mode == "pypi":
         _info("pypi mode: code from PyPI, syncing configs only…")
-        # Keep the dashboard-owned central store out of the --delete configs sync.
-        if not _rsync_path(host, local_path, "configs", excludes=["nodes/", "services/"]):
+        # Keep the dashboard-owned central store + the dashboard-written server
+        # override out of the --delete configs sync.
+        if not _rsync_path(host, local_path, "configs", excludes=_CONFIG_SYNC_EXCLUDES):
             return False
         _ok("configs synced")
     else:

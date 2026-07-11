@@ -238,3 +238,20 @@ def test_seed_skips_non_server_host(tmp_path: Path) -> None:
     host.services = ["node"]  # not a server → central store doesn't live here
     _seed_central_config(host, root, reseed=False)
     assert not (install / "configs" / "nodes" / "kitchen-pi.yaml").exists()
+
+
+# --- dashboard-owned state survives upgrades ---------------------------------
+
+
+def test_dashboard_owned_paths_protected_from_sync() -> None:
+    """Everything the dashboard writes on a deploy host must be excluded from the
+    overwriting/--delete rsyncs in BOTH modes, or `kenzy-deploy upgrade` wipes live
+    edits (the bug: Settings-tab server config vanished on every upgrade)."""
+    from kenzy.deploy.deploy import _CONFIG_SYNC_EXCLUDES, RSYNC_EXCLUDES
+
+    # source mode (full-tree rsync; root-anchored paths)
+    for path in ("/configs/nodes/", "/configs/services/", "/configs/server.local.yaml", "/.env"):
+        assert path in RSYNC_EXCLUDES
+    # pypi mode (configs-only rsync; paths relative to configs/)
+    for path in ("nodes/", "services/", "server.local.yaml"):
+        assert path in _CONFIG_SYNC_EXCLUDES
