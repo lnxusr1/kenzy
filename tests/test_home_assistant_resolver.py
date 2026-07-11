@@ -405,10 +405,34 @@ def test_confirmation_phrasing(ha, action, target, origin, expected):
     assert ha._confirm(action, idx, codes, target) == expected
 
 
+def test_confirmation_dedupes_room_prefixed_device_name(ha):
+    """HA devices are often named with their area baked in ("Master Bedroom Light"
+    in the Master Bedroom area) — the confirmation must not say the room twice
+    ("turned off the master bedroom master bedroom light")."""
+    eid = "light.master_bedroom_light"
+    idx = ha._DeviceIndex(
+        rooms={"master_bedroom": {"light": [eid]}},
+        defaults={},
+        spoken={eid: "master bedroom light"},
+        aliases={},
+        exclude=set(),
+        room_phrases={"master bedroom": "master_bedroom"},
+        device_map={eid: eid},
+    )
+    out = ha._confirm("turn_off", idx, [eid], "the master bedroom light")
+    assert out == "Turned off the master bedroom light."
+    # A device named exactly like its room still reads sanely (never empty).
+    idx.spoken[eid] = "master bedroom"
+    assert ha._confirm("turn_off", idx, [eid], "the master bedroom light") == (
+        "Turned off the master bedroom."
+    )
+
+
 def test_thermo_clamp_reads_config(monkeypatch):
     import importlib.util
-    from pathlib import Path
     import sys
+    from pathlib import Path
+
     from kenzy.llm import skills as reg
 
     root = Path(__file__).resolve().parents[1]

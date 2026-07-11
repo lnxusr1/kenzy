@@ -106,6 +106,7 @@ Opt-in; nothing is wired (zero overhead) unless `enabled`. Requires the `mqtt` e
 | `integrations.mqtt.host` | `"127.0.0.1"` | Broker hostname |
 | `integrations.mqtt.port` | `1883` | Broker port |
 | `integrations.mqtt.base_topic` | `"kenzy"` | Topic prefix for Kenzy's state/command topics |
+| `integrations.mqtt.chimes` | `{}` | Extra named chimes for the `kenzy/chime` topic — name → WAV path on the server host. Bundled sound names (`doorbell.wav`) work without an entry |
 | `integrations.mqtt.discovery_prefix` | `"homeassistant"` | Must match HA's MQTT discovery prefix |
 | `integrations.mqtt.commands` | `true` | Accept inbound commands (Trigger/Stop buttons, Mute switch, command topics). `false` = read-only |
 

@@ -80,15 +80,19 @@ No chime when you say "hey Kenzie":
 
 ## It cuts me off mid-sentence (or keeps listening forever)
 
-The silence detection is tuned wrong for your room. Run **Set up / calibrate
-audio…** → **Silence** step: it measures your room's noise floor and sets
-`silence_rms_threshold` just above it.
+The silence detection is tuned wrong for your room. Recalibrate — either say
+**"Hey Kenzy, calibrate"** and follow the spoken instructions, or run
+**Set up / calibrate audio…** from the dashboard. Calibration measures both the
+room's quiet floor *and* your voice level (the wake-word repetitions double as
+the voice sample) and anchors `silence_rms_threshold` to your voice, so a noisy
+appliance starting up later stays below it.
 
-- Set **too high**, background noise counts as "speech" ending — you get cut off.
-- Set **too low**, it never detects that you stopped talking.
+- Set **too high**, quiet speech counts as silence — you get cut off.
+- Set **too low**, background noise counts as speech — it never detects that
+  you stopped talking.
 
-A noisy appliance (fan, AC) starting up after calibration can shift the floor —
-just re-run the one step.
+If calibration reports **poor separation**, the mic can't reliably tell your
+voice from the room's noise — move it closer to where people talk.
 
 ## It hears me but never replies
 

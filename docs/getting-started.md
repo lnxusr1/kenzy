@@ -20,7 +20,8 @@ If anything doesn't behave the way a step says it should, jump to
   cancellation (AEC), which matters — it's what lets Kenzy hear you while she's
   making sound. A webcam mic plus desktop speakers will limp along for a first
   test, but a speakerphone is the single best purchase for this project. Using a
-  speaker **without** echo cancellation? Set `hardware_aec: false` for that room
+  speaker **without** echo cancellation? Calibration detects this and sets
+  `hardware_aec: false` for that room automatically (or set it yourself)
   and Kenzy adapts honestly — intercom and alarm ring-loops are disabled there
   (with a polite spoken explanation) instead of misbehaving; everything else
   works normally. See [rooms without echo cancellation](configuration/node.md#rooms-without-echo-cancellation-hardware_aec-false).

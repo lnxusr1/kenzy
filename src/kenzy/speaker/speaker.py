@@ -30,7 +30,7 @@ import numpy as np
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
-from kenzy import kenzy_version
+from kenzy import version_info
 from kenzy.fastapi_auth import (
     install_backup_endpoint,
     install_logs_endpoint,
@@ -161,7 +161,7 @@ def _load_embeddings() -> dict[str, np.ndarray[Any, Any]]:
 async def health() -> dict[str, object]:
     return {
         "status": "ok",
-        "version": kenzy_version(),
+        **version_info(),
         "model": _model_name,
         "threshold": _identify_threshold,
     }

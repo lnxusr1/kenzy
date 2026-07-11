@@ -9,13 +9,19 @@ import json
 import numpy as np
 
 from kenzy import protocol
-from kenzy.node.client import (
-    NodeClient,
-    _percentile,
-    _suggest_silence_rms,
-    _suggest_vad_threshold,
-    _suggest_wake_threshold,
+from kenzy.calibration import (
+    percentile as _percentile,
 )
+from kenzy.calibration import (
+    suggest_silence as _suggest_silence_rms,
+)
+from kenzy.calibration import (
+    suggest_vad as _suggest_vad_threshold,
+)
+from kenzy.calibration import (
+    suggest_wake as _suggest_wake_threshold,
+)
+from kenzy.node.client import NodeClient
 from kenzy.server.dashboard import Dashboard, DashboardConfig
 from kenzy.server.server import AudioServer, NodeSession
 
@@ -53,9 +59,22 @@ def test_calibration_suggestions():
     assert _percentile([], 0.5) == 0.0
     assert _percentile([10, 20, 30, 40], 0.5) == 20
 
-    # Silence: mostly-quiet samples → threshold just above the p90 floor.
-    assert _suggest_silence_rms([10] * 90 + [200] * 10) == 25
-    assert _suggest_silence_rms([]) is None
+    # Silence is two-sided and VOICE-anchored (0.8 distance derate, /2 margin):
+    # quiet floor ~10, speech ~700 → 0.4 × 700 = 280 — from the voice, not the
+    # floor (ambient can rise after calibration; the floor only clamps).
+    quiet = [10.0] * 90
+    speech = [700.0] * 40
+    assert _suggest_silence_rms(quiet, speech) == 280
+    # No separation (speech barely above the floor) → no guess; keep previous.
+    assert _suggest_silence_rms([100.0] * 90, [180.0] * 40) is None
+    assert _suggest_silence_rms([], speech) is None
+    assert _suggest_silence_rms(quiet, []) is None
+
+    from kenzy.calibration import separation_verdict as _separation_verdict
+
+    assert _separation_verdict(quiet, speech) == "good"
+    assert _separation_verdict([100.0] * 90, [180.0] * 40) == "poor"
+    assert _separation_verdict([100.0] * 90, [500.0] * 40) == "marginal"
 
     # Wake: a clear gap between ambient and utterance peak → a value inside it.
     w = _suggest_wake_threshold([0.02] * 90 + [0.9] * 10)

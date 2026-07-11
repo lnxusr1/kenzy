@@ -651,7 +651,9 @@ async def test_set_password_via_ws(tmp_path):
     assert d._dcfg.auth_password_hash != pw
     assert verify_password("s3cret!!", d._dcfg.auth_password_hash)
     assert d._cookie_secret == d._dcfg.auth_password_hash  # sessions invalidated
-    assert d._dcfg.auth_password_hash in path.read_text()  # written through
+    # Persisted to the override layer (survives deploy syncs), not server.yaml.
+    assert d._dcfg.auth_password_hash in (tmp_path / "server.local.yaml").read_text()
+    assert d._dcfg.auth_password_hash not in path.read_text()
     # The default-password warning clears immediately (no restart needed).
     assert d._default_password is False
     assert d._settings_state()["default_password"] is False

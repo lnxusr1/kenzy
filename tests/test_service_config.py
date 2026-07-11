@@ -40,6 +40,24 @@ def test_effective_service_config_deep_merges(tmp_path, monkeypatch):
     assert eff["host"] == "127.0.0.1"  # packaged default retained
 
 
+def test_effective_service_config_without_override(tmp_path, monkeypatch):
+    """include_override=False returns just the inherited layer — what the
+    dashboard editor shows as field placeholders."""
+    monkeypatch.setenv("KENZY_HOME", str(tmp_path))
+    services = tmp_path / "configs" / "services"
+    services.mkdir(parents=True)
+    (services / "stt.yaml").write_text("whisper:\n  model: small\n")
+    import yaml as _yaml
+
+    from kenzy.config import packaged_config
+
+    packaged = _yaml.safe_load(packaged_config("stt").read_text())
+    srv = AudioServer({})
+    defaults = srv._effective_service_config("stt", include_override=False)
+    assert defaults["whisper"]["model"] == packaged["whisper"]["model"]  # override ignored
+    assert srv._effective_service_config("stt")["whisper"]["model"] == "small"
+
+
 def test_effective_service_config_strips_secrets(tmp_path, monkeypatch):
     monkeypatch.setenv("KENZY_HOME", str(tmp_path))
     services = tmp_path / "configs" / "services"

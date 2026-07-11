@@ -37,7 +37,7 @@ class _Player:
     def play(self) -> None:
         self.chimes += 1
 
-    def play_pcm(self, audio: Any, interrupt: bool = False) -> None:
+    def play_pcm(self, audio: Any, interrupt: bool = False, alert: bool = False) -> None:
         self.pcm_plays.append(audio)
 
     def abort(self) -> None:

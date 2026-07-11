@@ -96,6 +96,21 @@ it's the id itself):
 | `kenzy/<node_id>/volume` | `0`–`100` | set volume |
 | `kenzy/<node_id>/mute` | `ON` / `OFF` | mute / unmute |
 | `kenzy/announce` | text | speak the text in **every** room |
+| `kenzy/chime` | see below | play a chime — instant, no TTS involved |
+
+`kenzy/chime` payloads: empty = the bundled doorbell, once. A bare string names the
+sound (`doorbell.wav`, `chime.wav`, or a name from `integrations.mqtt.chimes` — a
+map of name → WAV path on the server host). JSON unlocks the rest:
+
+```json
+{"sound": "doorbell.wav", "seconds": 8, "rooms": ["kitchen", "office"]}
+```
+
+`seconds` loops the cue (whole repeats, capped at 30 s); `rooms` limits which nodes
+play it (omit for house-wide). Chimes are **alert audio**: a muted node still plays
+them at a low, audible floor — same as the wake-word chime — because "someone is at
+your door" is exactly the class of thing mute shouldn't hide. (Nodes on older
+releases simply honor mute instead.)
 
 Example — announce when the back door opens after 11pm:
 
@@ -116,13 +131,57 @@ automation:
           payload: "The back door just opened."
 ```
 
+### Recipe: a house-wide doorbell
+
+If your smart doorbell's own chime is too quiet, let every Kenzy node announce a
+press. In HA: **Settings → Automations & Scenes → Create Automation**, then
+three-dots → **Edit in YAML**:
+
+```yaml
+alias: Doorbell → Kenzy chime
+mode: single
+trigger:
+  - platform: state
+    entity_id: binary_sensor.front_doorbell   # your doorbell's PRESS entity
+    to: "on"
+condition:
+  # Debounce: an impatient triple-press shouldn't announce three times.
+  - condition: template
+    value_template: >
+      {{ this.attributes.last_triggered is none or
+         now() - this.attributes.last_triggered > timedelta(seconds=15) }}
+action:
+  - service: mqtt.publish
+    data:
+      topic: kenzy/chime
+      payload: '{"sound": "doorbell.wav", "seconds": 4}'
+```
+
+Prefer a spoken announcement instead (or as well)? Publish to `kenzy/announce` with
+payload `Someone's at the front door.` — the chime is instant and TTS-free; the
+announcement says who/what but costs a couple seconds of synthesis.
+
+Tips:
+
+- **Find the right entity** in Developer Tools → States. Trigger on the *button
+  press* entity, not the doorbell's motion/person sensor — or the porch cat
+  announces itself. Newer integrations expose an `event.…` entity instead of a
+  binary sensor; for those, drop the `to: "on"` line (any state change on an
+  event entity means it fired).
+- **Test the Kenzy half first**: in Developer Tools → Actions, call
+  `mqtt.publish` with the topic/payload above — every connected node should
+  ring. Then the automation is just attaching your trigger to that action.
+- `mode: single` (the default) is right here; the action completes in
+  milliseconds, so modes never really compete — the debounce condition is what
+  prevents repeat announcements.
+
 ## How it works
 
 The server publishes to MQTT using HA MQTT Discovery (retained config messages on
 `<discovery_prefix>/<component>/…/config`), so HA builds the entities itself. A
 bridge **availability** topic with a last-will marks everything unavailable if the
 server crashes or stops. Inbound command topics map to the same actions the
-dashboard uses (trigger/stop/volume/mute/announce). No spoken text is ever sent.
+dashboard uses (trigger/stop/volume/mute/announce/chime). No spoken text is ever sent.
 
 ## Roadmap
 

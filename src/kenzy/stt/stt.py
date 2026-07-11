@@ -28,7 +28,7 @@ import numpy as np
 from fastapi import FastAPI
 from pydantic import BaseModel
 
-from kenzy import kenzy_version
+from kenzy import version_info
 from kenzy.fastapi_auth import (
     install_logs_endpoint,
     install_restart_endpoint,
@@ -81,7 +81,7 @@ _SAMPLE_RATE = 16000
 async def health() -> dict[str, object]:
     return {
         "status": "ok",
-        "version": kenzy_version(),
+        **version_info(),
         "provider": _provider,
         "model": _openai_model if _provider == "openai" else _model_size,
         "language": _language or "auto",

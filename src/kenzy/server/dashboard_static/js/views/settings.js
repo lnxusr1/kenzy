@@ -1,7 +1,44 @@
 import { html, useState, useEffect } from "../html.js";
 import { groupBySections, SERVER_SECTIONS } from "../schema.js";
 import { getSettings } from "../api.js";
-import { send, notify } from "../store.js";
+import { send, notify, subscribeUpgrades, useFleet } from "../store.js";
+
+// Code defaults the server applies when a key is set in neither server.yaml nor
+// the override — shown as the placeholder so an unset field still tells you what
+// happens (mirrors the node editor's DEFAULTS map). Keep in sync with the
+// cfg.get() fallbacks in server.py / integrations.
+const CODE_DEFAULTS = {
+  experimental: false,
+  "dashboard.logs": true,
+  "dashboard.controls": true,
+  "stt.timeout": 60,
+  "tts.timeout": 60,
+  "llm.timeout": 30,
+  "speaker.timeout": 10,
+  "dialog.max_turns": 6,
+  "alarm.ring_repeats": 10,
+  "alarm.ring_interval": 25,
+  "discovery.enabled": true,
+  "discovery.instance": "kenzy-server",
+  "integrations.mqtt.enabled": false,
+  "integrations.mqtt.host": "127.0.0.1",
+  "integrations.mqtt.port": 1883,
+  "integrations.mqtt.base_topic": "kenzy",
+  "integrations.mqtt.discovery_prefix": "homeassistant",
+  "integrations.mqtt.commands": true,
+};
+
+// Inherited value → human placeholder/label text.
+const fmt = (v) =>
+  v === undefined
+    ? "unset"
+    : v === null
+      ? "null"
+      : typeof v === "boolean"
+        ? v
+          ? "on"
+          : "off"
+        : String(v);
 
 // A read-only secret with a copy button (join/API token). Shown only on the
 // auth-gated Settings page so the operator can copy it instead of memorizing it.
@@ -53,17 +90,20 @@ function ServerSettings() {
   const set = (k, v) => setVals((cur) => ({ ...cur, [k]: v }));
 
   async function save() {
+    // Node-editor semantics: a field's value is the override layer only; an
+    // emptied field sends null, which removes the key from server.local.yaml
+    // (reverting to the server.yaml / code default shown in its placeholder).
     const patch = {};
     for (const f of data.fields) {
       let v = vals[f.key];
-      if (f.type === "num") {
-        if (v === "" || v == null) continue;
+      if (v === "" || v === undefined) v = null;
+      if (v !== null && f.type === "num") {
         const num = Number(v);
-        if (Number.isNaN(num)) continue;
+        if (Number.isNaN(num)) continue; // unparseable input = no change
         v = num;
-      } else if (f.type === "bool") v = !!v;
-      else v = v ?? "";
-      if (JSON.stringify(v) !== JSON.stringify(f.value)) patch[f.key] = v;
+      }
+      const before = f.value === undefined ? null : f.value;
+      if (JSON.stringify(v) !== JSON.stringify(before)) patch[f.key] = v;
     }
     if (!Object.keys(patch).length) {
       notify("No changes to save.");
@@ -82,20 +122,22 @@ function ServerSettings() {
 
   const row = (f) => {
     const v = vals[f.key];
+    const isSet = v !== null && v !== undefined && v !== "";
+    const inh = f.inherited !== null && f.inherited !== undefined ? f.inherited : CODE_DEFAULTS[f.key];
     let input;
     if (f.type === "bool")
-      input = html`<select onChange=${(e) => set(f.key, e.target.value === "true")}>
+      input = html`<select onChange=${(e) => set(f.key, e.target.value === "" ? null : e.target.value === "true")}>
+        <option value="" selected=${!isSet}>inherit (${fmt(inh)})</option>
         <option value="true" selected=${v === true}>on</option>
-        <option value="false" selected=${v !== true}>off</option></select>`;
+        <option value="false" selected=${v === false}>off</option></select>`;
     else if (f.type === "num")
-      input = html`<input type="number" step="any" inputmode="decimal" value=${v ?? ""}
-        onInput=${(e) => set(f.key, e.target.value)} />`;
+      input = html`<input type="number" step="any" inputmode="decimal" value=${isSet ? v : ""}
+        placeholder=${fmt(inh)} onInput=${(e) => set(f.key, e.target.value)} />`;
     else
-      input = html`<input value=${v ?? ""} placeholder=${f.value == null ? "unset" : ""}
+      input = html`<input value=${isSet ? v : ""} placeholder=${fmt(inh)}
         onInput=${(e) => set(f.key, e.target.value)} />`;
-    return html`<div class=${"cfg-row" + (f.overridden ? " overridden" : "")}>
-      <div class="cfg-key"><span class="mono">${f.key}</span>
-        ${f.overridden ? html`<span class="micro">override</span>` : null}</div>
+    return html`<div class=${"cfg-row" + (isSet ? " overridden" : "")}>
+      <div class="cfg-key"><span class="mono">${f.key}</span></div>
       <div class="cfg-input">${input}</div></div>`;
   };
 
@@ -118,12 +160,42 @@ function ServerSettings() {
 function UpdateCheck() {
   const [u, setU] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [busyAll, setBusyAll] = useState(false);
+  const [log, setLog] = useState([]); // running per-item log of an upgrade pass
+  const { live } = useFleet();
+  // Re-fetch whenever the live channel (re)connects — after step 1's server
+  // restart drops the WS, the fresh state is what arms step 2.
   useEffect(() => {
+    if (live === false && u) return; // keep showing the last state while down
     fetch("/api/upgrade")
       .then((r) => (r.ok ? r.json() : { error: true }))
       .then(setU)
       .catch(() => setU({ error: true }));
-  }, []);
+  }, [live]);
+  useEffect(
+    () =>
+      subscribeUpgrades((m) => {
+        const who = m.target || "server";
+        if (m.type === "upgrade_progress")
+          setLog((l) => [
+            ...l,
+            { text: `${m.step ? `[${m.step}/${m.total}] ` : ""}${who} — installing…` },
+          ]);
+        else if (m.type === "upgrade_result")
+          setLog((l) => [
+            ...l,
+            {
+              ok: m.ok,
+              text: `${who} — ${m.ok ? m.output || "done" : "FAILED: " + ((m.output || "").trim().split("\n").pop() || "see logs")}`,
+            },
+          ]);
+        else if (m.type === "upgrade_all_done") {
+          setLog((l) => [...l, { ok: m.ok, text: `finished: ${m.summary || "done"}` }]);
+          setBusyAll(false);
+        }
+      }),
+    [],
+  );
 
   if (!u) return html`<p class="micro">Checking for updates…</p>`;
   if (u.error) return html`<p class="micro">Could not load the update status.</p>`;
@@ -155,9 +227,32 @@ function UpdateCheck() {
     );
   }
 
-  // Only offer the action when controls are on, an update exists, and this isn't a
-  // dev/editable checkout. The backends/nodes upgrade separately (fan-out — later).
-  const canUpgrade = u.controls && u.update_available && u.current !== "dev";
+  async function upgradeAll() {
+    if (
+      !window.confirm(
+        `Upgrade every backend service and node${u.latest ? ` to ${u.latest}` : ""}? They run ` +
+          `one at a time (services first, then nodes) with a running log below. Anything ` +
+          `already holding the new version is simply restarted. Run this AFTER upgrading ` +
+          `the server.`,
+      )
+    )
+      return;
+    setLog([]);
+    setBusyAll(true);
+    const res = await send("upgrade_all", { version: u.latest });
+    if (!res.ok) {
+      setBusyAll(false);
+      notify(res.error || "Could not start the upgrade.", "err");
+    }
+  }
+
+  // Logical progression: step 1 (server) only when an update exists and this
+  // isn't a dev/editable checkout; step 2 (services + nodes) is visible whenever
+  // controls are on and PyPI answered, but stays DISABLED until the server is
+  // current — once step 1 completes (and the button disappears), step 2 arms.
+  const serverBehind = u.update_available && u.current !== "dev";
+  const canUpgrade = u.controls && serverBehind;
+  const canUpgradeAll = u.controls && u.checkable;
 
   return html`
     <dl class="kv">
@@ -165,14 +260,29 @@ function UpdateCheck() {
       <dt>latest on PyPI</dt><dd><span class="mono">${u.latest || "—"}</span></dd>
       <dt>status</dt><dd>${status}</dd>
     </dl>
-    ${canUpgrade
+    ${canUpgrade || canUpgradeAll
       ? html`<div class="cfg-actions">
-            <button class="btn-primary" disabled=${busy} onClick=${upgrade}>
-              ${busy ? "Starting…" : `Upgrade server to ${u.latest}`}</button>
+            ${canUpgrade
+              ? html`<button class="btn-primary" disabled=${busy} onClick=${upgrade}>
+                  ${busy ? "Starting…" : `1. Upgrade server to ${u.latest}`}</button>`
+              : null}
+            ${canUpgradeAll
+              ? html`<button class="btn-primary" disabled=${busyAll || serverBehind}
+                  title=${serverBehind ? "Upgrade the server first — this step arms once it's current." : ""}
+                  onClick=${upgradeAll}>
+                  ${busyAll ? "Upgrading…" : `${serverBehind ? "2. " : ""}Upgrade services + nodes`}</button>`
+              : null}
           </div>
-          <p class="micro">Upgrades this server host only (its <span class="mono">server</span>
-            extra); restarts it on success. Backend services and nodes are upgraded
-            separately.</p>`
+          <p class="micro">Two steps: the server first (restarts itself on success), then
+            everything else in one sequential pass — components already holding the new
+            version just restart. Dependency pins (constraints.txt) are honored.</p>`
+      : null}
+    ${log.length
+      ? html`<div class="upgrade-log mono">
+          ${log.map(
+            (e) => html`<div class=${e.ok === false ? "err" : e.ok ? "ok" : ""}>${e.text}</div>`,
+          )}
+        </div>`
       : null}`;
 }
 
@@ -364,7 +474,10 @@ export function SettingsView({ onLogout }) {
         <header><h2>System</h2><span class="rule"></span></header>
         <div class="card pad">
           <dl class="kv">
-            ${kv("kenzy version", html`<span class="mono">${s.version}</span>`)}
+            ${kv("kenzy version", html`<span class="mono">${s.version}</span>
+              ${s.installed && s.installed !== s.version
+                ? html` <span class="micro warn">v${s.installed} installed — restart to apply</span>`
+                : null}`)}
             ${kv("signed in as", html`<span class="mono">${s.username || "—"}</span>`)}
             ${kv("server (node WS)", html`<span class="mono">${s.server.host}:${s.server.port}</span>`)}
             ${kv("dashboard", html`<span class="mono">${s.dashboard.bind}:${s.dashboard.port}</span>`)}

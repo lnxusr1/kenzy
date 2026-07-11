@@ -154,6 +154,18 @@ button { font: inherit; cursor: pointer; }
   border: 1px solid var(--border); color: var(--text-dim);
 }
 .badge.streaming { color: var(--led-busy); border-color: color-mix(in srgb, var(--led-busy) 50%, transparent); }
+/* Upgraded on disk but still running old code — restart to apply. */
+.badge.warn, .micro.warn { color: var(--led-busy); }
+.badge.warn { border-color: color-mix(in srgb, var(--led-busy) 50%, transparent); }
+
+/* Running per-item log of an "upgrade services + nodes" pass (Settings). */
+.upgrade-log {
+  margin-top: var(--s3); padding: var(--s3); font-size: 12px; line-height: 1.7;
+  border: 1px solid var(--border); border-radius: var(--radius);
+  max-height: 220px; overflow-y: auto;
+}
+.upgrade-log .ok { color: var(--led-up); }
+.upgrade-log .err { color: var(--led-down); }
 
 /* ---- Service chips ---- */
 .chips { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: var(--s3); }
@@ -281,6 +293,12 @@ button { font: inherit; cursor: pointer; }
   background: color-mix(in srgb, var(--accent) 10%, transparent);
 }
 .wiz-actions { display: flex; flex-wrap: wrap; gap: var(--s2); align-items: stretch; }
+/* Listen-phase countdown + gate notes + separation verdict (audio wizard). */
+.wiz-count { float: right; font-size: 18px; font-weight: 700; color: var(--accent); }
+.wiz-note { color: var(--led-busy); }
+.sep-good { color: var(--led-up); }
+.sep-marginal { color: var(--led-busy); }
+.sep-poor { color: var(--led-down); }
 .wiz-footer {
   display: flex; align-items: center; justify-content: space-between; gap: var(--s3);
   margin-top: var(--s2); padding-top: var(--s3); border-top: 1px solid var(--border);
@@ -369,8 +387,8 @@ button { font: inherit; cursor: pointer; }
 .list-x { flex: none; width: auto; padding: 0 var(--s3); font-size: 16px; line-height: 1; }
 .list-add { width: 100%; font-size: 12px; padding: 7px; }
 .cfg .section + .section { margin-top: var(--s4); }
-.cfg-actions { margin-top: var(--s5); }
-.cfg-actions .btn-primary { width: auto; padding-inline: var(--s6); }
+.cfg-actions { margin-top: var(--s5); display: flex; flex-wrap: wrap; gap: var(--s3); }
+.cfg-actions .btn-primary { width: auto; margin-top: 0; padding-inline: var(--s5); }
 .cfg-msg { margin-top: var(--s4); font-size: 13px; }
 .cfg-msg.ok { color: var(--led-up); }
 .cfg-msg.err { color: var(--led-down); }

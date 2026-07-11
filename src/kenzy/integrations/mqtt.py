@@ -81,6 +81,7 @@ def command_filters(base_topic: str) -> list[str]:
         f"{base_topic}/+/volume",
         f"{base_topic}/+/mute",
         f"{base_topic}/announce",
+        f"{base_topic}/chime",
     ]
 
 
@@ -100,6 +101,28 @@ def parse_command(
     if toks == ["announce"]:
         text = payload.strip()
         return Command("announce", None, text) if text else None
+
+    if toks == ["chime"]:
+        # Payload: JSON {"sound": name, "seconds": n, "rooms": [...]} — or a bare
+        # string naming the sound, or empty for the default chime, once. The
+        # server validates the sound name (configured/bundled only) and caps the
+        # loop; this stays a pure parse.
+        raw = payload.strip()
+        value: dict[str, Any] = {}
+        if raw:
+            try:
+                data = json.loads(raw)
+            except ValueError:
+                data = raw
+            if isinstance(data, dict):
+                value = {
+                    "sound": data.get("sound"),
+                    "seconds": data.get("seconds"),
+                    "rooms": data.get("rooms"),
+                }
+            else:
+                value = {"sound": str(data)}
+        return Command("chime", None, value)
 
     if len(toks) == 2:
         slug, action = toks

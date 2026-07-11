@@ -34,6 +34,72 @@ def test_service_health_reports_version():
     assert r.json()["version"] == kenzy_version()
 
 
+def test_running_version_is_frozen_installed_is_live(monkeypatch):
+    """The running version is captured at import; installed_version() follows the
+    disk. The gap between them is exactly "upgraded but needs a restart" — an
+    un-recycled service used to claim the new version right after a pip upgrade
+    (backlog #6, found during the grocery-list debugging loop)."""
+    import importlib.metadata
+
+    import kenzy
+
+    running = kenzy.kenzy_version()
+    monkeypatch.setattr(  # pip upgrades the package under a live process
+        importlib.metadata, "version", lambda name: "99.0.0" if name == "kenzy" else "0"
+    )
+    assert kenzy.installed_version() == "99.0.0"  # follows the disk
+    assert kenzy.kenzy_version() == running  # stays with the running code
+    assert kenzy.version_info() == {"version": running, "installed": "99.0.0"}
+
+
+async def test_upgrade_short_circuits_to_restart_when_installed(monkeypatch):
+    """Clicking Upgrade on a service whose venv already holds the target version
+    (co-located with an upgraded server) must restart it, not run pip again; and
+    one already RUNNING the target must be left alone entirely."""
+    server = AudioServer({"stt": {"url": "http://127.0.0.1:1/transcribe"}})
+    dash = Dashboard(server, {"stt": {"url": "http://127.0.0.1:1/transcribe"}}, DashboardConfig())
+    calls: list[str] = []
+
+    async def fake_health(base):
+        return {"version": "3.7.3", "installed": "3.7.4"}
+
+    async def fake_restart(name):
+        calls.append(f"restart:{name}")
+        return True
+
+    async def fake_latest():
+        return "3.7.4"
+
+    monkeypatch.setattr(dash, "_service_health", fake_health)
+    monkeypatch.setattr(dash, "_restart_service", fake_restart)
+    monkeypatch.setattr(dash, "_latest_pypi_version", fake_latest)
+
+    ok, output = await dash._upgrade_service("stt", None)
+    assert ok and calls == ["restart:stt"]
+    assert "already installed" in output and "restarted" in output
+
+    # Already running the target → nothing to do (no restart, no pip).
+    async def fake_health_current(base):
+        return {"version": "3.7.4", "installed": "3.7.4"}
+
+    monkeypatch.setattr(dash, "_service_health", fake_health_current)
+    calls.clear()
+    ok, output = await dash._upgrade_service("stt", None)
+    assert ok and calls == []
+    assert "nothing to do" in output
+
+
+def test_health_reports_installed_alongside_running(monkeypatch):
+    import importlib.metadata
+
+    monkeypatch.setattr(
+        importlib.metadata, "version", lambda name: "99.0.0" if name == "kenzy" else "0"
+    )
+    body = TestClient(speaker_svc.app).get("/health").json()
+    assert body["version"] == kenzy_version()  # running code
+    assert body["installed"] == "99.0.0"  # on-disk (restart pending)
+
+
 def test_node_version_surfaced_in_state():
     server = AudioServer({})
     server._nodes["n1"] = NodeSession(

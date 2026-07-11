@@ -168,6 +168,22 @@ def _dotted_set(d: dict[str, Any], key: str, value: Any) -> None:
     cur[parts[-1]] = value
 
 
+def _dotted_del(d: dict[str, Any], key: str) -> None:
+    """Delete the value at a dotted path (no-op if absent), pruning parent dicts
+    that become empty so the override file stays minimal."""
+    parts = key.split(".")
+    chain: list[dict[str, Any]] = [d]
+    for part in parts[:-1]:
+        nxt = chain[-1].get(part)
+        if not isinstance(nxt, dict):
+            return
+        chain.append(nxt)
+    chain[-1].pop(parts[-1], None)
+    for i in range(len(chain) - 1, 0, -1):
+        if not chain[i]:
+            chain[i - 1].pop(parts[i - 1], None)
+
+
 def _version_tuple(v: str) -> tuple[int, ...]:
     """Best-effort numeric version tuple (leading digits of each dotted segment),
     e.g. ``"3.1.10"`` → ``(3, 1, 10)``. Non-numeric segments contribute 0."""
@@ -257,6 +273,9 @@ class Dashboard:
         # never through the heavy state snapshot.
         self._tune_subs: dict[ServerConnection, str] = {}
         server.add_tune_listener(self._on_tune_sample)
+        # Guided-calibration progress events (low-rate) — pushed to every authed
+        # client, so the dashboard can watch voice-initiated runs too.
+        server.add_calib_listener(self._on_calib_event)
         # Pull-based logs (only when the `logs` sub-flag is on): tell nodes to keep a
         # buffer, and capture the server's own logs for the viewer down to the
         # configured capture depth (default debug).
@@ -452,18 +471,34 @@ class Dashboard:
             return {}
 
     def _server_config_state(self) -> dict[str, Any]:
+        """Fields for the Settings editor, node-editor style: ``value`` is ONLY what
+        the override layer (server.local.yaml) holds; ``inherited`` is what applies
+        when it's unset (the hand-edited server.yaml value). The UI fills the input
+        from ``value`` and shows ``inherited`` as the placeholder."""
+        import yaml
+
         from kenzy.server.server import _SERVER_EDITABLE
 
         override = self._read_server_override()
+        base: dict[str, Any] = {}
+        if self._config_path is not None:
+            try:
+                loaded = yaml.safe_load(self._config_path.read_text()) or {}
+                if isinstance(loaded, dict):
+                    base = loaded
+            except Exception:
+                pass
         fields = []
         for key, typ in _SERVER_EDITABLE.items():
-            value = _dotted_get(self._cfg, key)
+            ov = _dotted_get(override, key)
+            inherited = _dotted_get(base, key)
             fields.append(
                 {
                     "key": key,
                     "type": typ,
-                    "value": None if value is _MISSING else value,
-                    "overridden": _dotted_get(override, key) is not _MISSING,
+                    "value": None if ov is _MISSING else ov,
+                    "inherited": None if inherited is _MISSING else inherited,
+                    "overridden": ov is not _MISSING,
                 }
             )
         return {"fields": fields, "writable": self._config_path is not None}
@@ -483,19 +518,30 @@ class Dashboard:
             raise ValueError("unsupported keys: " + ", ".join(unknown))
         override = self._read_server_override()
         for key, raw in patch.items():
+            if raw is None:  # null ⇒ unset: remove from the override, revert to inherited
+                _dotted_del(override, key)
+                continue
             try:
                 _dotted_set(override, key, _coerce_server_value(raw, _SERVER_EDITABLE[key]))
             except (TypeError, ValueError) as exc:
                 raise ValueError(f"invalid value for {key}: {exc}") from exc
         path = _server_override_path(self._config_path)
-        path.write_text(yaml.safe_dump(override, default_flow_style=False, sort_keys=True))
+        if override:
+            path.write_text(yaml.safe_dump(override, default_flow_style=False, sort_keys=True))
+        elif path.is_file():  # last key unset — drop the file, not an empty stub
+            path.unlink()
         log.info("Wrote server override %s (%d key(s))", path, len(patch))
 
     def _settings_state(self) -> dict[str, Any]:
         """Read-only server/dashboard info shown on the Settings page."""
+        from kenzy import installed_version
+
         version = kenzy_version()
         return {
             "version": version,
+            # On-disk version; differs from `version` (the running code) only when
+            # the package was upgraded under the live server — restart to apply.
+            "installed": installed_version(),
             "username": self._dcfg.auth_username,
             "server": {"host": self._server._host, "port": self._server._port},
             "dashboard": {"bind": self._dcfg.bind, "port": self._dcfg.port},
@@ -553,12 +599,14 @@ class Dashboard:
         return sorted(names)
 
     def _set_password(self, new_password: str) -> None:
-        """Persist a new dashboard password to server.yaml and apply it live.
+        """Persist a new dashboard password and apply it live.
 
-        Rewrites ``dashboard.auth.password_hash`` (preserving comments via
-        :func:`kenzy.passwd.set_auth`) and updates the in-memory hash + cookie
-        secret so it takes effect immediately — no restart. Because the signing
-        secret changes, existing sessions are invalidated and must sign in again.
+        Writes ``dashboard.auth`` to the ``server.local.yaml`` override layer
+        (via :func:`kenzy.passwd.set_auth`) — NOT server.yaml, which a
+        kenzy-deploy upgrade sync overwrites (silently reverting the login) and
+        which may be the read-only packaged default. The in-memory hash + cookie
+        secret update immediately — no restart. Because the signing secret
+        changes, existing sessions are invalidated and must sign in again.
         """
         if self._config_path is None or not self._config_path.is_file():
             raise OSError("server.yaml not found — cannot persist the password")
@@ -567,8 +615,7 @@ class Dashboard:
 
         username = self._dcfg.auth_username or "admin"
         new_hash = hash_password(new_password)
-        text = self._config_path.read_text()
-        self._config_path.write_text(set_auth(text, username, new_hash))
+        set_auth(self._config_path, username, new_hash)
         self._dcfg.auth_username = username
         self._dcfg.auth_password_hash = new_hash
         self._cookie_secret = new_hash
@@ -728,6 +775,7 @@ class Dashboard:
             name = path[len("/api/services/") : -len("/config")]
             try:
                 cfg = self._server._effective_service_config(name)
+                defaults = self._server._effective_service_config(name, include_override=False)
                 override = self._server.read_service_override(name)
             except Exception:
                 return self._json(404, {"error": "unknown service"})
@@ -736,6 +784,7 @@ class Dashboard:
                 {
                     "service": name,
                     "config": cfg,  # effective, secret-stripped
+                    "defaults": defaults,  # inherited layer only (field placeholders)
                     "override": override,
                     "reachable": name in self._service_urls,
                     "controls": self._dcfg.controls,
@@ -795,12 +844,17 @@ class Dashboard:
         except Exception:
             return []
 
+    def _service_base(self, name: str) -> str | None:
+        """Base URL for a backend service — statically configured or auto-registered."""
+        targets = {**self._service_urls, **self._server.announced_health_urls()}
+        url = targets.get(name)
+        return url[: -len("/health")] if url else None
+
     async def _restart_service(self, name: str) -> bool:
         """POST /restart to a backend service so it re-execs and re-pulls config."""
-        health_url = self._service_urls.get(name)
-        if not health_url:
+        base = self._service_base(name)
+        if not base:
             return False
-        base = health_url[: -len("/health")]
         import httpx
 
         try:
@@ -810,13 +864,40 @@ class Dashboard:
         except Exception:
             return False
 
+    async def _service_health(self, base: str) -> dict[str, Any]:
+        import httpx
+
+        try:
+            async with httpx.AsyncClient(timeout=3.0) as client:
+                r = await client.get(f"{base}/health")
+            data = r.json()
+            return data if isinstance(data, dict) else {}
+        except Exception:
+            return {}
+
     async def _upgrade_service(self, name: str, version: str | None) -> tuple[bool, str]:
         """POST /upgrade to a backend service (it pip-upgrades its own extra + re-execs).
-        Long timeout — a pip install on a slow host can take minutes."""
-        health_url = self._service_urls.get(name)
-        if not health_url:
+        Long timeout — a pip install on a slow host can take minutes.
+
+        Restart-only short-circuit: when the service's venv already holds the target
+        version (typical for services co-located with an already-upgraded server —
+        one shared venv), pip has nothing to do, so a restart applies it; and if it's
+        already RUNNING the target, nothing happens at all. Skipped when the target
+        is unknown (no version given + PyPI unreachable) — then pip decides.
+        """
+        base = self._service_base(name)
+        if not base:
             return False, "service not reachable"
-        base = health_url[: -len("/health")]
+        target = version or await self._latest_pypi_version()
+        if target:
+            health = await self._service_health(base)
+            installed, running = health.get("installed"), health.get("version")
+            if installed == target:
+                if running == target:
+                    return True, f"already running v{target} — nothing to do"
+                if await self._restart_service(name):
+                    return True, f"v{target} already installed — restarted to apply it"
+                return False, f"v{target} already installed but the restart failed"
         import httpx
 
         try:
@@ -847,6 +928,70 @@ class Dashboard:
         await send({"type": "upgrade_progress", "stage": "installing", "target": name})
         ok, output = await self._upgrade_service(name, version)
         await send({"type": "upgrade_result", "ok": ok, "output": output, "target": name})
+
+    async def _do_upgrade_all(self, connection: ServerConnection, version: str | None) -> None:
+        """Step 2 of the two-step upgrade: everything EXCEPT the server — each backend
+        service sequentially (co-located services share one venv, so parallel pip
+        runs could collide; after a server upgrade the short-circuit turns most of
+        these into plain restarts anyway), then every connected node (fire-and-watch:
+        each installs + re-execs and reconnects on its new version). Per-item
+        progress/result events feed the Settings page's running log."""
+
+        async def send(payload: dict[str, Any]) -> None:
+            try:
+                await connection.send(json.dumps(payload))
+            except Exception:
+                pass
+
+        services = sorted({**self._service_urls, **self._server.announced_health_urls()})
+        nodes = [(nid, sess.room_id) for nid, sess in self._server._nodes.items()]
+        total = len(services) + len(nodes)
+        step = 0
+        failed: list[str] = []
+        for name in services:
+            step += 1
+            await send(
+                {
+                    "type": "upgrade_progress",
+                    "stage": "installing",
+                    "target": name,
+                    "step": step,
+                    "total": total,
+                }
+            )
+            ok, output = await self._upgrade_service(name, version)
+            if not ok:
+                failed.append(name)
+            await send({"type": "upgrade_result", "ok": ok, "output": output, "target": name})
+        for nid, room in nodes:
+            step += 1
+            label = f"node {room or nid}"
+            await send(
+                {
+                    "type": "upgrade_progress",
+                    "stage": "installing",
+                    "target": label,
+                    "step": step,
+                    "total": total,
+                }
+            )
+            ok = await self._server.upgrade_node(nid, version)
+            if not ok:
+                failed.append(label)
+            await send(
+                {
+                    "type": "upgrade_result",
+                    "ok": ok,
+                    "target": label,
+                    "output": "upgrade sent — the node re-execs and reconnects"
+                    if ok
+                    else "node not connected",
+                }
+            )
+        summary = f"{total - len(failed)}/{total} upgraded" + (
+            f" — failed: {', '.join(failed)}" if failed else ""
+        )
+        await send({"type": "upgrade_all_done", "ok": not failed, "summary": summary})
 
     # ------------------------------------------------------------------
     # Skill registry (kenzy-llm): read the loaded skills + live-toggle disables
@@ -1013,9 +1158,40 @@ class Dashboard:
             except Exception:
                 pass
 
-        await send({"type": "upgrade_progress", "stage": "installing"})
+        # Restart-only short-circuit: if the target version is already on disk
+        # (pip ran but the process never recycled), applying it is a restart, not
+        # another install; and if it's already running, there's nothing to do.
+        target = version or await self._latest_pypi_version()
+        if target:
+            from kenzy import installed_version
+
+            installed = installed_version()
+            if installed == target:
+                if kenzy_version() == target:
+                    await send(
+                        {
+                            "type": "upgrade_result",
+                            "ok": True,
+                            "target": "server",
+                            "output": f"already running v{target} — nothing to do",
+                        }
+                    )
+                    return
+                await send(
+                    {
+                        "type": "upgrade_result",
+                        "ok": True,
+                        "target": "server",
+                        "output": f"v{target} already installed — restarting to apply it",
+                    }
+                )
+                await send({"type": "server_restarting"})
+                asyncio.get_running_loop().call_later(0.8, self._server.restart_server)
+                return
+
+        await send({"type": "upgrade_progress", "stage": "installing", "target": "server"})
         ok, output = await self._server.run_self_upgrade("server", version)
-        await send({"type": "upgrade_result", "ok": ok, "output": output})
+        await send({"type": "upgrade_result", "ok": ok, "output": output, "target": "server"})
         if ok:
             # Re-exec so the new code loads; the WS drops and the SPA reconnects.
             await send({"type": "server_restarting"})
@@ -1129,6 +1305,13 @@ class Dashboard:
                 await ws.send(payload)
             except Exception:
                 self._clients.discard(ws)
+
+    def _on_calib_event(self, node_id: str, event: dict[str, Any]) -> None:
+        """Push one guided-calibration progress event to connected browsers."""
+        if not self._clients:
+            return
+        payload = json.dumps({"type": "calibration", "node": node_id, "event": event})
+        asyncio.create_task(self._send_tune(list(self._clients), payload))
 
     def _on_tune_sample(self, node_id: str, sample: dict[str, Any]) -> None:
         """Relay one calibration sample to the client(s) tuning this node only."""
@@ -1256,6 +1439,38 @@ class Dashboard:
             if node and node not in self._tune_subs.values():
                 await self._server.stop_node_tuning(node)
             await ack(True)
+        elif mtype == "tune_watch":
+            # Watch-only tune subscription: the SERVER owns the window (guided
+            # calibration) — the browser just wants the live meter samples.
+            if not self._dcfg.controls:
+                return await ack(False, "controls are disabled (set dashboard.controls: true)")
+            self._tune_subs[connection] = str(msg.get("node", ""))
+            await ack(True)
+        elif mtype == "tune_unwatch":
+            self._tune_subs.pop(connection, None)
+            await ack(True)
+        elif mtype == "calibrate_start":
+            # Launch the guided calibration session in silent mode: the node beeps
+            # for the AEC probe and this browser renders the prompts from events.
+            if not self._dcfg.controls:
+                return await ack(False, "controls are disabled (set dashboard.controls: true)")
+            node = str(msg.get("node", ""))
+            room = ""
+            sess_obj = self._server._nodes.get(node)
+            if sess_obj is not None:
+                room = sess_obj.room_id
+            err = await self._server.start_calibration(node, room, mode="silent")
+            if err is None:
+                self._tune_subs[connection] = node  # live meter rides along
+            await ack(err is None, err)
+        elif mtype == "calibrate_cancel":
+            if not self._dcfg.controls:
+                return await ack(False, "controls are disabled (set dashboard.controls: true)")
+            node = str(msg.get("node", ""))
+            self._server._end_calib_session(node, force=True)
+            await self._server.stop_node_tuning(node)
+            self._tune_subs.pop(connection, None)
+            await ack(True)
         elif mtype == "announce":
             if not self._dcfg.controls:
                 return await ack(False, "controls are disabled (set dashboard.controls: true)")
@@ -1304,6 +1519,15 @@ class Dashboard:
             version = (str(msg.get("version") or "")).strip() or None
             await ack(True)
             asyncio.create_task(self._do_service_upgrade(connection, service, version))
+        elif mtype == "upgrade_all":
+            # Step 2 of the two-step upgrade: every service + node in one go (the
+            # server upgrades itself via upgrade_server, typically run first).
+            # Sequential; per-item events feed the Settings page's running log.
+            if not self._dcfg.controls:
+                return await ack(False, "controls are disabled (set dashboard.controls: true)")
+            version = (str(msg.get("version") or "")).strip() or None
+            await ack(True)
+            asyncio.create_task(self._do_upgrade_all(connection, version))
         elif mtype == "upgrade_node":
             if not self._dcfg.controls:
                 return await ack(False, "controls are disabled (set dashboard.controls: true)")

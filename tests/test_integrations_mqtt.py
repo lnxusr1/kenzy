@@ -21,6 +21,7 @@ from kenzy.integrations.mqtt import (
     MqttConfig,
     MqttTransport,
     _slug,
+    command_filters,
     discovery_messages,
     parse_command,
     plan_messages,
@@ -320,3 +321,31 @@ async def test_inbound_command_dispatched(monkeypatch: Any) -> None:
         await task
 
     assert got == [Command("trigger", "kitchen-pi")]
+
+
+# --- kenzy/chime (house-wide doorbell) ---------------------------------------
+
+
+def test_chime_topic_subscribed() -> None:
+    assert "kenzy/chime" in command_filters("kenzy")
+
+
+def test_chime_parse_forms() -> None:
+    kw = {"base_topic": "kenzy", "slug_to_node": {}}
+    # Full JSON: caller picks the sound, loop seconds, and rooms.
+    c = parse_command(
+        "kenzy/chime", '{"sound": "gong", "seconds": 8, "rooms": ["kitchen"]}', **kw
+    )
+    assert c == Command("chime", None, {"sound": "gong", "seconds": 8, "rooms": ["kitchen"]})
+    # Bare string = the sound name, played once.
+    c = parse_command("kenzy/chime", "doorbell", **kw)
+    assert c == Command("chime", None, {"sound": "doorbell"})
+    # Empty payload = the default chime, once.
+    c = parse_command("kenzy/chime", "", **kw)
+    assert c == Command("chime", None, {})
+    # A JSON string payload is also just a sound name.
+    c = parse_command("kenzy/chime", '"gong"', **kw)
+    assert c == Command("chime", None, {"sound": "gong"})
+    # Partial dicts parse with None gaps (the server sanitizes).
+    c = parse_command("kenzy/chime", '{"seconds": 5}', **kw)
+    assert c is not None and c.value["sound"] is None and c.value["seconds"] == 5

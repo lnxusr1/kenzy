@@ -33,7 +33,8 @@ full key reference in [Server Configuration](configuration/server.md#dashboard).
 ## Logging in
 
 The default login is **`admin` / `password`**. Change it on the server host with the
-`kenzy-passwd` CLI (it rewrites `dashboard.auth` in `server.yaml`):
+`kenzy-passwd` CLI (it writes `dashboard.auth` into the `server.local.yaml`
+override layer, so the login survives upgrades and deploy config syncs):
 
 ```bash
 kenzy-passwd            # prompts for username + new password
@@ -76,8 +77,9 @@ Open a node's **Configure** page to:
   `configs/nodes/<node_id>.yaml`, applied live if the node is connected and otherwise
   pulled on its next connect (so you can name a node before it's ever booted). Identity
   is the stable `node_id`, so renaming a room never orphans its config.
-- **Set up / calibrate audio** — the **Set up / calibrate audio…** button opens a guided
-  wizard (device → silence → wake word). See [Calibrating a node's audio](#calibrating-a-nodes-audio)
+- **Set up / calibrate audio** — the **Set up / calibrate audio…** button picks the
+  audio device, then launches the guided calibration session (the same one
+  "Hey Kenzy, calibrate" runs). See [Calibrating a node's audio](#calibrating-a-nodes-audio)
   below. The raw audio keys (`audio_device`, sample rates) also remain in the settings
   list for direct editing / pre-seeding an offline node.
 - **Edit per-node settings** — audio device + sample rates, wake-word threshold/VAD,
@@ -97,47 +99,59 @@ Secrets (API keys) are never served to a node and never editable here.
 
 ## Calibrating a node's audio
 
-The right `audio_device`, `silence_rms_threshold`, `wakeword_threshold`, and
-`wakeword_vad_threshold` depend on each room's hardware and noise level, so the defaults
-are rarely ideal. The **Set up / calibrate audio…** button on a node's Configure page
-opens a guided wizard that measures live audio and applies suggested values — no
-trial-and-error YAML edits. (Requires the node connected and `dashboard.controls: true`.)
+The right `audio_device`, `silence_rms_threshold`, `wakeword_threshold`,
+`wakeword_vad_threshold`, and `hardware_aec` depend on each room's hardware and noise
+level, so the defaults are rarely ideal. Calibration is **one guided session** with two
+ways in — and it needs a person standing where they'd normally talk either way:
 
-The wizard opens on an **overview** showing current values; from there run the full
-setup or jump straight to one step to recalibrate it:
+- Say **"Hey Kenzy, calibrate"** in the room: she speaks the instructions.
+- Click **Set up / calibrate audio…** on the node's Configure page: the same session
+  runs with the instructions shown in the dashboard (the node beeps once instead of
+  speaking — no TTS needed). Requires the node connected and `dashboard.controls: true`.
+
+The dashboard flow starts with the one step that needs a human at a screen:
 
 1. **Audio device** — choose the room's mic/speaker from the list the node reported (no
    need to run `kenzy-devices` on the box). Because the device is a hardware key, the
    wizard **saves it, restarts the node, and waits for it to reconnect** before
-   continuing — so the next steps measure the right device. (Click **Keep current** to
-   skip if the device is already right.)
-2. **Silence threshold** — **Start**, keep the room quiet (auto-stops after ~30 s), then
-   **Apply** to set `silence_rms_threshold` just above the measured noise floor. Applies
-   **live**. Too low → it keeps listening into silence; too high → it cuts you off.
-3. **Wake word** — **Start** and say your wake word ("Hey Kenzy") a few times. Two meters
-   show the wake-word and voice-activity (VAD) scores, with your utterances as peaks.
-   **Apply wake** sets `wakeword_threshold` just below your utterances (live). **Queue
-   VAD** stages `wakeword_vad_threshold` (which suppresses near-silence false fires);
-   it's applied — and the node restarted — when you click **Finish**, since the VAD gate
-   is baked into the wake-word model at load.
+   continuing. (Click **Keep current** to skip if the device is already right.)
+2. **Calibration** — one automated pass, watched live in the dashboard:
+   - **Echo check** — the node plays a known signal through its own speaker and
+     measures how much leaks back into the mic. This sets `hardware_aec`
+     automatically (present ⇒ you can interrupt her mid-sentence; absent ⇒
+     half-duplex mode, and intercom/alarms are disabled on that node). An ambiguous
+     reading — or a muted/very quiet speaker — changes nothing.
+   - **Quiet phase** — a few seconds of room silence (a loud noise restarts it once).
+   - **Wake phase** — say "Hey Kenzy" four times from where you'd normally speak. The
+     repetitions double as a sample of your voice level, and
+     `silence_rms_threshold` is **anchored to your voice** (not the quiet floor), so
+     an appliance starting up later stays below it. `wakeword_threshold` and
+     `wakeword_vad_threshold` come from the same pass.
+   - **Apply + verify** — values apply automatically (the node restarts once if the
+     VAD gate changed), then she really listens: say "Hey Kenzy" (then "never mind")
+     to prove the wake word works — if she misses it, the threshold is nudged down,
+     at most twice.
 
-The suggestions assume you follow each step's prompt (quiet for silence, speaking for
-wake word); all measured values are shown, and you can still fine-tune the numbers
-directly in the settings grid afterward.
+The result panel shows every applied value, the echo-cancellation verdict, a
+**noise-to-speech separation** rating (good / marginal / poor), and whether the wake
+word verified live. Anything that couldn't be measured cleanly keeps its previous
+value — and the panel says so. You can still fine-tune the numbers directly in the
+settings grid afterward.
 
 ### Headless calibration (no dashboard)
 
-On a node with no dashboard, run the same measurement locally:
+On a node with no server flow available, run the measurement locally:
 
 ```bash
 kenzy-node --calibrate
 ```
 
-It walks through the two phases and prints the suggested thresholds. Because node config
-is **server-owned** (pulled on connect), the values aren't written locally — apply them
-on the server, either from the dashboard's Calibration panel or by adding them to
-`configs/nodes/<node_id>.yaml` (this node) or `node_defaults` in `server.yaml` (all
-nodes).
+It walks through the same two phases (quiet, then speak) with the same voice-anchored
+math and prints the suggested thresholds — no echo check, since that needs the
+server-driven playback path. Because node config is **server-owned** (pulled on
+connect), the values aren't written locally — apply them on the server, either from
+the dashboard or by adding them to `configs/nodes/<node_id>.yaml` (this node) or
+`node_defaults` in `server.yaml` (all nodes).
 
 ## Configuring backend services
 

@@ -66,6 +66,16 @@ def load_tone(spec: str | None) -> bytes | None:
     return out
 
 
+def tile_pcm(pcm: bytes, seconds: float) -> bytes:
+    """Repeat a cue to AT LEAST ``seconds`` of audio, in whole repeats — a
+    doorbell cut off mid-"dong" sounds broken, so the last ring completes."""
+    if not pcm or seconds <= 0:
+        return pcm
+    need = int(seconds * TARGET_RATE) * 2  # bytes of 24 kHz mono int16
+    reps = max(1, -(-need // len(pcm)))
+    return pcm * reps
+
+
 def _to_mono(frames: bytes, channels: int) -> array.array[int]:
     samples: array.array[int] = array.array("h")
     samples.frombytes(frames)

@@ -110,7 +110,10 @@ def test_write_override_rejects_bad_number(tmp_path):
         dash._write_server_override({"stt.timeout": "not-a-number"})
 
 
-def test_server_config_state_reports_effective_and_overridden(tmp_path):
+def test_server_config_state_separates_override_from_inherited(tmp_path):
+    """Node-editor contract: `value` = the override layer only (None when the key
+    isn't in server.local.yaml); `inherited` = the server.yaml value that applies
+    when unset (the UI's placeholder)."""
     cfg = {
         "dashboard": {"enabled": True, "logs": False},
         "stt": {"url": "http://a/transcribe", "timeout": 60.0},
@@ -121,10 +124,28 @@ def test_server_config_state_reports_effective_and_overridden(tmp_path):
     assert state["writable"] is True
     by_key = {f["key"]: f for f in state["fields"]}
     assert by_key["dashboard.logs"]["overridden"] is True
+    assert by_key["dashboard.logs"]["value"] is True
+    assert by_key["dashboard.logs"]["inherited"] is False  # server.yaml's value
+    # A key set only in server.yaml: not overridden, value empty, inherited filled.
     assert by_key["stt.url"]["overridden"] is False
-    assert by_key["stt.url"]["value"] == "http://a/transcribe"
-    # An unset editable key surfaces as value None (not an error).
+    assert by_key["stt.url"]["value"] is None
+    assert by_key["stt.url"]["inherited"] == "http://a/transcribe"
+    # An entirely unset editable key surfaces as None/None (not an error).
     assert by_key["llm.url"]["value"] is None
+    assert by_key["llm.url"]["inherited"] is None
+
+
+def test_write_override_null_unsets_key(tmp_path):
+    """A null patch value removes the key from server.local.yaml (revert to
+    inherited), pruning empty parents; the last key removes the file."""
+    dash = _dash(tmp_path, {"dashboard": {"enabled": True}})
+    dash._write_server_override({"integrations.mqtt.host": "10.0.0.9", "dashboard.logs": False})
+    dash._write_server_override({"integrations.mqtt.host": None})
+    written = yaml.safe_load((tmp_path / "server.local.yaml").read_text())
+    assert "integrations" not in written  # empty parents pruned
+    assert written == {"dashboard": {"logs": False}}
+    dash._write_server_override({"dashboard.logs": None})
+    assert not (tmp_path / "server.local.yaml").exists()  # empty override = no file
 
 
 def test_server_config_state_not_writable_without_path():

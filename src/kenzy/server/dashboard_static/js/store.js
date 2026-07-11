@@ -29,6 +29,22 @@ export function subscribeSession(fn) {
   return () => _sessionSubs.delete(fn);
 }
 
+// Guided-calibration progress events: {node, event}. The wizard renders them
+// live (works for voice-initiated runs too).
+const _calibSubs = new Set();
+export function subscribeCalibration(fn) {
+  _calibSubs.add(fn);
+  return () => _calibSubs.delete(fn);
+}
+
+// Upgrade progress/result/done events (per-target). While anyone subscribes
+// (the Settings page's running log), toasts are suppressed in their favor.
+const _upgradeSubs = new Set();
+export function subscribeUpgrades(fn) {
+  _upgradeSubs.add(fn);
+  return () => _upgradeSubs.delete(fn);
+}
+
 // Schedule-set change pokes (Scheduled tab re-fetches /api/schedules on each).
 const _scheduleSubs = new Set();
 export function subscribeSchedules(fn) {
@@ -106,15 +122,26 @@ function connectWS() {
         _sessionSubs.forEach((fn) => fn(m.data));
       } else if (m.type === "schedules") {
         _scheduleSubs.forEach((fn) => fn());
-      } else if (m.type === "upgrade_progress") {
-        notify("Upgrade: installing… this can take a few minutes.");
-      } else if (m.type === "upgrade_result") {
-        notify(
-          m.ok
-            ? "Upgrade installed — the server is restarting; the dashboard will reconnect."
-            : "Upgrade failed: " + ((m.output || "").trim().split("\n").pop() || "see server logs"),
-          m.ok ? "ok" : "err",
-        );
+      } else if (m.type === "calibration") {
+        _calibSubs.forEach((fn) => fn(m));
+      } else if (
+        m.type === "upgrade_progress" ||
+        m.type === "upgrade_result" ||
+        m.type === "upgrade_all_done"
+      ) {
+        // The Settings page renders these as a running log when mounted; toasts
+        // are the fallback (e.g. a per-service Upgrade from the Services editor).
+        if (_upgradeSubs.size) _upgradeSubs.forEach((fn) => fn(m));
+        else if (m.type === "upgrade_progress")
+          notify(`Upgrading${m.target ? " " + m.target : ""}… this can take a few minutes.`);
+        else if (m.type === "upgrade_result")
+          notify(
+            m.ok
+              ? `Upgrade${m.target ? " " + m.target : ""}: ` + (m.output || "installed.")
+              : "Upgrade failed: " + ((m.output || "").trim().split("\n").pop() || "see server logs"),
+            m.ok ? "ok" : "err",
+          );
+        else notify(`Upgrade finished: ${m.summary || "done"}.`, m.ok ? "ok" : "err");
       }
     } catch {
       /* ignore */

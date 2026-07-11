@@ -42,7 +42,7 @@ from websockets.asyncio.server import ServerConnection
 from websockets.datastructures import Headers
 from websockets.http11 import Request, Response
 
-from kenzy import kenzy_version, protocol
+from kenzy import calibration, kenzy_version, protocol
 from kenzy.config import SERVICES
 from kenzy.serviceauth import check_bearer
 from kenzy.speaker import DEFAULT_ENROLL_PROMPTS
@@ -95,6 +95,22 @@ _SAFE_ID_RE = re.compile(r"[A-Za-z0-9._-]+")
 _ENV_NAME_RE = re.compile(r"^[A-Z][A-Z0-9_]{0,63}$")
 _ANNOUNCE_VOICE_PROMPT = "Read this aloud as a clear, calm public announcement."
 _INTERCOM_VOICE_PROMPT = "Read this aloud as a brief, friendly spoken notification."
+_CALIB_VOICE_PROMPT = "Calm, clear, unhurried — you are guiding someone through a setup step."
+_CALIB_SAY_MARGIN = 0.9  # playback outlasts streaming by roughly this much
+_CALIB_PEAK_REFRACTORY_S = 1.5  # min gap between counted wake attempts
+_CALIB_WAKE_WINDOW_S = 20.0  # wake phase cap (ends early at WAKE_TARGET attempts)
+_CALIB_WAKE_EXTEND_S = 12.0  # one extension when the phase gate fails
+_CALIB_PROBE_LEAD_S = 0.4  # skip the probe's first moments (playback lags streaming)
+_CALIB_PROBE_TAIL_S = 0.3  # ...and its tail, so only mid-playback frames are tagged
+_CALIB_PROBE_MIN_S = 1.0  # a shorter probe signal than this can't be tagged reliably
+_CALIB_PROBE_BEEP_S = 2.0  # silent-mode probe: the beep is tiled to this length
+_CALIB_VOLUME_FLOOR = 20  # below this volume a silent speaker fakes perfect AEC
+_CALIB_VERIFY_S = 12.0  # how long Verify waits for a real wake before nudging
+_CALIB_MAX_NUDGES = 2  # bounded: then be honest instead of oscillating
+_CALIB_RECONNECT_S = 35.0  # post-restart reconnect wait
+_CALIB_CLOSE_MARGIN_S = 2.5  # her verify-exchange reply plays out after streaming ends
+_CHIME_MAX_S = 30.0  # loop cap: a buggy automation must not ring the house forever
+_CHIME_DEFAULT = "doorbell.wav"
 # How long to wait for the receiver's spoken consent before declining (no answer).
 _CALL_TIMEOUT_SEC = 25.0
 # Voice enrollment: one sample per configured prompt (see _enroll_prompts), min bytes
@@ -304,6 +320,7 @@ class AudioServer:
         # Observers notified when the node registry/state changes (the dashboard
         # registers one for live push). Empty by default ⇒ zero overhead.
         self._state_listeners: list[Callable[[], None]] = []
+        self._calib_listeners: list[Callable[[str, dict[str, Any]], None]] = []
         self._metrics_listeners: list[Callable[[], None]] = []
         # node_id → (override mtime, parsed override) — see _effective_node_config.
         self._node_cfg_cache: dict[str, tuple[float | None, dict[str, Any]]] = {}
@@ -355,6 +372,18 @@ class AudioServer:
         """Register a callback fired with ``(node_id, sample)`` for each tune sample."""
         self._tune_listeners.append(fn)
 
+    def add_calib_listener(self, fn: Callable[[str, dict[str, Any]], None]) -> None:
+        """Register a callback fired with ``(node_id, event)`` for each guided-
+        calibration progress event (the dashboard's live view)."""
+        self._calib_listeners.append(fn)
+
+    def _notify_calib(self, node_id: str, event: dict[str, Any]) -> None:
+        for fn in self._calib_listeners:
+            try:
+                fn(node_id, event)
+            except Exception:
+                log.debug("calibration listener error", exc_info=True)
+
     def add_session_listener(self, fn: Callable[[dict[str, Any]], None]) -> None:
         """Register a callback fired with a completed-pipeline record (observability)."""
         self._session_listeners.append(fn)
@@ -372,6 +401,15 @@ class AudioServer:
                 fn(node_id, sample)
             except Exception:
                 log.debug("tune listener error", exc_info=True)
+
+    async def start_calibration(
+        self, node_id: str, room: str, *, mode: str = "spoken"
+    ) -> str | None:
+        """Guided calibration (implemented by TranscribingServer)."""
+        return "calibration not supported by this server"
+
+    def _end_calib_session(self, node_id: str, *, force: bool = False) -> None:
+        """Base no-op (TranscribingServer overrides)."""
 
     async def start_node_tuning(self, node_id: str, seconds: float = 20.0) -> bool:
         """Ask a connected node to begin a bounded calibration window."""
@@ -559,13 +597,17 @@ class AudioServer:
     # Central service config store (stt/tts/llm/speaker pull this at boot)
     # ------------------------------------------------------------------
 
-    def _effective_service_config(self, service: str) -> dict[str, Any]:
+    def _effective_service_config(
+        self, service: str, *, include_override: bool = True
+    ) -> dict[str, Any]:
         """Effective config for a backend service = packaged default ← stored override.
 
         The stored override lives at ``configs/services/<service>.yaml`` (server-
         owned) and is deep-merged over the packaged default. Secret-like keys are
         stripped, so secrets are never stored or served — they stay in each host's
-        environment/``.env``.
+        environment/``.env``. ``include_override=False`` returns just the inherited
+        layer (packaged default + auto-wired peers) — what applies when a key is
+        NOT overridden; the dashboard editor shows it as field placeholders.
         """
         import yaml
 
@@ -578,7 +620,7 @@ class AudioServer:
             if isinstance(loaded, dict):
                 base = loaded
         override = kenzy_data_root() / "configs" / "services" / f"{service}.yaml"
-        if override.is_file():
+        if include_override and override.is_file():
             try:
                 data = yaml.safe_load(override.read_text()) or {}
                 if isinstance(data, dict):
@@ -1553,6 +1595,19 @@ class TranscribingServer(AudioServer):
         # from the dashboard's Services tab). Active sessions keyed by node_id
         # (prompt → capture → POST /enroll loop).
         self._enroll_sessions: dict[str, dict[str, Any]] = {}
+        # Voice-guided calibration ("Hey Kenzy, calibrate") — active sessions keyed
+        # by node_id; tune samples are routed to them via the always-registered
+        # listener below (a dict miss when idle — negligible overhead).
+        self._calib_sessions: dict[str, dict[str, Any]] = {}
+        self.add_tune_listener(self._on_calib_sample)
+        # Named chimes an MQTT automation may play (kenzy/chime): bundled sound
+        # names work out of the box; integrations.mqtt.chimes maps extra names to
+        # server-host WAV paths. Only these names — never caller-supplied paths.
+        mqtt_cfg = (cfg.get("integrations", {}) or {}).get("mqtt", {}) or {}
+        chimes = mqtt_cfg.get("chimes") or {}
+        self._chimes: dict[str, str] = (
+            {str(k): str(v) for k, v in chimes.items()} if isinstance(chimes, dict) else {}
+        )
         if self._speaker_url:
             log.info(
                 "Speaker service: %s (timeout=%.0fs)", self._speaker_url, self._speaker_timeout
@@ -1570,6 +1625,7 @@ class TranscribingServer(AudioServer):
         self._cancel_stt(session.node_id)
         self._tts_active.discard(session.node_id)
         self._buffers[session.node_id] = bytearray()
+        self._calib_saw_wake(session.node_id)  # an idle wake opens a session
 
     async def on_audio_frame(self, session: NodeSession, data: bytes) -> None:
         buf = self._buffers.get(session.node_id)
@@ -1593,6 +1649,7 @@ class TranscribingServer(AudioServer):
 
     async def on_wakeword(self, session: NodeSession, model: str, score: float) -> None:
         self._cancel_stt(session.node_id)
+        self._calib_saw_wake(session.node_id)  # mid-stream/TTS wake counts too
         # The wake word acknowledges a ringing alarm (mirrors the intercom hang-up).
         self._stop_ringing(session.node_id)
         # If the node is not currently streaming audio to us it may be playing
@@ -1606,15 +1663,21 @@ class TranscribingServer(AudioServer):
     # ------------------------------------------------------------------
 
     async def send_tts_start(
-        self, node_id: str, session_id: str, sample_rate: int = 22050, channels: int = 1
+        self,
+        node_id: str,
+        session_id: str,
+        sample_rate: int = 22050,
+        channels: int = 1,
+        alert: bool = False,
     ) -> bool:
-        """Tell a node to enter TTS mode and begin accepting audio frames."""
+        """Tell a node to enter TTS mode and begin accepting audio frames.
+        ``alert`` audio (doorbell chimes) plays at the muted floor on muted nodes."""
         async with self._lock:
             session = self._nodes.get(node_id)
         if session is None:
             return False
         try:
-            await session.ws.send(protocol.tts_start(session_id, sample_rate, channels))
+            await session.ws.send(protocol.tts_start(session_id, sample_rate, channels, alert))
             self._tts_active.add(node_id)
             return True
         except websockets.exceptions.ConnectionClosed:
@@ -1953,6 +2016,10 @@ class TranscribingServer(AudioServer):
                 await self.start_enrollment(
                     source_node_id, source_room, str(action.get("name", ""))
                 )
+            elif atype == "start_calibration":
+                # Voice-guided audio calibration on the asking node (spawns its own
+                # task — the guided flow runs ~30-60s and must not block dispatch).
+                await self.start_calibration(source_node_id, source_room)
             elif atype == "set_volume":
                 # Volume/mute change targeting the asking node (room context the
                 # server already holds — no room resolution needed).
@@ -2384,6 +2451,7 @@ class TranscribingServer(AudioServer):
 
     def _cleanup_on_disconnect(self, node_id: str) -> None:
         self._end_enroll_session(node_id)
+        self._end_calib_session(node_id)
         self._followup_turns.pop(node_id, None)
         task = self._ring_tasks.pop(node_id, None)
         if task is not None:
@@ -2422,6 +2490,469 @@ class TranscribingServer(AudioServer):
         except Exception as exc:
             log.warning("enroll call failed: %s", exc)
             return False
+
+    # ------------------------------------------------------------------
+    # Guided calibration — ONE server-driven session behind two entry points:
+    # "Hey Kenzy, calibrate" (mode="spoken": prompts via TTS, and the intro
+    # sentence doubles as the AEC probe) and the dashboard wizard
+    # (mode="silent": the browser renders the prompts from calibration events;
+    # a beep is the probe — no TTS involved). Same phases, gates, and math
+    # (kenzy.calibration) either way. Device selection stays dashboard-only by
+    # design: a wrong device can't hear voice commands anyway.
+    # ------------------------------------------------------------------
+
+    def _calib_saw_wake(self, node_id: str) -> None:
+        """Resolve a pending calibration Verify: a real wake word was heard."""
+        sess = self._calib_sessions.get(node_id)
+        if sess is not None:
+            ev = sess.get("verify")
+            if ev is not None and not ev.is_set():
+                ev.set()
+
+    def _on_calib_sample(self, node_id: str, sample: dict[str, Any]) -> None:
+        """Tune-listener: route per-frame measurements into an active session."""
+        sess = self._calib_sessions.get(node_id)
+        if sess is None or sample.get("stopped"):
+            return
+        sess["samples"] += 1
+        phase = sess.get("phase")
+        rms = float(sample.get("rms") or 0.0)
+        if phase == "echo":  # mic residual while the node plays the probe signal
+            sess["echo"].append(rms)
+        elif phase == "quiet":
+            sess["quiet"].append(rms)
+        elif phase == "wake":
+            wake = float(sample.get("wake") or 0.0)
+            sess["wake"].append(wake)
+            sess["vad"].append(float(sample.get("vad") or 0.0))
+            if rms > sess["gate"]:
+                sess["speech"].append(rms)
+            now = time.monotonic()
+            if wake >= calibration.WAKE_PEAK and now - sess["last_peak"] > _CALIB_PEAK_REFRACTORY_S:
+                sess["last_peak"] = now
+                sess["peaks"] += 1
+                self._calib_emit(node_id, sess, stage="wake_heard", count=sess["peaks"])
+
+    def _calib_emit(self, node_id: str, sess: dict[str, Any], **event: Any) -> None:
+        """Emit one calibration progress event (the dashboard renders these live —
+        including for voice-initiated runs)."""
+        self._notify_calib(node_id, {"mode": sess["mode"], **event})
+
+    def _end_calib_session(self, node_id: str, *, force: bool = False) -> None:
+        sess = self._calib_sessions.get(node_id)
+        if sess is None:
+            return
+        if sess.get("expect_restart") and not force:
+            return  # the node re-exec mid-flow is planned — the session survives it
+        self._calib_sessions.pop(node_id, None)
+        task = sess.get("task")
+        if task is not None and task is not asyncio.current_task():
+            task.cancel()
+
+    async def start_calibration(
+        self, node_id: str, room: str, *, mode: str = "spoken"
+    ) -> str | None:
+        """Begin a guided calibration session; returns an error string or None."""
+        if node_id not in self._nodes:
+            return "node not connected"
+        if node_id in self._calib_sessions:
+            return "calibration already running"
+        if node_id in self._enroll_sessions:
+            return "enrollment in progress on this node"
+        sess: dict[str, Any] = {
+            "quiet": [],
+            "wake": [],
+            "vad": [],
+            "speech": [],
+            "echo": [],
+            "samples": 0,
+            "phase": None,
+            "gate": 0.0,
+            "peaks": 0,
+            "last_peak": 0.0,
+            "room": room,
+            "mode": mode,
+        }
+        self._calib_sessions[node_id] = sess
+        sess["task"] = asyncio.create_task(
+            self._run_calibration(node_id, room), name=f"calibrate-{node_id}"
+        )
+        return None
+
+    async def _calib_say(self, node_id: str, room: str, text: str) -> float | None:
+        """Speak a prompt and wait out its PLAYBACK (streaming completes before the
+        node finishes playing — the next phase must not start mid-prompt). Returns
+        the spoken duration, or None when synthesis failed (a spoken flow can't
+        run without a voice)."""
+        pcm = await self._synthesize(text, _CALIB_VOICE_PROMPT)
+        if not pcm:
+            log.warning("[%s] calibration prompt TTS failed", node_id)
+            return None
+        await self._stream_pcm(node_id, pcm)
+        duration = len(pcm) / 2 / 24000
+        await asyncio.sleep(duration + _CALIB_SAY_MARGIN)
+        return duration
+
+    def _calib_beep(self) -> bytes | None:
+        """The silent-mode probe signal: a bundled chime tiled to a deterministic
+        couple of seconds. No TTS involved, works on a fully-local install."""
+        from kenzy.server import tones
+
+        pcm = tones.load_tone("ready.wav")
+        if not pcm:
+            return None
+        need = int(_CALIB_PROBE_BEEP_S * 24000) * 2  # bytes of 24 kHz mono int16
+        reps = -(-need // len(pcm))
+        return (pcm * reps)[:need]
+
+    def _calib_probe_allowed(self, node_id: str) -> bool:
+        """A muted or near-silent speaker looks exactly like perfect AEC — skip
+        the probe (and leave the flag alone) rather than misclassify."""
+        try:
+            if bool(self._transient_node_cfg.get(node_id, {}).get("muted")):
+                return False
+            vol = self._effective_node_config(node_id).get("volume", 100)
+            return int(vol) >= _CALIB_VOLUME_FLOOR
+        except Exception:
+            return True
+
+    async def _calib_open_window(self, node_id: str, seconds: float) -> bool:
+        """Open one tune window and wait until samples actually flow. The node
+        accepts tune_start only when idle — right after a prompt it may still be
+        finishing TTS teardown, so re-request until the first sample arrives."""
+        sess = self._calib_sessions.get(node_id)
+        if sess is None:
+            return False
+        loop = asyncio.get_running_loop()
+        for _ in range(3):
+            if not await self.start_node_tuning(node_id, seconds):
+                break
+            baseline = sess["samples"]
+            t0 = loop.time()
+            while loop.time() - t0 < 2.5:
+                if sess["samples"] > baseline:
+                    return True
+                await asyncio.sleep(0.15)
+            await asyncio.sleep(0.7)
+        return False
+
+    def _calib_apply(self, node_id: str, patch: dict[str, Any]) -> None:
+        """Merge calibration results into the node's override (other keys kept)."""
+        existing = {
+            k: v
+            for k, v in self.read_node_override(node_id).items()
+            if k in _ALLOWED_OVERRIDE_KEYS
+        }
+        self.write_node_override(node_id, {**existing, **patch})
+
+    async def _calib_wait_reconnect(self, node_id: str) -> bool:
+        """Wait out the node's planned re-exec: gone, then back."""
+        loop = asyncio.get_running_loop()
+        saw_drop = False
+        t0 = loop.time()
+        while loop.time() - t0 < _CALIB_RECONNECT_S:
+            connected = node_id in self._nodes
+            if not connected:
+                saw_drop = True
+            elif saw_drop:
+                return True
+            await asyncio.sleep(0.3)
+        return False
+
+    async def _calib_wait_exchange(self, node_id: str) -> None:
+        """Wait out the full user↔Kenzy exchange the verify wake started: the
+        capture session (``streaming``), the pipeline task (``_stt_tasks``), and
+        the reply's TTS streaming (``_tts_active``) — plus a playback margin,
+        since the node keeps playing after streaming to it ends."""
+        loop = asyncio.get_running_loop()
+        t0 = loop.time()
+        await asyncio.sleep(min(0.5, _CALIB_CLOSE_MARGIN_S))  # let the pipeline register
+        while loop.time() - t0 < 30.0:
+            s = self._nodes.get(node_id)
+            busy = (
+                (s is not None and s.streaming)
+                or node_id in self._stt_tasks
+                or node_id in self._tts_active
+            )
+            if not busy:
+                break
+            await asyncio.sleep(0.3)
+        await asyncio.sleep(_CALIB_CLOSE_MARGIN_S)
+
+    async def _calib_wake_phase(self, node_id: str, sess: dict[str, Any], seconds: float) -> bool:
+        """One wake-phase window: ends early once enough attempts were heard."""
+        if not await self._calib_open_window(node_id, seconds + 8):
+            return False
+        sess["phase"] = "wake"
+        self._calib_emit(
+            node_id, sess, stage="wake", seconds=seconds, target=calibration.WAKE_TARGET
+        )
+        loop = asyncio.get_running_loop()
+        end = loop.time() + seconds
+        while loop.time() < end:
+            if sess["peaks"] >= calibration.WAKE_TARGET:
+                await asyncio.sleep(0.8)  # tail: let the last utterance's frames land
+                break
+            await asyncio.sleep(0.2)
+        sess["phase"] = None
+        await self.stop_node_tuning(node_id)
+        return True
+
+    async def _run_calibration(self, node_id: str, room: str) -> None:
+        sess = self._calib_sessions[node_id]
+        mode = sess["mode"]
+
+        async def say(text: str) -> bool:
+            """A prompt: spoken via TTS in spoken mode, event-only in silent mode
+            (the dashboard renders it). Emitted in both modes so the dashboard
+            can watch a voice-initiated run too."""
+            self._calib_emit(node_id, sess, stage="prompt", text=text)
+            if mode != "spoken":
+                return True
+            return await self._calib_say(node_id, room, text) is not None
+
+        def fail(summary: str) -> None:
+            self._calib_emit(node_id, sess, stage="done", ok=False, summary=summary)
+
+        try:
+            async with asyncio.timeout(300):
+                self._calib_emit(node_id, sess, stage="start")
+                intro = (
+                    "Let's calibrate my hearing for this room. "
+                    "First, stay quiet for about six seconds."
+                )
+                # One window spans the AEC probe and the quiet phase.
+                if not await self._calib_open_window(node_id, 60):
+                    await say("I couldn't take measurements just now — please try again later.")
+                    fail("no measurements — node busy or telemetry unavailable")
+                    return
+
+                # AEC probe: play a known signal through the node's own speaker and
+                # read the mic residual. Spoken mode: the intro sentence IS the
+                # signal. Silent mode: a beep (the browser shows the intro text).
+                probe_ok = self._calib_probe_allowed(node_id)
+                self._calib_emit(node_id, sess, stage="prompt", text=intro)
+                pcm: bytes | None
+                if mode == "spoken":
+                    pcm = await self._synthesize(intro, _CALIB_VOICE_PROMPT)
+                    if not pcm:
+                        log.warning("[%s] calibration prompt TTS failed", node_id)
+                        fail("TTS unavailable for spoken calibration")
+                        return
+                else:
+                    pcm = self._calib_beep() if probe_ok else None
+                if pcm is not None:
+                    duration = len(pcm) / 2 / 24000
+                    await self._stream_pcm(node_id, pcm)
+                    if probe_ok and duration >= _CALIB_PROBE_MIN_S:
+                        # Tag only mid-playback frames — playback lags streaming.
+                        await asyncio.sleep(_CALIB_PROBE_LEAD_S)
+                        sess["phase"] = "echo"
+                        await asyncio.sleep(
+                            max(0.0, duration - _CALIB_PROBE_LEAD_S - _CALIB_PROBE_TAIL_S)
+                        )
+                        sess["phase"] = None
+                        await asyncio.sleep(_CALIB_PROBE_TAIL_S + _CALIB_SAY_MARGIN)
+                    else:
+                        await asyncio.sleep(duration + _CALIB_SAY_MARGIN)
+                if not probe_ok:
+                    self._calib_emit(
+                        node_id,
+                        sess,
+                        stage="note",
+                        text="Muted or very low volume — skipping the echo check.",
+                    )
+
+                # Phase 1: the quiet floor (one retry if a burst poisons it).
+                for attempt in (1, 2):
+                    sess["quiet"].clear()
+                    sess["phase"] = "quiet"
+                    self._calib_emit(
+                        node_id, sess, stage="quiet", seconds=calibration.QUIET_SECONDS
+                    )
+                    await asyncio.sleep(calibration.QUIET_SECONDS)
+                    sess["phase"] = None
+                    if calibration.quiet_phase_bursty(sess["quiet"]) and attempt == 1:
+                        if not await say(
+                            "I heard a noise — let's try that once more. Quiet, please."
+                        ):
+                            fail("TTS failed mid-flow")
+                            return
+                        continue
+                    break
+                await self.stop_node_tuning(node_id)
+                if not sess["quiet"]:
+                    await say("I couldn't take measurements just now — please try again later.")
+                    fail("no samples in the quiet phase")
+                    return
+                sess["gate"] = calibration.speech_gate(sess["quiet"])
+
+                # AEC verdict — applied IMMEDIATELY, so the wake phase, verify, and
+                # everything after run under the correct duplex semantics.
+                aec = calibration.aec_verdict(sess["quiet"], sess["echo"])
+                current_aec = bool(self._effective_node_config(node_id).get("hardware_aec", True))
+                if aec is not None and aec != current_aec:
+                    self._calib_apply(node_id, {"hardware_aec": aec})
+                    await self.push_config(node_id)
+                    self._calib_emit(node_id, sess, stage="aec", aec=aec, changed=True)
+                    log.info("[%s] AEC probe: hardware_aec %s -> %s", node_id, current_aec, aec)
+                    consequence = (
+                        "By the way — I can hear you even while I'm talking, so feel "
+                        "free to interrupt me mid-sentence."
+                        if aec
+                        else "By the way — I can't hear anything while I'm talking, so "
+                        "wait for me to finish speaking before you reply."
+                    )
+                    if not await say(consequence):
+                        fail("TTS failed mid-flow")
+                        return
+                elif aec is not None:
+                    self._calib_emit(node_id, sess, stage="aec", aec=aec, changed=False)
+
+                # Phase 2: the wake word ×N doubles as the speech-level sample.
+                if not await say(
+                    f"Now say 'Hey Kenzy' {calibration.WAKE_TARGET} times, with a "
+                    "short pause between each, from where you'd normally speak."
+                ):
+                    fail("TTS failed mid-flow")
+                    return
+                await self._calib_wake_phase(node_id, sess, _CALIB_WAKE_WINDOW_S)
+                if sess["peaks"] < 2 or len(sess["speech"]) < calibration.MIN_SPEECH_FRAMES:
+                    if not await say(
+                        "I didn't quite hear that — a few more times, a little louder."
+                    ):
+                        fail("TTS failed mid-flow")
+                        return
+                    await self._calib_wake_phase(node_id, sess, _CALIB_WAKE_EXTEND_S)
+
+                # Compute (shared math) and apply what separated cleanly.
+                enough = len(sess["speech"]) >= calibration.MIN_SPEECH_FRAMES
+                speech = sess["speech"] if enough else []
+                sil = calibration.suggest_silence(sess["quiet"], speech)
+                wk = calibration.suggest_wake(sess["wake"])
+                vd = calibration.suggest_vad(sess["vad"])
+                verdict = calibration.separation_verdict(sess["quiet"], speech)
+                patch: dict[str, Any] = {}
+                kept: list[str] = []
+                for key, value in (
+                    ("silence_rms_threshold", sil),
+                    ("wakeword_threshold", wk),
+                    ("wakeword_vad_threshold", vd),
+                ):
+                    if value is not None:
+                        patch[key] = value
+                    else:
+                        kept.append(key)
+                self._calib_emit(
+                    node_id, sess, stage="applied", patch=patch, kept=kept, verdict=verdict
+                )
+                if not patch:
+                    msg = (
+                        "I couldn't get a clean measurement, "
+                        "so I've left your settings unchanged."
+                    )
+                    if verdict == "poor":
+                        msg += (
+                            " The room noise and your voice sound too similar from here — "
+                            "moving my microphone closer to where you talk would help."
+                        )
+                    await say(msg)
+                    fail("nothing safe to apply")
+                    return
+                self._calib_apply(node_id, patch)
+                await self.push_config(node_id)  # live keys apply immediately
+                log.info(
+                    "[%s] calibration applied: %s (separation=%s)", node_id, patch, verdict
+                )
+                summary = "I've tuned my hearing to this room."
+                if verdict == "marginal":
+                    summary += " The room is a bit noisy, but it should work."
+                elif verdict == "poor":
+                    summary += " Fair warning: this room is loud, so I may still mishear."
+                if not await say(summary):
+                    fail("TTS failed mid-flow")
+                    return
+
+                # The VAD gate is a boot key — restart to apply, then verify live.
+                if "wakeword_vad_threshold" in patch:
+                    if not await say(
+                        "I'll restart my listener to finish up — give me a few seconds."
+                    ):
+                        fail("TTS failed mid-flow")
+                        return
+                    sess["expect_restart"] = True
+                    self._calib_emit(node_id, sess, stage="restarting")
+                    await self.restart_node(node_id)
+                    reconnected = await self._calib_wait_reconnect(node_id)
+                    sess["expect_restart"] = False
+                    if not reconnected:
+                        fail("node did not reconnect after restart")
+                        return
+                    await asyncio.sleep(1.0)  # let audio init settle
+
+                # Verify: a REAL wake-word round trip, with bounded auto-nudges.
+                # (The "never mind" closes the session she opens gracefully.)
+                verify_ok = False
+                nudges = 0
+                sess["verify"] = asyncio.Event()
+                if not await say("Let's test it — say 'Hey Kenzy', then 'never mind'."):
+                    fail("TTS failed mid-flow")
+                    return
+                while True:
+                    self._calib_emit(node_id, sess, stage="verify", nudges=nudges)
+                    try:
+                        await asyncio.wait_for(sess["verify"].wait(), _CALIB_VERIFY_S)
+                        verify_ok = True
+                        break
+                    except TimeoutError:
+                        cur = self._effective_node_config(node_id).get("wakeword_threshold")
+                        if nudges >= _CALIB_MAX_NUDGES or not isinstance(cur, (int, float)):
+                            break
+                        lower = round(max(0.2, float(cur) - 0.07), 2)
+                        self._calib_apply(node_id, {"wakeword_threshold": lower})
+                        await self.push_config(node_id)
+                        nudges += 1
+                        sess["verify"] = asyncio.Event()
+                        self._calib_emit(
+                            node_id,
+                            sess,
+                            stage="note",
+                            text=f"No wake heard — lowered the threshold to {lower}.",
+                        )
+                        if not await say("I didn't catch it — once more?"):
+                            fail("TTS failed mid-flow")
+                            return
+                sess.pop("verify", None)
+                self._calib_emit(node_id, sess, stage="verify_result", ok=verify_ok, nudges=nudges)
+                if verify_ok:
+                    # The verify wake opened a REAL session, and the user's
+                    # "never mind" runs the whole pipeline — she answers it.
+                    # Wait out that entire exchange (capture → pipeline → her
+                    # reply's playback) before the closing line, or the two
+                    # replies fight over the speaker.
+                    await self._calib_wait_exchange(node_id)
+                    await say("Perfect — you're all set.")
+                else:
+                    await say(
+                        "I couldn't hear the wake word — check the microphone placement, "
+                        "or run the audio setup from the dashboard."
+                    )
+                self._calib_emit(
+                    node_id, sess, stage="done", ok=True, verify=verify_ok, verdict=verdict
+                )
+        except TimeoutError:
+            log.info("[%s] calibration timed out", node_id)
+            self._calib_emit(node_id, sess, stage="done", ok=False, summary="timed out")
+            await self.stop_node_tuning(node_id)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.warning("[%s] calibration failed", node_id, exc_info=True)
+            self._calib_emit(node_id, sess, stage="done", ok=False, summary="internal error")
+        finally:
+            sess["task"] = None  # don't self-cancel from _end_calib_session
+            sess["expect_restart"] = False
+            self._calib_sessions.pop(node_id, None)
 
     async def start_intercom(self, caller_id: str, caller_room: str, target_room: str) -> None:
         """Ring a target room for an intercom call (consent required before bridging)."""
@@ -2597,14 +3128,68 @@ class TranscribingServer(AudioServer):
             log.error("announce TTS synth failed: %s", exc)
             return None
 
-    async def _stream_pcm(self, node_id: str, pcm: bytes) -> None:
+    async def _stream_pcm(self, node_id: str, pcm: bytes, *, alert: bool = False) -> None:
         sid = str(uuid.uuid4())
-        if not await self.send_tts_start(node_id, sid, sample_rate=24000, channels=1):
+        if not await self.send_tts_start(node_id, sid, sample_rate=24000, channels=1, alert=alert):
             return
         for i in range(0, len(pcm), self._tts_chunk_size):
             if not await self.send_tts_frame(node_id, pcm[i : i + self._tts_chunk_size]):
                 return
         await self.send_tts_end(node_id, sid)
+
+    def _chime_spec(self, name: str) -> str | None:
+        """Resolve a chime NAME to a tone spec: a configured ``chimes:`` entry, or
+        a bare bundled filename. Anything path-like is refused — MQTT callers
+        never get to point at arbitrary files on the server host."""
+        name = name.strip()
+        if not name:
+            return None
+        if name in self._chimes:
+            return self._chimes[name]
+        from pathlib import PurePath
+
+        if PurePath(name).name == name and not name.startswith("."):
+            return name  # bare filename → tones resolves it in the bundled dir
+        return None
+
+    async def play_chime(
+        self, sound: str | None = None, seconds: float = 0.0, rooms: list[str] | None = None
+    ) -> int:
+        """Play a named chime on every (or selected) node — the instant, TTS-free
+        sibling of :meth:`announce` (the house-wide doorbell). ``seconds`` loops
+        the cue in whole repeats up to a cap. Alert audio: a muted node still
+        plays it at the audible floor."""
+        from kenzy.server import tones
+
+        spec = self._chime_spec(str(sound or "") or _CHIME_DEFAULT)
+        if spec is None:
+            log.warning("chime refused: %r is not a configured or bundled sound name", sound)
+            return 0
+        pcm = tones.load_tone(spec)
+        if not pcm:
+            return 0
+        try:
+            loop_s = min(float(seconds or 0), _CHIME_MAX_S)
+        except (TypeError, ValueError):
+            loop_s = 0.0
+        if loop_s > 0:
+            pcm = tones.tile_pcm(pcm, loop_s)
+        async with self._lock:
+            if rooms:
+                wanted = {str(r).strip().lower() for r in rooms}
+                targets = [
+                    nid for nid, s in self._nodes.items() if s.room_id.lower() in wanted
+                ]
+            else:
+                targets = list(self._nodes)
+        if not targets:
+            return 0
+        await asyncio.gather(
+            *(self._stream_pcm(nid, pcm, alert=True) for nid in targets),
+            return_exceptions=True,
+        )
+        log.info("Chime %r to %d node(s) (%.1fs)", spec, len(targets), len(pcm) / 2 / 24000)
+        return len(targets)
 
     async def announce(self, text: str, rooms: list[str] | None = None) -> int:
         text = text.strip()
@@ -2690,6 +3275,14 @@ def main() -> None:
                 await server.set_node_muted(cmd.node_id, bool(cmd.value))
             elif cmd.action == "announce" and cmd.value:
                 await server.announce(str(cmd.value))
+            elif cmd.action == "chime":
+                v = cmd.value if isinstance(cmd.value, dict) else {}
+                rooms = v.get("rooms")
+                await server.play_chime(
+                    v.get("sound"),
+                    v.get("seconds") or 0,
+                    [str(r) for r in rooms] if isinstance(rooms, list) else None,
+                )
 
         _hub = IntegrationHub()
         _dispatch = _dispatch_command if _mcfg.commands else None

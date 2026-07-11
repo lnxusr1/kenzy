@@ -187,13 +187,13 @@ export function ConfigView({ node, onBack }) {
     if (opts) {
       input = html`<select disabled=${!info.controls}
         onChange=${(e) => setKey(k, e.target.value === "" ? undefined : e.target.value)}>
-        <option value="" selected=${!set}>inherit</option>
+        <option value="" selected=${!set}>inherit (${fmt(effDefault)})</option>
         ${opts.map((o) => html`<option value=${o} selected=${cur === o}>${o}</option>`)}
       </select>`;
     } else if (t === "bool") {
       input = html`<select disabled=${!info.controls}
         onChange=${(e) => setKey(k, e.target.value === "" ? undefined : e.target.value === "true")}>
-        <option value="" selected=${!set}>inherit</option>
+        <option value="" selected=${!set}>inherit (${fmt(effDefault)})</option>
         <option value="true" selected=${cur === true}>on</option>
         <option value="false" selected=${cur === false}>off</option>
       </select>`;
@@ -241,7 +241,6 @@ export function ConfigView({ node, onBack }) {
                 title=${restart
                   ? "Audio hardware key — applied on the node's next boot or via Restart"
                   : "Applied live on save"}>${restart ? "restart" : "live"}</span>
-          <span class="micro">${set ? "override" : `inherits ${fmt(effDefault)}`}</span>
           ${nodeHelp(k) ? html`<span class="cfg-help">${nodeHelp(k)}</span>` : null}</div>
         <div class="cfg-input">${input}</div>
       </div>`;
@@ -337,6 +336,7 @@ export function ConfigView({ node, onBack }) {
 function fmt(v) {
   if (v === undefined || v === null) return "default";
   if (Array.isArray(v)) return v.length ? v.join(", ") : "bundled";
+  if (typeof v === "boolean") return v ? "on" : "off";
   return String(v);
 }
 

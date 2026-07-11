@@ -74,8 +74,9 @@ node_defaults:
   # same server-side/live semantics as the tones above. Empty = stay silent.
   sound_error: "error.wav"
   # Whether this room's speaker does acoustic echo cancellation (the published
-  # hardware guidance recommends AEC speakerphones — declared here because it
-  # can't be detected). Set false for a non-AEC speaker and the room becomes
+  # hardware guidance recommends AEC speakerphones). Calibration DETECTS and
+  # sets this per node automatically (it plays a known sound and measures the
+  # echo); set it manually only to override. False = non-AEC speaker: the room becomes
   # half-duplex: wake words are ignored while Kenzy is making sound, intercom is
   # unavailable, and alarms deliver once instead of ringing until acknowledged.
   hardware_aec: true
@@ -134,6 +135,11 @@ integrations:
     #   KENZY_MQTT_USERNAME / KENZY_MQTT_PASSWORD
     base_topic: "kenzy"
     discovery_prefix: "homeassistant"   # must match HA's MQTT discovery prefix
+    # Extra named chimes automations may play via the kenzy/chime topic (values
+    # are WAV paths on THIS host; bundled sound names like doorbell.wav work
+    # without any entry here):
+    # chimes:
+    #   gong: "/srv/sounds/gong.wav"
     # Accept inbound commands from HA so automations can drive Kenzy. Adds per-node
     # Trigger + Stop buttons and a Mute switch (reflects voice/dashboard mutes too),
     # and these command topics you can also publish to from automations:
@@ -141,5 +147,7 @@ integrations:
     #   kenzy/<node_id>/volume    (payload 0–100)
     #   kenzy/<node_id>/mute      (payload ON/OFF)
     #   kenzy/announce            (payload = text spoken in every room)
+    #   kenzy/chime               (a chime, instant/no-TTS: empty = doorbell once;
+    #                              or {"sound": ..., "seconds": ..., "rooms": [...]})
     # Set false for a read-only (publish-only) integration.
     commands: true

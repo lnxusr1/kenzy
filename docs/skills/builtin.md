@@ -24,6 +24,26 @@ This is the first user of the **server-actions** mechanism: the skill can't spea
 
 ---
 
+## Calibrate
+
+**File:** `builtin_skills/calibrate.py`
+
+*"Hey Kenzy, calibrate"* — runs the guided audio calibration for the room you're
+speaking in, entirely by voice: she asks for a few quiet seconds, then the wake word
+a few times, detects whether your speaker cancels its own echo (and sets
+`hardware_aec` accordingly), applies the measured thresholds, and finishes with a
+live wake-word test. Same flow as the dashboard's **Set up / calibrate audio**
+button — see [the dashboard guide](../dashboard.md#calibrating-a-nodes-audio).
+Audio *device* selection stays in the dashboard (a node with the wrong device
+can't hear you say "calibrate" anyway).
+
+| Function | Description |
+|---|---|
+| `calibrate_audio()` | Start the guided calibration on the asking node |
+| `fast_calibrate` (fast intent) | Instant trigger for the bare phrasings ("calibrate", "recalibrate your hearing", "run calibration") |
+
+---
+
 ## Date & Time
 
 **File:** `builtin_skills/datetime_skill.py`
@@ -109,6 +129,8 @@ The lists themselves live in **Home Assistant** (`todo` entities), not in Kenzy 
 
 The common phrasings are a deterministic fast intent (instant, no model call): adding (*"add bread, jam and coffee…"* adds three items), reading, removing (*"take X off the list"* — deletes the item), and checking off (*"check off X"*, *"mark X as done"* — stays visible as completed in HA). Item names match case-insensitively. Fuzzier requests (*"add everything I need for pancakes"*) fall through to the LLM tools:
 
+**Deleting a whole list** (*"delete the grocery list"*) is deliberately stricter than everything else, because it's destructive and voice mishears: Kenzy confirms first — *"The Grocery list still has 3 items on it. Delete it for good?"* — and only your spoken **yes** deletes it. The name must match exactly (or a configured alias): no fuzzy matching, and a bare *"delete the list"* asks which one rather than assuming the default. Only Local to-do lists can be deleted; a list synced from an outside service (Google Tasks, Todoist, CalDAV) gets a spoken explanation instead. *"Delete milk from the list"* still removes just the item.
+
 | Function | Description |
 |---|---|
 | `add_to_list(items, list_name)` | Add one or more items; empty `list_name` = the default list |
@@ -116,6 +138,7 @@ The common phrasings are a deterministic fast intent (instant, no model call): a
 | `remove_from_list(items, list_name)` | Delete items from the list |
 | `complete_list_items(items, list_name)` | Mark items done (kept as completed in HA) |
 | `create_list(name, items)` | Create a new Local to-do list (only on explicit request/confirmation) |
+| `delete_list(name)` | Delete a whole Local to-do list — always confirm-gated, exact name only |
 | `fast_lists` (fast intent) | The instant tier for all the phrasings above |
 
 **Requires:** `HA_API_KEY` in `.env` and the Home Assistant skill's `url` (the lists share its HA connection). Everything here is hard-gated on that connection: with no `HA_API_KEY`, or with the `home_assistant` skill disabled in the Skills tab, list commands stay out of the way entirely.

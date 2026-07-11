@@ -13,7 +13,7 @@ from websockets.http11 import Request
 
 from kenzy import serviceauth
 from kenzy.fastapi_auth import install_service_auth
-from kenzy.passwd import _current_username, set_auth
+from kenzy.passwd import current_username, override_path, set_auth
 from kenzy.server.dashboard import Dashboard, DashboardConfig
 from kenzy.server.server import AudioServer
 
@@ -164,26 +164,57 @@ def test_server_service_headers(monkeypatch):
 # --- kenzy-passwd -----------------------------------------------------------
 
 
-def test_passwd_set_auth_update_existing():
-    text = (
-        'dashboard:\n  enabled: false\n  auth:\n    username: "admin"\n'
-        '    password_hash: "old"\n  auth_token: null\n'
-    )
-    out = set_auth(text, "alice", serviceauth.hash_password("pw"))
+def test_passwd_writes_override_layer_not_server_yaml(tmp_path):
+    """The login must land in server.local.yaml: server.yaml is overwritten by
+    kenzy-deploy's upgrade sync (a password there silently reverts to the
+    operator tree's copy — usually the default) and may be the read-only
+    packaged file. The override layer is protected from both."""
     import yaml
 
-    auth = yaml.safe_load(out)["dashboard"]["auth"]
+    cfg = tmp_path / "server.yaml"
+    cfg.write_text('dashboard:\n  enabled: true\n  auth:\n    username: "admin"\n')
+    out = set_auth(cfg, "alice", serviceauth.hash_password("pw"))
+    assert out == tmp_path / "server.local.yaml"
+    assert 'username: "admin"' in cfg.read_text()  # server.yaml untouched
+    auth = yaml.safe_load(out.read_text())["dashboard"]["auth"]
     assert auth["username"] == "alice"
     assert serviceauth.verify_password("pw", auth["password_hash"]) is True
-    assert "auth_token: null" in out  # other keys/comments preserved
-    assert _current_username(text) == "admin"
+    # The override layer wins for the effective username…
+    assert current_username(cfg) == "alice"
+    # …and the server boots with the new hash (load_server_config merges it).
+    from kenzy.server.server import load_server_config
+
+    merged = load_server_config(cfg)
+    assert serviceauth.verify_password("pw", merged["dashboard"]["auth"]["password_hash"])
 
 
-def test_passwd_set_auth_insert_when_missing():
-    text = "dashboard:\n  enabled: true\n  port: 8770\n"
-    out = set_auth(text, "bob", serviceauth.hash_password("pw2"))
+def test_passwd_preserves_other_override_keys(tmp_path):
     import yaml
 
-    d = yaml.safe_load(out)["dashboard"]
-    assert d["auth"]["username"] == "bob"
-    assert d["port"] == 8770
+    cfg = tmp_path / "server.yaml"
+    cfg.write_text("dashboard:\n  enabled: true\n")
+    (tmp_path / "server.local.yaml").write_text(
+        "integrations:\n  mqtt:\n    host: 10.0.0.9\nexperimental: true\n"
+    )
+    out = set_auth(cfg, "bob", serviceauth.hash_password("pw2"))
+    data = yaml.safe_load(out.read_text())
+    assert data["integrations"]["mqtt"]["host"] == "10.0.0.9"  # dashboard edits kept
+    assert data["experimental"] is True
+    assert data["dashboard"]["auth"]["username"] == "bob"
+
+
+def test_passwd_redirects_out_of_packaged_dir(tmp_path, monkeypatch):
+    # A server running off the packaged default must not get its password
+    # written into site-packages — redirect to the config home.
+    import kenzy.config as kconfig
+
+    pkg = tmp_path / "pkg"
+    pkg.mkdir()
+    (pkg / "server.yaml").write_text("dashboard:\n  enabled: true\n")
+    home = tmp_path / "home"
+    monkeypatch.setattr(kconfig, "_PACKAGED_CONFIGS", pkg)
+    monkeypatch.setenv("KENZY_HOME", str(home))
+    assert override_path(pkg / "server.yaml") == home / "configs" / "server.local.yaml"
+    out = set_auth(pkg / "server.yaml", "eve", serviceauth.hash_password("pw3"))
+    assert out == home / "configs" / "server.local.yaml"
+    assert not (pkg / "server.local.yaml").exists()

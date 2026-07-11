@@ -237,15 +237,21 @@ def ack(session_id: str) -> str:
     return json.dumps({"type": MSG_ACK, "session_id": session_id})
 
 
-def tts_start(session_id: str, sample_rate: int = 22050, channels: int = 1) -> str:
-    return json.dumps(
-        {
-            "type": MSG_TTS_START,
-            "session_id": session_id,
-            "sample_rate": sample_rate,
-            "channels": channels,
-        }
-    )
+def tts_start(
+    session_id: str, sample_rate: int = 22050, channels: int = 1, alert: bool = False
+) -> str:
+    """``alert=True`` marks alert audio (doorbell chimes): a muted node still
+    plays it at the audible floor, like the wake-word ready chime. Older nodes
+    ignore the extra key (the chime simply honors mute there)."""
+    payload: dict[str, Any] = {
+        "type": MSG_TTS_START,
+        "session_id": session_id,
+        "sample_rate": sample_rate,
+        "channels": channels,
+    }
+    if alert:
+        payload["alert"] = True
+    return json.dumps(payload)
 
 
 def tts_end(session_id: str) -> str:

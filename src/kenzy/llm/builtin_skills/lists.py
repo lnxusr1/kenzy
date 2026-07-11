@@ -31,7 +31,7 @@ from typing import Any
 import httpx
 
 from kenzy.llm.builtin_skills import ha_model
-from kenzy.llm.skills import FastResult, fast_intent, is_disabled, skill
+from kenzy.llm.skills import FastResult, fast_intent, get_request, is_disabled, skill
 
 log = logging.getLogger(__name__)
 
@@ -111,6 +111,56 @@ async def _create_local_list(name: str) -> bool:
             return bool(resp.json().get("type") == "create_entry")
     except Exception as exc:
         log.warning("Could not create Local to-do list %r: %s", name, exc)
+        return False
+
+
+async def _local_entry_id(entity_id: str) -> str | None:
+    """The ``local_todo`` config-entry id backing a todo entity, or None.
+
+    None means the list is NOT ours to delete — it belongs to a synced provider
+    (Google Tasks, Todoist, CalDAV…) whose config entry lives outside the
+    ``local_todo`` domain, or HA couldn't be asked. Deletion is refused for both.
+    """
+    try:
+        base, headers = ha_model.ha_conn()
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.post(
+                f"{base}/api/template",
+                headers=headers,
+                json={"template": "{{ config_entry_id('" + entity_id + "') }}"},
+            )
+            resp.raise_for_status()
+            entry_id = resp.text.strip()
+            if not entry_id or entry_id == "None":
+                return None
+            resp = await client.get(
+                f"{base}/api/config/config_entries/entry?domain=local_todo",
+                headers=headers,
+            )
+            resp.raise_for_status()
+            entries = resp.json()
+            if isinstance(entries, list) and any(
+                isinstance(e, dict) and e.get("entry_id") == entry_id for e in entries
+            ):
+                return entry_id
+    except Exception as exc:
+        log.warning("Could not resolve config entry for %s: %s", entity_id, exc)
+    return None
+
+
+async def _delete_entry(entry_id: str) -> bool:
+    """Delete a ``local_todo`` config entry (the inverse of ``_create_local_list``).
+    Best-effort — False sends the caller to the spoken manual instruction."""
+    try:
+        base, headers = ha_model.ha_conn()
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.delete(
+                f"{base}/api/config/config_entries/entry/{entry_id}", headers=headers
+            )
+            resp.raise_for_status()
+        return True
+    except Exception as exc:
+        log.warning("Could not delete to-do list entry %s: %s", entry_id, exc)
         return False
 
 
@@ -210,6 +260,34 @@ async def _resolve_list(spoken: str) -> tuple[str | None, str | None, list[dict[
     except ImportError:  # pragma: no cover - rapidfuzz ships in the llm extra
         pass
     return None, None, available  # unknown name: not speakable — miss to the LLM
+
+
+async def _resolve_list_strict(spoken: str) -> tuple[str | None, str | None, list[dict[str, str]]]:
+    """Spoken name → todo entity for DESTRUCTIVE operations: exact display-name,
+    entity-slug, or curated-alias matches only — no fuzzy matching and no
+    default-list fallback (a misheard word must never pick a deletion target)."""
+    try:
+        available = await ha_model.fetch_todo_lists()
+    except Exception as exc:
+        log.warning("todo list fetch failed: %s", exc)
+        return None, _HA_DOWN, []
+    if not available:
+        return None, _NO_LISTS, []
+    ids = {entry["entity_id"] for entry in available}
+    wanted = _normalize_list_name(spoken)
+    if not wanted:  # a bare "the list" is never enough to delete by
+        names = ", ".join(entry["name"] for entry in available)
+        return None, f"Which list do you want to delete? You have: {names}.", available
+    cur = ha_model.load_curation().get("lists") or {}
+    for eid, aliases in (cur.get("aliases") or {}).items():
+        if eid in ids and any(_normalize_list_name(str(a)) == wanted for a in aliases):
+            return eid, None, available
+    for entry in available:
+        if _normalize_list_name(entry["name"]) == wanted:
+            return entry["entity_id"], None, available
+        if entry["entity_id"].split(".", 1)[-1].replace("_", " ") == wanted:
+            return entry["entity_id"], None, available
+    return None, None, available  # unknown name — miss to the LLM (which can ask)
 
 
 def _split_items(text: str) -> list[str]:
@@ -388,6 +466,28 @@ async def create_list(name: str, items: list[str] | None = None) -> str:
     return await _create_and_add(name, list(items or []))
 
 
+@skill
+async def delete_list(name: str) -> str:
+    """Delete an ENTIRE to-do list from Home Assistant (not items on it — use
+    remove_from_list for items). This never deletes immediately: it returns a
+    confirmation question — relay it to the user verbatim and expect their
+    answer; the deletion happens only if they say yes. Only locally-stored
+    lists can be deleted; lists synced from outside services can't be.
+
+    name: the exact list name as the user said it, e.g. "grocery list"
+    """
+    if not _ha_configured():
+        return _NOT_CONFIGURED
+    entity_id, err, available = await _resolve_list_strict(name)
+    if entity_id is None:
+        if err:
+            return err
+        names = ", ".join(entry["name"] for entry in available) or "none"
+        return f"Error: no list matches {name!r} exactly. The lists are: {names}."
+    key = str(get_request("room_id") or "").strip().lower()
+    return await _stage_delete(key, entity_id, _display(available, entity_id))
+
+
 # ---------------------------------------------------------------------------
 # Fast intents (the instant tier)
 # ---------------------------------------------------------------------------
@@ -403,6 +503,10 @@ _COMPLETE_RE = re.compile(
     r"|^mark (?P<items3>.+?) (?:as )?(?:done|complete|completed|bought)"
     r"(?: (?:on|from) (?P<list3>.+))?$"
 )
+# Whole-list deletion. Item removal ("delete milk FROM the list") is _REMOVE_RE —
+# its required off/from keeps the two apart. The strict resolver is the miss gate:
+# "delete broccoli" resolves to no list and falls through to the LLM.
+_DELETE_LIST_RE = re.compile(r"^(?:delete|get rid of|erase|throw away|trash) (?P<list>.+)$")
 
 _VOICE = "Speak briefly and clearly, like a helpful assistant confirming a request."
 
@@ -411,6 +515,11 @@ _VOICE = "Speak briefly and clearly, like a helpful assistant confirming a reque
 # next utterance from that room (the clarify holds the mic open). Nothing is
 # ever created without the spoken yes.
 _pending_create: dict[str, tuple[str, list[str], float]] = {}
+# Pending delete-a-list confirmations, keyed by room: (config entry id, display
+# name, expiry). Deletion is destructive and voice is a lossy channel, so it is
+# NEVER performed on the first utterance — only by the spoken yes that follows
+# the item-count confirmation question.
+_pending_delete: dict[str, tuple[str, str, float]] = {}
 _PENDING_TTL_S = 90.0
 _YES = frozenset(
     {
@@ -462,6 +571,31 @@ def _looks_like_list(spoken: str) -> bool:
     return not _normalize_list_name(spoken) or bool(_LISTY_RE.search(spoken.lower()))
 
 
+_NOT_DELETABLE = (
+    "That list is managed by an outside service, not by Home Assistant itself, "
+    "so I can't delete it — remove it from that service instead."
+)
+_DELETE_FAILED = (
+    "I couldn't delete it — you can remove it in Home Assistant under "
+    "Settings, then Devices and Services."
+)
+
+
+async def _stage_delete(key: str, entity_id: str, name: str) -> str:
+    """Verify the list is ours to delete, then stage the confirmation. Returns the
+    question (or refusal) to speak; the deletion itself only ever happens when the
+    next utterance from the room is a yes."""
+    entry_id = await _local_entry_id(entity_id)
+    if entry_id is None:
+        return _NOT_DELETABLE
+    count = len(await _get_items(entity_id))
+    _pending_delete[key] = (entry_id, name, time.time() + _PENDING_TTL_S)
+    if count:
+        things = "1 item" if count == 1 else f"{count} items"
+        return f"The {name} still has {things} on it. Delete it for good?"
+    return f"Delete the {name}? It's empty."
+
+
 def _fallthrough(err: str | None, list_text: str) -> FastResult:
     """Common miss/handled/clarify logic when a list didn't resolve."""
     if err in (_HA_DOWN, _NO_LISTS):
@@ -492,8 +626,23 @@ async def fast_lists(utterance: str, room_id: str | None, speaker: str | None) -
         return FastResult.miss()  # lists are an HA feature; without HA, stay out
     text = _normalize(utterance)
 
-    # A pending "should I create one?" confirmation for this room?
+    # A pending "delete it for good?" confirmation for this room? (Checked first:
+    # it's the destructive one, and its yes must never create anything.)
     key = (room_id or "").strip().lower()
+    pending_del = _pending_delete.pop(key, None)
+    if pending_del is not None:
+        entry_id, name, expires = pending_del
+        if time.time() <= expires:
+            if text in _YES:
+                ok = await _delete_entry(entry_id)
+                return FastResult.handled(
+                    f"Deleted the {name}." if ok else _DELETE_FAILED, _VOICE
+                )
+            if text in _NO:
+                return FastResult.handled(f"Okay, keeping the {name}.", _VOICE)
+        # Expired or the user moved on — fall through and process normally.
+
+    # A pending "should I create one?" confirmation for this room?
     pending = _pending_create.pop(key, None)
     if pending is not None:
         name, items, expires = pending
@@ -556,5 +705,21 @@ async def fast_lists(utterance: str, room_id: str | None, speaker: str | None) -
             entity_id, _display(available, entity_id), _split_items(items_text)
         )
         return FastResult.handled(reply, _VOICE)
+
+    m = _DELETE_LIST_RE.match(text)
+    if m:
+        # Destructive: strict resolution (exact/alias only, no fuzzy, no default),
+        # local_todo only, and never without the spoken confirmation that follows.
+        entity_id, err, available = await _resolve_list_strict(m.group("list"))
+        if entity_id is None:
+            if err in (_HA_DOWN, _NO_LISTS):
+                return _fallthrough(err, m.group("list"))
+            if err:  # bare "delete the list" — ask which; nothing is staged
+                return FastResult.clarify(err)
+            return FastResult.miss()  # unknown name ("delete broccoli") → LLM
+        question = await _stage_delete(key, entity_id, _display(available, entity_id))
+        if key not in _pending_delete:  # refusal (synced provider) — no confirm loop
+            return FastResult.handled(question, _VOICE)
+        return FastResult.clarify(question)
 
     return FastResult.miss()

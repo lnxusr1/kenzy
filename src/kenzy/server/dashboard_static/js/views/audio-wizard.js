@@ -1,101 +1,162 @@
-// Optional, launch-on-demand modal that guides audio setup for one node:
-// Overview → Device → Silence → Wake word → Finish. Reuses the shared calibration
-// primitives; no server/protocol additions (set_override + restart + tune_*).
+// Guided audio setup for one node. The DEVICE step is the one thing that needs
+// a human at the dashboard; everything after is the SERVER-driven calibration
+// session (the same one "Hey Kenzy, calibrate" runs) watched live: the browser
+// renders the prompts/phases from calibration events (mode="silent" — the node
+// beeps for the AEC probe instead of speaking), the meter rides the tune relay,
+// and results (thresholds, AEC verdict, live wake verify) arrive as events.
 import { html, useState, useEffect, useRef } from "../html.js";
-import { send, notify, useFleet } from "../store.js";
-import {
-  Meter,
-  useTuneStream,
-  logPct,
-  linPct,
-  round2,
-  rmsSuggest,
-  wakeSuggest,
-  vadSuggest,
-} from "./calibrate.js";
+import { send, notify, useFleet, subscribeTune, subscribeCalibration } from "../store.js";
+import { Meter, logPct, round2 } from "./calibrate.js";
 
 const fmt = (v) => (v === undefined || v === null || v === "" ? "default" : v);
 
 export function AudioWizard({ node, info, onClose, onApplied }) {
   const [step, setStep] = useState("overview");
-  const [applied, setApplied] = useState({});
-  const appliedRef = useRef({});
-  const [pendingVad, setPendingVad] = useState(null);
   const [devSel, setDevSel] = useState("");
-  const [devPhase, setDevPhase] = useState("idle"); // idle|saving|restarting|timeout
+  const [saving, setSaving] = useState(false);
+  const [devWait, setDevWait] = useState(false); // waiting out the device restart
   const sawDrop = useRef(false);
-  const tune = useTuneStream(node);
   const fleet = useFleet();
 
+  // ---- live calibration session state (rendered from server events) ----
+  const [running, setRunning] = useState(false);
+  const [prompt, setPrompt] = useState("");
+  const [phase, setPhase] = useState(null); // quiet|wake|restarting|verify|null
+  const [count, setCount] = useState(0);
+  const [wakes, setWakes] = useState({ count: 0, target: 4 });
+  const [notes, setNotes] = useState([]);
+  const [result, setResult] = useState(null); // {patch, kept, verdict}
+  const [aec, setAec] = useState(null); // {aec, changed}
+  const [verify, setVerify] = useState(null); // {ok, nudges} once resolved
+  const [done, setDone] = useState(null); // {ok, summary?}
+  const [latest, setLatest] = useState({ rms: 0, wake: 0 });
+
   const devices = (info.devices || []).filter((d) => d.suggested);
-  const cur = (k) => (applied[k] !== undefined ? applied[k] : info.config[k]);
+  const cur = (k) => info.config[k];
 
-  // Stop any running measurement when leaving a measuring step.
-  useEffect(() => {
-    if (tune.running) tune.stop();
-  }, [step]);
+  useEffect(
+    () =>
+      subscribeTune((m) => {
+        if (m.node !== node || !m.sample || m.sample.stopped) return;
+        setLatest({ rms: Number(m.sample.rms) || 0, wake: Number(m.sample.wake) || 0 });
+      }),
+    [node],
+  );
 
-  // After a device restart, advance once the node has dropped and come back.
+  useEffect(
+    () =>
+      subscribeCalibration(async (m) => {
+        if (m.node !== node) return;
+        const e = m.event || {};
+        if (!running && e.stage && !done) {
+          // A session we didn't start (e.g. voice-initiated) — watch it live.
+          setRunning(true);
+          setStep("calibrate");
+          send("tune_watch", { node });
+        }
+        if (e.stage === "prompt") setPrompt(e.text || "");
+        else if (e.stage === "quiet") {
+          setPhase("quiet");
+          setCount(Math.round(e.seconds || 6));
+        } else if (e.stage === "wake") {
+          setPhase("wake");
+          setCount(Math.round(e.seconds || 20));
+          setWakes((w) => ({ ...w, target: e.target || 4 }));
+        } else if (e.stage === "wake_heard") setWakes((w) => ({ ...w, count: e.count || 0 }));
+        else if (e.stage === "note") setNotes((n) => [...n, e.text || ""]);
+        else if (e.stage === "aec") setAec(e);
+        else if (e.stage === "applied") {
+          setPhase(null);
+          setResult(e);
+          if (onApplied) onApplied();
+        } else if (e.stage === "restarting") setPhase("restarting");
+        else if (e.stage === "verify") setPhase("verify");
+        else if (e.stage === "verify_result") setVerify(e);
+        else if (e.stage === "done") {
+          setPhase(null);
+          setRunning(false);
+          setDone(e);
+        }
+      }),
+    [node, running, done],
+  );
+
+  // Local countdown ticker for the timed phases.
   useEffect(() => {
-    if (devPhase !== "restarting") return undefined;
+    if (phase !== "quiet" && phase !== "wake") return undefined;
+    const t = setInterval(() => setCount((c) => (c > 0 ? c - 1 : 0)), 1000);
+    return () => clearInterval(t);
+  }, [phase]);
+
+  async function startCalibration() {
+    setPrompt("");
+    setNotes([]);
+    setResult(null);
+    setAec(null);
+    setVerify(null);
+    setDone(null);
+    setWakes({ count: 0, target: 4 });
+    const res = await send("calibrate_start", { node });
+    if (!res.ok) {
+      notify(res.error || "Could not start calibration.", "err");
+      return;
+    }
+    setRunning(true);
+  }
+
+  async function cancelCalibration() {
+    await send("calibrate_cancel", { node });
+    setRunning(false);
+    setPhase(null);
+    setDone({ ok: false, summary: "cancelled" });
+  }
+
+  // ---- device step (unchanged mechanics; flows into calibrate on reconnect) ----
+  useEffect(() => {
+    if (!devWait) return undefined;
     const n = (fleet.data?.nodes || []).find((x) => x.node_id === node);
     const connected = !!(n && n.connected);
     if (!connected) sawDrop.current = true;
     else if (sawDrop.current) {
-      setDevPhase("idle");
-      setStep("silence");
+      setDevWait(false);
+      setStep("calibrate");
     }
     return undefined;
-  }, [fleet, devPhase]);
-
+  }, [fleet, devWait]);
   useEffect(() => {
-    if (devPhase !== "restarting") return undefined;
-    const t = setTimeout(() => setDevPhase("timeout"), 35000);
+    if (!devWait) return undefined;
+    const t = setTimeout(() => {
+      setDevWait(false);
+      notify("The node is taking a while to come back — check its card.", "err");
+      setStep("overview");
+    }, 35000);
     return () => clearTimeout(t);
-  }, [devPhase]);
-
-  async function applyPatch(patch) {
-    const base = { ...(info.override || {}) };
-    delete base.room_id; // server-managed; rejected by set_override
-    const config = { ...base, ...appliedRef.current, ...patch };
-    const res = await send("set_override", { node, config });
-    if (res.ok) {
-      appliedRef.current = { ...appliedRef.current, ...patch };
-      setApplied(appliedRef.current);
-      if (onApplied) onApplied();
-    } else {
-      notify(res.error || "Could not save.", "err");
-    }
-    return res;
-  }
+  }, [devWait]);
 
   async function applyDevice() {
     const d = devices.find((x) => String(x.index) === String(devSel));
     if (!d) return;
-    setDevPhase("saving");
-    const res = await applyPatch({
-      audio_device: d.suggested.audio_device,
-      capture_sample_rate: d.suggested.capture_sample_rate,
-      playback_sample_rate: d.suggested.playback_sample_rate,
+    setSaving(true);
+    const base = { ...(info.override || {}) };
+    delete base.room_id; // server-managed; rejected by set_override
+    const res = await send("set_override", {
+      node,
+      config: {
+        ...base,
+        audio_device: d.suggested.audio_device,
+        capture_sample_rate: d.suggested.capture_sample_rate,
+        playback_sample_rate: d.suggested.playback_sample_rate,
+      },
     });
+    setSaving(false);
     if (!res.ok) {
-      setDevPhase("idle");
+      notify(res.error || "Could not save.", "err");
       return;
     }
+    if (onApplied) onApplied();
     await send("restart", { node });
     sawDrop.current = false;
-    setDevPhase("restarting");
-  }
-
-  async function finish() {
-    if (pendingVad != null) {
-      const res = await applyPatch({ wakeword_vad_threshold: pendingVad });
-      if (res.ok) {
-        await send("restart", { node });
-        notify("VAD gate applied — node restarting.");
-      }
-    }
-    onClose();
+    setDevWait(true);
   }
 
   // ---- step bodies --------------------------------------------------------
@@ -112,173 +173,109 @@ export function AudioWizard({ node, info, onClose, onApplied }) {
         <dt>silence threshold</dt><dd class="mono">${fmt(cur("silence_rms_threshold"))}</dd>
         <dt>wake threshold</dt><dd class="mono">${fmt(cur("wakeword_threshold"))}</dd>
         <dt>VAD gate</dt><dd class="mono">${fmt(cur("wakeword_vad_threshold"))}</dd>
+        <dt>echo cancel (AEC)</dt><dd class="mono">${fmt(cur("hardware_aec"))}</dd>
       </dl>
-      <p class="micro">Run the full setup, or jump to one step to recalibrate it.</p>
+      <p class="micro">Full setup checks the device, then the node runs a guided calibration
+        (instructions appear here; it beeps once to test echo cancellation). You can also just
+        say <b>“Hey Kenzy, calibrate”</b> in the room.</p>
       <div class="wiz-actions">
         <button class="btn-primary" onClick=${() => setStep("device")}>Start full setup</button>
-        <button class="btn-ghost" onClick=${() => setStep("device")}>Device</button>
-        <button class="btn-ghost" onClick=${() => setStep("silence")}>Silence</button>
-        <button class="btn-ghost" onClick=${() => setStep("wake")}>Wake word</button>
+        <button class="btn-ghost" onClick=${() => setStep("device")}>Device only</button>
+        <button class="btn-ghost" onClick=${() => setStep("calibrate")}>Calibrate only</button>
       </div>`;
   }
 
   function deviceStep() {
-    if (devPhase === "restarting") {
+    if (devWait) {
       return html`<p>Restarting <strong>${info.room || node}</strong> to apply the device…
         <span class="micro">waiting for it to reconnect.</span></p>
         <div class="wiz-actions"><span class="spinner"></span></div>`;
     }
-    if (devPhase === "timeout") {
-      return html`<p>The node is taking a while to come back.</p>
-        <div class="wiz-actions">
-          <button class="btn-ghost" onClick=${() => setStep("silence")}>Continue anyway</button>
-          <button class="btn-ghost" onClick=${onClose}>Close</button>
-        </div>`;
-    }
     return html`
-      <p class="micro">Pick the room's mic/speaker. Changing it restarts the node so the
-        next steps measure the right device.</p>
+      <p class="micro">Pick the room's mic/speaker — the one setting that needs a human.
+        Changing it restarts the node; calibration follows automatically.</p>
       ${devices.length
-        ? html`<select class="audio-select" disabled=${devPhase === "saving"}
+        ? html`<select class="audio-select" disabled=${saving}
             value=${devSel} onChange=${(e) => setDevSel(e.target.value)}>
             <option value="">choose a device…</option>
             ${devices.map((d) => html`<option value=${d.index}>${d.name}</option>`)}
           </select>`
         : html`<p class="micro">No selectable devices reported by this node.</p>`}
       <p class="audio-current">Current: <span class="mono">${fmt(cur("audio_device"))}</span></p>
-      <p class="wiz-hint">${devSel
-        ? "Click Apply & restart to switch to this device."
-        : "Choose a device above, or keep the current one to continue."}</p>
       ${wizFooter(
-        html`<button class=${devSel ? "btn-primary" : "btn-ghost"} disabled=${!devSel || devPhase === "saving"}
-          onClick=${applyDevice}>${devPhase === "saving" ? "Saving…" : "Apply & restart"}</button>
+        html`<button class=${devSel ? "btn-primary" : "btn-ghost"} disabled=${!devSel || saving}
+          onClick=${applyDevice}>${saving ? "Saving…" : "Apply & restart"}</button>
         <button class=${devSel ? "btn-ghost" : "btn-primary"}
-          onClick=${() => setStep("silence")}>Keep current →</button>`,
+          onClick=${() => setStep("calibrate")}>Keep current →</button>`,
       )}`;
   }
 
-  function silenceStep() {
-    const sug = rmsSuggest(tune.stats.rms);
-    const cv = cur("silence_rms_threshold");
-    const done = applied.silence_rms_threshold !== undefined;
-    // The single "next action" that gets the primary highlight, in order.
-    const stage = done
-      ? "next"
-      : sug != null
-        ? "apply"
-        : tune.running
-          ? "measure"
-          : "start";
-    const hint = {
-      start: "1. Click Start, then stay quiet for a few seconds.",
-      measure: "Listening… keep the room quiet.",
-      apply: "2. Looks good — click Apply to set the threshold.",
-      next: "✓ Applied. Click Next to continue.",
-    }[stage];
+  function calibrateStep() {
+    if (done) {
+      const v = result && result.verdict;
+      return html`
+        <p>${done.ok ? "Calibration complete." : `Calibration stopped${done.summary ? ` — ${done.summary}` : ""}.`}</p>
+        ${result && Object.keys(result.patch || {}).length
+          ? html`<dl class="wiz-cur">${Object.entries(result.patch).map(
+              ([k, val]) => html`<dt class="mono">${k}</dt><dd class="mono">${val}</dd>`,
+            )}</dl>`
+          : null}
+        ${aec && aec.changed
+          ? html`<p class="micro">Echo cancellation detected as${" "}
+              <b>${aec.aec ? "present" : "absent"}</b> — <span class="mono">hardware_aec</span>${" "}
+              set to <span class="mono">${String(aec.aec)}</span>.</p>`
+          : null}
+        ${result && (result.kept || []).length
+          ? html`<p class="micro wiz-note">Couldn't auto-calibrate ${result.kept.join(", ")} —
+              previous value${result.kept.length > 1 ? "s" : ""} kept.</p>`
+          : null}
+        ${v
+          ? html`<p class="micro">Noise-to-speech separation:${" "}
+              <b class=${"sep-" + v}>${v}</b></p>`
+          : null}
+        ${verify
+          ? html`<p class="micro">${verify.ok
+              ? "Wake word verified live. ✓"
+              : "Wake word could not be verified."}</p>`
+          : null}
+        <div class="wiz-actions">
+          <button class="btn-ghost" onClick=${startCalibration}>Run again</button>
+          <button class="btn-primary" onClick=${onClose}>Close</button>
+        </div>`;
+    }
+    if (!running) {
+      return html`
+        <p class="wiz-hint">The node runs the same guided flow as “Hey Kenzy, calibrate” —
+          instructions show here, it beeps once (echo-cancellation test), measures the quiet
+          room, then listens for the wake word. About half a minute.</p>
+        ${wizFooter(html`<button class="btn-primary" onClick=${startCalibration}>
+          Start — then follow the prompts</button>`)}`;
+    }
+    const phaseUi =
+      phase === "quiet"
+        ? html`<p class="wiz-hint">🤫 Stay quiet — measuring the room…
+            <span class="wiz-count mono">${count}</span></p>`
+        : phase === "wake"
+          ? html`<p class="wiz-hint">🗣 Say <b>“Hey Kenzy”</b> — heard <b>${wakes.count}</b>
+              of ${wakes.target} <span class="wiz-count mono">${count}</span></p>`
+          : phase === "restarting"
+            ? html`<p class="wiz-hint">Restarting the node to apply… <span class="spinner"></span></p>`
+            : phase === "verify"
+              ? html`<p class="wiz-hint">🗣 Say <b>“Hey Kenzy”</b>, then <b>“never mind”</b> —
+                  this time she's really listening.</p>`
+              : html`<p class="wiz-hint">${prompt || "Starting…"}</p>`;
     return html`
-      <p class="micro">Stay quiet so it measures the room's noise floor. Applies live.</p>
-      <${Meter} pct=${logPct(tune.latest.rms)} marks=${[
-        { at: cv, pos: logPct(cv || 0), cls: "cur", title: `current ${cv}` },
-        { at: sug, pos: logPct(sug || 0), cls: "sug", title: `suggested ${sug}` },
-      ]} />
-      <p class="calib-read">RMS <span class="mono">${Math.round(tune.latest.rms)}</span>
-        ${tune.stats.rms
-          ? html` · floor <span class="mono">${tune.stats.rms.p90}</span> · suggest
-              ${" "}<span class="mono">${sug ?? "—"}</span> · current <span class="mono">${fmt(cv)}</span>`
-          : html` · ${tune.running ? "listening…" : "not started"}`}</p>
-      <p class="wiz-hint">${hint}</p>
-      <div class="wiz-actions">
-        ${tune.running
-          ? html`<button class="btn-ghost" onClick=${tune.stop}>Stop</button>`
-          : html`<button class=${stage === "start" ? "btn-primary" : "btn-ghost"}
-              onClick=${tune.start}>${done ? "Re-measure" : "Start"}</button>`}
-        <button class=${stage === "apply" ? "btn-primary" : "btn-ghost"} disabled=${sug == null}
-          onClick=${() => applyPatch({ silence_rms_threshold: sug })}>
-          ${done ? "✓ Applied" : `Apply${sug != null ? ` ${sug}` : ""}`}</button>
-      </div>
-      ${wizFooter(html`<button class=${stage === "next" ? "btn-primary" : "btn-ghost"}
-        onClick=${() => setStep("wake")}>Next: wake word →</button>`)}`;
-  }
-
-  function wakeStep() {
-    const sw = wakeSuggest(tune.stats.wake);
-    const sv = vadSuggest(tune.stats.vad);
-    const cw = cur("wakeword_threshold");
-    const cvd = cur("wakeword_vad_threshold");
-    const wakeDone = applied.wakeword_threshold !== undefined;
-    const vadQueued = pendingVad != null;
-    // The single "next action" that gets the primary highlight, in order:
-    // start → measure → apply wake → queue VAD → next.
-    let stage;
-    if (!wakeDone) stage = sw != null ? "applyWake" : tune.running ? "measure" : "start";
-    else if (sv != null && !vadQueued) stage = "queueVad";
-    else stage = "next";
-    const hint = {
-      start: "1. Click Start, then say “Hey Kenzy” a few times.",
-      measure: "Say “Hey Kenzy” a few times…",
-      applyWake: "2. Click Apply wake to set the wake-word threshold.",
-      queueVad: "3. Click Queue VAD to reduce false triggers (applied on Finish).",
-      next: "✓ Done — click Next to finish.",
-    }[stage];
-    return html`
-      <p class="micro">Say the wake word ("Hey Kenzy") a few times.</p>
-      <div class="calib-grp"><span class="micro">wake score</span>
-        <${Meter} pct=${linPct(tune.latest.wake)} marks=${[
-          { at: cw, pos: linPct(cw || 0), cls: "cur", title: `current ${cw}` },
-          { at: sw, pos: linPct(sw || 0), cls: "sug", title: `suggested ${sw}` },
-        ]} />
-        <p class="calib-read">score <span class="mono">${round2(tune.latest.wake)}</span>
-          ${tune.stats.wake
-            ? html` · peak <span class="mono">${round2(tune.stats.wake.max)}</span> · suggest
-                ${" "}<span class="mono">${sw ?? "—"}</span> · current <span class="mono">${fmt(cw)}</span>`
-            : html` · ${tune.running ? "listening…" : "not started"}`}</p>
-      </div>
-      <div class="calib-grp"><span class="micro">voice-activity (VAD) score</span>
-        <${Meter} pct=${linPct(tune.latest.vad)} marks=${[
-          { at: cvd, pos: linPct(cvd || 0), cls: "cur", title: `current ${cvd}` },
-          { at: pendingVad ?? sv, pos: linPct((pendingVad ?? sv) || 0), cls: "sug", title: `suggested ${sv}` },
-        ]} />
-        <p class="calib-read">score <span class="mono">${round2(tune.latest.vad)}</span>
-          ${tune.stats.vad
-            ? html` · suggest <span class="mono">${sv ?? "—"}</span> · current
-                ${" "}<span class="mono">${fmt(cvd)}</span>
-                ${pendingVad != null ? html` · queued <span class="mono">${pendingVad}</span>` : null}`
-            : null}</p>
-      </div>
-      <p class="wiz-hint">${hint}</p>
-      <div class="wiz-actions">
-        ${tune.running
-          ? html`<button class="btn-ghost" onClick=${tune.stop}>Stop</button>`
-          : html`<button class=${stage === "start" ? "btn-primary" : "btn-ghost"}
-              onClick=${tune.start}>${wakeDone ? "Re-measure" : "Start"}</button>`}
-        <button class=${stage === "applyWake" ? "btn-primary" : "btn-ghost"} disabled=${sw == null}
-          onClick=${() => applyPatch({ wakeword_threshold: sw })}>
-          ${wakeDone ? "✓ Wake set" : `Apply wake${sw != null ? ` ${sw}` : ""}`}</button>
-        <button class=${stage === "queueVad" ? "btn-primary" : "btn-ghost"}
-          disabled=${!wakeDone || sv == null}
-          onClick=${() => setPendingVad(sv)}>
-          ${vadQueued ? "✓ VAD queued" : `Queue VAD${sv != null ? ` ${sv}` : ""} (restart)`}</button>
-      </div>
-      ${wizFooter(html`<button class=${stage === "next" ? "btn-primary" : "btn-ghost"}
-        onClick=${() => setStep("finish")}>Next: finish →</button>`)}`;
-  }
-
-  function finishStep() {
-    const keys = Object.keys(applied);
-    return html`
-      <p>Setup complete.</p>
-      ${keys.length
-        ? html`<dl class="wiz-cur">${keys.map(
-            (k) => html`<dt class="mono">${k}</dt><dd class="mono">${applied[k]}</dd>`,
-          )}</dl>`
-        : html`<p class="micro">No changes were applied.</p>`}
-      ${pendingVad != null
-        ? html`<p class="micro">VAD gate <span class="mono">${pendingVad}</span> will be applied
-            and the node restarted on Finish.</p>`
+      ${phaseUi}
+      ${prompt && phase ? html`<p class="micro">${prompt}</p>` : null}
+      <${Meter} pct=${logPct(latest.rms)} marks=${[]} />
+      <p class="calib-read">level <span class="mono">${Math.round(latest.rms)}</span>
+        · wake score <span class="mono">${round2(latest.wake)}</span></p>
+      ${aec && aec.changed
+        ? html`<p class="micro">Echo cancellation: <b>${aec.aec ? "present" : "absent"}</b>
+            — updated.</p>`
         : null}
-      <div class="wiz-actions">
-        <button class="btn-primary" onClick=${finish}>Finish${pendingVad != null ? " & restart" : ""}</button>
-      </div>`;
+      ${notes.map((t) => html`<p class="micro wiz-note">${t}</p>`)}
+      ${wizFooter(html`<button class="btn-ghost" onClick=${cancelCalibration}>Cancel</button>`)}`;
   }
 
   function wizFooter(actions) {
@@ -288,22 +285,24 @@ export function AudioWizard({ node, info, onClose, onApplied }) {
     </div>`;
   }
 
+  // Connectivity is judged LIVE (fleet feed), and never ejects the wizard while
+  // a session is running — the session itself restarts the node mid-flow.
+  const fleetNode = (fleet.data?.nodes || []).find((x) => x.node_id === node);
+  const connected = fleetNode ? !!fleetNode.connected : !!info.connected;
+
   let body;
-  if (!info.connected) body = html`<p>Node must be connected to set up audio.</p>`;
+  if (!connected && !running && !devWait && !done)
+    body = html`<p>Node must be connected to set up audio.</p>`;
   else if (!info.controls)
     body = html`<p>Enable <code class="mono">dashboard.controls</code> to use the wizard.</p>`;
   else if (step === "device") body = deviceStep();
-  else if (step === "silence") body = silenceStep();
-  else if (step === "wake") body = wakeStep();
-  else if (step === "finish") body = finishStep();
+  else if (step === "calibrate") body = calibrateStep();
   else body = overview();
 
   const titles = {
     overview: "Audio setup",
     device: "Step 1 — Audio device",
-    silence: "Step 2 — Silence threshold",
-    wake: "Step 3 — Wake word",
-    finish: "Finish",
+    calibrate: "Step 2 — Calibration",
   };
 
   return html`

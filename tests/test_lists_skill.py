@@ -51,7 +51,23 @@ def ha(monkeypatch):
 
     monkeypatch.setattr(sk, "_DISABLED", set())
     ls._pending_create.clear()
-    return SimpleNamespace(items=items, calls=calls, curation=curation)
+    ls._pending_delete.clear()
+
+    # Config-entry surface for whole-list deletion: shopping list is local_todo,
+    # errands is a synced provider (deletion must be refused).
+    entries = {"todo.shopping_list": "entry-shopping"}
+    deleted: list[str] = []
+
+    async def fake_local_entry_id(entity_id):
+        return entries.get(entity_id)
+
+    async def fake_delete_entry(entry_id):
+        deleted.append(entry_id)
+        return True
+
+    monkeypatch.setattr(ls, "_local_entry_id", fake_local_entry_id)
+    monkeypatch.setattr(ls, "_delete_entry", fake_delete_entry)
+    return SimpleNamespace(items=items, calls=calls, curation=curation, deleted=deleted)
 
 
 # ---------------------------------------------------------------------------
@@ -278,3 +294,100 @@ def test_validate_curation_lists_block():
         ha_model.validate_curation({"lists": {"bogus": 1}})
     with pytest.raises(ValueError):
         ha_model.validate_curation({"lists": {"aliases": {"todo.x": "not-a-list"}}})
+
+
+# ---------------------------------------------------------------------------
+# Whole-list deletion (confirm-gated, strict resolution, local_todo only)
+# ---------------------------------------------------------------------------
+
+
+async def test_fast_delete_confirms_then_deletes(ha):
+    r = await ls.fast_lists("delete the shopping list", "kitchen", None)
+    assert r.status == "clarify"  # mic held open for the answer
+    assert "2 items" in r.text and "Delete it for good?" in r.text
+    assert not ha.deleted  # NOTHING deleted before the yes
+    r = await ls.fast_lists("yes", "kitchen", None)
+    assert r.is_handled and r.text == "Deleted the Shopping list."
+    assert ha.deleted == ["entry-shopping"]
+
+
+async def test_fast_delete_no_keeps_list(ha):
+    await ls.fast_lists("delete the shopping list", "kitchen", None)
+    r = await ls.fast_lists("no", "kitchen", None)
+    assert r.is_handled and "keeping" in r.text.lower()
+    assert not ha.deleted
+
+
+async def test_fast_delete_empty_list_confirmation(ha):
+    r = await ls.fast_lists("delete the chores", "kitchen", None)  # alias, empty list
+    # errands is a synced provider in the fixture → refusal instead of a confirm.
+    assert r.is_handled and "outside service" in r.text
+    assert "kitchen" not in ls._pending_delete
+
+
+async def test_fast_delete_confirmation_is_room_scoped(ha):
+    await ls.fast_lists("delete the shopping list", "kitchen", None)
+    r = await ls.fast_lists("yes", "office", None)  # a different room's yes
+    assert r.status == "miss"  # not consumed — and nothing deleted
+    assert not ha.deleted
+
+
+async def test_fast_delete_requires_exact_name(ha):
+    # Fuzzy matches are allowed for adds, but NEVER for deletion.
+    r = await ls.fast_lists("delete the shoping list", "kitchen", None)  # typo
+    assert r.status == "miss"
+    assert not ls._pending_delete
+
+
+async def test_fast_delete_bare_name_asks_which(ha):
+    r = await ls.fast_lists("delete the list", "kitchen", None)
+    assert r.status == "clarify" and "Which list" in r.text
+    assert not ls._pending_delete  # asking ≠ staging
+
+
+async def test_fast_delete_never_uses_default_fallback(ha):
+    # "the list" resolves to the default for ADDS; for deletion it must not.
+    r = await ls.fast_lists("add butter to the list", "kitchen", None)
+    assert r.is_handled  # sanity: default fallback works for adds
+    r = await ls.fast_lists("delete the list", "kitchen", None)
+    assert "Which list" in r.text
+
+
+async def test_fast_delete_expired_confirmation_ignored(ha, monkeypatch):
+    await ls.fast_lists("delete the shopping list", "kitchen", None)
+    entry_id, name, _ = ls._pending_delete["kitchen"]
+    ls._pending_delete["kitchen"] = (entry_id, name, 0.0)  # long expired
+    await ls.fast_lists("yes", "kitchen", None)
+    assert not ha.deleted  # the stale yes deleted nothing
+
+
+async def test_delete_item_still_routes_to_item_removal(ha):
+    # "delete X from Y" is item removal, not list deletion.
+    r = await ls.fast_lists("delete milk from the shopping list", "kitchen", None)
+    assert r.is_handled and "Removed Milk" in r.text
+    assert not ha.deleted and "Milk" not in ha.items["todo.shopping_list"]
+
+
+async def test_delete_unknown_thing_misses(ha):
+    r = await ls.fast_lists("delete broccoli", "kitchen", None)
+    assert r.status == "miss"  # not a list — the LLM can sort it out
+
+
+async def test_delete_list_tool_stages_confirmation(ha):
+    import kenzy.llm.skills as sk
+
+    sk.begin_request({"room_id": "Kitchen"})
+    out = await ls.delete_list("shopping list")
+    assert "Delete it for good?" in out
+    assert "kitchen" in ls._pending_delete  # keyed like the fast path consumes it
+    r = await ls.fast_lists("yes", "Kitchen", None)
+    assert r.is_handled and ha.deleted == ["entry-shopping"]
+
+
+async def test_delete_list_tool_rejects_inexact_name(ha):
+    import kenzy.llm.skills as sk
+
+    sk.begin_request({"room_id": "kitchen"})
+    out = await ls.delete_list("shoping")  # typo — no fuzzy for destruction
+    assert "no list matches" in out
+    assert not ls._pending_delete

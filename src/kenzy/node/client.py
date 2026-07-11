@@ -91,44 +91,22 @@ def _volume_to_gain(value: Any) -> float:
     return max(0.0, min(1.0, pct / 100.0))
 
 
-# --- Calibration suggestion heuristics (mirror dashboard_static/js/views/calibrate.js)
+# --- Calibration suggestion heuristics: shared math in kenzy.calibration (one
+# source for the dashboard wizard's JS mirror, this CLI, and the server's
+# voice-guided flow). Thin aliases keep this module's call sites readable.
 
-
-def _percentile(values: list[float], q: float) -> float:
-    if not values:
-        return 0.0
-    s = sorted(values)
-    return s[min(len(s) - 1, max(0, int(q * (len(s) - 1))))]
-
-
-def _suggest_silence_rms(rms: list[float]) -> int | None:
-    """silence_rms_threshold just above the ambient floor (p90)."""
-    if not rms:
-        return None
-    floor = _percentile(rms, 0.9)
-    return int(max(5, min(5000, round(max(floor * 1.5, floor + 15)))))
-
-
-def _suggest_wake_threshold(wake: list[float]) -> float | None:
-    """wakeword_threshold in the gap between ambient (p75) and the utterance peak."""
-    if not wake:
-        return None
-    ambient = _percentile(wake, 0.75)
-    gap = max(wake) - ambient
-    if gap < 0.15:  # no clear wake-word utterance was heard
-        return None
-    return round(max(0.05, min(0.95, ambient + gap * 0.4)), 2)
-
-
-def _suggest_vad_threshold(vad: list[float]) -> float | None:
-    """wakeword_vad_threshold below speech VAD, above the silence floor."""
-    if not vad:
-        return None
-    ambient = _percentile(vad, 0.75)
-    gap = max(vad) - ambient
-    if gap < 0.15:
-        return None
-    return round(max(0.0, min(0.9, ambient + gap * 0.3)), 2)
+from kenzy.calibration import (  # noqa: E402  (grouped with the other kenzy imports)
+    separation_verdict as _separation_verdict,
+)
+from kenzy.calibration import (  # noqa: E402
+    suggest_silence as _suggest_silence_rms,
+)
+from kenzy.calibration import (  # noqa: E402
+    suggest_vad as _suggest_vad_threshold,
+)
+from kenzy.calibration import (  # noqa: E402
+    suggest_wake as _suggest_wake_threshold,
+)
 
 
 def _set_yaml_scalar(text: str, key: str, value: str) -> str:
@@ -430,8 +408,11 @@ class _SoundPlayer:
         self._pending_alert = True
         self._restart = True
 
-    def play_pcm(self, audio: np.ndarray[Any, Any], interrupt: bool = False) -> None:
-        """Play arbitrary int16 mono PCM at _TTS_SAMPLE_RATE (honors mute).
+    def play_pcm(
+        self, audio: np.ndarray[Any, Any], interrupt: bool = False, alert: bool = False
+    ) -> None:
+        """Play arbitrary int16 mono PCM at _TTS_SAMPLE_RATE (honors mute unless
+        ``alert`` — alert audio, e.g. a doorbell chime, plays at the muted floor).
 
         With ``interrupt=True`` the new audio replaces whatever is playing on the
         very next callback (from the start), rather than waiting for the current
@@ -439,7 +420,7 @@ class _SoundPlayer:
         wedge between an abort and this call and clip the new audio's head.
         """
         self._pending = audio.reshape(-1, 1)
-        self._pending_alert = False
+        self._pending_alert = alert
         if interrupt:
             self._interrupt = True
         self._restart = True
@@ -597,6 +578,7 @@ class NodeClient:
         # No maxsize — dropping frames causes truncated playback for long responses.
         self._tts_q: asyncio.Queue[bytes] = asyncio.Queue()
         self._tts_sample_rate: int = 24000
+        self._tts_alert: bool = False  # current TTS session is alert audio (beats mute)
         self._tts_task: asyncio.Task[None] | None = None
 
         self._state: str = _STATE_IDLE
@@ -994,7 +976,9 @@ class NodeClient:
     # TTS helpers
     # ------------------------------------------------------------------
 
-    async def _begin_tts(self, session_id: str, sample_rate: int, channels: int) -> None:
+    async def _begin_tts(
+        self, session_id: str, sample_rate: int, channels: int, alert: bool = False
+    ) -> None:
         self._stop_ringback()  # a spoken reply (decline/timeout) supersedes ringing
         self._reset_barge()
         # Deliberately NO queue drain here: _recv_loop enqueues binary frames the
@@ -1004,6 +988,7 @@ class NodeClient:
         # are cleared at abort time (_stop_tts_playback); the completion path
         # consumes the queue, so it's always clean by the time a session starts.
         self._tts_sample_rate = sample_rate
+        self._tts_alert = alert  # alert audio (doorbell chime) beats mute
         self._state = _STATE_TTS
         self._session_id = session_id
         log.info("[%s] TTS started (rate=%d ch=%d)", session_id[:8], sample_rate, channels)
@@ -1026,7 +1011,7 @@ class NodeClient:
             if self._player:
                 # Atomic interrupt: cut the waiting sound and start TTS from the
                 # first sample in one swap, so a fast reply is never clipped.
-                self._player.play_pcm(audio, interrupt=True)
+                self._player.play_pcm(audio, interrupt=True, alert=self._tts_alert)
             # Stay in TTS state while audio plays; _tts_wait_done transitions to IDLE.
             self._tts_task = asyncio.create_task(self._tts_wait_done(), name="tts_wait")
             log.info("TTS playback started")
@@ -1431,7 +1416,7 @@ class NodeClient:
                 sid = str(msg.get("session_id") or uuid.uuid4())
                 sample_rate = int(msg.get("sample_rate", 22050))
                 channels = int(msg.get("channels", 1))
-                await self._begin_tts(sid, sample_rate, channels)
+                await self._begin_tts(sid, sample_rate, channels, alert=bool(msg.get("alert")))
 
             elif mtype == protocol.MSG_TTS_END:
                 await self._end_tts(reason="complete")
@@ -2296,15 +2281,37 @@ def run_calibration(cfg: dict[str, Any], node_id: str) -> None:
 
     stream.start()
     try:
-        _countdown("Phase 1/2 — stay QUIET to measure the room's noise floor (5s).")
-        rms1, _, _ = _collect(5.0)
-        sil = _suggest_silence_rms(rms1)
+        # Phase 1: the quiet floor — with one retry if a loud burst poisons it
+        # (same gate as the dashboard wizard).
+        from kenzy.calibration import MIN_SPEECH_FRAMES, quiet_phase_bursty, speech_gate
 
-        wake_all: list[float] = []
-        vad_all: list[float] = []
-        if oww is not None:
-            _countdown("Phase 2/2 — say the wake word ('Hey Kenzy') a few times (12s).")
-            _, wake_all, vad_all = _collect(12.0)
+        rms1: list[float] = []
+        for attempt in (1, 2):
+            _countdown("Phase 1/2 — stay QUIET to measure the room's noise floor (5s).")
+            rms1, _, _ = _collect(5.0)
+            if quiet_phase_bursty(rms1) and attempt == 1:
+                print("  heard a noise — restarting the quiet phase…")
+                continue
+            break
+
+        # Phase 2: the wake word doubles as the speech-level sample (both the
+        # wake/VAD scores AND how loud YOUR VOICE is from where you speak). Runs
+        # even without wake models — the silence math still needs speech RMS.
+        prompt = (
+            "say the wake word ('Hey Kenzy') a few times"
+            if oww is not None
+            else "speak a few sentences at normal volume"
+        )
+        _countdown(f"Phase 2/2 — {prompt}, from where you'd normally talk (12s).")
+        rms2, wake_all, vad_all = _collect(12.0)
+
+        gate = speech_gate(rms1)
+        speech = [r for r in rms2 if r > gate]
+        if len(speech) < MIN_SPEECH_FRAMES:
+            print("  didn't hear enough speech — silence threshold left unchanged.")
+            speech = []
+        sil = _suggest_silence_rms(rms1, speech)
+        verdict = _separation_verdict(rms1, speech)
         wk = _suggest_wake_threshold(wake_all)
         vd = _suggest_vad_threshold(vad_all)
     finally:
@@ -2318,13 +2325,20 @@ def run_calibration(cfg: dict[str, Any], node_id: str) -> None:
     print("Suggested thresholds")
     print("=" * 60)
     if sil is not None:
-        print(f"  silence_rms_threshold:  {sil}")
+        print(f"  silence_rms_threshold:  {sil}   # anchored to your voice level")
+    elif speech:
+        print("  silence_rms_threshold:  (noise and speech don't separate — kept; see below)")
     if wk is not None:
         print(f"  wakeword_threshold:     {wk}")
     elif oww is not None:
         print("  wakeword_threshold:     (no clear wake word heard — re-run and speak up)")
     if vd is not None:
         print(f"  wakeword_vad_threshold: {vd}   # needs a node restart to apply")
+    if verdict is not None:
+        print(f"\n  noise-to-speech separation: {verdict}")
+        if verdict == "poor":
+            print("  This room/mic can't reliably tell speech from noise — try moving the")
+            print("  mic closer to where people talk, then re-run.")
     print()
     print("These are server-owned (the node pulls its config). Apply them from the")
     print("dashboard's Calibration panel, or add them on the SERVER to one of:")

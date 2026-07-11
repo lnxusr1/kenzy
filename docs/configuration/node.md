@@ -64,7 +64,7 @@ The node service runs on each room device. It captures microphone audio, detects
 | `dialog_no_speech_timeout_ms` | `8000` | How long Kenzy **waits for your answer** during a multi-turn dialog before giving up (the soft end cue = "I stopped waiting"). Live-applied. |
 | `dialog_onset_ms` | `300` | Speech required to **start** a dialog turn — either sustained speech of this length, or a shorter *complete* word ("yes", "Boo") that ends in silence. A cough or clink can't trip the mic; your first word is buffered and kept whole. Live-applied. |
 | `dialog_onset_vad_threshold` | `0.5` | Voice-activity confidence gate for dialog onset (falls back to energy sensing if the VAD model is absent). Live-applied. |
-| `hardware_aec` | `true` | Whether this room's speaker does **acoustic echo cancellation** (declared, not detected — Kenzy can't tell from the audio). Set `false` for a non-AEC speaker and the room runs **half-duplex**: see the table below for exactly what changes. Live-applied; shown as a "no AEC" badge on the room's fleet card. |
+| `hardware_aec` | `true` | Whether this room's speaker does **acoustic echo cancellation**. **Calibration detects and sets this automatically** (it plays a known sound through the node's speaker and measures the echo); set it manually only to override an ambiguous reading. Set `false` for a non-AEC speaker and the room runs **half-duplex**: see the table below for exactly what changes. Live-applied; shown as a "no AEC" badge on the room's fleet card. |
 
 ### Rooms without echo cancellation (`hardware_aec: false`)
 

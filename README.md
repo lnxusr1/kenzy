@@ -113,12 +113,12 @@ Prerequisites on each remote host: SSH key auth and passwordless sudo. Backend s
 
 ## Dashboard
 
-`kenzy-server` can serve an **opt-in** web fleet manager (off by default). Enable it in
-`server.yaml` (`dashboard.enabled: true`, `controls: true`, `logs: true`) and open
-`http://127.0.0.1:8770/dashboard`. It gives you one place to:
+`kenzy-server` serves a web fleet manager — **on by default** in the shipped config
+(set `dashboard.enabled: false` in `server.yaml` to disable it entirely; nothing is
+then wired up). Open `http://<server>:8770/dashboard`. It gives you one place to:
 
 - See live node + backend-service health and each host's installed version
-- Configure each node, **rename its room**, and run a guided **audio-calibration wizard**
+- Configure each node, **rename its room**, and run **guided calibration** (also available by voice: "Hey Kenzy, calibrate") — it measures the room, detects echo cancellation, and applies the thresholds itself
 - Manage **skills** (enable/disable live) and **speaker profiles** (rename / delete / enroll from a room)
 - Watch **pipeline activity** (transcripts, latency, fast-path hit rate) and read server / service / node **logs**
 - Trigger / stop / restart nodes and send TTS **announcements** to every room

@@ -78,6 +78,9 @@ function NodeCard({ node, onConfigure }) {
 
 function ServiceChip({ svc, onConfigure }) {
   const detail = svc.detail || {};
+  // `version` is the RUNNING code; `installed` is what's on disk. They differ
+  // when the shared venv was upgraded but this service wasn't recycled yet.
+  const stale = detail.installed && detail.version && detail.installed !== detail.version;
   const bits = [detail.version && "v" + detail.version, detail.model, detail.provider, detail.voice]
     .filter(Boolean)
     .join(" · ");
@@ -87,6 +90,9 @@ function ServiceChip({ svc, onConfigure }) {
       <span class=${"led " + (svc.up ? "up" : "down")}></span>
       <span class="name">${svc.name}</span>
       <span class="detail">${svc.up ? bits || "ok" : "down"}</span>
+      ${stale
+        ? html`<span class="badge warn" title=${`v${detail.installed} installed — restart to apply`}>restart</span>`
+        : null}
     </div>
   `;
 }

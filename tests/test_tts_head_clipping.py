@@ -22,7 +22,9 @@ class _FakePlayer:
         self.played: list[np.ndarray[Any, Any]] = []
         self.aborted = False
 
-    def play_pcm(self, audio: np.ndarray[Any, Any], interrupt: bool = False) -> None:
+    def play_pcm(
+        self, audio: np.ndarray[Any, Any], interrupt: bool = False, alert: bool = False
+    ) -> None:
         self.played.append(audio)
 
     def abort(self) -> None:

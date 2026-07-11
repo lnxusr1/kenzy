@@ -840,6 +840,11 @@ def _confirm(action: str, idx: _DeviceIndex, codes: list[str], target: str) -> s
 
     scope = room or floor
     room_phrase = scope.replace("_", " ") if scope else ""
+    # HA devices often have their area baked into the name ("Master Bedroom Light"
+    # in the Master Bedroom) — rendering room + device would say the room twice.
+    # When the device name already starts with the room, it carries the room alone.
+    if room_phrase and re.match(rf"{re.escape(room_phrase)}\b", device_phrase, re.IGNORECASE):
+        room_phrase = ""
     what = " ".join(p for p in (room_phrase, device_phrase) if p).strip()
     if not what:
         what = "it" if len(codes) == 1 else "them"

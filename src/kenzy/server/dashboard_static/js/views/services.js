@@ -25,7 +25,21 @@ function setPath(obj, path, value) {
   cur[parts[parts.length - 1]] = value;
 }
 
-const eq = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+function delPath(obj, path) {
+  // Delete a dotted path, pruning parents that become empty (keeps YAML minimal).
+  const parts = path.split(".");
+  const chain = [obj];
+  for (let i = 0; i < parts.length - 1; i++) {
+    const nxt = chain[chain.length - 1][parts[i]];
+    if (!nxt || typeof nxt !== "object") return;
+    chain.push(nxt);
+  }
+  delete chain[chain.length - 1][parts[parts.length - 1]];
+  for (let i = chain.length - 1; i > 0; i--) {
+    if (Object.keys(chain[i]).length === 0) delete chain[i - 1][parts[i - 1]];
+  }
+}
+
 const typeOf = (v) =>
   Array.isArray(v)
     ? "list"
@@ -35,10 +49,33 @@ const typeOf = (v) =>
         ? "num"
         : "str";
 
+// Inherited value → human placeholder/label text.
+const fmt = (v) =>
+  v === undefined
+    ? "unset"
+    : v === null
+      ? "null"
+      : Array.isArray(v)
+        ? v.length
+          ? v.join(", ")
+          : "empty"
+        : typeof v === "boolean"
+          ? v
+            ? "on"
+            : "off"
+          : String(v);
+
+// Sentinel for the "inherit" select option ("" can be a real enum value, e.g.
+// reasoning_effort's "don't send").
+const INHERIT = "__inherit__";
+
 function ServiceEditor({ name, onBack }) {
   const [info, setInfo] = useState(null);
-  const [vals, setVals] = useState({}); // flat dotted → edited value
-  const [orig, setOrig] = useState({}); // flat dotted → effective (baseline)
+  // Node-editor convention: `vals` holds ONLY override-layer values (undefined =
+  // inherit); `defs` is the inherited layer (packaged default + auto-wired peers),
+  // shown as placeholders. Clearing a field removes the key from the override.
+  const [vals, setVals] = useState({});
+  const [defs, setDefs] = useState({});
   const [saving, setSaving] = useState(false);
 
   async function load() {
@@ -48,10 +85,9 @@ function ServiceEditor({ name, onBack }) {
       return;
     }
     const data = await r.json();
-    const flat = flatten(data.config);
     setInfo(data);
-    setOrig(flat);
-    setVals({ ...flat });
+    setDefs(flatten(data.defaults || data.config));
+    setVals({ ...flatten(data.override) });
   }
   useEffect(() => {
     load();
@@ -62,25 +98,31 @@ function ServiceEditor({ name, onBack }) {
 
   const ovFlat = flatten(info.override);
   const setKey = (k, v) => setVals({ ...vals, [k]: v });
+  // Effective view (inherited ← current edits) for dependency-driven visibility.
+  const effective = { ...defs };
+  for (const [k, v] of Object.entries(vals)) if (v !== undefined) effective[k] = v;
 
   async function save() {
-    // Start from the stored override (so untouched overrides are preserved) and
-    // apply every leaf the user changed away from the effective baseline.
+    // Start from the stored override (preserves keys hidden by a dependency, e.g.
+    // openai.* while provider=whisper); every rendered key is then set or removed —
+    // an emptied field deletes its key, reverting to the inherited default.
     const override = JSON.parse(JSON.stringify(info.override || {}));
-    for (const [k, v] of Object.entries(vals)) {
-      let val = v;
+    for (const k of visibleKeys) {
+      let val = vals[k];
       // Number fields hold a raw string while editing; coerce back to a number so
       // decimals (e.g. 0.25) survive and aren't written to YAML as strings.
-      if (typeof orig[k] === "number" && typeof v === "string") {
-        if (v === "") continue;
-        const num = Number(v);
-        if (Number.isNaN(num)) continue;
-        val = num;
-      } else if (Array.isArray(v)) {
-        // Drop blank rows; trim string items.
-        val = v.map((s) => (typeof s === "string" ? s.trim() : s)).filter((s) => s !== "" && s != null);
+      if (typeof val === "string" && typeOf(baseVal(k)) === "num") {
+        const num = Number(val);
+        val = val === "" || Number.isNaN(num) ? undefined : num;
+      } else if (typeof val === "string" && val === "") {
+        val = undefined; // cleared text field = unset
+      } else if (Array.isArray(val)) {
+        // Drop blank rows; trim string items; empty list = unset.
+        val = val.map((s) => (typeof s === "string" ? s.trim() : s)).filter((s) => s !== "" && s != null);
+        if (!val.length) val = undefined;
       }
-      if (!eq(val, orig[k])) setPath(override, k, val);
+      if (val === undefined) delPath(override, k);
+      else setPath(override, k, val);
     }
     setSaving(true);
     const res = await send("set_service_config", { service: name, config: override });
@@ -114,10 +156,14 @@ function ServiceEditor({ name, onBack }) {
     );
   }
 
+  // Type/inheritance baseline: the inherited layer, falling back to the stored
+  // override for custom keys that have no packaged default.
+  const baseVal = (k) => (defs[k] !== undefined ? defs[k] : ovFlat[k]);
+
   // Only render fields whose dependency (e.g. provider) is currently satisfied,
   // then group them by parent path so related settings sit together.
-  const visibleKeys = Object.keys(orig)
-    .filter((k) => fieldVisible(name, k, vals))
+  const visibleKeys = [...new Set([...Object.keys(defs), ...Object.keys(ovFlat)])]
+    .filter((k) => fieldVisible(name, k, effective))
     .sort();
   const groups = SERVICE_SECTIONS[name]
     ? groupBySections(visibleKeys, SERVICE_SECTIONS[name])
@@ -128,36 +174,35 @@ function ServiceEditor({ name, onBack }) {
   const label = (k, group) =>
     k.includes(".") && k.slice(0, k.lastIndexOf(".")) === group ? k.slice(k.lastIndexOf(".") + 1) : k;
   const row = (k, group) => {
-    const t = typeOf(orig[k]);
+    const t = typeOf(baseVal(k));
     const v = vals[k];
-    const overridden = k in ovFlat;
+    const set = v !== undefined;
     const opts = serviceEnum(name, k);
     const help = serviceHelp(name, k);
     let input;
     if (opts) {
-      input = html`<select disabled=${!info.controls} onChange=${(e) => setKey(k, e.target.value)}>
-        ${opts.map((o) => html`<option value=${o} selected=${v === o}>${o || "(unset)"}</option>`)}
-      </select>`;
-    } else if (t === "bool" || orig[k] === null) {
-      // Booleans render as an on/off chooser; a null-valued key gets a "default"
-      // option too (consistent with the node editor's inherit state).
-      const nullable = orig[k] === null;
       input = html`<select disabled=${!info.controls}
-        onChange=${(e) =>
-          setKey(k, e.target.value === "" ? null : e.target.value === "true")}>
-        ${nullable ? html`<option value="" selected=${v == null}>default</option>` : null}
+        onChange=${(e) => setKey(k, e.target.value === INHERIT ? undefined : e.target.value)}>
+        <option value=${INHERIT} selected=${!set}>inherit (${fmt(defs[k])})</option>
+        ${opts.map((o) => html`<option value=${o} selected=${set && v === o}>${o || "(unset)"}</option>`)}
+      </select>`;
+    } else if (t === "bool") {
+      input = html`<select disabled=${!info.controls}
+        onChange=${(e) => setKey(k, e.target.value === INHERIT ? undefined : e.target.value === "true")}>
+        <option value=${INHERIT} selected=${!set}>inherit (${fmt(defs[k])})</option>
         <option value="true" selected=${v === true}>on</option>
         <option value="false" selected=${v === false}>off</option>
       </select>`;
     } else if (t === "num") {
       // Store the raw string while typing (coerced back to a number on save) so a
       // decimal like 0.25 isn't collapsed to an integer mid-keystroke.
-      const step = Number.isInteger(orig[k]) ? "1" : "any";
+      const step = Number.isInteger(baseVal(k)) ? "1" : "any";
       input = html`<input type="number" step=${step} inputmode="decimal" disabled=${!info.controls}
-        value=${v ?? ""} onInput=${(e) => setKey(k, e.target.value)} />`;
+        value=${set ? v : ""} placeholder=${fmt(defs[k])}
+        onInput=${(e) => setKey(k, e.target.value === "" ? undefined : e.target.value)} />`;
     } else if (t === "list") {
       const items = Array.isArray(v) ? v : [];
-      const update = (next) => setKey(k, next);
+      const update = (next) => setKey(k, next.length ? next : undefined);
       input = html`<div class="list-edit">
         ${items.map(
           (item, i) => html`
@@ -169,18 +214,20 @@ function ServiceEditor({ name, onBack }) {
             </div>
           `,
         )}
+        ${!items.length && Array.isArray(defs[k]) && defs[k].length
+          ? html`<span class="micro">inherits: ${defs[k].join(", ")}</span>`
+          : null}
         <button class="list-add btn-ghost" disabled=${!info.controls}
-          onClick=${() => update([...items, ""])}>+ Add</button>
+          onClick=${() => setKey(k, [...items, ""])}>+ Add</button>
       </div>`;
     } else {
-      input = html`<input disabled=${!info.controls} value=${v ?? ""}
-        placeholder=${orig[k] === null ? "null" : ""}
-        onInput=${(e) => setKey(k, e.target.value)} />`;
+      input = html`<input disabled=${!info.controls} value=${set ? v : ""}
+        placeholder=${fmt(defs[k])}
+        onInput=${(e) => setKey(k, e.target.value === "" ? undefined : e.target.value)} />`;
     }
     return html`
-      <div class=${"cfg-row" + (overridden ? " overridden" : "")}>
+      <div class=${"cfg-row" + (set ? " overridden" : "")}>
         <div class="cfg-key"><span class="mono" title=${k}>${label(k, group)}</span>
-          ${overridden ? html`<span class="micro">override</span>` : null}
           ${help ? html`<span class="cfg-help">${help}</span>` : null}</div>
         <div class="cfg-input">${input}</div>
       </div>`;
