@@ -162,7 +162,7 @@ function UpdateCheck() {
   const [busy, setBusy] = useState(false);
   const [busyAll, setBusyAll] = useState(false);
   const [log, setLog] = useState([]); // running per-item log of an upgrade pass
-  const { live } = useFleet();
+  const { live, data: fleetData } = useFleet();
   // Re-fetch whenever the live channel (re)connects — after step 1's server
   // restart drops the WS, the fresh state is what arms step 2.
   useEffect(() => {
@@ -247,12 +247,38 @@ function UpdateCheck() {
   }
 
   // Logical progression: step 1 (server) only when an update exists and this
-  // isn't a dev/editable checkout; step 2 (services + nodes) is visible whenever
-  // controls are on and PyPI answered, but stays DISABLED until the server is
-  // current — once step 1 completes (and the button disappears), step 2 arms.
+  // isn't a dev/editable checkout; step 2 (services + nodes) shows only while
+  // something in the fleet still needs it — a running version behind `latest`,
+  // an installed-but-not-restarted service, or an unknown version we can't
+  // vouch for. Once everything is current it disappears, like step 1 does.
+  // It stays DISABLED until the server itself is current (upgrade order).
+  const vnum = (v) => String(v).split(".").slice(0, 4).map((s) => parseInt(s, 10) || 0);
+  const isNewer = (a, b) => {
+    const A = vnum(a), B = vnum(b);
+    for (let i = 0; i < Math.max(A.length, B.length); i++) {
+      const d = (A[i] || 0) - (B[i] || 0);
+      if (d) return d > 0;
+    }
+    return false;
+  };
+  const fleetBehind = (() => {
+    if (!u.latest) return false;
+    const services = (fleetData?.services || []).filter((s) => s.up);
+    const nodes = (fleetData?.nodes || []).filter((n) => n.connected);
+    const svcBehind = services.some((s) => {
+      const d = s.detail || {};
+      if (d.version === "dev") return false; // editable checkout — not upgradable
+      return !d.version || isNewer(u.latest, d.version) ||
+        (d.installed && d.installed !== d.version); // upgraded on disk, restart owed
+    });
+    const nodeBehind = nodes.some(
+      (n) => n.version !== "dev" && (!n.version || isNewer(u.latest, n.version)),
+    );
+    return svcBehind || nodeBehind;
+  })();
   const serverBehind = u.update_available && u.current !== "dev";
   const canUpgrade = u.controls && serverBehind;
-  const canUpgradeAll = u.controls && u.checkable;
+  const canUpgradeAll = u.controls && u.checkable && (fleetBehind || serverBehind || busyAll);
 
   return html`
     <dl class="kv">

@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [3.8.1]
+
+### Fixed
+
+- **The "Upgrade services + nodes" button now retires itself when the work is done.** It stayed visible even after every service and node was on the latest version. It now watches the live fleet — running versions vs. the latest release, plus any service upgraded on disk but not yet restarted — and disappears once everything is current, exactly like the server's own upgrade button. (It still appears, disabled, while the server itself is behind — preserving the two-step order — and unknown/unreported versions keep it visible, since they can't be vouched for.)
+
 ## [3.8.0]
 
 ### Fixed
