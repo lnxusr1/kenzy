@@ -20,6 +20,9 @@ _VOICE_PROMPT = "Speak naturally at a conversational pace."
 # Relative step for a bare "turn it up / down" (percentage points).
 _STEP = 15
 
+# Naming a media thing ("mute the TV", "turn the music up") means the room's
+# media player, not the Kenzy node — miss so the home_assistant skill handles it.
+_MEDIA_RE = re.compile(r"\b(tv|television|music|movie|show|media|stereo|speakers?)\b")
 _UNMUTE_RE = re.compile(r"\bunmute\b|\bturn (the )?(sound|volume|audio) back on\b")
 _MUTE_RE = re.compile(r"\b(mute|be quiet|silence yourself|shut up)\b")
 # A number for "set the volume to N" / "volume at N percent".
@@ -43,6 +46,8 @@ def classify(utterance: str) -> tuple[str, int | None] | None:
     """
     text = utterance.strip().lower()
     if not text:
+        return None
+    if _MEDIA_RE.search(text):
         return None
     if _UNMUTE_RE.search(text):
         return ("unmute", None)

@@ -25,6 +25,14 @@ discovery:
   # Shared-secret join token; must match the server's discovery.token if set.
   # token: ""
 
+# TLS client behavior when the server has TLS enabled (a wss:// server_url, or
+# the mDNS advert says so). Default: connect encrypted but do NOT verify the
+# certificate — the right posture for a self-signed home-LAN cert. Set
+# tls_verify: true to require a trusted cert (system store), or point tls_ca
+# at the server's cert/CA file to pin it.
+# tls_verify: false
+# tls_ca: ""
+
 # Stable primary identifier for this node. Leave unset — one is generated and
 # written here on first run (or assigned at install via `kenzy-init --node-id`),
 # and kept across restarts. The server keys this node's config, controls, and

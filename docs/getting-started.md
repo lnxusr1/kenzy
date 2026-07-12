@@ -194,6 +194,8 @@ curl -fsSL https://kenzy.ai/install.sh | bash -s -- --profile node --token <toke
 | `--version` | `KENZY_VERSION` | *(latest ≥3)* | Pin a specific PyPI version |
 | `--package` | `KENZY_PACKAGE` | *(PyPI)* | Install a local wheel/sdist/source dir instead of PyPI |
 | `--constraints` | `KENZY_CONSTRAINTS` | *(none)* | A pip constraints file of dependency pins to honor on install **and every future auto-upgrade** (seeds the config home's `constraints.txt`) |
+| `--tls` / `--no-tls` | `KENZY_TLS` | *(ask)* | Server/all installs ask whether to [enable TLS](configuration/server.md#tls-optional) (wss + https dashboard) with a **generated self-signed cert** — these flags answer without the prompt. Default (and `--yes`) is plaintext. |
+| `--tls-cert` / `--tls-key` | `KENZY_TLS_CERT` / `KENZY_TLS_KEY` | *(generated)* | Use your own certificate pair instead of generating one (both required; implies `--tls`) |
 | `--no-service` | — | — | Install + config only; skip the systemd units |
 | `--yes` | `KENZY_YES` | `0` | Assume defaults / no prompts (CI) |
 | `--home` | `KENZY_HOME` | `~/.config/kenzy` | Config home (configs, skills, data, `.env`) |

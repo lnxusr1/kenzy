@@ -98,6 +98,16 @@ class ServerAdvertiser:
             self._info = None
 
 
+def _service_url(host: str, port: int, properties: dict[Any, Any]) -> str:
+    """Build the server URL from a resolved mDNS record; the ``tls`` TXT flag
+    (advertised when the server terminates TLS) switches the scheme to wss."""
+    tls = properties.get(b"tls") or properties.get("tls")
+    if isinstance(tls, bytes):
+        tls = tls.decode(errors="replace")
+    scheme = "wss" if str(tls or "").strip() == "1" else "ws"
+    return f"{scheme}://{host}:{port}"
+
+
 def discover_server(
     timeout: float = 5.0, cancel_event: threading.Event | None = None
 ) -> str | None:
@@ -128,7 +138,7 @@ def discover_server(
             ipv4 = [a for a in addrs if ":" not in a]
             candidates = ipv4 or addrs
             if candidates:
-                found.append(f"ws://{candidates[0]}:{info.port}")
+                found.append(_service_url(candidates[0], int(info.port or 0), info.properties))
                 done.set()
 
         def add_service(self, zc: Zeroconf, type_: str, name: str) -> None:

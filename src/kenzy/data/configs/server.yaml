@@ -15,6 +15,18 @@ host: "0.0.0.0"
 # WebSocket port
 port: 8765
 
+# Optional TLS — encrypts the node WebSocket port (wss) AND the dashboard
+# (https) with one cert/key pair. Off unless both paths are set. A self-signed
+# cert is fine for a home LAN: Kenzy's own clients (nodes, backend services)
+# connect encrypted-but-unverified by default, so no CA install is needed
+# (browsers will show a one-time certificate warning). Generate a pair with:
+#   openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
+#     -keyout kenzy.key -out kenzy.crt -subj "/CN=kenzy"
+# File-managed on purpose (a bad path here could lock the dashboard out).
+# tls:
+#   cert: /path/to/kenzy.crt
+#   key: /path/to/kenzy.key
+
 # mDNS discovery — advertise this server as _kenzy._tcp so nodes find it without
 # a hardcoded server_url. Set enabled: false on networks where you'd rather pin
 # server_url on each node. `token` is the shared join secret nodes must present

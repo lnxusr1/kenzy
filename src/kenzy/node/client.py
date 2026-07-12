@@ -494,6 +494,10 @@ class NodeClient:
         # server_url is optional: when unset (or empty), the node discovers the
         # server over mDNS. An explicit value short-circuits discovery.
         self._server_url: str | None = cfg.get("server_url") or None
+        # TLS client posture for a wss:// server (bootstrap keys — needed before
+        # any connection exists, so they live in the local node.yaml).
+        self._tls_verify: bool = bool(cfg.get("tls_verify", False))
+        self._tls_ca: str | None = cfg.get("tls_ca") or None
         _disc = cfg.get("discovery") or {}
         self._discovery_enabled: bool = bool(_disc.get("enabled", True))
         # Shared-secret presented in hello; must match the server's discovery.token.
@@ -2128,7 +2132,15 @@ class NodeClient:
             while True:
                 try:
                     server_url = await self._resolve_server_url()
-                    ws = await websockets.connect(server_url)
+                    ssl_ctx = None
+                    if server_url.startswith("wss://"):
+                        # Encrypted-but-unverified by default: a self-signed LAN
+                        # cert isn't verifiable without an installed CA chain.
+                        # tls_verify: true / tls_ca: <path> opt into verification.
+                        from kenzy import tlsutil
+
+                        ssl_ctx = tlsutil.client_context(verify=self._tls_verify, ca=self._tls_ca)
+                    ws = await websockets.connect(server_url, ssl=ssl_ctx)
                     delay = 1
                     await self._run_session(ws)
 

@@ -29,6 +29,17 @@ log = logging.getLogger(__name__)
 #: ws(s):// → http(s):// for talking to the server's config endpoint.
 _SCHEME_MAP = {"ws": "http", "wss": "https"}
 
+
+def _ssl_for(base: str) -> Any:
+    """SSL context for https bases (None for plain http). Encrypted-but-unverified
+    by default — KENZY_TLS_VERIFY=1 / KENZY_TLS_CA=<path> opt into verification."""
+    if not base.startswith("https://"):
+        return None
+    from kenzy import tlsutil
+
+    return tlsutil.client_context_from_env()
+
+
 #: Last server HTTP base resolved by :func:`bootstrap_config`, reused by the
 #: registration heartbeat so it doesn't re-run mDNS every tick.
 _server_base: str | None = None
@@ -96,7 +107,7 @@ def bootstrap_config(service: str, *, timeout: float = 5.0) -> dict[str, Any]:
             req = urllib.request.Request(f"{base}/config/{service}")  # noqa: S310 (http only)
             if token:
                 req.add_header("Authorization", f"Bearer {token}")
-            with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310
+            with urllib.request.urlopen(req, context=_ssl_for(base), timeout=timeout) as resp:  # noqa: S310
                 cfg = json.loads(resp.read().decode())
             if not isinstance(cfg, dict):
                 raise ValueError("server returned a non-object config")
@@ -125,7 +136,7 @@ def fetch_service_config(service: str, *, timeout: float = 3.0) -> dict[str, Any
         req = urllib.request.Request(f"{base}/config/{service}")  # noqa: S310 (http only)
         if token:
             req.add_header("Authorization", f"Bearer {token}")
-        with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310
+        with urllib.request.urlopen(req, context=_ssl_for(base), timeout=timeout) as resp:  # noqa: S310
             cfg = json.loads(resp.read().decode())
         return cfg if isinstance(cfg, dict) else None
     except Exception:
@@ -180,7 +191,7 @@ def start_registration(service: str, cfg: dict[str, Any], *, interval: float = 3
                     req = urllib.request.Request(f"{base}/register?{params}")  # noqa: S310
                     if token:
                         req.add_header("Authorization", f"Bearer {token}")
-                    urllib.request.urlopen(req, timeout=5).close()  # noqa: S310
+                    urllib.request.urlopen(req, context=_ssl_for(base), timeout=5).close()  # noqa: S310
                 except Exception as exc:  # noqa: BLE001 - heartbeat is best-effort
                     log.debug("Service registration for %s failed: %s", service, exc)
             time.sleep(interval)

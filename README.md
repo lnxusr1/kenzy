@@ -125,6 +125,8 @@ then wired up). Open `http://<server>:8770/dashboard`. It gives you one place to
 - **Upgrade** the server, backend services, and nodes in place — one click, with an "update available" check against PyPI
 - Edit a safe subset of the server's own config and change the dashboard password
 
+Traffic is plaintext by default (a trusted-LAN posture). Optional TLS — `tls: {cert, key}` in `server.yaml`, or say yes at the installer's TLS question — encrypts both the dashboard (https) and the node audio stream (wss); a self-signed cert works because Kenzy's own clients connect encrypted-but-unverified by default. See the [server configuration docs](https://docs.kenzy.ai/configuration/server/#tls-optional).
+
 All `/api` reads and actions require login; mutating actions also need `controls`. Login
 defaults to `admin` / `password` — change it with `kenzy-passwd` (server host only) or
 from the Settings page. It is plaintext HTTP on a LAN bind, so **do not port-forward it**.
@@ -184,7 +186,9 @@ Per-skill config lives under `skills.<name>` in `llm.yaml`. Secrets come from en
 
 Smart home control pulls your device **topology live from Home Assistant** — which entities exist, their friendly names, domains, and floor/area placement — so there's no device-map file to maintain. Add a device in HA and it's voice-controllable on the next refresh. Commands resolve in two tiers: a deterministic fast path (padacioso + rapidfuzz, no LLM) for everyday imperatives, and a sub-LLM fallback that reads the live `floor → area → type → entity` outline for harder requests.
 
-The only hand-authored input is an optional `data/home_assistant/curation.yaml` — the voice layer HA can't store: spoken aliases, per-device notes, room group-defaults, and voice-control exclusions. Edit it directly or from the dashboard's **Home Assistant** tab. Run `kenzy-ha-devices` to print the live tree with each entity ID and its included/excluded status. (If HA is unreachable and legacy `device_ids.yaml`/`device_ids.json` files are present, the skill falls back to them.)
+Covered domains: lights, switches, fans, covers, locks, climate — plus **scenes, scripts, buttons, and toggle helpers** ("activate movie night", "run the goodnight routine", "turn on guest mode" — resolved by name house-wide), the **robot vacuum** ("start the vacuum", "send it home"), and **media-player transport** ("pause the TV", "skip this song", "turn the music down" — targeting whatever's actually playing; starting new music by name arrives with the Music Assistant integration).
+
+The only hand-authored input is an optional `data/home_assistant/curation.yaml` — the voice layer HA can't store: spoken aliases, per-device notes, room group-defaults, and voice-control exclusions. Edit it directly or from the dashboard's **Home Assistant** tab. Run `kenzy-ha-devices` to print the live tree with each entity ID and its included/excluded status.
 
 ## Development
 

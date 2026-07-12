@@ -267,6 +267,19 @@ class Dashboard:
         # Cache of the latest kenzy version on PyPI (checked lazily; ~1 h TTL) so the
         # update check doesn't hit PyPI on every Settings load.
         self._pypi_cache: tuple[float, str | None] | None = None
+        # TLS: the dashboard terminates the same cert pair as the node WS port
+        # (`tls: {cert, key}` in server.yaml). Browsers see https/wss; with a
+        # self-signed cert they show a one-time interstitial (or install the CA).
+        self._ssl: Any = None
+        tls_cfg = cfg.get("tls") or {}
+        if isinstance(tls_cfg, dict) and tls_cfg.get("cert") and tls_cfg.get("key"):
+            from kenzy import tlsutil
+
+            try:
+                self._ssl = tlsutil.server_context(str(tls_cfg["cert"]), str(tls_cfg["key"]))
+                log.info("TLS enabled on the dashboard (https)")
+            except Exception as exc:
+                log.error("Dashboard TLS config invalid (%s) — continuing WITHOUT TLS", exc)
         server.add_state_listener(self._on_state_change)
         # Calibration: which connected browser is tuning which node (connection → node_id).
         # Tune samples are relayed only to the subscribed client, not all clients, and
@@ -370,12 +383,13 @@ class Dashboard:
         cookie = self._cookie_header("", request, max_age=0)
         return self._json(200, {"ok": True}, set_cookie=cookie)
 
-    @staticmethod
-    def _cookie_header(value: str, request: Request, *, max_age: int) -> str:
+    def _cookie_header(self, value: str, request: Request, *, max_age: int) -> str:
         """Build the session cookie. Adds ``Secure`` when the request arrived over TLS
         (directly or via a reverse proxy that forwards the scheme), so the cookie isn't
         sent in cleartext once HTTPS is in front (F-7). Plaintext stays the default."""
-        secure = request.headers.get("X-Forwarded-Proto", "").lower() == "https"
+        secure = (
+            self._ssl is not None or request.headers.get("X-Forwarded-Proto", "").lower() == "https"
+        )
         attrs = "HttpOnly; SameSite=Strict; Path=/"
         if secure:
             attrs += "; Secure"
@@ -1659,5 +1673,6 @@ class Dashboard:
             self._dcfg.port,
             process_request=self.process_request,
             max_size=262_144,  # mutations are small JSON; bound inbound frame size (F-10)
+            ssl=self._ssl,
         ):
             await asyncio.Future()

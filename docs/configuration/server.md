@@ -11,6 +11,7 @@ The server is the central WebSocket hub. It accepts connections from room nodes,
 |---|---|---|
 | `host` | `"0.0.0.0"` | Bind address. `0.0.0.0` listens on all interfaces. |
 | `port` | `8765` | WebSocket port |
+| `tls.cert` / `tls.key` | — | Optional TLS: paths to a certificate + private key on the server host. When both are set the node WebSocket port speaks **wss** and the dashboard **https** (one cert pair covers both). See [TLS](#tls-optional) below. |
 | `log_level` | `"info"` | Log verbosity |
 | `experimental` | `false` | Opt this server into experimental features that aren't ready to ship officially (none gated yet — reserved for future previews). Also switches the dashboard favicon to the experimental mark — gold tile, petrol "K", corner badge dot — so the browser tab is distinguishable from production at a glance. Editable from the dashboard's Settings tab. |
 
@@ -45,6 +46,42 @@ Authorization: Bearer <discovery.token / KENZY_SERVICE_TOKEN>
 `text` is required; `rooms` is an optional comma-separated list of room names (omit for **every** room). Returns `{"announced": <node count>, …}`. It must be a **GET** with query parameters (the `websockets` HTTP hook only accepts GET and exposes no request body), gated by the service-to-service bearer when one is configured.
 
 For a ready-to-use Home Assistant `rest_command`, see [Home Assistant Integration → Calling Kenzy from Home Assistant](../skills/home-assistant.md#calling-kenzy-from-home-assistant).
+
+### TLS (optional)
+
+Kenzy runs in plaintext by default — normal for a trusted home LAN. The
+[installer](../getting-started.md) offers to set this all up for you (say yes at the TLS
+question, or pass `--tls`); to do it by hand, give the server a certificate and key:
+
+```yaml
+tls:
+  cert: /etc/kenzy/kenzy.crt
+  key: /etc/kenzy/kenzy.key
+```
+
+One pair covers both listeners: the node WebSocket port becomes **wss** and the dashboard
+becomes **https** (the login cookie is then marked `Secure`). A **self-signed certificate
+is fine** — generate one with:
+
+```bash
+openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
+  -keyout kenzy.key -out kenzy.crt -subj "/CN=kenzy"
+```
+
+Kenzy's own clients are built for exactly this posture: nodes and the backend services
+connect **encrypted but unverified** by default, so nothing needs a CA installed —
+traffic is protected from passive eavesdropping without pretending a trust chain exists.
+mDNS advertises the TLS flag, so auto-discovering nodes and services switch to `wss://`
+automatically; nodes with an explicit `server_url` need it changed to `wss://` by hand.
+Browsers *do* verify, so the dashboard shows a one-time certificate warning (or install
+the cert on your machines).
+
+Operators with a real CA can turn verification on at each client: `tls_verify: true` /
+`tls_ca:` in `node.yaml` (see [Node Configuration](node.md)), or `KENZY_TLS_VERIFY=1` /
+`KENZY_TLS_CA=/path` in a backend service's environment. The `tls` keys are deliberately
+**not** dashboard-editable (a bad path would lock the dashboard out); manage them in
+`server.yaml`. Everything also still works behind a reverse proxy terminating TLS — the
+dashboard honors `X-Forwarded-Proto`.
 
 ### Dashboard
 

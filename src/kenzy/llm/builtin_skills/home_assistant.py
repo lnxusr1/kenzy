@@ -25,7 +25,9 @@ Config in llm.yaml under skills.home_assistant:
   base_url:      null         # only needed for local providers (Ollama, etc.)
   curation_file: "data/home_assistant/curation.yaml"   # optional
   cache_ttl:     300          # seconds to cache the HA topology
-  domains:       [light, switch, fan, cover, lock, climate]
+  media_volume_steps: 3       # device notches per spoken "turn the TV up/down" (1-6)
+  domains:       [light, switch, fan, cover, lock, climate, scene,
+                  script, button, input_button, input_boolean, vacuum, media_player]
   default_room:  ""           # used when the user doesn't specify a room
 """
 
@@ -65,6 +67,17 @@ def _thermo_min() -> float:
 def _thermo_max() -> float:
     return float(get_config("home_assistant", "thermo_max", _THERMO_MAX))
 
+
+def _media_volume_steps() -> int:
+    """Device notches per spoken volume command. One HA volume_up = one notch,
+    which is painfully slow by voice — default to 3 (clamped 1–6)."""
+    try:
+        steps = int(get_config("home_assistant", "media_volume_steps", 3))
+    except (TypeError, ValueError):
+        steps = 3
+    return max(1, min(6, steps))
+
+
 # Actions that require a recognized (non-unknown) speaker.
 _SECURE_ACTIONS = {"lock", "unlock", "open_cover", "close_cover"}
 
@@ -75,7 +88,8 @@ request, identify which devices to act on and what action to perform.
 The device map is structured as: floor > area > type > device.
 Top-level keys are floors (e.g. downstairs, upstairs, outside).
 Second-level keys are areas (rooms) within that floor.
-Third-level keys are device types (lights, fans, locks, covers, climate).
+Third-level keys are device types (lights, fans, locks, covers, climate,
+scenes, scripts, buttons, toggles, media).
 
 Device actions by type:
 - light / switch : turn_on | turn_off | toggle
@@ -83,6 +97,15 @@ Device actions by type:
 - cover          : open_cover | close_cover
 - lock           : lock | unlock
 - climate        : set_temperature  (°F, must be 65–85)
+- scene          : turn_on   ("activate" / "run" / "start" a scene)
+- script         : turn_on  (run it) | turn_off  (stop a running script)
+- button         : press
+- toggle         : turn_on | turn_off | toggle  (input_boolean helpers, e.g. "guest mode")
+- vacuum         : start | stop | return_to_base  ("send it home" / "back to the dock")
+- media          : media_play | media_pause | media_next_track | media_previous_track |
+                   volume_up | volume_down | media_mute | media_unmute | turn_on | turn_off
+                   (transport only — starting NEW music by name is not supported yet;
+                   say so if asked to play a specific song/artist)
 
 Selection rules:
 - A location context (floor + area) may be provided below the request. When it
@@ -98,6 +121,9 @@ Selection rules:
   even when the context area is on that same floor.
 - If no specific device or type is mentioned and the room has a "default" list,
   use those devices.
+- Scenes, scripts, buttons, and toggles usually have no area and appear under
+  home > unplaced. Match them by NAME across the whole map — the location
+  context does not scope them.
 - Each "- " line is a Home Assistant entity_id (e.g. light.kitchen_island).
   Use it verbatim as the "id" value. The text after "#" is the friendly name
   and optional context — read it to match the user's wording, but never return
@@ -246,11 +272,14 @@ async def _resolve(request: str, yaml_text: str, room: str | None = None) -> dic
 async def handle_home_control(
     request: str, speaker: str | None = None, room: str | None = None
 ) -> str:
-    """Control or query smart home devices: lights, fans, locks, covers, thermostats.
+    """Control or query smart home devices: lights, fans, locks, covers,
+    thermostats, scenes, scripts, buttons, and toggle helpers.
 
     Use for any request involving home devices — turning lights on or off,
     adjusting fans, locking or unlocking doors, opening or closing covers,
-    setting the thermostat, or checking the status of any device.
+    setting the thermostat, checking the status of any device, activating a
+    scene ("movie night"), running a script or routine, pressing a button, or
+    flipping an input_boolean helper ("guest mode").
 
     Pass the user's complete request text verbatim.  This skill consults the
     home device map to identify the correct devices and executes the action.
@@ -340,6 +369,15 @@ async def _apply_devices(devices: list[dict[str, Any]], device_map: dict[str, st
                 else:
                     status_lines.append(f"{name}: {s}")
 
+            elif action in ("volume_up", "volume_down"):
+                # Relative steps (Roku-class players report no volume_level, so
+                # absolute volume_set can't be trusted); one notch per call.
+                for _ in range(_media_volume_steps()):
+                    await _ha_service(ha_id, action)
+
+            elif action in ("media_mute", "media_unmute"):
+                await _ha_service(ha_id, "volume_mute", {"is_volume_muted": action == "media_mute"})
+
             elif action == "set_temperature":
                 temp = max(_thermo_min(), min(_thermo_max(), float(dev.get("temperature", 70))))
                 await _ha_service(ha_id, "set_temperature", {"temperature": temp})
@@ -406,7 +444,112 @@ _DOMAIN_TO_TYPE = {
     "cover": "covers",
     "lock": "lock",
     "climate": "climate",
+    "scene": "scenes",
+    "script": "scripts",
+    "button": "buttons",
+    "input_button": "buttons",
+    "input_boolean": "toggles",
+    "vacuum": "vacuums",
+    "media_player": "media",
 }
+
+# --- Tier 1 name-first domains (scene/script/button/input_boolean) ----------
+# Single-verb, resolved by NAME across the whole house (they usually have no
+# area, so room scoping doesn't apply). None of their type keys are group
+# words, so "turn on the lights" can never sweep up a scene or a helper.
+
+# Trailing qualifier words ("the movie night scene") tried stripped when the
+# full phrase doesn't match — tried second, since real names may contain them
+# ("Guest Mode", "Bedtime Scene").
+_QUALIFIERS = {"scene", "script", "routine", "automation", "button"}
+
+# Domains the "activate/run/press" verb family may act on; anything else
+# ("run the blinds") defers to the LLM. Service = press for buttons, turn_on
+# for the rest.
+_ACTIVATE_DOMAINS = {
+    "scene",
+    "script",
+    "button",
+    "input_button",
+    "input_boolean",
+    "switch",
+    "light",
+    "fan",
+    "vacuum",
+}
+
+_ACTIVATE_VERB = {
+    "scene": "Activated",
+    "script": "Ran",
+    "button": "Pressed",
+    "input_button": "Pressed",
+    "vacuum": "Started",
+}
+
+# Spoken type-words for the vacuum ("start the vacuum" names no device) — the
+# room's vacuum wins, else the house's only one, else defer to a clarify.
+_VACUUM_WORDS = {"vacuum", "vacuum cleaner", "robot vacuum"}
+
+# The activate family's HA service, chosen by the matched entity's domain.
+_ACTIVATE_SERVICE = {"button": "press", "input_button": "press", "vacuum": "start"}
+
+# Legacy verbs translated per domain ("turn on the vacuum" means start it).
+_SERVICE_ALIAS = {("vacuum", "turn_on"): "start", ("vacuum", "turn_off"): "stop"}
+
+# "stop the X" services by domain; anything else defers to the LLM.
+_STOP_SERVICES = {
+    "vacuum": "stop",
+    "fan": "turn_off",
+    "script": "turn_off",
+    "media_player": "media_pause",
+}
+
+# --- media_player transport (Tier 2) ----------------------------------------
+# Transport verbs only: act on what's already playing. Starting NEW music by
+# name is the Music Assistant integration (later — see design/backlog.md).
+# intent name → (HA service, live states that make a player the obvious
+# target, spoken confirmation verb).
+_MEDIA_INTENTS: dict[str, tuple[str, tuple[str, ...], str]] = {
+    "media_pause": ("media_pause", ("playing", "on", "buffering"), "Paused"),
+    "media_resume": ("media_play", ("paused", "idle", "on"), "Resumed"),
+    "media_next": ("media_next_track", ("playing", "on", "buffering"), "Skipped"),
+    "media_previous": ("media_previous_track", ("playing", "on", "buffering"), "Went back on"),
+    "media_vol_up": ("volume_up", ("playing", "on", "buffering"), "Turned up"),
+    "media_vol_down": ("volume_down", ("playing", "on", "buffering"), "Turned down"),
+    "media_mute": ("media_mute", ("playing", "on", "buffering"), "Muted"),
+    "media_unmute": ("media_unmute", ("playing", "on", "buffering", "paused"), "Unmuted"),
+}
+
+# Fast-path service compatibility for the name-first domains: a scene can't
+# turn_off, a button only presses — mismatches miss to the LLM instead of
+# 500ing against HA. Legacy domains keep their existing paths untouched.
+_DOMAIN_SERVICES = {
+    "scene": {"turn_on"},
+    "script": {"turn_on", "turn_off", "toggle"},
+    "button": {"press"},
+    "input_button": {"press"},
+    "input_boolean": {"turn_on", "turn_off", "toggle"},
+    "vacuum": {"start", "stop", "return_to_base"},
+    "media_player": {
+        "turn_on",
+        "turn_off",
+        "toggle",
+        "media_play",
+        "media_pause",
+        "media_next_track",
+        "media_previous_track",
+        "volume_up",
+        "volume_down",
+        "media_mute",
+        "media_unmute",
+    },
+}
+
+
+def _service_ok(entity_id: str, service: str) -> bool:
+    allowed = _DOMAIN_SERVICES.get(entity_id.split(".", 1)[0])
+    return allowed is None or service in allowed
+
 
 _ARTICLES = {"the", "a", "an", "my", "our", "your", "some", "please"}
 _FILLERS = {"in", "at", "of", "inside", "to"}
@@ -456,11 +599,30 @@ def _auto_spoken(code: str) -> str:
     return " ".join(parts)
 
 
+def _add_intent(c: Any, name: str, phrases: list[str]) -> None:
+    """add_intent with "[the] {device}" expanded to explicit variants.
+
+    padacioso quirk: an optional word immediately before a capture ("[the]
+    {device}") fails to match when the word is absent — so "turn on guest
+    mode" would miss while "turn on the guest mode" hits. Expanding the
+    article into two explicit patterns restores the bare form.
+    """
+    expanded: list[str] = []
+    for ph in phrases:
+        if "[the] " in ph:
+            expanded.append(ph.replace("[the] ", "the "))
+            expanded.append(ph.replace("[the] ", ""))
+        else:
+            expanded.append(ph)
+    c.add_intent(name, expanded)
+
+
 def _build_intents() -> Any:
     from padacioso import IntentContainer  # type: ignore[import-untyped]
 
     c = IntentContainer()
-    c.add_intent(
+    _add_intent(
+        c,
         "turn_on",
         [
             "[please] turn on [the] {device}",
@@ -468,7 +630,8 @@ def _build_intents() -> Any:
             "[please] cut on [the] {device}",
         ],
     )
-    c.add_intent(
+    _add_intent(
+        c,
         "turn_off",
         [
             "[please] turn off [the] {device}",
@@ -477,17 +640,109 @@ def _build_intents() -> Any:
             "[please] kill [the] {device}",
         ],
     )
-    c.add_intent("toggle", ["[please] toggle [the] {device}"])
-    c.add_intent("lock", ["[please] lock [the] {device}"])
-    c.add_intent("unlock", ["[please] unlock [the] {device}"])
-    c.add_intent(
+    _add_intent(c, "toggle", ["[please] toggle [the] {device}"])
+    _add_intent(c, "stop_device", ["[please] stop [the] {device}"])
+    _MEDIA_WORD = "(music|tv|television|movie|show|media)"
+    _add_intent(
+        c,
+        "media_pause",
+        [
+            "[please] pause",
+            "[please] pause it",
+            "[please] pause that",
+            f"[please] pause [the] {_MEDIA_WORD}",
+            f"[please] pause the {_MEDIA_WORD} in the {{room}}",
+        ],
+    )
+    _add_intent(
+        c,
+        "media_resume",
+        [
+            "[please] resume",
+            "[please] unpause",
+            "[please] keep playing",
+            "[please] continue playing",
+            "play",
+            f"[please] resume [the] {_MEDIA_WORD}",
+            f"[please] play the {_MEDIA_WORD}",
+            f"[please] resume the {_MEDIA_WORD} in the {{room}}",
+        ],
+    )
+    _add_intent(
+        c,
+        "media_next",
+        [
+            "[please] next",
+            "[please] next (song|track)",
+            "[please] skip (this|the) (song|track)",
+            "[please] skip it",
+            "[please] play the next (song|track)",
+        ],
+    )
+    _add_intent(
+        c,
+        "media_previous",
+        [
+            "[please] previous (song|track)",
+            "[please] play the (previous|last) (song|track)",
+            "[please] go back a (song|track)",
+        ],
+    )
+    _add_intent(
+        c,
+        "media_vol_up",
+        [
+            f"[please] turn the {_MEDIA_WORD} up",
+            f"[please] turn up the {_MEDIA_WORD}",
+            f"[please] turn the {_MEDIA_WORD} volume up",
+        ],
+    )
+    _add_intent(
+        c,
+        "media_vol_down",
+        [
+            f"[please] turn the {_MEDIA_WORD} down",
+            f"[please] turn down the {_MEDIA_WORD}",
+            f"[please] turn the {_MEDIA_WORD} volume down",
+            f"[please] lower the {_MEDIA_WORD} [volume]",
+        ],
+    )
+    _add_intent(c, "media_mute", [f"[please] mute the {_MEDIA_WORD}"])
+    _add_intent(c, "media_unmute", [f"[please] unmute the {_MEDIA_WORD}"])
+    _add_intent(
+        c,
+        "return_home",
+        [
+            "[please] send [the] {device} home",
+            "[please] send [the] {device} [back] to the (dock|base)",
+            "[please] tell [the] {device} to go home",
+        ],
+    )
+    _add_intent(
+        c,
+        "activate",
+        [
+            "[please] activate [the] {device}",
+            "[please] run [the] {device}",
+            "[please] start [the] {device}",
+            "[please] execute [the] {device}",
+            "[please] launch [the] {device}",
+            "[please] press [the] {device}",
+            "[please] push [the] {device}",
+        ],
+    )
+    _add_intent(c, "lock", ["[please] lock [the] {device}"])
+    _add_intent(c, "unlock", ["[please] unlock [the] {device}"])
+    _add_intent(
+        c,
         "open_cover",
         [
             "[please] open [the] {device}",
             "[please] raise [the] {device}",
         ],
     )
-    c.add_intent(
+    _add_intent(
+        c,
         "close_cover",
         [
             "[please] close [the] {device}",
@@ -495,7 +750,8 @@ def _build_intents() -> Any:
             "[please] lower [the] {device}",
         ],
     )
-    c.add_intent(
+    _add_intent(
+        c,
         "set_temperature",
         [
             "set [the] {device} to {value} [degrees]",
@@ -687,7 +943,7 @@ def _extract_floor(idx: _DeviceIndex, toks: list[str]) -> tuple[str | None, list
 
 
 def _fuzzy(idx: _DeviceIndex, room: str | None, phrase: str) -> str | None:
-    from rapidfuzz import fuzz, process
+    from rapidfuzz import fuzz, process, utils
 
     if room is not None:
         codes = [c for grp in idx.rooms.get(room, {}).values() for c in grp]
@@ -696,7 +952,15 @@ def _fuzzy(idx: _DeviceIndex, room: str | None, phrase: str) -> str | None:
     if not codes:
         return None
     choices = {idx.spoken.get(c, c): c for c in codes}
-    match = process.extractOne(phrase, list(choices), scorer=fuzz.WRatio, score_cutoff=_FUZZ_CUTOFF)
+    # default_process lowercases both sides — the utterance arrives lowercase
+    # while HA names are Title Case, which alone costs ~18 WRatio points.
+    match = process.extractOne(
+        phrase,
+        list(choices),
+        scorer=fuzz.WRatio,
+        processor=utils.default_process,
+        score_cutoff=_FUZZ_CUTOFF,
+    )
     return choices[match[0]] if match else None
 
 
@@ -776,6 +1040,12 @@ def _resolve_target(
     if codes is not None:
         return codes
 
+    # "the vacuum" through the on/off verbs (the service alias maps them to
+    # start/stop): positional resolution, same as the activate family.
+    if phrase in _VACUUM_WORDS:
+        code = _resolve_vacuum(idx, room)
+        return [code] if code else None
+
     # Bare group ("the lights", "fans").
     if phrase in _GROUP_WORDS:
         gtype = _GROUP_WORDS[phrase]
@@ -807,6 +1077,15 @@ def _resolve_target(
         code = _fuzzy(idx, None, phrase)
         if code:
             return [code]
+
+    # Trailing qualifier ("turn on the movie night scene" → "movie night").
+    if len(toks) > 1 and toks[-1] in _QUALIFIERS:
+        stripped = " ".join(toks[:-1])
+        code = _fuzzy(idx, room, stripped)
+        if not code and not explicit_room:
+            code = _fuzzy(idx, None, stripped)
+        if code:
+            return [code]
     return None
 
 
@@ -816,6 +1095,86 @@ def _resolve_climate(idx: _DeviceIndex, target: str, origin_room: str | None) ->
     room = room or _room_key(origin_room)
     codes = idx.rooms.get(room, {}).get("climate", [])
     return codes or None
+
+
+def _resolve_vacuum(idx: _DeviceIndex, room: str | None) -> str | None:
+    """The room's vacuum, else the house's ONLY vacuum, else None (clarify)."""
+    room_codes = idx.rooms.get(room or "", {}).get("vacuums", [])
+    if len(room_codes) == 1:
+        return room_codes[0]
+    all_codes = [c for c in idx.device_map if c.startswith("vacuum.")]
+    return all_codes[0] if len(all_codes) == 1 else None
+
+
+async def _resolve_media(idx: _DeviceIndex, room: str | None, want: tuple[str, ...]) -> str | None:
+    """One media player for a transport verb.
+
+    The scoped room's only player wins outright (pausing an idle TV is a
+    harmless no-op); with several in the room, the one whose LIVE state makes
+    it the obvious target (playing, for most verbs). No room match ⇒ widen
+    house-wide by state — "pause the music" from the kitchen stops the one
+    thing playing anywhere. Still ambiguous ⇒ None (the LLM clarifies).
+    """
+
+    async def pick(codes: list[str], lone_wins: bool) -> str | None:
+        if lone_wins and len(codes) == 1:
+            # A room's only player wins even when idle (a no-op pause is
+            # harmless) — but never a dead one; fall through to widen instead.
+            try:
+                state = str((await _ha_state(codes[0])).get("state", ""))
+            except Exception:
+                return None
+            return codes[0] if state not in ("unavailable", "unknown") else None
+        hits = []
+        for c in codes:
+            try:
+                state = str((await _ha_state(c)).get("state", ""))
+            except Exception:
+                continue
+            if state in want:
+                hits.append(c)
+        return hits[0] if len(hits) == 1 else None
+
+    room_codes = idx.rooms.get(room or "", {}).get("media", [])
+    if room_codes:
+        code = await pick(room_codes, lone_wins=True)
+        if code:
+            return code
+    house = [c for r in idx.rooms.values() for c in r.get("media", [])]
+    house = [c for c in house if c not in room_codes]
+    return await pick(house, lone_wins=False) if house else None
+
+
+def _resolve_named(idx: _DeviceIndex, target: str, origin_room: str | None) -> str | None:
+    """Name-first resolution for the activate verb family: curated aliases
+    house-wide (unique hits only), then fuzzy across every device name,
+    retrying with a trailing qualifier word stripped."""
+    toks = [t for t in _norm(target).split() if t not in _ARTICLES and t not in _FILLERS]
+    if not toks:
+        return None
+
+    # "the vacuum" is a type word, not a name ("Rosie" won't fuzzy-match it):
+    # resolve it positionally — an explicit room, the asking room, or the only one.
+    room, vac_toks = _extract_room(idx, toks)
+    if " ".join(vac_toks) in _VACUUM_WORDS:
+        return _resolve_vacuum(idx, room or _room_key(origin_room))
+    phrases = [" ".join(toks)]
+    if len(toks) > 1 and toks[-1] in _QUALIFIERS:
+        phrases.append(" ".join(toks[:-1]))
+
+    origin = _room_key(origin_room)
+    for phrase in phrases:
+        hits = idx.aliases.get((origin, phrase)) or idx.aliases.get(("unplaced", phrase))
+        if not hits:
+            all_hits = [codes for (_r, ph), codes in idx.aliases.items() if ph == phrase]
+            if len(all_hits) == 1:
+                hits = all_hits[0]
+        if hits and len(hits) == 1:
+            return hits[0]
+        code = _fuzzy(idx, None, phrase)
+        if code:
+            return code
+    return None
 
 
 def _parse_int(value: Any) -> int | None:
@@ -870,7 +1229,11 @@ async def fast_home_control(utterance: str, room_id: str | None, speaker: str | 
         return FastResult.miss()
 
     name = match.get("name")
-    if name not in _CONTROL and name != "set_temperature":
+    if (
+        name not in _CONTROL
+        and name not in ("set_temperature", "activate", "stop_device", "return_home")
+        and name not in _MEDIA_INTENTS
+    ):
         return FastResult.miss()
 
     ents = match.get("entities", {}) or {}
@@ -887,12 +1250,56 @@ async def fast_home_control(utterance: str, room_id: str | None, speaker: str | 
         await _apply_devices(devices, idx.device_map)
         return FastResult.handled(f"Set the temperature to {int(temp)} degrees.", _FAST_VOICE)
 
+    if name in _MEDIA_INTENTS:
+        svc, want, verb = _MEDIA_INTENTS[name]
+        spoken_room = _norm(str(ents.get("room", "")))
+        room = idx.room_phrases.get(spoken_room) if spoken_room else _room_key(origin)
+        if spoken_room and not room:
+            return FastResult.miss()  # named a room we don't know
+        code = await _resolve_media(idx, room, want)
+        if not code:
+            return FastResult.miss()
+        await _apply_devices([{"id": code, "action": svc}], idx.device_map)
+        return FastResult.handled(f"{verb} the {idx.spoken.get(code, code)}.", _FAST_VOICE)
+
+    if name == "activate":
+        code = _resolve_named(idx, target, origin)
+        if not code or code.split(".", 1)[0] not in _ACTIVATE_DOMAINS:
+            return FastResult.miss()
+        domain = code.split(".", 1)[0]
+        svc = _ACTIVATE_SERVICE.get(domain, "turn_on")
+        await _apply_devices([{"id": code, "action": svc}], idx.device_map)
+        verb = _ACTIVATE_VERB.get(domain, "Turned on")
+        return FastResult.handled(f"{verb} {idx.spoken.get(code, code)}.", _FAST_VOICE)
+
+    if name == "stop_device":
+        code = _resolve_named(idx, target, origin)
+        svc = _STOP_SERVICES.get(code.split(".", 1)[0]) if code else None
+        if not code or not svc:
+            return FastResult.miss()
+        await _apply_devices([{"id": code, "action": svc}], idx.device_map)
+        return FastResult.handled(f"Stopped {idx.spoken.get(code, code)}.", _FAST_VOICE)
+
+    if name == "return_home":
+        code = _resolve_named(idx, target, origin)
+        if not code or not code.startswith("vacuum."):
+            return FastResult.miss()
+        await _apply_devices([{"id": code, "action": "return_to_base"}], idx.device_map)
+        return FastResult.handled(f"Sent {idx.spoken.get(code, code)} home.", _FAST_VOICE)
+
     codes = _resolve_target(idx, name, target, origin)
     if not codes:
         return FastResult.miss()
 
     svc = _CONTROL[name][0]
-    devices = [{"id": c, "action": svc} for c in codes]
+    # A name-first entity resolved through the legacy verbs ("turn off movie
+    # night"): translate per domain where the intent is obvious ("turn on the
+    # vacuum" means start it), then only act when the domain supports the
+    # service — else let the LLM untangle it.
+    services = [_SERVICE_ALIAS.get((c.split(".", 1)[0], svc), svc) for c in codes]
+    if not all(_service_ok(c, s) for c, s in zip(codes, services)):
+        return FastResult.miss()
+    devices = [{"id": c, "action": s} for c, s in zip(codes, services)]
     if blocked := _secure_blocked(devices, speaker):
         return FastResult.handled(blocked, _FAST_VOICE)
     await _apply_devices(devices, idx.device_map)

@@ -27,6 +27,7 @@ export function HaView() {
   const [listDefault, setListDefault] = useState("");
   const [listAliases, setListAliases] = useState({}); // entity_id -> "csv"
   const [dirty, setDirty] = useState(false);
+  const [open, setOpen] = useState({}); // "floor/area" -> bool (collapsed by default)
 
   function hydrate(d) {
     const cur = d.curation || {};
@@ -184,6 +185,16 @@ export function HaView() {
       onChange=${(e) => onChange(e.target.checked)} /> ${label}</label>`;
 
   const row = (e) => {
+    // Built-in exclusion (Kenzy's own MQTT-bridge entities): code-level, so no
+    // curation control could ever apply — render inert instead of implying it.
+    if (e.reason === "kenzy internal")
+      return html`
+        <div class="ha-row excluded" key=${e.entity_id}>
+          <div class="ha-ent">
+            <span class="mono">${e.entity_id}</span>
+            <span class="micro">${e.name} · Kenzy's own entity — always excluded from voice</span>
+          </div>
+        </div>`;
     const r = rowOf(e.entity_id);
     return html`
       <div class=${"ha-row" + (r.exclude ? " excluded" : "")} key=${e.entity_id}>
@@ -288,22 +299,37 @@ export function HaView() {
         (floor) => html`
           <div class="ha-floor" key=${floor}>
             <h3 class="ha-floor-h">${floor}</h3>
-            ${Object.keys(tree[floor]).sort().map(
-              (area) => html`
+            ${Object.keys(tree[floor]).sort().map((area) => {
+              const key = `${floor}/${area}`;
+              const isOpen = !!open[key];
+              const ents = Object.values(tree[floor][area]).flat();
+              const nIncl = ents.filter((e) => e.included).length;
+              return html`
                 <div class="card ha-area" key=${area}>
-                  <div class="ha-area-h">${area}</div>
-                  ${Object.keys(tree[floor][area]).sort().map(
-                    (domain) => html`
-                      <div class="ha-dom" key=${domain}>
-                        <div class="ha-dom-h micro">${domain}</div>
-                        ${tree[floor][area][domain]
-                          .slice()
-                          .sort((a, b) => a.entity_id.localeCompare(b.entity_id))
-                          .map(row)}
-                      </div>`,
-                  )}
-                </div>`,
-            )}
+                  <button
+                    class="ha-area-h ha-area-toggle"
+                    aria-expanded=${isOpen}
+                    onClick=${() => setOpen((m) => ({ ...m, [key]: !isOpen }))}
+                  >
+                    <span class="ha-caret">${isOpen ? "▾" : "▸"}</span> ${area}
+                    <span class="micro ha-area-count">
+                      ${ents.length} device${ents.length === 1 ? "" : "s"}${nIncl < ents.length ? `, ${nIncl} voice-controllable` : ""}
+                    </span>
+                  </button>
+                  ${isOpen
+                    ? Object.keys(tree[floor][area]).sort().map(
+                        (domain) => html`
+                          <div class="ha-dom" key=${domain}>
+                            <div class="ha-dom-h micro">${domain}</div>
+                            ${tree[floor][area][domain]
+                              .slice()
+                              .sort((a, b) => a.entity_id.localeCompare(b.entity_id))
+                              .map(row)}
+                          </div>`,
+                      )
+                    : null}
+                </div>`;
+            })}
           </div>`,
       )}
       ${devices.length === 0 ? html`<div class="empty">No voice-controllable entities reported.</div>` : null}

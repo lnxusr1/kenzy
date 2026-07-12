@@ -319,6 +319,19 @@ class AudioServer:
         self._conn_log: dict[str, deque[float]] = {}
         # Observers notified when the node registry/state changes (the dashboard
         # registers one for live push). Empty by default ⇒ zero overhead.
+        # Optional TLS termination (F-13 slice): `tls: {cert, key}` in server.yaml
+        # enables wss on this port (and https on the dashboard, which reads the
+        # same block). Clients default to encrypted-but-unverified (self-signed).
+        self._ssl: Any = None
+        tls_cfg = cfg.get("tls") or {}
+        if isinstance(tls_cfg, dict) and tls_cfg.get("cert") and tls_cfg.get("key"):
+            from kenzy import tlsutil
+
+            try:
+                self._ssl = tlsutil.server_context(str(tls_cfg["cert"]), str(tls_cfg["key"]))
+                log.info("TLS enabled on the node WebSocket port (wss)")
+            except Exception as exc:
+                log.error("TLS config invalid (%s) — continuing WITHOUT TLS", exc)
         self._state_listeners: list[Callable[[], None]] = []
         self._calib_listeners: list[Callable[[str, dict[str, Any]], None]] = []
         self._metrics_listeners: list[Callable[[], None]] = []
@@ -1417,6 +1430,7 @@ class AudioServer:
             self._port,
             process_request=self._process_config_request,
             max_size=_MAX_WS_FRAME,
+            ssl=self._ssl,
         ):
             await asyncio.Future()  # run until cancelled
 
@@ -2651,9 +2665,7 @@ class TranscribingServer(AudioServer):
     def _calib_apply(self, node_id: str, patch: dict[str, Any]) -> None:
         """Merge calibration results into the node's override (other keys kept)."""
         existing = {
-            k: v
-            for k, v in self.read_node_override(node_id).items()
-            if k in _ALLOWED_OVERRIDE_KEYS
+            k: v for k, v in self.read_node_override(node_id).items() if k in _ALLOWED_OVERRIDE_KEYS
         }
         self.write_node_override(node_id, {**existing, **patch})
 
@@ -2860,8 +2872,7 @@ class TranscribingServer(AudioServer):
                 )
                 if not patch:
                     msg = (
-                        "I couldn't get a clean measurement, "
-                        "so I've left your settings unchanged."
+                        "I couldn't get a clean measurement, so I've left your settings unchanged."
                     )
                     if verdict == "poor":
                         msg += (
@@ -2873,9 +2884,7 @@ class TranscribingServer(AudioServer):
                     return
                 self._calib_apply(node_id, patch)
                 await self.push_config(node_id)  # live keys apply immediately
-                log.info(
-                    "[%s] calibration applied: %s (separation=%s)", node_id, patch, verdict
-                )
+                log.info("[%s] calibration applied: %s (separation=%s)", node_id, patch, verdict)
                 summary = "I've tuned my hearing to this room."
                 if verdict == "marginal":
                     summary += " The room is a bit noisy, but it should work."
@@ -3189,9 +3198,7 @@ class TranscribingServer(AudioServer):
         async with self._lock:
             if rooms:
                 wanted = {str(r).strip().lower() for r in rooms}
-                targets = [
-                    nid for nid, s in self._nodes.items() if s.room_id.lower() in wanted
-                ]
+                targets = [nid for nid, s in self._nodes.items() if s.room_id.lower() in wanted]
             else:
                 targets = list(self._nodes)
         if not targets:
@@ -3255,7 +3262,13 @@ def main() -> None:
             port=server._port,
             host=server._host,
             instance=str(discovery_cfg.get("instance", "kenzy-server")),
-            properties={"version": version, "auth": auth},
+            properties={
+                "version": version,
+                "auth": auth,
+                # Nodes build wss:// from this flag, so discovery keeps working
+                # when the server terminates TLS.
+                "tls": "1" if server._ssl is not None else "0",
+            },
         )
 
     # Dashboard: opt-in and only wired up when enabled (zero overhead when off).

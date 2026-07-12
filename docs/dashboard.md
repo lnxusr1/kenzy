@@ -9,9 +9,10 @@ reachable from any machine on your network at `http://<server>:8770`. (Set
 mounted and it adds zero overhead.)
 
 !!! warning "Keep it on the LAN"
-    Login runs over **plaintext HTTP** and defaults to `admin` / `password`. Bind the
-    dashboard to localhost or your LAN, change the password (below), and **never
-    port-forward** the dashboard port to the public internet.
+    Login runs over **plaintext HTTP** by default and defaults to `admin` / `password`.
+    Bind the dashboard to localhost or your LAN, change the password (below), and
+    **never port-forward** the dashboard port to the public internet. To encrypt it,
+    [enable TLS](#https-optional).
 
 ## Enabling it
 
@@ -295,8 +296,8 @@ written to the server host's `.env` — values are never displayed, served, or l
 the page only shows which names are *set*. Restart the affected services (Services
 tab) to apply. It writes the server's own `.env`, which co-located services share; on
 a multi-host setup, remote hosts keep their own `.env` (`kenzy-deploy` syncs it).
-Requires `dashboard.controls`. Remember the dashboard runs over plain HTTP — enter
-keys from a machine on your own network.
+Requires `dashboard.controls`. Unless you've [enabled TLS](#https-optional), the
+dashboard runs over plain HTTP — enter keys from a machine on your own network.
 
 The **Updates** section compares the installed version against the latest `kenzy` release
 on PyPI and flags when one is available. It's checked lazily (only when you open Settings,
@@ -346,9 +347,17 @@ place, it requires login but not `controls`.
 ### HTTPS (optional)
 
 Login and traffic are **plaintext by default** — fine on a trusted wired LAN, weaker on
-Wi-Fi. To encrypt it, put the dashboard behind a **reverse proxy that terminates TLS**
-(Caddy gets you an automatic cert for a routable name; nginx/Traefik work with your own
-cert). Have the proxy forward `X-Forwarded-Proto: https` — the dashboard then marks its
-session cookie `Secure` automatically. Kenzy deliberately does **not** generate
-self-signed certs (the browser warnings train people to click through security prompts).
-Whatever you do, keep the dashboard off the public internet.
+Wi-Fi. Two ways to encrypt it:
+
+- **Built-in TLS** — set `tls: {cert, key}` in `server.yaml` and the dashboard serves
+  **https** (and the node WebSocket port **wss**) directly. A self-signed cert works;
+  your browser shows a one-time warning (or install the cert). See
+  [Server Configuration → TLS](configuration/server.md#tls-optional) for the
+  one-line `openssl` command and how Kenzy's own clients handle it.
+- **Reverse proxy** terminating TLS (Caddy gets you an automatic cert for a routable
+  name; nginx/Traefik work with your own cert). Have the proxy forward
+  `X-Forwarded-Proto: https`.
+
+Either way the dashboard marks its session cookie `Secure` automatically. Kenzy never
+generates certs for you — TLS is a deliberate opt-in with a cert you supply. Whatever
+you do, keep the dashboard off the public internet.

@@ -49,7 +49,34 @@ from kenzy.llm.skills import get_config  # type: ignore[import]
 log = logging.getLogger(__name__)
 
 # Domains we can voice-control.  Anything else HA exposes is ignored.
-_DEFAULT_DOMAINS = ("light", "switch", "fan", "cover", "lock", "climate")
+_DEFAULT_DOMAINS = (
+    "light",
+    "switch",
+    "fan",
+    "cover",
+    "lock",
+    "climate",
+    "scene",
+    "script",
+    "button",
+    "input_button",
+    "input_boolean",
+    "vacuum",
+    "media_player",
+)
+
+# Name-first domains: voice-reachable even with NO area assignment (scenes and
+# scripts usually have none).  The topology template only walks areas, so these
+# are additionally merged in from /api/states when unplaced; spatial domains
+# stay placed-only (an area-less light is deliberately not voice-addressable).
+NAME_FIRST_DOMAINS = frozenset(
+    {"scene", "script", "button", "input_button", "input_boolean", "vacuum"}
+)
+
+# Device buttons with these device_classes are hardware maintenance (Identify /
+# Restart / Update), not voice targets — dropped automatically. In a real HA
+# they dominate the button domain (~30 of 39 observed).
+_DIAGNOSTIC_BUTTON_CLASSES = {"identify", "restart", "update"}
 
 # Synthetic top level used when an area has no floor (floors are optional in HA).
 _NO_FLOOR = "home"
@@ -162,6 +189,13 @@ def _exclude_reason(entity_id: str, domain: str, area: str, curation: dict[str, 
     ``area`` is the area *slug*.  Single source of truth shared by the model
     builder and the ``kenzy-ha-devices`` discovery CLI.
     """
+    # Built-in rule: Kenzy's own HA entities (the MQTT bridge's per-node
+    # trigger/stop buttons and mute switch) are never voice targets — voice-
+    # controlling your own control surface is a loop, and the mute switch
+    # would otherwise ride the switch domain into "turn on the lights".
+    if entity_id.split(".", 1)[-1].startswith("kenzy_"):
+        return "kenzy internal"
+
     exclude = curation.get("exclude", {}) or {}
 
     if entity_id in set(exclude.get("entities", []) or []):
@@ -335,17 +369,65 @@ async def fetch_todo_lists() -> list[dict[str, str]]:
 
 
 async def fetch_raw() -> list[dict[str, Any]]:
-    """Render the topology template through HA and return the raw entity rows."""
+    """Render the topology template through HA and return the raw entity rows.
+
+    The template only sees entities placed in an area, so entities of the
+    name-first domains (scenes/scripts/buttons/input_booleans, which usually
+    have no area) are merged in from ``/api/states`` as unplaced rows.
+    """
     base, headers = ha_conn()
     async with httpx.AsyncClient(timeout=15) as client:
         resp = await client.post(
             f"{base}/api/template", headers=headers, json={"template": _TEMPLATE}
         )
         resp.raise_for_status()
-    parsed = json.loads(resp.text)
-    if not isinstance(parsed, list):
-        raise ValueError("HA template did not return a list")
+        parsed = json.loads(resp.text)
+        if not isinstance(parsed, list):
+            raise ValueError("HA template did not return a list")
+
+        merge_domains = set(_domains()) & NAME_FIRST_DOMAINS
+        if merge_domains:
+            states = await client.get(f"{base}/api/states", headers=headers)
+            states.raise_for_status()
+            parsed = merge_unplaced(parsed, states.json(), merge_domains)
     return parsed
+
+
+def merge_unplaced(
+    rows: list[dict[str, Any]], states: list[dict[str, Any]], domains: set[str]
+) -> list[dict[str, Any]]:
+    """Append area-less entities of the given domains as unplaced rows.
+
+    Also drops diagnostic-class buttons (identify/restart/update) everywhere —
+    including placed ones that came through the template — since the template
+    can't see ``device_class`` but ``/api/states`` can.
+    """
+    diagnostic: set[str] = set()
+    for st in states:
+        entity_id = str(st.get("entity_id", ""))
+        if entity_id.split(".", 1)[0] in ("button", "input_button"):
+            attrs = st.get("attributes") or {}
+            if attrs.get("device_class") in _DIAGNOSTIC_BUTTON_CLASSES:
+                diagnostic.add(entity_id)
+
+    seen = {str(r.get("entity_id", "")) for r in rows}
+    out = [r for r in rows if str(r.get("entity_id", "")) not in diagnostic]
+    for st in states:
+        entity_id = str(st.get("entity_id", ""))
+        if "." not in entity_id or entity_id in seen or entity_id in diagnostic:
+            continue
+        if entity_id.split(".", 1)[0] not in domains:
+            continue
+        attrs = st.get("attributes") or {}
+        out.append(
+            {
+                "entity_id": entity_id,
+                "name": attrs.get("friendly_name"),
+                "area": None,
+                "floor": None,
+            }
+        )
+    return out
 
 
 def build_model(raw: list[dict[str, Any]], curation: dict[str, Any]) -> HAModel:

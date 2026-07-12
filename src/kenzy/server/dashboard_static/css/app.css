@@ -615,6 +615,11 @@ button { font: inherit; cursor: pointer; }
 .ha-floor-h { margin: var(--s3) 0; font-size: 14px; letter-spacing: .04em; text-transform: uppercase; color: var(--text-faint); }
 .ha-area { padding: 0; overflow: hidden; }
 .ha-area-h { padding: var(--s3) var(--s4); font-weight: 700; border-bottom: 1px solid var(--border); background: var(--panel-2, var(--panel)); }
+.ha-area-toggle { display: block; width: 100%; text-align: left; border: 0; border-bottom: 1px solid var(--border); cursor: pointer; color: var(--text); font: inherit; font-weight: 700; }
+.ha-area-toggle:hover { background: var(--panel-hover, var(--panel)); }
+.ha-area-toggle[aria-expanded="false"] { border-bottom: 0; }
+.ha-caret { display: inline-block; width: 1em; color: var(--text-faint); }
+.ha-area-count { font-weight: 400; margin-left: var(--s2); }
 .ha-dom + .ha-dom { border-top: 1px solid var(--border); }
 .ha-dom-h { padding: 6px var(--s4) 0; }
 .ha-row {

@@ -276,3 +276,18 @@ async def test_dispatch_set_volume_action(tmp_path, monkeypatch):
 )
 def test_volume_classify(utterance, expected):
     assert classify(utterance) == expected
+
+
+def test_media_words_defer_to_the_ha_skill():
+    # Naming a media thing means the room's player, not the Kenzy node —
+    # these must MISS here so home_assistant's media transport handles them.
+    assert classify("mute the tv") is None
+    assert classify("unmute the television") is None
+    assert classify("turn the music up") is None
+    assert classify("turn the tv volume down") is None
+
+
+def test_bare_volume_words_still_mean_the_node():
+    assert classify("mute") == ("mute", None)
+    assert classify("turn it up") == ("up", None)
+    assert classify("set the volume to 60") == ("set", 60)

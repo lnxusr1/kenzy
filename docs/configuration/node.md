@@ -11,8 +11,10 @@ The node service runs on each room device. It captures microphone audio, detects
 
 | Key | Default | Description |
 |---|---|---|
-| `server_url` | `null` | WebSocket URL of the kenzy-server. Leave `null`/empty to **auto-discover** the server on the LAN via mDNS; set an explicit `ws://` URL to skip discovery (e.g. across VLANs that block multicast). |
+| `server_url` | `null` | WebSocket URL of the kenzy-server. Leave `null`/empty to **auto-discover** the server on the LAN via mDNS; set an explicit `ws://` (or `wss://` for a TLS-enabled server) URL to skip discovery (e.g. across VLANs that block multicast). |
 | `discovery.enabled` | `true` | Browse for the server over mDNS when `server_url` is unset |
+| `tls_verify` | `false` | When connecting over `wss://` (a [TLS-enabled server](server.md#tls-optional)): `false` = encrypted but the certificate is **not** verified — the right posture for a self-signed home-LAN cert, no CA install needed. `true` = require a certificate trusted by the system store. |
+| `tls_ca` | — | Path to the server's certificate (or a CA bundle) to **pin**: connections verify against this file specifically. Implies verification. |
 | `node_id` | *(generated)* | Stable primary identifier for this node. Leave unset — one is generated and written back to `node.yaml` on first run (or assigned at install with `kenzy-init --node-id ID`), then kept across restarts. The server keys the registry, per-node config, and all controls on it, so a node's identity (and its config) survives even when the room name changes or the device is reimaged. |
 | `room_id` | `null` | Human **room name** (e.g. `kitchen`). **Server-owned**: set it from the [dashboard](../dashboard.md). Until the server provides one it falls back to the **hostname**. Sent to the assistant as context (used in conversation history). |
 | `audio_device` | `null` | PortAudio device name substring or integer index. `null` uses the system default. Use `kenzy-devices` to find the correct value. |

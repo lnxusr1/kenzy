@@ -123,8 +123,65 @@ If HA is unreachable and no topology has been fetched yet, home-control requests
 | `cover` | `open_cover`, `close_cover` |
 | `lock` | `lock`, `unlock` |
 | `climate` | `set_temperature` (65–85 °F), `get_status` |
+| `scene` | `turn_on` — *"activate movie night"*, *"turn on the movie night scene"* |
+| `script` | `turn_on` — *"run the goodnight routine"* |
+| `button`, `input_button` | `press` — *"press the coffee maker button"* |
+| `input_boolean` | `turn_on`, `turn_off`, `toggle` — *"turn on guest mode"* |
+| `vacuum` | `start`, `stop`, `return_to_base` — *"start the vacuum"*, *"send Rosie home"* |
+| `media_player` | transport only: pause / resume / next / previous / media volume / mute / on / off — *"pause the TV"*, *"skip this song"*, *"turn the music down"* |
 
 `set_temperature` and the control actions are handled by the fast path. `get_status` and relative changes ("make it warmer") are resolved by the LLM fallback.
+
+### Scenes, scripts, buttons, and toggles (name-first)
+
+Scenes, scripts, and helper entities usually have **no area** in HA, so they resolve by
+**name across the whole house** rather than by room — *"activate movie night"* works from
+any room, and the verb family (*activate / run / start / execute / launch / press /
+push*) all reach them. A trailing qualifier word is understood: *"the movie night
+scene"* matches a scene named just "Movie Night". Plain *"turn on guest mode"* works
+too — `input_boolean` helpers accept the normal on/off/toggle verbs (they never join
+room groups, so *"turn on the lights"* can't flip one).
+
+Two kinds of noise are filtered automatically:
+
+- **Diagnostic device buttons** (`device_class: identify / restart / update`) — hardware
+  maintenance, not voice targets.
+- **Kenzy's own HA entities** (the MQTT bridge's per-node trigger/stop buttons and mute
+  switch, `*.kenzy_*`) — voice-controlling your own control surface would be a loop.
+
+Some integrations expose junk buttons *without* a diagnostic `device_class` (ping
+sensors, Z-Wave state buttons). Sweep those out with curation patterns:
+
+```yaml
+exclude:
+  patterns:
+    - "button.*_ping"
+    - "button.*identify*"
+```
+
+**Vacuums** understand *"start/run/stop the vacuum"*, *"turn the vacuum on/off"* (translated
+to start/stop), and *"send it home"* / *"back to the dock"*. Say "the vacuum" and Kenzy
+resolves it positionally — the asking room's vacuum, or the house's only one; with several,
+name the one you mean ("start Rosie") or it asks. Vacuums resolve by name even when HA has
+no area assigned to them.
+
+**Media players — transport, not libraries.** *"Pause"*, *"resume"*, *"skip this song"*,
+*"turn the TV up"*, *"mute the television"*, *"pause the music in the living room"* — all
+instant, against whatever is already playing. Targeting is positional with a live-state
+tiebreak: an explicitly named room wins; otherwise the asking room's player; a room with
+several players picks the one actually *playing*; and with no player in your room, Kenzy
+widens to the one thing playing anywhere in the house — "pause the music" from the
+kitchen stops the den. Two things playing and no room named ⇒ she asks. A spoken volume command moves the
+player **3 device notches** (one notch per command is painful by voice); tune it with
+`media_volume_steps`. Naming a media
+thing routes volume words to the *player* ("turn the music up", "mute the TV") while the
+bare forms ("turn it up", "mute") still control the Kenzy node itself. **Starting new
+music by name** ("play some jazz") is deliberately not here yet — that arrives with the
+Music Assistant integration; asked today, Kenzy says so instead of guessing.
+
+Scenes and scripts can do anything your HA lets them do — if one unlocks doors or opens
+the garage, remember that **activating it by voice is not speaker-gated** the way direct
+lock/cover commands are. Exclude sensitive ones from voice control via curation.
 
 ## Temperature limits
 
@@ -150,7 +207,8 @@ skills:
     # base_url: null               # set for Ollama / LM Studio
     curation_file: "data/home_assistant/curation.yaml"   # optional
     cache_ttl:     300             # seconds to cache the HA topology
-    # domains: [light, switch, fan, cover, lock, climate] # voice-controllable domains
+    # domains: [light, switch, fan, cover, lock, climate,  # voice-controllable domains
+    #           scene, script, button, input_button, input_boolean, vacuum, media_player]
     default_room:  "living_room"   # assumed room if user doesn't specify
 ```
 
@@ -161,13 +219,19 @@ skills:
 | `base_url` | — | Provider base URL for the sub-LLM (Ollama / LM Studio) |
 | `curation_file` | `data/home_assistant/curation.yaml` | Path to the curation file (relative to the config root) |
 | `cache_ttl` | `300` | Seconds to cache the HA topology pull before refreshing |
-| `domains` | `light, switch, fan, cover, lock, climate` | Entity domains exposed to voice control |
+| `media_volume_steps` | `3` | Device volume notches per spoken "turn the TV up/down" (1–6) |
+| `domains` | `light, switch, fan, cover, lock, climate, scene, script, button, input_button, input_boolean, vacuum, media_player` | Entity domains exposed to voice control |
 | `default_room` | — | Room assumed when the user names none |
 
 ## Example interactions
 
 - *"Turn off the office lights"* → **(fast)** all office lights
 - *"Turn on the lights"* → **(fast)** the room's curated default subset
+- *"Activate movie night"* → **(fast)** the Movie Night scene, from any room
+- *"Run the goodnight routine"* → **(fast)** the Goodnight script
+- *"Turn on the sprinklers"* → **(fast)** an `input_boolean.enable_sprinklers` helper
+- *"Send the vacuum home"* → **(fast)** `return_to_base` on the room's (or only) vacuum
+- *"Pause the music"* → **(fast)** the room's player, or the one thing playing anywhere
 - *"Turn on the lamps in the living room"* → **(fast)** the living-room lamps, even from another room's node
 - *"Set the thermostat to 72"* → **(fast)** sets the room's climate entity (clamped 65–85 °F)
 - *"Lock the front door"* → **(fast)** requires an enrolled speaker; refused for unknown
