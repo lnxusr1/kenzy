@@ -67,7 +67,8 @@ async def test_greetings_do_not_hijack(social, utterance):
 
 
 @pytest.mark.parametrize(
-    "utterance", ["never mind", "nevermind", "forget it", "nvm", "Forget that."]
+    "utterance",
+    ["never mind", "nevermind", "forget it", "nvm", "Forget that.", "cancel", "Cancel that."],
 )
 async def test_nevermind_handled(social, utterance):
     r = await social.fast_nevermind(utterance, "office", None)
@@ -80,6 +81,12 @@ async def test_nevermind_handled(social, utterance):
         "never mind the eggs, remove them from the list",  # → lists
         "forget the milk on the list",
         "never turn on the lights",
+        "cancel the alarm",  # → schedule cancel (keeps its noun)
+        # The quiet-demanding family is handled UPSTREAM by the server's
+        # _STOP_PHRASES gate (silent session end) — never by this intent.
+        "stop",
+        "quiet",
+        "hush",
     ],
 )
 async def test_nevermind_does_not_hijack(social, utterance):

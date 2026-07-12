@@ -69,6 +69,7 @@ markdown_extensions:
 nav:
   - Home: index.md
   - Getting Started: getting-started.md
+  - Talking to Kenzy: talking-to-kenzy.md
   - Troubleshooting: troubleshooting.md
   - Architecture: architecture.md
   - Dashboard: dashboard.md

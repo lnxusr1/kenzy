@@ -48,7 +48,13 @@ _GREETING_RE = re.compile(
     r"good (?:morning|afternoon|evening)|morning|afternoon|evening)$"
 )
 _NIGHT_RE = re.compile(r"^(?:good ?night|goodnight|night night|nighty night)$")
-_NEVERMIND_RE = re.compile(r"^(?:never ?mind|forget it|forget that|nvm)$")
+# Conversational bail-outs, anchored whole-utterance — these get a brief spoken
+# ack. The quiet-DEMANDING family ("stop", "quiet", "hush", "shut up"…) is
+# deliberately NOT here: the server's _STOP_PHRASES gate ends those sessions
+# silently before the LLM service is even called (no ack — they asked for quiet).
+_NEVERMIND_RE = re.compile(
+    r"^(?:never ?mind|forget it|forget that|nvm|cancel|cancel that)$"
+)
 
 
 def _day_part() -> str:
@@ -96,13 +102,15 @@ async def fast_greeting(utterance: str, room_id: str | None, speaker: str | None
 
 @fast_intent(priority=97)
 async def fast_nevermind(utterance: str, room_id: str | None, speaker: str | None) -> FastResult:
-    """Bail out of an exchange: "never mind" / "forget it" → a quick ack.
+    """Bail out of an exchange: "never mind" / "cancel" → a quick ack.
 
     Returns handled with ``expect_response`` unset, so when this lands during a
     held dialog the server's floor-hold logic ends the conversation cleanly — a
     fast reply that doesn't ask for a response closes the floor. No special
     plumbing needed. Anchored to the bare phrase so "forget the eggs on the
-    list" still routes to the lists skill.
+    list" still routes to the lists skill and "cancel the alarm" to schedules.
+    ("stop"/"quiet"/"hush" never reach this service — the server's
+    _STOP_PHRASES gate ends those sessions silently, which is the point.)
     """
     if _NEVERMIND_RE.match(_normalize(utterance)):
         return FastResult.handled(random.choice(_ACK), _VOICE)

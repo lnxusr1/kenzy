@@ -60,6 +60,8 @@ how it all fits together.
 
 ## Quick links
 
+- **[Talking to Kenzy](talking-to-kenzy.md)** — the five-minute guide to using her: waking, interrupting, canceling, muting, conversations
+
 - [Getting Started](getting-started.md) — install it and have your first conversation
 - [Troubleshooting](troubleshooting.md) — when something doesn't work
 - [Dashboard](dashboard.md) — the web page where you manage everything

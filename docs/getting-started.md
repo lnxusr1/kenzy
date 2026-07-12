@@ -158,6 +158,11 @@ including giving devices natural spoken names, is at
 
 ## Next steps
 
+Now teach the house to use her: [Talking to Kenzy](talking-to-kenzy.md) is the
+five-minute guide — waking her, interrupting, canceling, muting, and how
+conversations work.
+
+
 - [Enroll voices](speaker-enrollment.md) so Kenzy knows who's talking
 - [Explore the dashboard](dashboard.md) — updates, logs, activity view, per-room tuning
 - [See what it can do](skills/builtin.md) — weather, news, announcements, and more

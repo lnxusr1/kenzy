@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [3.8.2]
+
+### Added
+
+- **The stop words got a full vocabulary — and the docs finally teach the basics.** Kenzy has always ended a session silently, before any AI involvement, when the whole utterance was a stop phrase ("stop", "be quiet", "shut up"…). That set now covers the rest of the family — "stop it", "stop talking", "hush", "shush", "enough", "that's enough" — all instant and reply-free (you asked for quiet). The polite bail-outs ("never mind", "forget it", and now "cancel") keep their brief spoken "Okay." And there's a new **[Talking to Kenzy](https://docs.kenzy.ai/talking-to-kenzy/)** docs page — waking her, interrupting mid-sentence, the stop words vs. the bail-outs vs. muting, how conversations work without repeating the wake word, and what every chime means. The five-minute guide to hand a houseguest.
+
 ## [3.8.1]
 
 ### Fixed

@@ -12,9 +12,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from typing import Any
 
 import numpy as np
+import pytest
 
 from kenzy import protocol
 from kenzy.node.client import _STATE_IDLE, _STATE_STREAMING, _STATE_TTS, NodeClient
@@ -480,3 +482,32 @@ async def test_barge_disabled_without_aec(monkeypatch):
     # The audio-loop gate (hardware_aec) would skip _handle_barge_frame entirely;
     # here we assert the gate condition the loop checks.
     assert not (c._state == _STATE_TTS and c._capture_after_prompt and c._hardware_aec)
+
+
+# ---------------------------------------------------------------------------
+# The silent stop gate (_STOP_PHRASES): pipeline-level, pre-LLM, pre-skills
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "phrase",
+    [
+        "stop", "Stop.", "stop it", "stop talking", "be quiet", "quiet",
+        "hush", "shut up", "silence", "enough", "That's enough!", "please stop",
+    ],
+)
+def test_stop_phrases_cover_the_family(phrase):
+    """The whole quiet-demanding family ends the session silently at the server —
+    before the LLM and before any skill (no spoken ack: they asked for quiet)."""
+    from kenzy.server.server import _STOP_PHRASES
+
+    normalized = re.sub(r"[^\w\s]", "", phrase).strip().lower()
+    assert normalized in _STOP_PHRASES, phrase
+
+
+def test_stop_phrases_require_the_whole_utterance():
+    from kenzy.server.server import _STOP_PHRASES
+
+    for phrase in ("stop the timer", "cancel", "never mind", "quiet down please"):
+        normalized = re.sub(r"[^\w\s]", "", phrase).strip().lower()
+        assert normalized not in _STOP_PHRASES, phrase

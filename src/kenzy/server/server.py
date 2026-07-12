@@ -1461,13 +1461,25 @@ async def _stdin_control(server: AudioServer) -> None:
 # STT pipeline
 # ---------------------------------------------------------------------------
 
+# Whole-utterance phrases that end the session SILENTLY, before the LLM and
+# before any skill — someone demanding quiet doesn't want a spoken "Okay!" back.
+# (Conversational bail-outs like "never mind" live in the social fast intent
+# instead, where a brief spoken ack is the polite response.)
 _STOP_PHRASES: frozenset[str] = frozenset(
     {
         "stop",
+        "stop it",
+        "stop that",
+        "stop talking",
         "be quiet",
         "quiet",
+        "hush",
+        "shush",
         "shut up",
         "silence",
+        "enough",
+        "that's enough",
+        "thats enough",
         "please stop",
         "please be quiet",
         "please shut up",
