@@ -65,3 +65,5 @@ synth_phrase.py
 build_pypi.sh
 publish.sh
 dev_stack.py
+# Voice test rig (dev-box specific: BY Y02 speaker/mic beside the node)
+voice_probe.py

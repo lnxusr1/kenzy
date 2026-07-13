@@ -193,6 +193,10 @@ def ha(monkeypatch):
         ),
         Entity("vacuum.rosie", "vacuum", "Rosie", "living_room", "Living Room",
                "downstairs", "Downstairs"),
+        Entity("light.of_lamp", "light", "Office Lamp", "office", "Office",
+               "downstairs", "Downstairs"),
+        Entity("light.of_lamp_2", "light", "Office Lamp 2", "office", "Office",
+               "downstairs", "Downstairs"),
         Entity("media_player.living_room_tv", "media_player", "Living Room TV",
                "living_room", "Living Room", "downstairs", "Downstairs"),
         Entity("media_player.den_tv", "media_player", "Den TV",
@@ -580,7 +584,10 @@ async def test_explicit_room_targeting(ha, monkeypatch):
 
 async def test_mute_the_tv_is_media_not_node(ha, monkeypatch):
     applied = _media_env(ha, monkeypatch, {})
-    result = await ha.fast_home_control("mute the tv", "living_room", "john")
+    # Whisper-style transcript: capitalized + trailing period. Fixed-word
+    # patterns must survive it (field bug: fell to the LLM, which muted
+    # TVs house-wide).
+    result = await ha.fast_home_control("Mute the TV.", "living_room", "john")
     assert result.is_handled
     assert applied["devices"] == [{"id": "media_player.living_room_tv", "action": "media_mute"}]
 
@@ -643,3 +650,32 @@ async def test_turn_off_the_tv_legacy_verb(ha, monkeypatch):
     result = await ha.fast_home_control("turn off the den tv", "den", "john")
     assert result.is_handled
     assert applied["devices"] == [{"id": "media_player.den_tv", "action": "turn_off"}]
+
+
+# ---------------------------------------------------------------------------
+# Room-embedded device names (field bugs found by the voice test rig, 2026-07-12)
+# ---------------------------------------------------------------------------
+
+
+async def test_room_stripped_plural_resolves_via_stem(ha):
+    # "turn on the office lamps": room "office" is extracted, leaving "lamps" —
+    # the stem group must match Title-Case names case-insensitively.
+    idx = await _view(ha)
+    codes = ha._resolve_target(idx, "turn_on", "the office lamps", "den")
+    assert codes is not None
+    assert set(codes) == {"light.of_lamp", "light.of_lamp_2"}
+
+
+async def test_room_word_alone_cannot_win_the_retry(ha):
+    # "office ceiling fan" (no such device; fixture office has only lamps):
+    # the room word must not fuzz the phrase onto an arbitrary "Office X" —
+    # this must defer to the LLM, not actuate a lamp.
+    idx = await _view(ha)
+    assert ha._resolve_target(idx, "turn_on", "the office ceiling fan", "den") is None
+
+
+async def test_room_embedded_singular_keeps_room_words(ha):
+    # "turn on the office lamp": stripped "lamp" scores under the fuzzy cutoff
+    # vs "Office Lamp"; the full phrase (room words kept) is an exact match.
+    idx = await _view(ha)
+    assert ha._resolve_target(idx, "turn_on", "the office lamp", "den") == ["light.of_lamp"]

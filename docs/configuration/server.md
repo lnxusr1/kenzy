@@ -76,6 +76,12 @@ automatically; nodes with an explicit `server_url` need it changed to `wss://` b
 Browsers *do* verify, so the dashboard shows a one-time certificate warning (or install
 the cert on your machines).
 
+The **backend services are covered too**: co-located services receive the server's cert
+pair through the config they already pull and bring their own listeners up as https —
+the whole mesh (pipeline calls, dashboard proxies, health checks) is then encrypted with
+no extra setup. Services on *other* hosts supply their own pair via `KENZY_TLS_CERT` /
+`KENZY_TLS_KEY` in their environment.
+
 Operators with a real CA can turn verification on at each client: `tls_verify: true` /
 `tls_ca:` in `node.yaml` (see [Node Configuration](node.md)), or `KENZY_TLS_VERIFY=1` /
 `KENZY_TLS_CA=/path` in a backend service's environment. The `tls` keys are deliberately

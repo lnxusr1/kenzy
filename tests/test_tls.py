@@ -122,3 +122,56 @@ def test_plain_config_means_no_tls():
         {"host": "127.0.0.1", "port": 0, "tls": {"cert": "/nope.crt", "key": "/nope.key"}}
     )
     assert bad._ssl is None
+
+
+def test_uvicorn_tls_kwargs(certpair, monkeypatch):
+    cert, key = certpair
+    monkeypatch.delenv("KENZY_TLS_CERT", raising=False)
+    monkeypatch.delenv("KENZY_TLS_KEY", raising=False)
+    # from the config block
+    kw = tlsutil.uvicorn_tls_kwargs({"tls": {"cert": cert, "key": key}})
+    assert kw == {"ssl_certfile": cert, "ssl_keyfile": key}
+    # absent -> plaintext
+    assert tlsutil.uvicorn_tls_kwargs({}) == {}
+    # configured but missing files -> warn + plaintext, never a boot failure
+    assert tlsutil.uvicorn_tls_kwargs({"tls": {"cert": "/nope.crt", "key": "/nope.key"}}) == {}
+    # env wins over config (the multi-host path)
+    monkeypatch.setenv("KENZY_TLS_CERT", cert)
+    monkeypatch.setenv("KENZY_TLS_KEY", key)
+    kw = tlsutil.uvicorn_tls_kwargs({"tls": {"cert": "/other.crt", "key": "/other.key"}})
+    assert kw == {"ssl_certfile": cert, "ssl_keyfile": key}
+
+
+def test_served_service_config_carries_the_tls_pair(certpair, tmp_path, monkeypatch):
+    """A TLS server injects its cert pair into co-located services' configs —
+    and the injection must survive the secret-stripper (which eats "key")."""
+    monkeypatch.setenv("KENZY_HOME", str(tmp_path))
+    (tmp_path / "configs").mkdir()
+    cert, key = certpair
+    server = AudioServer({"host": "127.0.0.1", "port": 0, "tls": {"cert": cert, "key": key}})
+    cfg = server._effective_service_config("stt")
+    assert cfg["tls"] == {"cert": cert, "key": key}
+    # plaintext server injects nothing
+    plain = AudioServer({"host": "127.0.0.1", "port": 0})
+    assert "tls" not in plain._effective_service_config("stt")
+
+
+def test_loopback_urls_auto_upgrade_with_mesh_tls(certpair, tmp_path, monkeypatch):
+    """A pre-TLS config's static http://127.0.0.1 service URLs must follow the
+    server into TLS — co-located services WILL be serving https."""
+    monkeypatch.setenv("KENZY_HOME", str(tmp_path))
+    (tmp_path / "configs").mkdir()
+    cert, key = certpair
+    cfg = {
+        "host": "127.0.0.1", "port": 0,
+        "tls": {"cert": cert, "key": key},
+        "stt": {"url": "http://127.0.0.1:8767/transcribe"},
+        "tts": {"url": "http://otherhost:8769/speak"},  # remote: operator's call
+    }
+    server = AudioServer(cfg)
+    assert server._peer_service_urls["stt"] == "https://127.0.0.1:8767/transcribe"
+    assert server._peer_service_urls["tts"] == "http://otherhost:8769/speak"
+    # without TLS nothing changes
+    plain = AudioServer({"host": "127.0.0.1", "port": 0,
+                         "stt": {"url": "http://127.0.0.1:8767/transcribe"}})
+    assert plain._peer_service_urls["stt"] == "http://127.0.0.1:8767/transcribe"

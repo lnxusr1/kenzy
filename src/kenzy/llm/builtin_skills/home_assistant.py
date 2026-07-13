@@ -942,7 +942,7 @@ def _extract_floor(idx: _DeviceIndex, toks: list[str]) -> tuple[str | None, list
     return None, toks
 
 
-def _fuzzy(idx: _DeviceIndex, room: str | None, phrase: str) -> str | None:
+def _fuzzy(idx: _DeviceIndex, room: str | None, phrase: str, strict: bool = False) -> str | None:
     from rapidfuzz import fuzz, process, utils
 
     if room is not None:
@@ -954,10 +954,13 @@ def _fuzzy(idx: _DeviceIndex, room: str | None, phrase: str) -> str | None:
     choices = {idx.spoken.get(c, c): c for c in codes}
     # default_process lowercases both sides — the utterance arrives lowercase
     # while HA names are Title Case, which alone costs ~18 WRatio points.
+    # strict=True scores the WHOLE string (no partial matching): needed when the
+    # phrase contains the room name, where WRatio's partials let the room word
+    # alone put every "Office X" device over the cutoff in a tie.
     match = process.extractOne(
         phrase,
         list(choices),
-        scorer=fuzz.WRatio,
+        scorer=fuzz.ratio if strict else fuzz.WRatio,
         processor=utils.default_process,
         score_cutoff=_FUZZ_CUTOFF,
     )
@@ -977,7 +980,7 @@ def _stem_group(idx: _DeviceIndex, room: str, phrase: str) -> list[str] | None:
         c
         for grp in idx.rooms.get(room, {}).values()
         for c in grp
-        if stem in idx.spoken.get(c, c).split()
+        if stem in idx.spoken.get(c, c).lower().split()
     ]
     codes = [c for c in codes if c not in idx.exclude]
     return codes or None
@@ -1004,6 +1007,7 @@ def _resolve_target(
     has_all = bool(set(raw) & _ALL_WORDS)
     toks = [t for t in raw if t not in _ARTICLES and t not in _ALL_WORDS]
 
+    full_phrase = " ".join(t for t in toks if t not in _FILLERS).strip()
     extracted, toks = _extract_room(idx, toks)
     explicit_room = extracted is not None
     room = extracted or _room_key(origin_room)
@@ -1069,6 +1073,14 @@ def _resolve_target(
     group = _stem_group(idx, room, phrase)
     if group:
         return group
+
+    # Devices named WITH their room ("Office Lamp" in the office): the
+    # room-stripped phrase can miss where the full phrase matches exactly.
+    # Strict scoring only — a partial match on the room word must not win.
+    if explicit_room and full_phrase != phrase:
+        code = _fuzzy(idx, room, full_phrase, strict=True)
+        if code:
+            return [code]
 
     # Widen to a house-wide search ONLY when the user did not name a room.
     # If they explicitly said "in the <room>", stay there (or defer to the LLM)
@@ -1223,7 +1235,11 @@ async def fast_home_control(utterance: str, room_id: str | None, speaker: str | 
         return FastResult.miss()
 
     try:
-        match = container.calc_intent(utterance) or {}
+        # STT transcripts carry capitalization + punctuation ("Mute the TV.").
+        # Capture patterns absorb a trailing period into {device} (harmless —
+        # resolution normalizes), but fixed-word patterns ("mute the (tv|…)")
+        # would hard-miss on it, so parse a normalized copy.
+        match = container.calc_intent(_norm(utterance)) or {}
     except Exception as exc:
         log.warning("HA intent parse failed: %s", exc)
         return FastResult.miss()

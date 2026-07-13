@@ -248,11 +248,14 @@ def main() -> None:
         _whisper = WhisperModel(model_size, device=device, compute_type=compute_type)
         log.info("Whisper model ready.")
 
+    from kenzy import tlsutil
+
     uvicorn.run(
         app,
         host=effective_bind(cfg),
         port=int(cfg.get("port", 8767)),
         log_level=str(cfg.get("log_level", "info")).lower(),
+        **tlsutil.uvicorn_tls_kwargs(cfg),
     )
 
 

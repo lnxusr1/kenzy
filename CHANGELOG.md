@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [3.10.0]
+
+### Added
+
+- **TLS now covers the service mesh too.** With `tls: {cert, key}` set on the server, the backend services (STT, TTS, LLM, speaker) no longer stay plaintext: the server hands its cert pair to co-located services through the config they already pull, each service's own listener comes up as **https**, the auto-registration heartbeat reports the scheme, and every internal call (pipeline, dashboard proxies, health checks) speaks https — unverified by default, like every other Kenzy client (`KENZY_TLS_VERIFY`/`KENZY_TLS_CA` to opt into real verification). Remote hosts in a multi-host fleet supply their own pair via `KENZY_TLS_CERT`/`KENZY_TLS_KEY`. Zero extra setup for the common case: enable TLS on the server and the whole stack — node audio, dashboard, and now the mesh — is encrypted. Missing cert files degrade to plaintext with a warning, never a boot failure.
+
+### Fixed
+
+- **The dashboard's startup log now says `https://` when TLS is on** (it always said `http://`, which sent you to a URL the browser couldn't open).
+- **"Mute the TV." now works with the period.** Speech-to-text transcripts arrive capitalized and punctuated, and the media/vacuum command patterns (fixed-word forms like "mute the TV", "skip this song") hard-missed on the trailing period — falling through to the LLM, which in one observed case muted TVs house-wide instead of the one in the room. The intent parser now reads a normalized copy of the transcript; the device-name patterns were already tolerant, and now everything is.
+- **Two device-resolution bugs found by talking to Kenzy — literally.** A new automated voice-test rig (synthesized speech through a real speaker into a real node mic) caught both on its first run. First: plural device phrases ("turn on the office lamps") compared the spoken stem against Home Assistant's Title-Case names case-sensitively, so the match never fired and the request fell to the slower LLM tier. Second: devices named after their own room ("Office Lamp" in the office) were unreachable by their natural phrasing — "turn on the office lamp" stripped the room word and the leftover missed the fuzzy cutoff. Both now resolve instantly; the room-name retry deliberately uses strict whole-string matching so the room word alone can never pull the command onto the wrong device ("office ceiling fan" defers to the LLM rather than guessing a lamp).
+
 ## [3.9.0]
 
 ### Added

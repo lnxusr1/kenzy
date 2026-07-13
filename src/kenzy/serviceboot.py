@@ -177,8 +177,20 @@ def start_registration(service: str, cfg: dict[str, Any], *, interval: float = 3
         except Exception:
             return ""
 
+    from kenzy import tlsutil
+
+    serves_tls = bool(tlsutil.uvicorn_tls_kwargs(cfg))
+
     def _loop() -> None:
-        params = urlencode({"service": service, "host": host, "port": port, "version": _version()})
+        params = urlencode(
+            {
+                "service": service,
+                "host": host,
+                "port": port,
+                "version": _version(),
+                "tls": "1" if serves_tls else "0",
+            }
+        )
         while True:
             base = _server_base
             if base is None:

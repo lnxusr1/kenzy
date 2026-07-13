@@ -690,11 +690,14 @@ def main() -> None:
     skill_registry.set_config(skills_cfg)
     skill_registry.load_skills(user_dir, disabled)
 
+    from kenzy import tlsutil
+
     uvicorn.run(
         app,
         host=effective_bind(cfg),
         port=int(cfg.get("port", 8766)),
         log_level=str(cfg.get("log_level", "info")).lower(),
+        **tlsutil.uvicorn_tls_kwargs(cfg),
     )
 
 

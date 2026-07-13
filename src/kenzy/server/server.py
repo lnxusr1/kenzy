@@ -42,7 +42,7 @@ from websockets.asyncio.server import ServerConnection
 from websockets.datastructures import Headers
 from websockets.http11 import Request, Response
 
-from kenzy import calibration, kenzy_version, protocol
+from kenzy import calibration, kenzy_version, protocol, tlsutil
 from kenzy.config import SERVICES
 from kenzy.serviceauth import check_bearer
 from kenzy.speaker import DEFAULT_ENROLL_PROMPTS
@@ -231,6 +231,26 @@ def load_server_config(config_path: str | Path) -> dict[str, Any]:
     return cfg
 
 
+_LOOPBACK_HTTP_RE = re.compile(r"^http://(127\.0\.0\.1|localhost)[:/]")
+
+
+def _mesh_url(cfg: dict[str, Any], url: str | None) -> str | None:
+    """Auto-upgrade a loopback service URL to https when mesh TLS is on.
+
+    With ``tls:`` set, co-located services follow the server into TLS (their
+    pair is injected via config-pull) — so a stale ``http://127.0.0.1:…`` URL
+    from a pre-TLS config would speak plaintext at a TLS listener and break
+    the pipeline. Remote URLs are left alone: another host's scheme is the
+    operator's call.
+    """
+    tls = cfg.get("tls") or {}
+    if url and tls.get("cert") and tls.get("key") and _LOOPBACK_HTTP_RE.match(url):
+        upgraded = "https://" + url[len("http://") :]
+        log.info("Mesh TLS: upgraded loopback service URL %s → %s", url, upgraded)
+        return upgraded
+    return url
+
+
 def _strip_secrets(data: dict[str, Any]) -> list[str]:
     """Recursively delete secret-like keys in place; return the dotted paths dropped."""
     dropped: list[str] = []
@@ -301,7 +321,7 @@ class AudioServer:
         # Backend service URLs the server is configured with, injected into dependent
         # services' served config (see _SERVICE_PEERS) so they aren't duplicated.
         self._peer_service_urls: dict[str, str] = {
-            s: str((cfg.get(s) or {}).get("url"))
+            s: str(_mesh_url(cfg, str((cfg.get(s) or {}).get("url"))))
             for s in ("stt", "tts", "llm", "speaker")
             if isinstance(cfg.get(s), dict) and (cfg.get(s) or {}).get("url")
         }
@@ -323,12 +343,14 @@ class AudioServer:
         # enables wss on this port (and https on the dashboard, which reads the
         # same block). Clients default to encrypted-but-unverified (self-signed).
         self._ssl: Any = None
+        self._tls_paths: tuple[str, str] | None = None
         tls_cfg = cfg.get("tls") or {}
         if isinstance(tls_cfg, dict) and tls_cfg.get("cert") and tls_cfg.get("key"):
             from kenzy import tlsutil
 
             try:
                 self._ssl = tlsutil.server_context(str(tls_cfg["cert"]), str(tls_cfg["key"]))
+                self._tls_paths = (str(tls_cfg["cert"]), str(tls_cfg["key"]))
                 log.info("TLS enabled on the node WebSocket port (wss)")
             except Exception as exc:
                 log.error("TLS config invalid (%s) — continuing WITHOUT TLS", exc)
@@ -656,6 +678,13 @@ class AudioServer:
                 section = {}
                 base[peer] = section
             section.setdefault("url", url)
+        # Mesh TLS: when this server terminates TLS, co-located services reuse
+        # the same pair — injected here (post-strip: `tls.key` is a path, but
+        # the secret-stripper would eat any key named "key" from an override,
+        # so remote hosts use KENZY_TLS_CERT/KENZY_TLS_KEY env instead). A
+        # service whose files don't exist logs a warning and stays plaintext.
+        if self._tls_paths and not (base.get("tls") or {}).get("key"):
+            base["tls"] = {"cert": self._tls_paths[0], "key": self._tls_paths[1]}
         return base
 
     def _service_override_path(self, service: str) -> Path:
@@ -786,7 +815,8 @@ class AudioServer:
             port = 0
         if not port:
             return self._http_json(400, {"error": "missing or invalid port"})
-        base = f"http://{host}:{port}"
+        scheme = "https" if (qs.get("tls") or ["0"])[0] == "1" else "http"
+        base = f"{scheme}://{host}:{port}"
         first = service not in self._announced_services
         self._announced_services[service] = {
             "base": base,
@@ -1561,7 +1591,7 @@ class TranscribingServer(AudioServer):
         self._ring_tasks: dict[str, asyncio.Task[None]] = {}
 
         scfg: dict[str, Any] = cfg.get("stt", {})
-        self._stt_url: str | None = str(scfg["url"]) if scfg.get("url") else None
+        self._stt_url: str | None = _mesh_url(cfg, str(scfg["url"])) if scfg.get("url") else None
         self._stt_timeout: float = float(scfg.get("timeout", 60.0))
         if self._stt_url:
             log.info("STT service: %s (timeout=%.0fs)", self._stt_url, self._stt_timeout)
@@ -1569,7 +1599,7 @@ class TranscribingServer(AudioServer):
             log.warning("STT service not configured — audio will not be transcribed.")
 
         tcfg: dict[str, Any] = cfg.get("tts", {})
-        self._tts_url: str | None = str(tcfg["url"]) if tcfg.get("url") else None
+        self._tts_url: str | None = _mesh_url(cfg, str(tcfg["url"])) if tcfg.get("url") else None
         self._tts_timeout: float = float(tcfg.get("timeout", 60.0))
         self._tts_chunk_size: int = int(tcfg.get("chunk_size", 4096))
         if self._tts_url:
@@ -1578,7 +1608,7 @@ class TranscribingServer(AudioServer):
             log.info("TTS service not configured — responses will not be spoken.")
 
         lcfg: dict[str, Any] = cfg.get("llm", {})
-        self._llm_url: str | None = str(lcfg["url"]) if lcfg.get("url") else None
+        self._llm_url: str | None = _mesh_url(cfg, str(lcfg["url"])) if lcfg.get("url") else None
         self._llm_timeout: float = float(lcfg.get("timeout", 30.0))
         if self._llm_url:
             log.info("LLM service: %s (timeout=%.0fs)", self._llm_url, self._llm_timeout)
@@ -1586,7 +1616,9 @@ class TranscribingServer(AudioServer):
             log.info("LLM service not configured — STT results will be logged only.")
 
         spcfg: dict[str, Any] = cfg.get("speaker", {})
-        self._speaker_url: str | None = str(spcfg["url"]) if spcfg.get("url") else None
+        self._speaker_url: str | None = (
+            _mesh_url(cfg, str(spcfg["url"])) if spcfg.get("url") else None
+        )
         self._speaker_timeout: float = float(spcfg.get("timeout", 10.0))
         # The unidentified-speaker name is owned by the speaker SERVICE (it's what
         # /identify returns). Read it from that service's effective config — the
@@ -1926,7 +1958,7 @@ class TranscribingServer(AudioServer):
 
         payload = {"audio_b64": base64.b64encode(pcm).decode(), "room_id": room_id}
         try:
-            async with httpx.AsyncClient() as client:
+            async with httpx.AsyncClient(verify=tlsutil.httpx_verify()) as client:
                 resp = await client.post(
                     self._speaker_url,  # type: ignore[arg-type]
                     json=payload,
@@ -1949,7 +1981,7 @@ class TranscribingServer(AudioServer):
             "room_id": room_id,
             "session_id": session_id,
         }
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(verify=tlsutil.httpx_verify()) as client:
             resp = await client.post(
                 self._stt_url,  # type: ignore[arg-type]
                 json=payload,
@@ -1983,7 +2015,7 @@ class TranscribingServer(AudioServer):
             # intercom skills refuse these targets in the reply itself.
             "no_aec_rooms": self._no_aec_rooms(),
         }
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(verify=tlsutil.httpx_verify()) as client:
             resp = await client.post(
                 self._llm_url,  # type: ignore[arg-type]
                 json=payload,
@@ -2175,7 +2207,7 @@ class TranscribingServer(AudioServer):
 
         from kenzy.backup import unpack_archive_bytes
 
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(verify=tlsutil.httpx_verify()) as client:
             resp = await client.get(
                 base_url + "/backup", timeout=20.0, headers=self._service_headers()
             )
@@ -2504,7 +2536,7 @@ class TranscribingServer(AudioServer):
         enroll_url = self._speaker_url.rsplit("/", 1)[0] + "/enroll"
         payload = {"audio_b64": base64.b64encode(pcm).decode(), "name": name}
         try:
-            async with httpx.AsyncClient() as client:
+            async with httpx.AsyncClient(verify=tlsutil.httpx_verify()) as client:
                 resp = await client.post(
                     enroll_url,
                     json=payload,
@@ -3100,7 +3132,7 @@ class TranscribingServer(AudioServer):
         sid = session_id or str(uuid.uuid4())
         await self.send_tts_start(node_id, sid, sample_rate=24000, channels=1)
         try:
-            async with httpx.AsyncClient() as client:
+            async with httpx.AsyncClient(verify=tlsutil.httpx_verify()) as client:
                 resp = await client.post(
                     self._tts_url,
                     json={"text": text, "voice_prompt": voice_prompt, "room_id": room_name},
@@ -3136,7 +3168,7 @@ class TranscribingServer(AudioServer):
         import httpx
 
         try:
-            async with httpx.AsyncClient() as client:
+            async with httpx.AsyncClient(verify=tlsutil.httpx_verify()) as client:
                 resp = await client.post(
                     self._tts_url,
                     json={"text": text, "voice_prompt": voice_prompt, "room_id": "announce"},

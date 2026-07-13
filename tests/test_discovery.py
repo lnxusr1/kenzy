@@ -35,4 +35,5 @@ def test_advertise_discover_roundtrip():
         pytest.skip("mDNS not routable in this environment")
     # A real kenzy-server elsewhere on the LAN could answer first, so only the
     # shape is asserted; the round-trip itself proves browse + resolve work.
-    assert url.startswith("ws://")
+    # (Since 3.9.0 a TLS-enabled server legitimately advertises wss://.)
+    assert url.startswith(("ws://", "wss://"))

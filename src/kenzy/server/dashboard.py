@@ -29,7 +29,7 @@ import websockets
 from websockets.datastructures import Headers
 from websockets.http11 import Request, Response
 
-from kenzy import kenzy_version, serviceauth
+from kenzy import kenzy_version, serviceauth, tlsutil
 from kenzy.logutil import install_ring_handler, level_value
 
 if TYPE_CHECKING:
@@ -439,7 +439,7 @@ class Dashboard:
 
         async def check(name: str, url: str) -> dict[str, Any]:
             try:
-                async with httpx.AsyncClient(timeout=2.0) as client:
+                async with httpx.AsyncClient(timeout=2.0, verify=tlsutil.httpx_verify()) as client:
                     r = await client.get(url)
                 detail = (
                     r.json()
@@ -847,7 +847,7 @@ class Dashboard:
         import httpx
 
         try:
-            async with httpx.AsyncClient(timeout=3.0) as client:
+            async with httpx.AsyncClient(timeout=3.0, verify=tlsutil.httpx_verify()) as client:
                 r = await client.get(
                     f"{base}/logs?{urlsplit(request.path).query}",
                     headers=self._server._service_headers(),
@@ -872,7 +872,7 @@ class Dashboard:
         import httpx
 
         try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
+            async with httpx.AsyncClient(timeout=5.0, verify=tlsutil.httpx_verify()) as client:
                 r = await client.post(f"{base}/restart", headers=self._server._service_headers())
             return r.status_code == 200
         except Exception:
@@ -882,7 +882,7 @@ class Dashboard:
         import httpx
 
         try:
-            async with httpx.AsyncClient(timeout=3.0) as client:
+            async with httpx.AsyncClient(timeout=3.0, verify=tlsutil.httpx_verify()) as client:
                 r = await client.get(f"{base}/health")
             data = r.json()
             return data if isinstance(data, dict) else {}
@@ -915,7 +915,7 @@ class Dashboard:
         import httpx
 
         try:
-            async with httpx.AsyncClient(timeout=900.0) as client:
+            async with httpx.AsyncClient(timeout=900.0, verify=tlsutil.httpx_verify()) as client:
                 r = await client.post(
                     f"{base}/upgrade",
                     json={"version": version},
@@ -1022,7 +1022,7 @@ class Dashboard:
         import httpx
 
         try:
-            async with httpx.AsyncClient(timeout=4.0) as client:
+            async with httpx.AsyncClient(timeout=4.0, verify=tlsutil.httpx_verify()) as client:
                 if method == "POST":
                     r = await client.post(
                         f"{base}/skills",
@@ -1048,7 +1048,7 @@ class Dashboard:
         import httpx
 
         try:
-            async with httpx.AsyncClient(timeout=20.0) as client:
+            async with httpx.AsyncClient(timeout=20.0, verify=tlsutil.httpx_verify()) as client:
                 if method == "POST":
                     r = await client.post(
                         f"{base}/ha/curation",
@@ -1153,7 +1153,7 @@ class Dashboard:
 
         latest: str | None = None
         try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
+            async with httpx.AsyncClient(timeout=5.0, verify=tlsutil.httpx_verify()) as client:
                 r = await client.get("https://pypi.org/pypi/kenzy/json")
                 r.raise_for_status()
             info = r.json().get("info") or {}
@@ -1239,7 +1239,7 @@ class Dashboard:
         import httpx
 
         try:
-            async with httpx.AsyncClient(timeout=8.0) as client:
+            async with httpx.AsyncClient(timeout=8.0, verify=tlsutil.httpx_verify()) as client:
                 r = await client.request(
                     method,
                     f"{base}{sub_path}",
@@ -1664,7 +1664,8 @@ class Dashboard:
             await ack(False, f"unknown message type: {mtype!r}")
 
     async def serve(self) -> None:
-        log.info("Dashboard on http://%s:%d/dashboard", self._dcfg.bind, self._dcfg.port)
+        scheme = "https" if self._ssl is not None else "http"
+        log.info("Dashboard on %s://%s:%d/dashboard", scheme, self._dcfg.bind, self._dcfg.port)
         if self._dcfg.auth_username is None and self._dcfg.auth_token is None:
             log.warning("Dashboard has no credentials configured — mutations disabled.")
         async with websockets.serve(

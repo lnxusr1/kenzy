@@ -312,11 +312,14 @@ def main() -> None:
             "on" if _openai_fallback else "off",
         )
 
+    from kenzy import tlsutil
+
     uvicorn.run(
         app,
         host=effective_bind(cfg),
         port=int(cfg.get("port", 8769)),
         log_level=str(cfg.get("log_level", "info")).lower(),
+        **tlsutil.uvicorn_tls_kwargs(cfg),
     )
 
 
