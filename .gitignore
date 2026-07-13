@@ -67,3 +67,6 @@ publish.sh
 dev_stack.py
 # Voice test rig (dev-box specific: BY Y02 speaker/mic beside the node)
 voice_probe.py
+
+# Dev-box household curation (John's real HA layer — not fixture data)
+/data/home_assistant/curation.yaml

@@ -555,6 +555,15 @@ _ARTICLES = {"the", "a", "an", "my", "our", "your", "some", "please"}
 _FILLERS = {"in", "at", "of", "inside", "to"}
 _ALL_WORDS = {"all", "every", "everything", "any"}
 _FUZZ_CUTOFF = 82
+# Token-coverage gate: every spoken word must partially match SOME word of the
+# device name. Without it, WRatio's partial tricks let a generic type word do
+# all the scoring — a garbled "hot light" put a dozen unrelated lights over
+# the cutoff (and even a perfect "hall light" lost to a device named "Light").
+# Tolerance stays WITHIN words (prefixes, plurals, and substrings score 100);
+# strictness applies ACROSS words (unaccounted-for words disqualify). 85 —
+# partial_ratio's edge alignment is generous with short tokens ("hot" scores
+# 80 against "light"), so anything lower lets garbage back in.
+_TOKEN_COVERAGE = 85
 
 # Past tense: the HA REST call completes before TTS playback even begins, so the
 # device is already on/off/locked by the time the confirmation is spoken.
@@ -942,6 +951,17 @@ def _extract_floor(idx: _DeviceIndex, toks: list[str]) -> tuple[str | None, list
     return None, toks
 
 
+def _covers(tokens: list[str], name: str) -> bool:
+    """True when every spoken token partially matches some word of the name."""
+    from rapidfuzz import fuzz
+
+    name_tokens = name.lower().split()
+    return all(
+        max((fuzz.partial_ratio(tok, nt) for nt in name_tokens), default=0) >= _TOKEN_COVERAGE
+        for tok in tokens
+    )
+
+
 def _fuzzy(idx: _DeviceIndex, room: str | None, phrase: str, strict: bool = False) -> str | None:
     from rapidfuzz import fuzz, process, utils
 
@@ -951,7 +971,16 @@ def _fuzzy(idx: _DeviceIndex, room: str | None, phrase: str, strict: bool = Fals
         codes = list(idx.device_map)
     if not codes:
         return None
-    choices = {idx.spoken.get(c, c): c for c in codes}
+    # Coverage gate first (see _TOKEN_COVERAGE): a candidate is only eligible
+    # when every spoken word is accounted for in its name.
+    tokens = _norm(phrase).split()
+    choices = {
+        name: code
+        for name, code in ((idx.spoken.get(c, c), c) for c in codes)
+        if _covers(tokens, name)
+    }
+    if not choices:
+        return None
     # default_process lowercases both sides — the utterance arrives lowercase
     # while HA names are Title Case, which alone costs ~18 WRatio points.
     # strict=True scores the WHOLE string (no partial matching): needed when the
@@ -1050,6 +1079,16 @@ def _resolve_target(
         code = _resolve_vacuum(idx, room)
         return [code] if code else None
 
+    # A device NAMED exactly what was said beats the group word: "the office
+    # light" means the fixture "Office Light", while the generic "the light" /
+    # "the lights" keeps its room-group (curated defaults) semantics. Checked
+    # with the room words kept AND stripped, so "office light" from anywhere
+    # and "light" said in a room whose fixture is just "Light" both hit.
+    for candidate in (full_phrase, phrase):
+        exact = _exact_named(idx, room, candidate)
+        if exact:
+            return exact
+
     # Bare group ("the lights", "fans").
     if phrase in _GROUP_WORDS:
         gtype = _GROUP_WORDS[phrase]
@@ -1107,6 +1146,18 @@ def _resolve_climate(idx: _DeviceIndex, target: str, origin_room: str | None) ->
     room = room or _room_key(origin_room)
     codes = idx.rooms.get(room, {}).get("climate", [])
     return codes or None
+
+
+def _exact_named(idx: _DeviceIndex, room: str | None, text: str) -> list[str]:
+    """Devices in the room whose spoken name IS the text (normalized equality).
+
+    Both representations of one fixture (a light entity and its switch twin
+    often share a name) are returned together; curation usually excludes one.
+    """
+    if room is None:
+        return []
+    codes = [c for grp in idx.rooms.get(room, {}).values() for c in grp]
+    return [c for c in codes if _norm(idx.spoken.get(c, c)) == text]
 
 
 def _resolve_vacuum(idx: _DeviceIndex, room: str | None) -> str | None:

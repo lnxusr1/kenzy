@@ -26,9 +26,10 @@ If anything doesn't behave the way a step says it should, jump to
   (with a polite spoken explanation) instead of misbehaving; everything else
   works normally. See [rooms without echo cancellation](configuration/node.md#rooms-without-echo-cancellation-hardware_aec-false).
 - **An OpenAI API key** (from [platform.openai.com](https://platform.openai.com)).
-  The default setup uses OpenAI for the "thinking" and the voice — the easiest way
-  to start. You can switch to other providers, or to fully local models, later
-  ([LLM](configuration/llm.md), [TTS](configuration/tts.md)).
+  The default setup uses OpenAI for the "thinking" and the voice — it's just the
+  quickest way to get going (one key, no model downloads, works on a single Pi).
+  Running **locally** is kind of the point of Kenzy; switch whenever you're
+  ready — see [Running Fully Local](fully-local.md).
 - **Optional:** [Home Assistant](https://www.home-assistant.io/), if you want voice
   control of your smart home. You can add it any time.
 
@@ -59,7 +60,17 @@ any time.
 
 ## Step 2 — Add your OpenAI key
 
-Open the settings file the installer created:
+!!! note "Wait — isn't Kenzy supposed to be local?"
+    It is — every stage can run on your own hardware, and this step is the
+    deliberate exception, not the fine print. OpenAI is the **quick-start
+    brain**: one key, no model downloads, and it works even when everything
+    runs on a single Pi (which can't run a capable language model). Your voice
+    audio still stays home — the ears (speech-to-text) are local by default;
+    only the transcribed *text* goes to the model. Once you're up and talking,
+    moving the brain and the voice into your house is a config change:
+    [Running Fully Local](fully-local.md#configuring-the-brain-the-llm).
+
+To get going now, open the settings file the installer created:
 
 ```bash
 nano ~/.config/kenzy/.env
@@ -167,8 +178,9 @@ conversations work.
 - [Explore the dashboard](dashboard.md) — updates, logs, activity view, per-room tuning
 - [See what it can do](skills/builtin.md) — weather, news, announcements, and more
 - [Write a skill](skills/writing-skills.md) — add abilities with a small Python file
-- [Go fully local](fully-local.md) — run the language model and the voice on your
-  own hardware; nothing spoken at home leaves your network
+- [Running Fully Local](fully-local.md) — swap the default OpenAI quick-start
+  for models running on your own hardware, stage by stage; nothing spoken at
+  home has to leave your network
 
 ---
 

@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [3.10.1]
+
+### Fixed
+
+- **"The office light" means the fixture named "Office Light" — not every light in the office.** Singular device references that exactly match a real device name now hit that device; the generic forms ("the light", "the lights") keep their room-group semantics with your curated defaults. Works with the room words spoken or not ("turn on the office light" from any room; "turn on the light" standing in a room whose fixture is named just "Light").
+- **A garbled word can no longer actuate a random device.** Field incident: "turn off the hall light" was misheard by speech-to-text as "turn off the *hot* light" — and the fuzzy matcher confidently turned off a back-porch fixture, because the word "light" alone scored a dozen unrelated devices past the match cutoff. Device matching now enforces **token coverage**: every word you said must be accounted for in the device's name, so tolerance stays *within* words (prefixes, plurals, near-misses like "hall"→"Hallway" still match) while an unexplained word disqualifies the candidate. Garbled phrases fall through to the AI tier, which sees your room and the device map and can clarify or make a room-scoped judgment out loud — instead of the matcher firing silently on the wrong thing. The same gate fixes a perfect-transcript bug it uncovered: "hall light" used to *lose* to any device literally named "Light."
+
 ## [3.10.0]
 
 ### Added

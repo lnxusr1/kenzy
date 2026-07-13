@@ -22,20 +22,25 @@ Kenzy:  Tomorrow looks sunny with a high of 84…
 
 ## Making her stop
 
-- **Interrupt her mid-sentence:** say **"Hey Kenzy"** while she's talking. Her
-  speech stops instantly and she listens for what you actually want.
+- **Interrupt her mid-sentence:** say **"Hey Kenzy"** while she's talking —
+  the wake word is the **only** thing she reacts to while speaking, so a bare
+  *"stop"* shouted over her does nothing. "Hey Kenzy" cuts her off instantly
+  and she listens; follow with *"stop"* to end it there (or say nothing and
+  she'll go back to idle on her own).
 - **The stop words** — *"stop"*, *"stop it"*, *"stop talking"*, *"be quiet"*,
   *"quiet"*, *"hush"*, *"shut up"*, *"silence"*, *"that's enough"* — end the
-  exchange **silently**. No reply, no acknowledgment: you asked for quiet, so
-  quiet is what you get. These are handled at the lowest level, before any
-  thinking happens, so they're instant even if your AI model is slow or down.
+  exchange **silently** whenever she's listening: right after the wake word
+  ("Hey Kenzy" … *"stop"*), or as your answer when she's holding the mic open
+  for a follow-up. No reply, no acknowledgment: you asked for quiet, so quiet
+  is what you get. These are handled at the lowest level, before any thinking
+  happens, so they're instant even if your AI model is slow or down.
 - **The polite bail-outs** — *"never mind"*, *"forget it"*, *"cancel"* — do the
   same thing but with a brief spoken "Okay, no problem," which fits the cases
   where you changed your mind rather than demanded silence.
 - **A ringing alarm** stops the moment you say the wake word — no other words
   needed.
 
-!!! note "\"Stop\" vs. \"stop the timer\""
+!!! note "“Stop” vs. “stop the timer”"
     A bare *"stop"* ends the current exchange. *"Stop the timer"* / *"cancel
     the alarm"* cancel the thing you named — see
     [Timers, Alarms & Reminders](skills/builtin.md#timers-alarms-reminders).

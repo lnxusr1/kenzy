@@ -193,6 +193,12 @@ def ha(monkeypatch):
         ),
         Entity("vacuum.rosie", "vacuum", "Rosie", "living_room", "Living Room",
                "downstairs", "Downstairs"),
+        Entity("light.hall", "light", "Hallway Light", "hallway", "Hallway",
+               "downstairs", "Downstairs"),
+        Entity("switch.entrance", "switch", "Light", "foyer", "Foyer",
+               "downstairs", "Downstairs"),
+        Entity("light.of_ceiling", "light", "Office Light", "office", "Office",
+               "downstairs", "Downstairs"),
         Entity("light.of_lamp", "light", "Office Lamp", "office", "Office",
                "downstairs", "Downstairs"),
         Entity("light.of_lamp_2", "light", "Office Lamp 2", "office", "Office",
@@ -679,3 +685,58 @@ async def test_room_embedded_singular_keeps_room_words(ha):
     # vs "Office Lamp"; the full phrase (room words kept) is an exact match.
     idx = await _view(ha)
     assert ha._resolve_target(idx, "turn_on", "the office lamp", "den") == ["light.of_lamp"]
+
+
+# ---------------------------------------------------------------------------
+# Token-coverage gate (field bug: "hot light" actuated an unrelated light)
+# ---------------------------------------------------------------------------
+
+
+async def test_garbled_type_word_defers_to_llm(ha):
+    # STT misheard "hall" as "hot": no device accounts for "hot", so nothing
+    # may actuate — the LLM (with the map + room context) gets to clarify.
+    idx = await _view(ha)
+    assert ha._resolve_target(idx, "turn_off", "the hot light", "foyer") is None
+    result = await ha.fast_home_control("Turn off the hot light.", "foyer", "john")
+    assert not result.is_handled
+
+
+async def test_near_miss_room_name_beats_bare_type_device(ha):
+    # Even heard PERFECTLY, "hall light" used to lose to a foyer device named
+    # just "Light" (the type word scored 90 vs the real target's 87). Coverage
+    # requires "hall" to be accounted for: bare "Light" is out, "Hallway Light"
+    # wins house-wide even when asked from the foyer.
+    idx = await _view(ha)
+    assert ha._resolve_target(idx, "turn_off", "the hall light", "foyer") == ["light.hall"]
+
+
+async def test_bare_type_device_still_reachable_by_its_own_name(ha):
+    # The foyer's "Light" stays addressable where it's unambiguous: as the
+    # room's group word ("turn off the lights" in the foyer).
+    idx = await _view(ha)
+    codes = ha._resolve_target(idx, "turn_off", "the lights", "foyer")
+    assert codes == ["switch.entrance"]
+
+
+# ---------------------------------------------------------------------------
+# Exact name beats the group word (field bug: "the office light" = ALL lights)
+# ---------------------------------------------------------------------------
+
+
+async def test_singular_exact_name_beats_group_word(ha):
+    # "the office light" names a real fixture ("Office Light") — it must hit
+    # exactly that device, not sweep the room's whole lights bucket.
+    idx = await _view(ha)
+    assert ha._resolve_target(idx, "turn_on", "the office light", "den") == ["light.of_ceiling"]
+
+
+async def test_plural_keeps_group_semantics(ha):
+    idx = await _view(ha)
+    codes = ha._resolve_target(idx, "turn_on", "the office lights", "den")
+    assert set(codes) == {"light.of_ceiling", "light.of_lamp", "light.of_lamp_2"}
+
+
+async def test_in_room_singular_exact_name(ha):
+    # Said IN the room: "the light" where the fixture is named just "Light".
+    idx = await _view(ha)
+    assert ha._resolve_target(idx, "turn_on", "the light", "foyer") == ["switch.entrance"]

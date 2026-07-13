@@ -1,10 +1,19 @@
 # Running Fully Local
 
 Kenzy was architected so that **every stage of the voice pipeline can run on your
-own hardware** — nothing spoken in your home has to leave your network. The
-default setup uses OpenAI for the "thinking" and the voice because it's the
-easiest start, but that's a configuration choice, not a dependency. This page is
-the recipe for flipping each stage local.
+own hardware** — nothing spoken in your home has to leave your network.
+
+So why does [Getting Started](getting-started.md) walk you through an OpenAI
+key? Because that default is a **pragmatic quick-start, not a philosophy**: one
+key, zero model downloads, and it works even when your whole install is a
+single Raspberry Pi — which can run everything *except* a capable language
+model. It gets you from install to "Hey Kenzy" in minutes so you can feel out
+what she can do before investing in hardware.
+
+Running in your own house is the point of Kenzy — and going local is more than
+swapping the brain: the ears, the voice, and the skills each have their own
+story. This page is the whole recipe, stage by stage — flip everything local,
+or mix cloud and local deliberately.
 
 ## What "fully local" means here
 
@@ -32,7 +41,7 @@ and speaker identification — runs entirely on your machines. Two honest caveat
 So on a default install, three of five stages are already local — only the LLM
 and the voice need switching.
 
-### The LLM → Ollama
+### Configuring the brain (the LLM)
 
 On the server (or any box with the horsepower):
 
