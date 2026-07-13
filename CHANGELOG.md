@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Fixed
+
+- **Singular means THE device; plural means the group.** "Turn on the light" was still taking the room's curated default set (the lamps) instead of the fixture named "Office Light." The rule is now grammatical: a singular group word ("the light", "the fan") resolves to the device named "\<Room\> Light"/"Light", else the room's only one of that type — and when no specific referent exists (several lights, none named "Light"), it degrades gracefully to the plural action, since the curated default set is your answer to "what does the lighting mean in this room." Plural ("the lights") and "all/every" phrasings behave as before, with "all" always sweeping the full set. Verified live across the whole matrix.
+
 ## [3.10.1]
 
 ### Fixed

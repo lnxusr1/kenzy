@@ -740,3 +740,49 @@ async def test_in_room_singular_exact_name(ha):
     # Said IN the room: "the light" where the fixture is named just "Light".
     idx = await _view(ha)
     assert ha._resolve_target(idx, "turn_on", "the light", "foyer") == ["switch.entrance"]
+
+
+# ---------------------------------------------------------------------------
+# Singular vs plural group semantics (field bug: "the light" took the defaults)
+# ---------------------------------------------------------------------------
+
+
+async def test_singular_the_light_in_room_means_the_named_fixture(ha):
+    # Said IN the office: "the light" = the device named "Office Light",
+    # never the room's curated default set (defaults are plural semantics).
+    idx = await _view(ha)
+    assert ha._resolve_target(idx, "turn_on", "the light", "office") == ["light.of_ceiling"]
+
+
+async def test_singular_with_defaults_still_means_the_named_fixture(ha, monkeypatch):
+    idx = await _view(ha)
+    # Even WITH a curated default pointing elsewhere, singular ignores it.
+    idx.defaults.setdefault("office", {})["lights"] = ["light.of_lamp"]
+    assert ha._resolve_target(idx, "turn_on", "the light", "office") == ["light.of_ceiling"]
+    # ...while the plural keeps taking the default.
+    assert ha._resolve_target(idx, "turn_on", "the lights", "office") == ["light.of_lamp"]
+
+
+async def test_singular_lone_device_of_type(ha):
+    # "the fan" in the living room: no device NAMED "fan", but only one fan.
+    idx = await _view(ha)
+    assert ha._resolve_target(idx, "turn_on", "the fan", "living_room") == ["fan.lr_fan"]
+
+
+async def test_singular_without_referent_degrades_to_plural_action(ha):
+    # Living room: several lights, none named "Light", no lone device — the
+    # singular degrades to the plural action (the curated default set).
+    idx = await _view(ha)
+    assert ha._resolve_target(idx, "turn_on", "the light", "living_room") == [
+        "light.lr_floor_lamp"  # the room's curated default
+    ]
+    # ...and deactivate keeps its all-of-type sweep (minus in_group: false).
+    codes = ha._resolve_target(idx, "turn_off", "the light", "living_room")
+    assert set(codes) == {"light.lr_floor_lamp", "light.lr_ceiling"}
+
+
+async def test_every_light_counts_as_plural(ha):
+    # "every light" is semantically plural: group behavior, not THE device.
+    idx = await _view(ha)
+    codes = ha._resolve_target(idx, "turn_on", "every light", "office")
+    assert set(codes) == {"light.of_ceiling", "light.of_lamp", "light.of_lamp_2"}
