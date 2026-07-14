@@ -1094,6 +1094,18 @@ def _resolve_target(
         gtype = _GROUP_WORDS[phrase]
         if gtype not in types or action in _EXPLICIT_ONLY:
             return None
+        # SINGULAR prefers THE device: the one named "<Room> Light" (or just
+        # "Light"), else the room's only one of the type. When no specific
+        # referent exists, it degrades to the plural action below — the
+        # curated default set is the operator's answer to "what does the
+        # lighting mean here" ("all"/"every" always counts as plural).
+        if not phrase.endswith("s") and not has_all:
+            named = _room_named_device(idx, room, phrase)
+            if named:
+                return named
+            lone = [c for c in idx.rooms.get(room, {}).get(gtype, []) if c not in idx.exclude]
+            if len(lone) == 1:
+                return lone
         codes = _group_codes(idx, room, gtype, direction, has_all)
         # The in_group:false floor (name-only devices) applies to every group
         # command EXCEPT an explicit deactivate-all ("turn off all the lights"),
@@ -1146,6 +1158,22 @@ def _resolve_climate(idx: _DeviceIndex, target: str, origin_room: str | None) ->
     room = room or _room_key(origin_room)
     codes = idx.rooms.get(room, {}).get("climate", [])
     return codes or None
+
+
+def _room_named_device(idx: _DeviceIndex, room: str | None, word: str) -> list[str]:
+    """Room devices whose name IS the word once the room's own words are
+    stripped: "the light" in the office matches "Office Light" (and a fixture
+    named just "Light"). Searches every type bucket — a fan that lives as a
+    switch entity is still THE fan. Twins sharing a name return together."""
+    room_words = set((room or "").replace("_", " ").split())
+    out: list[str] = []
+    for grp in idx.rooms.get(room or "", {}).values():
+        for code in grp:
+            toks = _norm(idx.spoken.get(code, code)).split()
+            local = [w for w in toks if w not in room_words]
+            if toks == [word] or local == [word]:
+                out.append(code)
+    return out
 
 
 def _exact_named(idx: _DeviceIndex, room: str | None, text: str) -> list[str]:
