@@ -51,6 +51,13 @@ Then finish up:
 2. `kenzy-setup` (re-download models; skip for an **Include everything** backup)
 3. Restart the services: `systemctl --user restart 'kenzy-*'`
 
+!!! note "TLS survives a restore"
+    A backup never contains your TLS certificate or private key (private-key
+    material stays on its host, like `.env`). If the restored config had TLS
+    enabled, `kenzy-init --restore` mints a fresh self-signed certificate in
+    its place, so the restored server keeps speaking `https`/`wss` — Kenzy's
+    clients don't pin certificates, so a new one is seamless.
+
 On a **multi-host** deployment, restore the same archive on each host — every
 service reads only its own part of the config home, so one archive serves them
 all. (Custom wake-word model files living on room nodes are the one thing outside

@@ -13,14 +13,13 @@ the host environment and are never part of the pulled config.
 
 from __future__ import annotations
 
+import http.client
 import json
 import logging
 import os
 import sys
 import threading
 import time
-import urllib.error
-import urllib.request
 from typing import Any
 from urllib.parse import urlencode, urlparse
 
@@ -30,14 +29,64 @@ log = logging.getLogger(__name__)
 _SCHEME_MAP = {"ws": "http", "wss": "https"}
 
 
-def _ssl_for(base: str) -> Any:
-    """SSL context for https bases (None for plain http). Encrypted-but-unverified
-    by default — KENZY_TLS_VERIFY=1 / KENZY_TLS_CA=<path> opt into verification."""
-    if not base.startswith("https://"):
-        return None
-    from kenzy import tlsutil
+def _signed_get(base: str, path: str, token: str | None, timeout: float) -> tuple[int, bytes, bool]:
+    """GET ``base + path`` with token-proof auth (stdlib http.client).
 
-    return tlsutil.client_context_from_env()
+    Sends the ``X-Kenzy-Auth`` signature AND the legacy bearer (deprecation
+    window). Reads the server's TLS cert off the connection to verify the
+    ``X-Kenzy-Sig`` response signature — binding the reply to the channel we
+    actually spoke over, so a relay presenting a different cert is caught.
+
+    Returns ``(status, body, response_ok)``. ``response_ok`` is False only when
+    the server signed a reply that failed verification (relay/tamper); an
+    unsigned reply (legacy/plaintext server) leaves it True. Raises the
+    OSError family on transport failure so callers retry.
+    """
+    parsed = urlparse(base)
+    host, port = parsed.hostname or "127.0.0.1", parsed.port
+    https = parsed.scheme == "https"
+    if https:
+        from kenzy import tlsutil
+
+        conn: http.client.HTTPConnection = http.client.HTTPSConnection(
+            host, port, context=tlsutil.client_context_from_env(), timeout=timeout
+        )
+    else:
+        conn = http.client.HTTPConnection(host, port, timeout=timeout)
+    ts: int | None = None
+    try:
+        conn.connect()
+        binding = b""
+        if https:
+            from kenzy import tlsutil
+
+            sock = conn.sock
+            der = sock.getpeercert(binary_form=True) if sock is not None else None  # type: ignore[union-attr]
+            binding = tlsutil.peer_cert_binding(der)
+        headers: dict[str, str] = {}
+        if token:
+            from kenzy import serviceauth
+
+            ts = int(time.time())
+            sign_path = path.split("?", 1)[0]
+            headers[serviceauth.SIG_HEADER] = serviceauth.sign_service_request(
+                token, "GET", sign_path, ts=ts
+            )
+            headers["Authorization"] = f"Bearer {token}"  # legacy window
+        conn.request("GET", path, headers=headers)
+        resp = conn.getresponse()
+        body = resp.read()
+        status = resp.status
+        sig = resp.getheader("X-Kenzy-Sig")
+    finally:
+        conn.close()
+
+    response_ok = True
+    if token and ts is not None and sig:
+        from kenzy import serviceauth
+
+        response_ok = serviceauth.verify_service_response(sig, token, ts, body, binding=binding)
+    return status, body, response_ok
 
 
 #: Last server HTTP base resolved by :func:`bootstrap_config`, reused by the
@@ -99,16 +148,19 @@ def bootstrap_config(service: str, *, timeout: float = 5.0) -> dict[str, Any]:
     with exponential backoff (1 s → 60 s) on any failure, writes a local copy,
     and returns the config dict.
     """
-    token = os.environ.get("KENZY_SERVICE_TOKEN")
+    from kenzy.serviceauth import service_token_from_env
+
+    token = service_token_from_env()
     delay = 1
     while True:
         try:
             base = _resolve_server_http(timeout)
-            req = urllib.request.Request(f"{base}/config/{service}")  # noqa: S310 (http only)
-            if token:
-                req.add_header("Authorization", f"Bearer {token}")
-            with urllib.request.urlopen(req, context=_ssl_for(base), timeout=timeout) as resp:  # noqa: S310
-                cfg = json.loads(resp.read().decode())
+            status, body, response_ok = _signed_get(base, f"/config/{service}", token, timeout)
+            if status != 200:
+                raise OSError(f"server returned HTTP {status} for /config/{service}")
+            if not response_ok:
+                raise ValueError("config response signature invalid — possible relay")
+            cfg = json.loads(body.decode())
             if not isinstance(cfg, dict):
                 raise ValueError("server returned a non-object config")
             _save_local(service, cfg)
@@ -116,10 +168,55 @@ def bootstrap_config(service: str, *, timeout: float = 5.0) -> dict[str, Any]:
             _server_base = base
             log.info("Pulled %s config from %s", service, base)
             return cfg
-        except (OSError, urllib.error.URLError, ValueError, json.JSONDecodeError) as exc:
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
             log.warning("Config pull for %s failed (%s); retrying in %ds", service, exc, delay)
             time.sleep(delay)
             delay = min(delay * 2, 60)
+
+
+def populate_data(service: str, *, timeout: float = 10.0) -> None:
+    """Fill a service's data slice from the server when its own copy is empty.
+
+    The mirror of config-pull for DATA (speaker embeddings; the LLM's skills +
+    curation): a freshly installed or reimaged host boots with an empty slice
+    and fetches it from the server's ``GET /data/<service>`` — so disaster
+    recovery is "restore the server, turn the hosts on." **Local data always
+    wins**: a host that already has its slice never calls the server, so a
+    stale server copy can't clobber a live fleet. Best-effort — config-pull has
+    already confirmed the server is reachable; a fresh install with nothing to
+    pull is normal, not an error.
+    """
+    from kenzy import backup
+    from kenzy.config import kenzy_data_root
+
+    if service not in backup.DATA_SLICES:
+        return
+    root = kenzy_data_root()
+    if backup.slice_populated(root, service):
+        return  # local data wins — never overwrite a live host
+
+    from kenzy.serviceauth import service_token_from_env
+
+    token = service_token_from_env()
+    try:
+        base = _server_base or _resolve_server_http(timeout)
+        status, body, response_ok = _signed_get(base, f"/data/{service}", token, timeout)
+        if status != 200 or not response_ok:
+            log.warning(
+                "Data self-populate for %s: server returned %s (verified=%s)",
+                service,
+                status,
+                response_ok,
+            )
+            return
+        entries = backup.unpack_archive_bytes(body)
+        written = backup.write_slice(entries, root)
+        if written:
+            log.info("Self-populated %s data from the server: %d file(s)", service, len(written))
+        else:
+            log.info("Self-populate for %s: server has no data yet (fresh install)", service)
+    except Exception as exc:  # noqa: BLE001 - best-effort; a fresh install has nothing to pull
+        log.warning("Data self-populate for %s failed (%s); continuing", service, exc)
 
 
 def fetch_service_config(service: str, *, timeout: float = 3.0) -> dict[str, Any] | None:
@@ -130,14 +227,15 @@ def fetch_service_config(service: str, *, timeout: float = 3.0) -> dict[str, Any
     want server-provided values (like an auto-wired peer URL) but must stay responsive
     when the server is unreachable.
     """
-    token = os.environ.get("KENZY_SERVICE_TOKEN")
+    from kenzy.serviceauth import service_token_from_env
+
+    token = service_token_from_env()
     try:
         base = _resolve_server_http(timeout)
-        req = urllib.request.Request(f"{base}/config/{service}")  # noqa: S310 (http only)
-        if token:
-            req.add_header("Authorization", f"Bearer {token}")
-        with urllib.request.urlopen(req, context=_ssl_for(base), timeout=timeout) as resp:  # noqa: S310
-            cfg = json.loads(resp.read().decode())
+        status, body, response_ok = _signed_get(base, f"/config/{service}", token, timeout)
+        if status != 200 or not response_ok:
+            return None
+        cfg = json.loads(body.decode())
         return cfg if isinstance(cfg, dict) else None
     except Exception:
         return None
@@ -167,7 +265,9 @@ def start_registration(service: str, cfg: dict[str, Any], *, interval: float = 3
         return
     # Report the effective bind host; the server maps 0.0.0.0 to our source IP.
     host = effective_bind(cfg)
-    token = os.environ.get("KENZY_SERVICE_TOKEN")
+    from kenzy.serviceauth import service_token_from_env
+
+    token = service_token_from_env()
 
     def _version() -> str:
         try:
@@ -200,10 +300,7 @@ def start_registration(service: str, cfg: dict[str, Any], *, interval: float = 3
                     base = None
             if base:
                 try:
-                    req = urllib.request.Request(f"{base}/register?{params}")  # noqa: S310
-                    if token:
-                        req.add_header("Authorization", f"Bearer {token}")
-                    urllib.request.urlopen(req, context=_ssl_for(base), timeout=5).close()  # noqa: S310
+                    _signed_get(base, f"/register?{params}", token, 5.0)
                 except Exception as exc:  # noqa: BLE001 - heartbeat is best-effort
                     log.debug("Service registration for %s failed: %s", service, exc)
             time.sleep(interval)

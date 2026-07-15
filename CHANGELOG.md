@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [3.11.0]
+
+### Added
+
+- **A node can boot from three environment variables — no `node.yaml` needed.** Point `KENZY_SERVER_URL` at the server, set `KENZY_SERVER_TOKEN` (if the server requires a join token) and `KENZY_NODE_ID`, and a room device starts with no config file — everything operational is pulled from the server as always. `KENZY_NODE_ID`, when set, is authoritative and never written to disk, which is exactly how two node instances run on one machine (two speakerphones, two units, two ids). A systemd unit with a few `Environment=` lines is now a complete node install. (The token env var was renamed `KENZY_SERVICE_TOKEN` → `KENZY_SERVER_TOKEN` to match; the old name is still accepted everywhere.)
+- **A rebuilt host repopulates its own data from the server — restore just got real.** A backup has always bundled the whole fleet's state (enrolled voice profiles from the speaker host, skills and Home Assistant curation from the LLM host), but *restoring* only ever unpacked onto the server — so on a multi-host setup, the other machines came back empty. Now a service that boots with an empty data directory fetches its slice from the server over the same signed channel it already uses for config, the same way it pulls its settings. Disaster recovery collapses to "restore the server, turn the hosts back on" — nobody hand-copies `.npy` files. It's self-healing beyond restore, too: reimage a speaker box and it comes back with its enrolled voices automatically. **Local data always wins** — a host that already has its data never calls the server, so a stale copy can never overwrite a live one. (Co-located installs are unaffected: everything already shares one config home.)
+
+### Fixed
+
+- **Restoring a backup keeps TLS on, and a backup never carries your private key.** Two related fixes now that installs can have a TLS certificate: a backup deliberately excludes the certificate/key (private-key material, like `.env`, never enters an archive — wherever it sits), and on `kenzy-init --restore`, when the restored `server.yaml` expects a certificate that isn't there, Kenzy mints a fresh self-signed one at that path. Without this, a restored server would find its cert missing and quietly fall back to plaintext; now a restore preserves the encrypted posture, and — because Kenzy's clients don't pin certificates — a freshly-minted cert is a non-event.
+
+### Changed
+
+- **Service-to-service auth no longer puts the shared token on the wire, and TLS is the install default.** The backend services and the server now prove they hold the fleet token by *signing* each request (HMAC) instead of sending it — so an eavesdropper on the LAN, even one that terminates TLS, learns nothing it can replay, and an impostor can't answer for the server. The config channel goes further: the server signs its reply bound to its own TLS certificate, so a relay presenting a *different* certificate is caught when the service checks the answer against the cert it actually saw. Fresh installs now enable TLS by default (encrypting node audio, the dashboard, and the service mesh) — pass `--no-tls` for the old plaintext behavior. This is groundwork: once a later release drops the transitional token header, the server can safely serve API keys to the fleet, so secrets live on one host instead of every host. Mixed-version fleets upgrade seamlessly (the pre-3.11 token header is still accepted for one release); existing plaintext installs are untouched until you enable TLS yourself.
+
 ## [3.10.2]
 
 ### Fixed

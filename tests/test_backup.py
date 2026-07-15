@@ -38,6 +38,11 @@ def _make_home(root):
     (root / "constraints.txt").write_text("numpy<2.0\n")
     (root / ".env").write_text("OPENAI_API_KEY=sk-secret\n")
     (root / "models" / "speaker" / "big.bin").write_bytes(b"\x00" * 64)
+    # TLS material — a private key must NEVER enter an archive, wherever it sits.
+    (root / "configs" / "certs").mkdir()
+    (root / "configs" / "certs" / "kenzy.crt").write_text("-----BEGIN CERTIFICATE-----\n")
+    (root / "configs" / "certs" / "kenzy.key").write_text("-----BEGIN PRIVATE KEY-----\n")
+    (root / "stray.pem").write_text("-----BEGIN PRIVATE KEY-----\n")
 
 
 def _names(data: bytes) -> set[str]:
@@ -63,6 +68,8 @@ def test_backup_includes_state_and_excludes_secrets_and_models(tmp_path):
     assert not any(".env" in n for n in names)  # secrets never travel
     assert not any(n.startswith("models/") for n in names)  # re-downloadable bulk
     assert not any("__pycache__" in n for n in names)
+    assert not any("certs/" in n for n in names)  # TLS key/cert never travel
+    assert not any(n.endswith((".key", ".pem")) for n in names)  # private key material
 
 
 def test_restore_roundtrip(tmp_path):
@@ -315,3 +322,38 @@ async def test_dashboard_backup_route(tmp_path, monkeypatch):
     with tarfile.open(fileobj=io.BytesIO(resp.body), mode="r:gz") as tar:
         f = tar.extractfile(MANIFEST_NAME)
         assert f is not None and json.loads(f.read())["kenzy_version"]
+
+
+def test_restore_regenerates_missing_tls_cert(tmp_path):
+    """A restored server.yaml with a tls: block whose files are absent (they
+    never travel in a backup) gets a fresh self-signed pair — so TLS survives a
+    restore instead of silently degrading to plaintext."""
+    import shutil
+
+    import pytest
+
+    from kenzy.init import _ensure_restored_certs
+
+    if not shutil.which("openssl"):
+        pytest.skip("openssl not available")
+    home = tmp_path / "home"
+    (home / "configs" / "certs").mkdir(parents=True)
+    cert = home / "configs" / "certs" / "kenzy.crt"
+    key = home / "configs" / "certs" / "kenzy.key"
+    (home / "configs" / "server.yaml").write_text(
+        f"port: 8765\ntls:\n  cert: {cert}\n  key: {key}\n"
+    )
+    assert not cert.exists()
+    _ensure_restored_certs(home)
+    assert cert.is_file() and key.is_file()
+    assert oct(key.stat().st_mode)[-3:] == "600"  # key is private
+
+
+def test_restore_without_tls_makes_no_cert(tmp_path):
+    from kenzy.init import _ensure_restored_certs
+
+    home = tmp_path / "home"
+    (home / "configs").mkdir(parents=True)
+    (home / "configs" / "server.yaml").write_text("port: 8765\n")
+    _ensure_restored_certs(home)  # no tls block -> no-op, no crash
+    assert not (home / "configs" / "certs").exists()

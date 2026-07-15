@@ -87,6 +87,21 @@ misbehave:
 !!! note "Zero-config nodes (discovery + config-pull)"
     A node needs no operational local config. With `server_url` unset it finds the server via mDNS, generates a stable `node_id` on first run (or one assigned at install via `kenzy-init --node-id`), and **blocks until the server answers** — it connects, sends `hello`, and waits for the server's `config` frame before initializing audio. That effective config is the server's `node_defaults` plus any per-node override in `configs/nodes/<node_id>.yaml`. **Hardware keys** (`audio_device`, sample rates, `wakeword_models`/VAD gate, sounds) are applied as the audio stack is built on this first pull; a *later* change to a hardware key needs a restart (one click in the dashboard). **Live-tunable keys** (wake-word threshold, silence RMS, VAD timing) apply immediately on every push. So a room device can run with an essentially empty `node.yaml`, and everything — including its room name — is configured from the [dashboard](../dashboard.md) and centralised on the server. Pre-seed a node by creating `configs/nodes/<node_id>.yaml` on the server before the device first connects. See [Server Configuration](server.md#discovery-and-config-pull).
 
+!!! note "Env-only bootstrap (no `node.yaml`)"
+    A node can start from the **environment alone** — no config file at all —
+    which is the tidiest way to provision a room device:
+
+    | Variable | Purpose |
+    |---|---|
+    | `KENZY_SERVER_URL` | How to reach the server (`ws://`/`wss://`; `http(s)://` and a bare `host:port` are accepted and normalized). Omit to auto-discover via mDNS. |
+    | `KENZY_SERVER_TOKEN` | The shared join token (if the server requires one). `KENZY_SERVICE_TOKEN` is still accepted as a legacy alias. |
+    | `KENZY_NODE_ID` | A stable id for this node. When set it is **authoritative** — used as-is and never written to disk — so two node instances can run on one machine (two speakerphones, two units, two ids). Omit and the node generates + persists one on first run. |
+
+    These override any `node.yaml` value, so a systemd unit with a few
+    `Environment=` lines is a complete node install; everything operational is
+    still pulled from the server. (`KENZY_NODE_ID` unset falls back to the
+    generate-and-persist behavior described above.)
+
 !!! tip "Finding the right device name"
     Run `kenzy-devices` after install. It tests every PortAudio device against Kenzy's required sample rates and prints ready-to-paste `node.yaml` settings including `capture_sample_rate` and `playback_sample_rate` if resampling is needed.
 

@@ -150,15 +150,25 @@ def test_service_auth_noop_without_env(monkeypatch):
 
 
 def test_server_service_headers(monkeypatch):
+    from kenzy import serviceauth
+
     monkeypatch.setenv("KENZY_SERVICE_TOKEN", "envtok")
-    assert AudioServer({"discovery": {"token": "disc"}})._service_headers() == {
-        "Authorization": "Bearer envtok"
-    }
+    hdrs = AudioServer({"discovery": {"token": "disc"}})._service_headers("GET", "http://h:8767/config/stt")
+    # legacy bearer (deprecation window) AND the token-proof signature
+    assert hdrs["Authorization"] == "Bearer envtok"
+    assert serviceauth.verify_service_request(
+        hdrs[serviceauth.SIG_HEADER], "envtok", "GET", "/config/stt"
+    ) is not None
+    assert "envtok" not in hdrs[serviceauth.SIG_HEADER]  # token not in the signature
+
     monkeypatch.delenv("KENZY_SERVICE_TOKEN", raising=False)
-    assert AudioServer({"discovery": {"token": "disc"}})._service_headers() == {
-        "Authorization": "Bearer disc"
-    }
-    assert AudioServer({})._service_headers() == {}
+    hdrs = AudioServer({"discovery": {"token": "disc"}})._service_headers("POST", "http://h/speak")
+    assert hdrs["Authorization"] == "Bearer disc"
+    assert serviceauth.verify_service_request(
+        hdrs[serviceauth.SIG_HEADER], "disc", "POST", "/speak"
+    ) is not None
+
+    assert AudioServer({})._service_headers("GET", "http://h/x") == {}
 
 
 # --- kenzy-passwd -----------------------------------------------------------

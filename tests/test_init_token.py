@@ -1,5 +1,5 @@
 """F-2: kenzy-init generates a join token by default and wires it consistently
-across server.yaml, the co-located node.yaml, and .env (KENZY_SERVICE_TOKEN)."""
+across server.yaml, the co-located node.yaml, and .env (KENZY_SERVER_TOKEN)."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ def _token(yaml_path):
 
 def _env_token(env_path):
     for line in env_path.read_text().splitlines():
-        if line.startswith("KENZY_SERVICE_TOKEN="):
+        if line.startswith("KENZY_SERVER_TOKEN="):
             return line.split("=", 1)[1].strip().strip('"')
     return None
 

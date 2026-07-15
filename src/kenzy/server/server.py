@@ -42,7 +42,7 @@ from websockets.asyncio.server import ServerConnection
 from websockets.datastructures import Headers
 from websockets.http11 import Request, Response
 
-from kenzy import calibration, kenzy_version, protocol, tlsutil
+from kenzy import calibration, kenzy_version, protocol, serviceauth, tlsutil
 from kenzy.config import SERVICES
 from kenzy.serviceauth import check_bearer
 from kenzy.speaker import DEFAULT_ENROLL_PROMPTS
@@ -330,7 +330,7 @@ class AudioServer:
         # Shared service-to-service bearer for outbound calls to stt/tts/llm/speaker.
         # KENZY_SERVICE_TOKEN (a real env var, seen by all services) is canonical;
         # discovery.token is a fallback for single-host setups.
-        self._service_token: str | None = os.environ.get("KENZY_SERVICE_TOKEN") or self._join_token
+        self._service_token: str | None = serviceauth.service_token_from_env() or self._join_token
 
         # node_id → NodeSession  (guarded by _lock)
         self._nodes: dict[str, NodeSession] = {}
@@ -344,6 +344,10 @@ class AudioServer:
         # same block). Clients default to encrypted-but-unverified (self-signed).
         self._ssl: Any = None
         self._tls_paths: tuple[str, str] | None = None
+        self._channel_binding: bytes = b""  # SHA-256 of our TLS leaf cert (b"" = plaintext)
+        from kenzy.config import kenzy_data_root
+
+        self._data_root = kenzy_data_root()  # our config home, fixed for this process
         tls_cfg = cfg.get("tls") or {}
         if isinstance(tls_cfg, dict) and tls_cfg.get("cert") and tls_cfg.get("key"):
             from kenzy import tlsutil
@@ -351,6 +355,7 @@ class AudioServer:
             try:
                 self._ssl = tlsutil.server_context(str(tls_cfg["cert"]), str(tls_cfg["key"]))
                 self._tls_paths = (str(tls_cfg["cert"]), str(tls_cfg["key"]))
+                self._channel_binding = tlsutil.own_cert_binding(str(tls_cfg["cert"]))
                 log.info("TLS enabled on the node WebSocket port (wss)")
             except Exception as exc:
                 log.error("TLS config invalid (%s) — continuing WITHOUT TLS", exc)
@@ -469,9 +474,23 @@ class AudioServer:
         except Exception:
             return False
 
-    def _service_headers(self) -> dict[str, str]:
-        """Bearer header for outbound backend calls (empty when no token set)."""
-        return {"Authorization": f"Bearer {self._service_token}"} if self._service_token else {}
+    def _service_headers(self, method: str, url: str | None) -> dict[str, str]:
+        """Auth headers for an outbound call to a backend service.
+
+        Sends the token-proof signature (``X-Kenzy-Auth``) AND the legacy bearer
+        during the deprecation window: a 3.11+ service prefers the signature, a
+        pre-3.11 service reads the bearer. A follow-up minor drops the bearer.
+        """
+        token = self._service_token
+        if not token:
+            return {}
+        from urllib.parse import urlparse
+
+        path = urlparse(url or "").path or "/"
+        return {
+            "Authorization": f"Bearer {token}",
+            serviceauth.SIG_HEADER: serviceauth.sign_service_request(token, method, path),
+        }
 
     # ------------------------------------------------------------------
     # Config-pull: effective per-node config = defaults + per-room override
@@ -735,11 +754,59 @@ class AudioServer:
             status, "OK" if status == 200 else "ERR", headers, json.dumps(payload).encode()
         )
 
+    def _authorize_service(
+        self, request: Request, method: str, path: str
+    ) -> tuple[bool, int | None]:
+        """Authorize an inbound service-to-service request.
+
+        Returns ``(authorized, ts)`` where ``ts`` is the request timestamp when
+        token-proof auth (``X-Kenzy-Auth``) was used — the caller signs the
+        response with it — and ``None`` for the legacy bearer path (no response
+        signature) or when auth is disabled.
+        """
+        token = self._service_token
+        if not token:
+            return True, None
+        ts = serviceauth.verify_service_request(
+            request.headers.get(serviceauth.SIG_HEADER), token, method, path
+        )
+        if ts is not None:
+            return True, ts
+        if check_bearer(request.headers.get("authorization"), token):
+            log.debug("service auth for %s: legacy bearer accepted (pre-3.11 client)", path)
+            return True, None
+        return False, None
+
     def _check_service_token(self, request: Request) -> bool:
-        """True if the service-to-service bearer is satisfied (or none is configured)."""
-        if not self._service_token:
-            return True
-        return check_bearer(request.headers.get("authorization"), self._service_token)
+        """Back-compat boolean wrapper (announce/register call sites)."""
+        ok, _ts = self._authorize_service(request, "GET", request.path.split("?", 1)[0])
+        return ok
+
+    def _sign_response(self, resp: Response, ts: int | None) -> Response:
+        """Attach ``X-Kenzy-Sig`` when the request was token-proof (``ts`` set) —
+        binds the reply body to this server's TLS cert so a relay presenting a
+        different cert is caught client-side. Works for JSON or binary bodies."""
+        if ts is not None and self._service_token:
+            resp.headers["X-Kenzy-Sig"] = serviceauth.sign_service_response(
+                self._service_token, ts, bytes(resp.body), binding=self._channel_binding
+            )
+        return resp
+
+    def _signed_json(self, status: int, payload: Any, ts: int | None) -> Response:
+        return self._sign_response(self._http_json(status, payload), ts)
+
+    def _http_data_slice(self, service: str, ts: int | None) -> Response:
+        """``GET /data/<service>`` — the service's data slice (embeddings, or
+        skills+curation) as a signed tar.gz from this server's config home. A
+        freshly installed service self-populates from this; local data wins, so
+        an already-populated host never calls it. Closes the backup/restore
+        asymmetry: restore the server, hosts repopulate themselves."""
+        from kenzy import backup
+
+        body = backup.create_data_slice(self._data_root, service)
+        headers = Headers()
+        headers["Content-Type"] = "application/gzip"
+        return self._sign_response(Response(200, "OK", headers, body), ts)
 
     async def _process_config_request(
         self, connection: ServerConnection, request: Request
@@ -759,14 +826,25 @@ class AudioServer:
             return await self._http_announce(request)
         if path == "/register":
             return self._http_register(request, connection)
+        if path.startswith("/data/"):
+            ok, ts = self._authorize_service(request, "GET", path)
+            if not ok:
+                return self._http_json(401, {"error": "invalid service token"})
+            service = path[len("/data/") :]
+            from kenzy import backup
+
+            if service not in backup.DATA_SLICES:
+                return self._http_json(404, {"error": "no data slice for service"})
+            return self._http_data_slice(service, ts)
         if not path.startswith("/config/"):
             return None
-        if not self._check_service_token(request):
+        ok, ts = self._authorize_service(request, "GET", path)
+        if not ok:
             return self._http_json(401, {"error": "invalid service token"})
         service = path[len("/config/") :]
         if service not in SERVICES or service == "node":
             return self._http_json(404, {"error": "unknown service"})
-        return self._http_json(200, self._effective_service_config(service))
+        return self._signed_json(200, self._effective_service_config(service), ts)
 
     async def _http_announce(self, request: Request) -> Response:
         """Handle ``/announce?text=…&rooms=…`` — speak a message aloud in rooms.
@@ -1963,7 +2041,7 @@ class TranscribingServer(AudioServer):
                     self._speaker_url,  # type: ignore[arg-type]
                     json=payload,
                     timeout=self._speaker_timeout,
-                    headers=self._service_headers(),
+                    headers=self._service_headers("POST", self._speaker_url),
                 )
                 resp.raise_for_status()
             return str(resp.json()["speaker"])
@@ -1986,7 +2064,7 @@ class TranscribingServer(AudioServer):
                 self._stt_url,  # type: ignore[arg-type]
                 json=payload,
                 timeout=self._stt_timeout,
-                headers=self._service_headers(),
+                headers=self._service_headers("POST", self._stt_url),
             )
             resp.raise_for_status()
         return str(resp.json()["text"])
@@ -2020,7 +2098,7 @@ class TranscribingServer(AudioServer):
                 self._llm_url,  # type: ignore[arg-type]
                 json=payload,
                 timeout=self._llm_timeout,
-                headers=self._service_headers(),
+                headers=self._service_headers("POST", self._llm_url),
             )
             resp.raise_for_status()
             data = resp.json()
@@ -2209,7 +2287,9 @@ class TranscribingServer(AudioServer):
 
         async with httpx.AsyncClient(verify=tlsutil.httpx_verify()) as client:
             resp = await client.get(
-                base_url + "/backup", timeout=20.0, headers=self._service_headers()
+                base_url + "/backup",
+                timeout=20.0,
+                headers=self._service_headers("GET", base_url + "/backup"),
             )
             resp.raise_for_status()
         return unpack_archive_bytes(resp.content)
@@ -2541,7 +2621,7 @@ class TranscribingServer(AudioServer):
                     enroll_url,
                     json=payload,
                     timeout=self._speaker_timeout,
-                    headers=self._service_headers(),
+                    headers=self._service_headers("POST", enroll_url),
                 )
                 resp.raise_for_status()
             return True
@@ -3137,7 +3217,7 @@ class TranscribingServer(AudioServer):
                     self._tts_url,
                     json={"text": text, "voice_prompt": voice_prompt, "room_id": room_name},
                     timeout=self._tts_timeout,
-                    headers=self._service_headers(),
+                    headers=self._service_headers("POST", self._tts_url),
                 )
                 resp.raise_for_status()
             pcm = resp.content
@@ -3173,7 +3253,7 @@ class TranscribingServer(AudioServer):
                     self._tts_url,
                     json={"text": text, "voice_prompt": voice_prompt, "room_id": "announce"},
                     timeout=self._tts_timeout,
-                    headers=self._service_headers(),
+                    headers=self._service_headers("POST", self._tts_url),
                 )
                 resp.raise_for_status()
             return resp.content

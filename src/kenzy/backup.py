@@ -49,10 +49,12 @@ class RestoreError(Exception):
 
 def _excluded(rel: Path) -> bool:
     """Per-file exclusions inside the whitelisted trees."""
-    if any(part in ("__pycache__", ".venv", ".git") for part in rel.parts):
-        return True
+    if any(part in ("__pycache__", ".venv", ".git", "certs") for part in rel.parts):
+        return True  # certs/ holds a TLS private key — host security material, like .env
     if rel.name == ".env" or rel.name.endswith(".env"):
         return True  # secrets never enter an archive
+    if rel.name.endswith((".key", ".pem")):
+        return True  # a private key never enters an archive, wherever it sits
     return rel.name.endswith(".pyc")
 
 
@@ -84,6 +86,45 @@ def collect_local(root: Path) -> dict[str, bytes]:
                 if not _excluded(rel):
                     entries[str(rel)] = member.read_bytes()
     return entries
+
+
+#: Per-service data slice = the config-home-relative paths a service owns. The
+#: server serves these from ITS config home (``GET /data/<svc>``); a freshly
+#: installed service self-populates them at boot when its own copy is empty.
+#: Same scope as the backup slices (``data/`` + ``skills/``) so it reuses the
+#: same safe archiving/extraction; the path doubles as the archive prefix.
+DATA_SLICES: dict[str, tuple[str, ...]] = {
+    "speaker": ("data/speakers",),
+    "llm": ("skills", "data/home_assistant"),
+}
+
+
+def create_data_slice(root: Path, service: str) -> bytes:
+    """A service's data slice as a tar.gz, taken from config home ``root``."""
+    pairs = [(root / p, p) for p in DATA_SLICES.get(service, ())]
+    return archive_entries(collect_paths(pairs), None)
+
+
+def slice_populated(root: Path, service: str) -> bool:
+    """True when the service's slice already holds a file locally — the guard
+    that makes self-population fill only an EMPTY host and never clobber a live
+    one (local data always wins)."""
+    for prefix in DATA_SLICES.get(service, ()):
+        d = root / prefix
+        if d.is_dir() and any(p.is_file() for p in d.rglob("*")):
+            return True
+    return False
+
+
+def write_slice(entries: dict[str, bytes], root: Path) -> list[str]:
+    """Write unpacked slice entries (already scope-validated) into ``root``."""
+    written: list[str] = []
+    for name in sorted(entries):
+        dest = root / name
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(entries[name])
+        written.append(name)
+    return written
 
 
 def collect_paths(pairs: list[tuple[Path, str]]) -> dict[str, bytes]:

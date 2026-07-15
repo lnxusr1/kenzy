@@ -67,3 +67,70 @@ def test_hello_carries_node_id():
     assert msg["room_id"] == "kitchen" and msg["node_id"] == "n-7"
     # Legacy form (no node_id) omits the field.
     assert "node_id" not in protocol.parse(protocol.hello("kitchen"))
+
+
+# ---------------------------------------------------------------------------
+# Env-only bootstrap (server-authority stage d)
+# ---------------------------------------------------------------------------
+
+
+def test_service_token_from_env_prefers_new_name(monkeypatch):
+    from kenzy.serviceauth import service_token_from_env
+
+    monkeypatch.delenv("KENZY_SERVER_TOKEN", raising=False)
+    monkeypatch.delenv("KENZY_SERVICE_TOKEN", raising=False)
+    assert service_token_from_env() is None
+    monkeypatch.setenv("KENZY_SERVICE_TOKEN", "legacy")
+    assert service_token_from_env() == "legacy"  # alias still works
+    monkeypatch.setenv("KENZY_SERVER_TOKEN", "current")
+    assert service_token_from_env() == "current"  # new name wins
+
+
+def test_normalize_ws_url():
+    from kenzy.node.client import _normalize_ws_url
+
+    assert _normalize_ws_url("ws://h:8765") == "ws://h:8765"
+    assert _normalize_ws_url("wss://h:8765") == "wss://h:8765"
+    assert _normalize_ws_url("http://h:8765") == "ws://h:8765"
+    assert _normalize_ws_url("https://h:8765") == "wss://h:8765"
+    assert _normalize_ws_url("h:8765") == "ws://h:8765"
+
+
+def test_apply_node_env_layers_bootstrap_vars(monkeypatch):
+    from kenzy.node.client import _apply_node_env
+
+    monkeypatch.setenv("KENZY_SERVER_URL", "https://server:8765")
+    monkeypatch.setenv("KENZY_SERVER_TOKEN", "fleet-tok")
+    monkeypatch.setenv("KENZY_NODE_ID", "porch-left")
+    cfg: dict = {}
+    _apply_node_env(cfg)
+    assert cfg["server_url"] == "wss://server:8765"  # https -> wss
+    assert cfg["discovery"]["token"] == "fleet-tok"
+    assert cfg["node_id"] == "porch-left"
+
+
+def test_env_node_id_is_authoritative_not_persisted(tmp_path, monkeypatch):
+    # With KENZY_NODE_ID set, the id comes from the env and nothing is written.
+    from kenzy.node.client import _apply_node_env, _ensure_node_id
+
+    monkeypatch.setenv("KENZY_NODE_ID", "two-on-one-box")
+    cfg: dict = {}
+    _apply_node_env(cfg)
+    write_path = tmp_path / "node.yaml"
+    assert _ensure_node_id(cfg, write_path) == "two-on-one-box"
+    assert not write_path.exists()  # env id is authoritative — never persisted
+
+
+def test_env_only_node_client_boot(monkeypatch):
+    # A node constructed from an empty file + env alone reaches the server.
+    from kenzy.node.client import _apply_node_env
+
+    monkeypatch.setenv("KENZY_SERVER_URL", "ws://10.0.0.2:8765")
+    monkeypatch.setenv("KENZY_SERVER_TOKEN", "tok")
+    monkeypatch.setenv("KENZY_NODE_ID", "den")
+    cfg: dict = {}
+    _apply_node_env(cfg)
+    client = NodeClient(cfg)
+    assert client._server_url == "ws://10.0.0.2:8765"
+    assert client._join_token == "tok"
+    assert client._node_id == "den"

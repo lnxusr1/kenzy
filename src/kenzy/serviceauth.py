@@ -122,9 +122,112 @@ def check_bearer(authorization: str | None, token: str | None) -> bool:
     No-op (always True) when ``token`` is falsy, so service auth is opt-in. Kept
     free of any web-framework import — the server (no fastapi) imports this module
     too; each FastAPI service wraps it in a tiny dependency.
+
+    **Legacy path** (pre-3.11): the raw token rides the wire. Superseded by the
+    token-proof HMAC scheme below, which never transmits the token; accepted
+    only during the mixed-version deprecation window.
     """
     if not token:
         return True
     auth = authorization or ""
     presented = auth[7:] if auth.startswith("Bearer ") else ""
     return hmac.compare_digest(presented, token)
+
+
+# ---------------------------------------------------------------------------
+# Token-proof service auth (HMAC — the token is NEVER transmitted)
+# ---------------------------------------------------------------------------
+#
+# Each service-to-service request carries a signature, not the token: an
+# eavesdropper (even a TLS-terminating relay on the LAN, which our
+# encrypted-but-unverified posture permits) learns nothing replayable, and an
+# impostor without the token cannot mint a valid config. Freshness is bounded
+# by a timestamp; the config RESPONSE additionally binds to the server's TLS
+# certificate (channel binding) so a relay presenting a different cert is
+# detected when the client checks the reply against the cert it actually saw.
+# Request signatures deliberately omit the body and the channel binding —
+# response-side binding alone defeats relays, and this keeps verifiers from
+# having to read the request body (the starlette middleware footgun).
+
+_HMAC_SCHEME = "KENZY-HMAC"
+_MAX_SKEW = 120  # seconds; assumes NTP (Raspberry Pi OS default-on)
+#: The signature rides its OWN header, not Authorization, so the legacy bearer
+#: can accompany it during the deprecation window without a header collision.
+SIG_HEADER = "X-Kenzy-Auth"
+
+
+def service_token_from_env() -> str | None:
+    """The shared fleet token from the environment: ``KENZY_SERVER_TOKEN``
+    (preferred, 3.11+) or the legacy ``KENZY_SERVICE_TOKEN`` alias. Part of the
+    env-only bootstrap contract (server-authority stage d)."""
+    return os.environ.get("KENZY_SERVER_TOKEN") or os.environ.get("KENZY_SERVICE_TOKEN") or None
+
+
+def _svc_key(token: str) -> bytes:
+    return hashlib.sha256(b"kenzy-svc-hmac\x00" + token.encode()).digest()
+
+
+def _req_material(ts: int, method: str, path: str) -> bytes:
+    return b"\x00".join([b"req", str(ts).encode(), method.upper().encode(), path.encode()])
+
+
+def _resp_material(ts: int, body: bytes, binding: bytes) -> bytes:
+    return b"\x00".join([b"resp", str(ts).encode(), hashlib.sha256(body).digest(), binding])
+
+
+def sign_service_request(token: str, method: str, path: str, *, ts: int | None = None) -> str:
+    """Build the ``X-Kenzy-Auth: KENZY-HMAC …`` header value for a token-proof request."""
+    ts = int(time.time()) if ts is None else ts
+    sig = hmac.new(_svc_key(token), _req_material(ts, method, path), hashlib.sha256).hexdigest()
+    return f"{_HMAC_SCHEME} ts={ts}, sig={sig}"
+
+
+def verify_service_request(
+    authorization: str | None,
+    token: str,
+    method: str,
+    path: str,
+    *,
+    max_skew: int = _MAX_SKEW,
+    now: int | None = None,
+) -> int | None:
+    """Return the request timestamp if the KENZY-HMAC header is valid, else None.
+
+    None means "not a valid signature" — the caller decides whether to fall back
+    to :func:`check_bearer` (legacy window) or reject. ``token`` must be truthy
+    (the caller handles the auth-disabled case).
+    """
+    auth = authorization or ""
+    prefix = _HMAC_SCHEME + " "
+    if not auth.startswith(prefix):
+        return None
+    try:
+        fields = dict(part.strip().split("=", 1) for part in auth[len(prefix) :].split(","))
+        ts = int(fields["ts"])
+        sig = fields["sig"]
+    except (ValueError, KeyError):
+        return None
+    now = int(time.time()) if now is None else now
+    if abs(now - ts) > max_skew:
+        return None
+    expected = hmac.new(
+        _svc_key(token), _req_material(ts, method, path), hashlib.sha256
+    ).hexdigest()
+    return ts if hmac.compare_digest(sig, expected) else None
+
+
+def sign_service_response(token: str, ts: int, body: bytes, *, binding: bytes = b"") -> str:
+    """Signature the server attaches (``X-Kenzy-Sig``) so the client can confirm
+    the reply came, unforged, over the TLS channel it observed."""
+    return hmac.new(_svc_key(token), _resp_material(ts, body, binding), hashlib.sha256).hexdigest()
+
+
+def verify_service_response(
+    sig: str | None, token: str, ts: int, body: bytes, *, binding: bytes = b""
+) -> bool:
+    """Client-side check of the server's ``X-Kenzy-Sig`` against the response
+    body and the certificate the client actually saw (``binding``)."""
+    if not sig:
+        return False
+    expected = sign_service_response(token, ts, body, binding=binding)
+    return hmac.compare_digest(sig, expected)

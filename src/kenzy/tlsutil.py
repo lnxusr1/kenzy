@@ -21,8 +21,10 @@ it is loopback in the default install (see design/security-hardening.md).
 
 from __future__ import annotations
 
+import hashlib
 import os
 import ssl
+from pathlib import Path
 from typing import Any
 
 
@@ -31,6 +33,32 @@ def server_context(cert: str, key: str) -> ssl.SSLContext:
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     ctx.load_cert_chain(cert, key)
     return ctx
+
+
+# ---------------------------------------------------------------------------
+# Channel binding — the SHA-256 of the leaf certificate a server presents
+# ---------------------------------------------------------------------------
+# A server hashes its OWN cert to bind response signatures to; a client hashes
+# the cert it actually SAW to check them. A relay presenting a different cert
+# produces a mismatch. Empty bytes means "no TLS" (plaintext install).
+
+
+def own_cert_binding(cert_path: str | None) -> bytes:
+    """Channel binding for a server presenting ``cert_path`` (its leaf cert's
+    DER, SHA-256). ``b""`` when there is no cert (plaintext) or it can't be read."""
+    if not cert_path:
+        return b""
+    try:
+        der = ssl.PEM_cert_to_DER_cert(Path(cert_path).read_text())
+        return hashlib.sha256(der).digest()
+    except Exception:
+        return b""
+
+
+def peer_cert_binding(der: bytes | None) -> bytes:
+    """Channel binding from a peer certificate in DER form (as returned by
+    ``ssl.getpeercert(binary_form=True)``). ``b""`` when None (plaintext)."""
+    return hashlib.sha256(der).digest() if der else b""
 
 
 def client_context(verify: bool = False, ca: str | None = None) -> ssl.SSLContext:

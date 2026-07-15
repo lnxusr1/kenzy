@@ -606,13 +606,19 @@ def main() -> None:
     load_dotenv()
 
     from kenzy.logutil import configure_logging, level_value
-    from kenzy.serviceboot import effective_bind, load_service_config, start_registration
+    from kenzy.serviceboot import (
+        effective_bind,
+        load_service_config,
+        populate_data,
+        start_registration,
+    )
 
     configure_logging(logging.INFO)  # provisional, so the config pull's retries are visible
 
     # Central config: pull from the server (blocking until it answers); an explicit
     # config path loads locally instead (dev/offline escape hatch).
     cfg: dict[str, Any] = load_service_config("llm")
+    populate_data("llm")  # fetch skills + curation from the server if this host has none
     start_registration("llm", cfg)  # auto-announce to the server (dashboard + pipeline)
 
     configure_logging(level_value(cfg.get("log_level"), logging.INFO))

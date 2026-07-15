@@ -123,6 +123,48 @@ def _set_yaml_scalar(text: str, key: str, value: str) -> str:
     return f"{text}{sep}{key}: {quoted}\n"
 
 
+def _apply_node_env(cfg: dict[str, Any]) -> None:
+    """Layer the env-only bootstrap vars over the loaded config (server-authority
+    stage d), so a node can start from the environment alone — ``node.yaml``
+    becomes optional:
+
+    * ``KENZY_SERVER_URL`` → ``server_url`` (normalized to ``ws(s)://``).
+    * ``KENZY_SERVER_TOKEN`` (or legacy ``KENZY_SERVICE_TOKEN``) → the join token.
+    * ``KENZY_NODE_ID`` → a stable ``node_id`` from the env — authoritative, so
+      it is neither generated nor persisted (this is how two node instances run
+      on one machine: two units, two ids).
+    """
+    from kenzy.serviceauth import service_token_from_env
+
+    url = os.environ.get("KENZY_SERVER_URL")
+    if url:
+        cfg["server_url"] = _normalize_ws_url(url)
+    token = service_token_from_env()
+    if token:
+        disc = cfg.get("discovery")
+        if not isinstance(disc, dict):
+            disc = {}
+            cfg["discovery"] = disc
+        disc["token"] = token
+    node_id = os.environ.get("KENZY_NODE_ID")
+    if node_id:
+        cfg["node_id"] = node_id
+
+
+def _normalize_ws_url(raw: str) -> str:
+    """Normalize a server URL for the node's WebSocket connection: ``http`` →
+    ``ws``, ``https`` → ``wss``, ``ws``/``wss`` kept, a bare host → ``ws://``.
+    (``KENZY_SERVER_URL`` is shared with the backend services, which use the
+    http form; a node needs the ws form.)"""
+    from urllib.parse import urlparse
+
+    if "://" not in raw:
+        return f"ws://{raw}"
+    parsed = urlparse(raw)
+    scheme = {"http": "ws", "https": "wss"}.get(parsed.scheme, parsed.scheme)
+    return f"{scheme}://{parsed.netloc}{parsed.path}".rstrip("/")
+
+
 def _ensure_node_id(cfg: dict[str, Any], config_path: Path | None) -> str:
     """Return the node's stable ``node_id``, generating + persisting one if absent.
 
@@ -2371,8 +2413,17 @@ def main() -> None:
     do_calibrate = "--calibrate" in args
     positional = [a for a in args if not a.startswith("-")]
     config_path = resolve_config("node", positional[0] if positional else None)
-    with open(config_path) as fh:
-        cfg = yaml.safe_load(fh) or {}
+    try:
+        with open(config_path) as fh:
+            cfg = yaml.safe_load(fh) or {}
+    except FileNotFoundError:
+        # Env-only bootstrap (stage d): no node.yaml at all — the environment
+        # (KENZY_SERVER_URL / KENZY_SERVER_TOKEN / KENZY_NODE_ID) supplies
+        # everything a node needs to start; the rest is pulled from the server.
+        cfg = {}
+
+    # Env vars override the file so a node can boot from the environment alone.
+    _apply_node_env(cfg)
 
     # Console follows log_level (default info); the dashboard log buffer can go
     # deeper (log_capture_level) once the server enables capture (config-pull).

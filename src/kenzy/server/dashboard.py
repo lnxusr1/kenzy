@@ -848,10 +848,8 @@ class Dashboard:
 
         try:
             async with httpx.AsyncClient(timeout=3.0, verify=tlsutil.httpx_verify()) as client:
-                r = await client.get(
-                    f"{base}/logs?{urlsplit(request.path).query}",
-                    headers=self._server._service_headers(),
-                )
+                url = f"{base}/logs?{urlsplit(request.path).query}"
+                r = await client.get(url, headers=self._server._service_headers("GET", url))
                 r.raise_for_status()
             logs = r.json().get("logs", [])
             return logs if isinstance(logs, list) else []
@@ -873,7 +871,10 @@ class Dashboard:
 
         try:
             async with httpx.AsyncClient(timeout=5.0, verify=tlsutil.httpx_verify()) as client:
-                r = await client.post(f"{base}/restart", headers=self._server._service_headers())
+                r = await client.post(
+                    f"{base}/restart",
+                    headers=self._server._service_headers("POST", f"{base}/restart"),
+                )
             return r.status_code == 200
         except Exception:
             return False
@@ -919,7 +920,7 @@ class Dashboard:
                 r = await client.post(
                     f"{base}/upgrade",
                     json={"version": version},
-                    headers=self._server._service_headers(),
+                    headers=self._server._service_headers("POST", f"{base}/upgrade"),
                 )
                 r.raise_for_status()
             data = r.json()
@@ -1027,10 +1028,13 @@ class Dashboard:
                     r = await client.post(
                         f"{base}/skills",
                         json=payload or {},
-                        headers=self._server._service_headers(),
+                        headers=self._server._service_headers("POST", f"{base}/skills"),
                     )
                 else:
-                    r = await client.get(f"{base}/skills", headers=self._server._service_headers())
+                    r = await client.get(
+                        f"{base}/skills",
+                        headers=self._server._service_headers("GET", f"{base}/skills"),
+                    )
                 r.raise_for_status()
             data = r.json()
             return data if isinstance(data, dict) else None
@@ -1053,11 +1057,12 @@ class Dashboard:
                     r = await client.post(
                         f"{base}/ha/curation",
                         json=payload or {},
-                        headers=self._server._service_headers(),
+                        headers=self._server._service_headers("POST", f"{base}/ha/curation"),
                     )
                 else:
                     r = await client.get(
-                        f"{base}/ha/curation", headers=self._server._service_headers()
+                        f"{base}/ha/curation",
+                        headers=self._server._service_headers("GET", f"{base}/ha/curation"),
                     )
                 r.raise_for_status()
             data = r.json()
@@ -1244,7 +1249,7 @@ class Dashboard:
                     method,
                     f"{base}{sub_path}",
                     json=payload,
-                    headers=self._server._service_headers(),
+                    headers=self._server._service_headers(method, f"{base}{sub_path}"),
                 )
             try:
                 body = r.json()

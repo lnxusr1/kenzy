@@ -19,9 +19,28 @@ from pydantic import BaseModel
 from starlette.responses import Response
 
 from kenzy.logutil import install_ring_handler
-from kenzy.serviceauth import check_bearer
+from kenzy.serviceauth import (
+    SIG_HEADER,
+    check_bearer,
+    service_token_from_env,
+    verify_service_request,
+)
 
 log = logging.getLogger(__name__)
+
+
+def _service_authorized(request: Request, token: str) -> bool:
+    """True when a request carries valid token-proof auth (``X-Kenzy-Auth``) or,
+    during the deprecation window, the legacy bearer. Requests never carry the
+    token in a replayable form once the bearer is dropped (a later minor)."""
+    if (
+        verify_service_request(
+            request.headers.get(SIG_HEADER), token, request.method, request.url.path
+        )
+        is not None
+    ):
+        return True
+    return check_bearer(request.headers.get("authorization"), token)
 
 
 class UpgradeRequest(BaseModel):
@@ -36,7 +55,7 @@ def install_service_auth(app: FastAPI) -> None:
     No-op when the env var is unset, so service-to-service auth is opt-in and
     backward compatible. ``/health`` stays open (the dashboard polls it).
     """
-    token = os.environ.get("KENZY_SERVICE_TOKEN")
+    token = service_token_from_env()
     if not token:
         return
 
@@ -44,9 +63,7 @@ def install_service_auth(app: FastAPI) -> None:
     async def _service_token_guard(
         request: Request, call_next: Callable[[Request], Awaitable[Response]]
     ) -> Response:
-        if request.url.path != "/health" and not check_bearer(
-            request.headers.get("authorization"), token
-        ):
+        if request.url.path != "/health" and not _service_authorized(request, token):
             return JSONResponse({"detail": "invalid service token"}, status_code=401)
         return await call_next(request)
 
