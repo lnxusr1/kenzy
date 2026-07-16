@@ -7,8 +7,7 @@ local copy as a record, and returns it. Per the centralized-config design the
 service **blocks** (retry/backoff) until the server answers — the server is the
 single source of truth.
 
-Stdlib-only (``urllib``) so it adds no dependency to a service; secrets stay in
-the host environment and are never part of the pulled config.
+Stdlib-only (``http.client``) so it adds no dependency to a service.
 """
 
 from __future__ import annotations
@@ -32,8 +31,8 @@ _SCHEME_MAP = {"ws": "http", "wss": "https"}
 def _signed_get(base: str, path: str, token: str | None, timeout: float) -> tuple[int, bytes, bool]:
     """GET ``base + path`` with token-proof auth (stdlib http.client).
 
-    Sends the ``X-Kenzy-Auth`` signature AND the legacy bearer (deprecation
-    window). Reads the server's TLS cert off the connection to verify the
+    Sends the ``X-Kenzy-Auth`` token-proof signature only (3.12 — the raw
+    token never rides the wire). Reads the server's TLS cert off the connection to verify the
     ``X-Kenzy-Sig`` response signature — binding the reply to the channel we
     actually spoke over, so a relay presenting a different cert is caught.
 
@@ -72,7 +71,9 @@ def _signed_get(base: str, path: str, token: str | None, timeout: float) -> tupl
             headers[serviceauth.SIG_HEADER] = serviceauth.sign_service_request(
                 token, "GET", sign_path, ts=ts
             )
-            headers["Authorization"] = f"Bearer {token}"  # legacy window
+            # 3.12: token-proof only — the raw token no longer rides the wire
+            # (a 3.11 server still accepts this signature). Servers keep
+            # accepting the legacy bearer for stragglers; nothing sends it.
         conn.request("GET", path, headers=headers)
         resp = conn.getresponse()
         body = resp.read()
@@ -121,6 +122,25 @@ def _resolve_server_http(timeout: float) -> str:
     return _http_base(url)
 
 
+def _apply_secrets(cfg: dict[str, Any]) -> None:
+    """Move a served ``_secrets`` map into this process's environment (stage b).
+
+    Pops the map out of ``cfg`` (so it never lands in the on-disk config record)
+    and sets each key in ``os.environ``. **Server value wins** over any local
+    ``.env`` — central rotation must not be shadowed by a stale local copy. Only
+    ever present on an authenticated TLS pull (the server gates it); on
+    plaintext/unauthenticated the service just keeps its own environment.
+    """
+    secrets = cfg.pop("_secrets", None)
+    if not isinstance(secrets, dict):
+        return
+    for name, value in secrets.items():
+        if isinstance(name, str) and isinstance(value, str) and value:
+            os.environ[name] = value
+    if secrets:
+        log.info("Applied %d secret(s) from the server to the environment", len(secrets))
+
+
 def _save_local(service: str, cfg: dict[str, Any]) -> None:
     """Write a record of the pulled config into the config home (not read on boot).
 
@@ -144,7 +164,7 @@ def bootstrap_config(service: str, *, timeout: float = 5.0) -> dict[str, Any]:
     """Pull ``service``'s effective config from the server, blocking until it succeeds.
 
     Discovers the server (mDNS or ``KENZY_SERVER_URL``), fetches
-    ``GET /config/<service>`` with the ``KENZY_SERVICE_TOKEN`` bearer, retries
+    ``GET /config/<service>`` with a token-proof signature, retries
     with exponential backoff (1 s → 60 s) on any failure, writes a local copy,
     and returns the config dict.
     """
@@ -163,6 +183,7 @@ def bootstrap_config(service: str, *, timeout: float = 5.0) -> dict[str, Any]:
             cfg = json.loads(body.decode())
             if not isinstance(cfg, dict):
                 raise ValueError("server returned a non-object config")
+            _apply_secrets(cfg)  # pop _secrets into our env BEFORE we persist a record
             _save_local(service, cfg)
             global _server_base
             _server_base = base
@@ -236,7 +257,10 @@ def fetch_service_config(service: str, *, timeout: float = 3.0) -> dict[str, Any
         if status != 200 or not response_ok:
             return None
         cfg = json.loads(body.decode())
-        return cfg if isinstance(cfg, dict) else None
+        if isinstance(cfg, dict):
+            cfg.pop("_secrets", None)  # a peer-URL fetch has no business carrying secrets
+            return cfg
+        return None
     except Exception:
         return None
 

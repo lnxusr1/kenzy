@@ -154,8 +154,8 @@ def test_server_service_headers(monkeypatch):
 
     monkeypatch.setenv("KENZY_SERVICE_TOKEN", "envtok")
     hdrs = AudioServer({"discovery": {"token": "disc"}})._service_headers("GET", "http://h:8767/config/stt")
-    # legacy bearer (deprecation window) AND the token-proof signature
-    assert hdrs["Authorization"] == "Bearer envtok"
+    # 3.12: token-proof signature only — NO bearer, token never on the wire.
+    assert "Authorization" not in hdrs
     assert serviceauth.verify_service_request(
         hdrs[serviceauth.SIG_HEADER], "envtok", "GET", "/config/stt"
     ) is not None
@@ -163,7 +163,7 @@ def test_server_service_headers(monkeypatch):
 
     monkeypatch.delenv("KENZY_SERVICE_TOKEN", raising=False)
     hdrs = AudioServer({"discovery": {"token": "disc"}})._service_headers("POST", "http://h/speak")
-    assert hdrs["Authorization"] == "Bearer disc"
+    assert "Authorization" not in hdrs
     assert serviceauth.verify_service_request(
         hdrs[serviceauth.SIG_HEADER], "disc", "POST", "/speak"
     ) is not None

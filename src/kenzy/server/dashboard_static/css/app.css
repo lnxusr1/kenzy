@@ -429,6 +429,16 @@ button { font: inherit; cursor: pointer; }
 .btn-primary:hover { filter: brightness(1.07); }
 .btn-primary:active { transform: translateY(1px); }
 .btn-primary[disabled] { opacity: .6; cursor: not-allowed; }
+.btn-danger {
+  width: auto; margin-top: var(--s2); padding: 10px var(--s5); border: none; border-radius: var(--radius);
+  background: var(--led-down); color: #fff; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; font-size: 13px; cursor: pointer;
+  transition: filter var(--t-fast), transform var(--t-fast);
+}
+.btn-danger:hover { filter: brightness(1.07); }
+.btn-danger:active { transform: translateY(1px); }
+.btn-danger[disabled] { opacity: .5; cursor: not-allowed; }
+.restore-box { margin-top: var(--s4); padding: var(--s3) var(--s4); border: 1px solid var(--border); border-radius: var(--radius); }
+.restore-box summary { cursor: pointer; }
 .login .err { color: var(--led-down); font-size: 13px; margin: 0 0 var(--s4); text-align: center; min-height: 1.2em; }
 .login .hint { margin-top: var(--s5); text-align: center; font-size: 12px; color: var(--text-faint); }
 .login .hint code { font-family: var(--font-mono); color: var(--text-dim); }

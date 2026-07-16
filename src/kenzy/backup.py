@@ -260,6 +260,107 @@ def read_manifest(archive: Path) -> dict[str, object] | None:
         return None
 
 
+def regenerate_missing_certs(home: Path) -> str | None:
+    """Mint a self-signed TLS pair when the restored config expects one that isn't
+    there. A backup never carries the private key, and Kenzy's no-pinning posture
+    makes a fresh cert a non-event — without this a restored server would find its
+    cert missing and silently fall back to plaintext.
+
+    **Relocation-aware**: ``server.yaml`` stores *absolute* cert paths, so a
+    backup restored into a different folder (a new machine) references the old
+    install's paths. When the referenced cert is absent, the new pair is minted
+    **under this config home** (``<home>/certs/``) and the ``tls:`` block is
+    rewritten to match — so restore is location-independent. Returns a status
+    message (for the caller to print/log), or ``None`` when nothing needed doing.
+    """
+    import shutil
+    import socket
+    import subprocess
+
+    import yaml  # type: ignore[import-untyped]
+
+    files = ("server.yaml", "server.local.yaml")
+    tls: dict[str, str] = {}
+    for name in files:
+        path = home / "configs" / name
+        if not path.is_file():
+            continue
+        try:
+            data = yaml.safe_load(path.read_text()) or {}
+        except Exception:
+            continue
+        block = data.get("tls") if isinstance(data, dict) else None
+        if isinstance(block, dict):
+            tls.update({k: str(v) for k, v in block.items() if k in ("cert", "key") and v})
+
+    cert, key = tls.get("cert"), tls.get("key")
+    if not (cert and key):
+        return None  # no TLS configured
+    if Path(cert).is_file() and Path(key).is_file():
+        return None  # certs still present (same-machine reinstall) — keep them
+    if not shutil.which("openssl"):
+        return "TLS is configured but openssl isn't available — the server starts in PLAINTEXT."
+
+    # If the stored path already lives inside this config home, regenerate in
+    # place (a same-layout reinstall). Only when it points OUTSIDE — a backup
+    # restored into a different folder — relocate the pair under this home
+    # (``<home>/certs/``, the installer's layout) so TLS survives the move.
+    def _inside_home(p: str) -> bool:
+        try:
+            Path(p).resolve().relative_to(home.resolve())
+            return True
+        except ValueError:
+            return False
+
+    if _inside_home(cert) and _inside_home(key):
+        new_cert, new_key = Path(cert), Path(key)
+    else:
+        new_cert = home / "certs" / Path(cert).name
+        new_key = home / "certs" / Path(key).name
+    new_cert.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        subprocess.run(
+            [
+                "openssl",
+                "req",
+                "-x509",
+                "-newkey",
+                "rsa:2048",
+                "-nodes",
+                "-days",
+                "3650",
+                "-keyout",
+                str(new_key),
+                "-out",
+                str(new_cert),
+                "-subj",
+                f"/CN={socket.gethostname()}",
+            ],
+            check=True,
+            capture_output=True,
+        )
+        new_key.chmod(0o600)
+    except (OSError, subprocess.CalledProcessError) as exc:
+        return f"Could not regenerate the TLS certificate ({exc}); the server starts plaintext."
+
+    relocated = str(new_cert) != cert or str(new_key) != key
+    if relocated:
+        # Point server.yaml / server.local.yaml at the new pair (literal path
+        # swap, so surrounding comments and formatting are preserved).
+        for name in files:
+            path = home / "configs" / name
+            if not path.is_file():
+                continue
+            text = path.read_text()
+            if cert in text or key in text:
+                path.write_text(text.replace(cert, str(new_cert)).replace(key, str(new_key)))
+        return (
+            f"Relocated the TLS certificate to {new_cert.parent} and updated "
+            "server.yaml (cross-folder restore keeps TLS on)."
+        )
+    return f"Regenerated a self-signed TLS certificate at {new_cert} (restore keeps TLS on)."
+
+
 def restore_backup(archive: Path, root: Path, *, force: bool = False) -> list[str]:
     """Unpack a backup into ``root``; returns the restored relative paths.
 

@@ -357,3 +357,32 @@ def test_restore_without_tls_makes_no_cert(tmp_path):
     (home / "configs" / "server.yaml").write_text("port: 8765\n")
     _ensure_restored_certs(home)  # no tls block -> no-op, no crash
     assert not (home / "configs" / "certs").exists()
+
+
+def test_restore_relocates_absolute_cert_to_new_home(tmp_path):
+    """A backup restored into a DIFFERENT folder: server.yaml references the old
+    machine's absolute cert path. The regen relocates the pair under the new home
+    and rewrites the tls block — so a cross-machine restore keeps TLS."""
+    import shutil
+
+    import pytest
+
+    from kenzy.backup import regenerate_missing_certs
+
+    if not shutil.which("openssl"):
+        pytest.skip("openssl not available")
+    new_home = tmp_path / "newmachine"
+    (new_home / "configs").mkdir(parents=True)
+    old = "/some/old/machine/configs/certs"  # absent on this box
+    (new_home / "configs" / "server.yaml").write_text(
+        f'port: 8765\ntls:\n  cert: {old}/kenzy.crt\n  key: {old}/kenzy.key\n'
+    )
+    msg = regenerate_missing_certs(new_home)
+    assert msg and "Relocated" in msg
+    # cert now lives under the new home, not the stale old path
+    assert (new_home / "certs" / "kenzy.crt").is_file()
+    assert oct((new_home / "certs" / "kenzy.key").stat().st_mode)[-3:] == "600"
+    # server.yaml points at the relocated pair, old path gone
+    text = (new_home / "configs" / "server.yaml").read_text()
+    assert str(new_home / "certs" / "kenzy.crt") in text
+    assert old not in text

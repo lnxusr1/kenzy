@@ -292,10 +292,14 @@ scope: **include secrets** (`.env` — the archive then carries live API keys) a
 
 The **API keys** section is a **write-only** secret editor: pick a key
 (`OPENAI_API_KEY`, `HA_API_KEY`, `HF_TOKEN`, or a custom name), paste a value, and it's
-written to the server host's `.env` — values are never displayed, served, or logged;
-the page only shows which names are *set*. Restart the affected services (Services
-tab) to apply. It writes the server's own `.env`, which co-located services share; on
-a multi-host setup, remote hosts keep their own `.env` (`kenzy-deploy` syncs it).
+written to the server host's `.env` — values are never displayed or logged; the page
+only shows which names are *set*. Restart the affected services (Services tab) to apply.
+
+As of 3.12 this is **fleet-wide**: with TLS enabled, the server hands each backend
+service the keys it needs over the authenticated config channel, so a key set here
+takes effect on every host — you no longer maintain a separate `.env` per machine.
+(Without TLS, secrets aren't served, and remote hosts fall back to their own local
+`.env`.) The server's value wins, so rotating a key here actually rotates it everywhere.
 Requires `dashboard.controls`. Unless you've [enabled TLS](#https-optional), the
 dashboard runs over plain HTTP — enter keys from a machine on your own network.
 

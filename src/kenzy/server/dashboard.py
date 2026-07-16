@@ -1520,6 +1520,29 @@ class Dashboard:
                 return await ack(False, "controls are disabled (set dashboard.controls: true)")
             ok = await self._restart_service(str(msg.get("service", "")))
             await ack(ok, None if ok else "service not reachable")
+        elif mtype == "restore":
+            if not self._dcfg.controls:
+                return await ack(False, "controls are disabled (set dashboard.controls: true)")
+            import base64
+            import binascii
+
+            try:
+                data = base64.b64decode(str(msg.get("data", "")), validate=True)
+            except (binascii.Error, ValueError):
+                return await ack(False, "invalid backup payload")
+            if not data:
+                return await ack(False, "empty backup payload")
+            try:
+                # File I/O + the cert-regen openssl call — off the event loop.
+                restored = await asyncio.to_thread(self._server.restore_from_archive, data)
+            except Exception as exc:  # RestoreError or bad archive
+                return await ack(False, f"restore failed: {exc}")
+            await ack(True, None)
+            await self._broadcast_state()
+            # Restart so services re-pull the restored config and self-populate;
+            # the WS drops and the SPA reconnects to the restored server.
+            log.warning("Restore applied (%d files) — restarting server", len(restored))
+            asyncio.get_running_loop().call_later(0.8, self._server.restart_server)
         elif mtype == "upgrade_server":
             if not self._dcfg.controls:
                 return await ack(False, "controls are disabled (set dashboard.controls: true)")
@@ -1678,7 +1701,11 @@ class Dashboard:
             self._dcfg.bind,
             self._dcfg.port,
             process_request=self.process_request,
-            max_size=262_144,  # mutations are small JSON; bound inbound frame size (F-10)
+            # Mutations are small JSON, but a `restore` carries a base64 backup
+            # (a realistic archive — configs/curation/embeddings/skills, no models
+            # — is tens of KB; this bound holds even a large one while staying
+            # finite). Bigger archives (`?full=1` models) use `kenzy-init --restore`.
+            max_size=8_388_608,  # 8 MB (F-10: still a bounded inbound frame)
             ssl=self._ssl,
         ):
             await asyncio.Future()

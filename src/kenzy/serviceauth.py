@@ -216,6 +216,35 @@ def verify_service_request(
     return ts if hmac.compare_digest(sig, expected) else None
 
 
+def sign_node_hello(token: str, node_id: str, *, ts: int | None = None) -> dict[str, Any]:
+    """A node's join proof for its ``hello`` — token-proof + timestamp-fresh, so
+    the raw join token never rides the WebSocket handshake. Returns
+    ``{"ts": …, "sig": …}`` to carry in ``hello.auth`` (3.12+)."""
+    ts = int(time.time()) if ts is None else ts
+    material = b"\x00".join([b"hello", str(ts).encode(), node_id.encode()])
+    sig = hmac.new(_svc_key(token), material, hashlib.sha256).hexdigest()
+    return {"ts": ts, "sig": sig}
+
+
+def verify_node_hello(
+    auth: Any, token: str, node_id: str, *, max_skew: int = _MAX_SKEW, now: int | None = None
+) -> bool:
+    """Verify a node's ``hello.auth`` proof against the claimed ``node_id``."""
+    if not isinstance(auth, dict):
+        return False
+    try:
+        ts = int(auth["ts"])
+        sig = str(auth["sig"])
+    except (KeyError, ValueError, TypeError):
+        return False
+    now = int(time.time()) if now is None else now
+    if abs(now - ts) > max_skew:
+        return False
+    material = b"\x00".join([b"hello", str(ts).encode(), node_id.encode()])
+    expected = hmac.new(_svc_key(token), material, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(sig, expected)
+
+
 def sign_service_response(token: str, ts: int, body: bytes, *, binding: bytes = b"") -> str:
     """Signature the server attaches (``X-Kenzy-Sig``) so the client can confirm
     the reply came, unforged, over the TLS channel it observed."""

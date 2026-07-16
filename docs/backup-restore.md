@@ -37,6 +37,23 @@ Two things stay out **by default**, each with an opt-in checkbox:
 
 ## Restoring
 
+### From the dashboard
+
+**Settings → Restore from a backup…** — pick your backup file, type `RESTORE` to
+confirm, and it's uploaded to the server and applied: configuration, Home Assistant
+curation, enrolled voice profiles, schedules, and any custom skills. The server then
+restarts, and the rest of the fleet re-pulls its config and repopulates its own data
+automatically — so a whole-deployment recovery is one browser round-trip.
+
+Two things to know: it **overwrites** the server's live settings (that's why it asks
+you to type `RESTORE`), and because a backup can contain **custom skills** — Python you
+authored, loaded at startup — the upload runs code under your admin session, the same
+trust the dashboard's in-place upgrade already carries. Only restore backups you made.
+Very large archives that bundled `models/` (`?full=1`) exceed the upload path — use the
+CLI below for those.
+
+### From the command line
+
 On a fresh install (after running the [installer](getting-started.md) or
 `kenzy-init`):
 
@@ -51,12 +68,15 @@ Then finish up:
 2. `kenzy-setup` (re-download models; skip for an **Include everything** backup)
 3. Restart the services: `systemctl --user restart 'kenzy-*'`
 
-!!! note "TLS survives a restore"
+!!! note "TLS survives a restore — even onto a new machine"
     A backup never contains your TLS certificate or private key (private-key
     material stays on its host, like `.env`). If the restored config had TLS
-    enabled, `kenzy-init --restore` mints a fresh self-signed certificate in
-    its place, so the restored server keeps speaking `https`/`wss` — Kenzy's
-    clients don't pin certificates, so a new one is seamless.
+    enabled, the restore mints a fresh self-signed certificate in its place, so
+    the restored server keeps speaking `https`/`wss` — Kenzy's clients don't pin
+    certificates, so a new one is seamless. And because `server.yaml` stores an
+    absolute cert path, a restore into a **different folder** (a new machine)
+    relocates the certificate under the new config home and rewrites the `tls:`
+    block to match — so recovery works anywhere, not just the original path.
 
 On a **multi-host** deployment, restore the same archive on each host — every
 service reads only its own part of the config home, so one archive serves them

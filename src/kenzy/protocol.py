@@ -66,6 +66,7 @@ def hello(
     capabilities: dict[str, Any] | None = None,
     token: str | None = None,
     kenzy_version: str | None = None,
+    auth: dict[str, Any] | None = None,
 ) -> str:
     """Node→server registration.
 
@@ -82,6 +83,8 @@ def hello(
         payload["capabilities"] = capabilities
     if token is not None:
         payload["token"] = token
+    if auth is not None:
+        payload["auth"] = auth  # 3.12+ token-proof join (raw token stays off the wire)
     if kenzy_version is not None:
         payload["kenzy_version"] = kenzy_version
     return json.dumps(payload)

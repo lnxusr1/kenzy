@@ -393,6 +393,61 @@ function BackupPanel() {
       hand-placed custom model on the server)
     </label>
     <p><a class="btn" href=${"/api/backup" + (qs ? "?" + qs : "")} download>Download backup</a></p>
+    <${RestorePanel} />
+  `;
+}
+
+// Restore an uploaded backup into the server's config home, then the server
+// restarts and the rest of the fleet re-pulls + self-populates. The upload rides
+// the WS channel (the dashboard HTTP hook takes no body); a realistic archive is
+// tens of KB. A force-overwrite of live config, so it's typed-confirm gated.
+const _RESTORE_MAX = 8 * 1024 * 1024; // matches the server's WS frame bound
+
+function RestorePanel() {
+  const [file, setFile] = useState(null);
+  const [confirm, setConfirm] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function doRestore() {
+    if (!file) return;
+    if (file.size > _RESTORE_MAX) {
+      notify("Backup too large for dashboard restore — use kenzy-init --restore.", "err");
+      return;
+    }
+    setBusy(true);
+    const buf = new Uint8Array(await file.arrayBuffer());
+    let bin = "";
+    for (let i = 0; i < buf.length; i++) bin += String.fromCharCode(buf[i]);
+    const res = await send("restore", { data: btoa(bin) });
+    if (res.ok) {
+      notify("Backup restored — server is restarting. The page will reconnect.");
+    } else {
+      notify(res.error || "Restore failed.", "err");
+      setBusy(false);
+    }
+  }
+
+  return html`
+    <details class="restore-box">
+      <summary class="micro"><b>Restore from a backup…</b></summary>
+      <p class="micro">
+        Uploads a backup into this server and <b>overwrites</b> its configuration,
+        curation, voice profiles, and any custom skills — then the server restarts and
+        the rest of the fleet re-pulls automatically. This replaces live settings, so
+        it's a deliberate action. (Custom skills are executable code you authored; an
+        upload runs under your admin session. Huge archives with <span class="mono">models/</span>
+        use <span class="mono">kenzy-init --restore</span> instead.)
+      </p>
+      <input type="file" accept=".gz,.tgz,application/gzip"
+        disabled=${busy} onChange=${(e) => setFile(e.target.files[0] || null)} />
+      <label class="micro" style="display:block; margin-top:.4rem">
+        Type <span class="mono">"RESTORE"</span> to confirm:
+        <input class="ha-in" style="width:8rem" disabled=${busy}
+          value=${confirm} onInput=${(e) => setConfirm(e.target.value)} />
+      </label>
+      <p><button class="btn-danger" disabled=${busy || !file || confirm !== "RESTORE"}
+        onClick=${doRestore}>${busy ? "Restoring…" : "Restore & restart"}</button></p>
+    </details>
   `;
 }
 

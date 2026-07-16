@@ -329,57 +329,12 @@ def _restore(archive: Path, home: Path, *, force: bool) -> None:
 
 
 def _ensure_restored_certs(home: Path) -> None:
-    """Regenerate a self-signed TLS pair when the restored config expects one.
+    """Regenerate a self-signed TLS pair when the restored config expects one."""
+    from kenzy.backup import regenerate_missing_certs
 
-    The backup carries ``server.yaml`` (with any ``tls: {cert, key}`` block) but
-    NOT the certificate files — the private key is host security material that
-    never enters an archive, and Kenzy's no-pinning posture makes a fresh cert a
-    non-event (clients connect encrypted-but-unverified). Without this, a restored
-    server would find its cert missing and silently fall back to plaintext. So if
-    the config references a cert/key that isn't there, mint a new self-signed pair
-    at those paths (exactly what install.sh does on a fresh install).
-    """
-    import shutil
-    import socket
-    import subprocess
-
-    import yaml  # type: ignore[import-untyped]
-
-    tls: dict[str, str] = {}
-    for name in ("server.yaml", "server.local.yaml"):
-        path = home / "configs" / name
-        if not path.is_file():
-            continue
-        try:
-            data = yaml.safe_load(path.read_text()) or {}
-        except Exception:
-            continue
-        block = data.get("tls") if isinstance(data, dict) else None
-        if isinstance(block, dict):
-            tls.update({k: str(v) for k, v in block.items() if k in ("cert", "key") and v})
-
-    cert, key = tls.get("cert"), tls.get("key")
-    if not (cert and key):
-        return  # no TLS configured — nothing to do
-    if Path(cert).is_file() and Path(key).is_file():
-        return  # certs came back (e.g. co-located paths still present)
-    if not shutil.which("openssl"):
-        print("  ! TLS is configured but openssl isn't available — the server will")
-        print("    start in PLAINTEXT until you supply the cert/key. See docs.kenzy.ai.")
-        return
-
-    Path(cert).parent.mkdir(parents=True, exist_ok=True)
-    try:
-        subprocess.run(
-            ["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "3650",
-             "-keyout", key, "-out", cert, "-subj", f"/CN={socket.gethostname()}"],
-            check=True, capture_output=True,
-        )
-        Path(key).chmod(0o600)
-        print(f"  Regenerated a self-signed TLS certificate at {cert} (restore keeps TLS on).")
-    except (OSError, subprocess.CalledProcessError) as exc:
-        print(f"  ! Could not regenerate the TLS certificate ({exc}); server starts plaintext.")
-    print("to re-download models, and restart the services.")
+    msg = regenerate_missing_certs(home)
+    if msg:
+        print(f"  {msg}")
 
 
 if __name__ == "__main__":

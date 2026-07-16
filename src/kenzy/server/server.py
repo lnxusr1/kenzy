@@ -131,6 +131,18 @@ _CONN_RATE_WINDOW = 60.0  # … within this many seconds
 # aren't duplicated in two places (an override in the service's own config still wins).
 # Only speaker (its kenzy-enroll CLI) needs TTS today.
 _SERVICE_PEERS: dict[str, tuple[str, ...]] = {"speaker": ("tts",)}
+
+#: The environment secrets each backend service needs to do its job. The server
+#: serves the ones it holds to that service over the authenticated TLS config
+#: channel (3.12+, server-authority stage b), so API keys live on ONE host
+#: instead of every host. Served under ``_secrets`` (never as config keys); the
+#: service injects them into its own environment at boot, server value winning.
+_SERVICE_SECRETS: dict[str, tuple[str, ...]] = {
+    "stt": ("OPENAI_API_KEY",),
+    "tts": ("OPENAI_API_KEY",),
+    "llm": ("OPENAI_API_KEY", "HA_API_KEY", "CUSTOM_LLM_API_KEY"),
+    "speaker": ("HF_TOKEN",),
+}
 # Words that count as accepting an incoming call. Default-deny: anything else declines.
 _AFFIRM_WORDS = frozenset(
     {"yes", "yeah", "yep", "yup", "sure", "ok", "okay", "accept", "accepted", "affirmative"}
@@ -477,9 +489,9 @@ class AudioServer:
     def _service_headers(self, method: str, url: str | None) -> dict[str, str]:
         """Auth headers for an outbound call to a backend service.
 
-        Sends the token-proof signature (``X-Kenzy-Auth``) AND the legacy bearer
-        during the deprecation window: a 3.11+ service prefers the signature, a
-        pre-3.11 service reads the bearer. A follow-up minor drops the bearer.
+        Sends only the token-proof signature (``X-Kenzy-Auth``) — as of 3.12 the
+        raw token never rides the wire. Verifiers still accept the legacy bearer
+        for a straggler on an old release, but nothing sends it any more.
         """
         token = self._service_token
         if not token:
@@ -487,10 +499,10 @@ class AudioServer:
         from urllib.parse import urlparse
 
         path = urlparse(url or "").path or "/"
-        return {
-            "Authorization": f"Bearer {token}",
-            serviceauth.SIG_HEADER: serviceauth.sign_service_request(token, method, path),
-        }
+        # 3.12: token-proof only — the raw bearer no longer rides the wire (a
+        # 3.11 service still accepts this signature). The verify side keeps
+        # honoring the legacy bearer for stragglers; nothing sends it.
+        return {serviceauth.SIG_HEADER: serviceauth.sign_service_request(token, method, path)}
 
     # ------------------------------------------------------------------
     # Config-pull: effective per-node config = defaults + per-room override
@@ -652,16 +664,18 @@ class AudioServer:
     # ------------------------------------------------------------------
 
     def _effective_service_config(
-        self, service: str, *, include_override: bool = True
+        self, service: str, *, include_override: bool = True, include_secrets: bool = False
     ) -> dict[str, Any]:
         """Effective config for a backend service = packaged default ← stored override.
 
         The stored override lives at ``configs/services/<service>.yaml`` (server-
         owned) and is deep-merged over the packaged default. Secret-like keys are
-        stripped, so secrets are never stored or served — they stay in each host's
-        environment/``.env``. ``include_override=False`` returns just the inherited
-        layer (packaged default + auto-wired peers) — what applies when a key is
-        NOT overridden; the dashboard editor shows it as field placeholders.
+        stripped from the config body, so secrets are never *stored*. When
+        ``include_secrets`` is set (only on the authenticated TLS ``/config``
+        pull, never the dashboard read), the server adds a ``_secrets`` map of
+        the API keys this service needs that the server holds in its environment
+        — so keys can live on one host (stage b). ``include_override=False``
+        returns just the inherited layer for the dashboard editor's placeholders.
         """
         import yaml
 
@@ -704,6 +718,16 @@ class AudioServer:
         # service whose files don't exist logs a warning and stays plaintext.
         if self._tls_paths and not (base.get("tls") or {}).get("key"):
             base["tls"] = {"cert": self._tls_paths[0], "key": self._tls_paths[1]}
+        # Central secrets (stage b): serve the API keys this service needs that
+        # we hold — only on the authenticated TLS pull (caller sets the flag).
+        if include_secrets:
+            secrets = {
+                name: os.environ[name]
+                for name in _SERVICE_SECRETS.get(service, ())
+                if os.environ.get(name)
+            }
+            if secrets:
+                base["_secrets"] = secrets
         return base
 
     def _service_override_path(self, service: str) -> Path:
@@ -753,6 +777,19 @@ class AudioServer:
         return Response(
             status, "OK" if status == 200 else "ERR", headers, json.dumps(payload).encode()
         )
+
+    def _join_authorized(self, msg: dict[str, Any]) -> bool:
+        """A node's hello is authorized when its 3.12 ``auth`` proof verifies for
+        the claimed node_id, or (legacy window) the raw ``token`` field matches.
+        No configured join token ⇒ open (unauthenticated joins allowed)."""
+        if not self._join_token:
+            return True
+        token = str(self._join_token)
+        auth = msg.get("auth")
+        if auth is not None:
+            node_id = str(msg.get("node_id") or msg.get("room_id") or "")
+            return serviceauth.verify_node_hello(auth, token, node_id)
+        return hmac.compare_digest(str(msg.get("token") or ""), token)
 
     def _authorize_service(
         self, request: Request, method: str, path: str
@@ -844,7 +881,12 @@ class AudioServer:
         service = path[len("/config/") :]
         if service not in SERVICES or service == "node":
             return self._http_json(404, {"error": "unknown service"})
-        return self._signed_json(200, self._effective_service_config(service), ts)
+        # Secrets ride only an authenticated (ts set = token-proof) TLS channel
+        # (channel_binding present) — never plaintext, never a legacy-bearer
+        # request. So a relay that can't produce a signature gets no keys.
+        with_secrets = ts is not None and bool(self._channel_binding)
+        cfg = self._effective_service_config(service, include_secrets=with_secrets)
+        return self._signed_json(200, cfg, ts)
 
     async def _http_announce(self, request: Request) -> Response:
         """Handle ``/announce?text=…&rooms=…`` — speak a message aloud in rooms.
@@ -1056,9 +1098,7 @@ class AudioServer:
             log.warning("Expected hello, got '%s' from %s", msg.get("type"), ws.remote_address)
             return None
 
-        if self._join_token is not None and not hmac.compare_digest(
-            str(msg.get("token") or ""), self._join_token
-        ):
+        if self._join_token is not None and not self._join_authorized(msg):
             log.warning("Rejected node from %s: bad/missing join token", ws.remote_address)
             try:
                 await ws.close(1008, "invalid join token")
@@ -1354,6 +1394,26 @@ class AudioServer:
         dashboard to apply server-config changes that wire up at startup."""
         log.warning("Restarting server (re-exec)")
         os.execv(sys.executable, [sys.executable, *sys.argv])
+
+    def restore_from_archive(self, data: bytes) -> list[str]:
+        """Restore a dashboard-uploaded backup tarball into this server's config
+        home (force-overwrite — a dashboard restore is a deliberate replace), then
+        regenerate the TLS cert if the restored config expects a now-absent one.
+        The caller restarts the server afterward so services re-pull and
+        self-populate (stage c) — a full fleet restore from one upload."""
+        import tempfile
+
+        from kenzy import backup
+
+        with tempfile.NamedTemporaryFile(suffix=".tar.gz", delete=True) as tmp:
+            tmp.write(data)
+            tmp.flush()
+            restored = backup.restore_backup(Path(tmp.name), self._data_root, force=True)
+        msg = backup.regenerate_missing_certs(self._data_root)
+        if msg:
+            log.info("Restore: %s", msg)
+        log.warning("Restored %d file(s) from a dashboard upload", len(restored))
+        return restored
 
     async def run_self_upgrade(
         self, extra: str = "server", version: str | None = None

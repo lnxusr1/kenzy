@@ -2047,12 +2047,20 @@ class NodeClient:
             "playback_sample_rate": self._playback_rate,
             "devices": self._device_capabilities(),
         }
+        # 3.12: prove possession of the join token by signature — the raw token
+        # no longer rides the hello. (Requires a >=3.12 server; managed upgrades
+        # do the server first. A server still accepts the legacy token field.)
+        auth = None
+        if self._join_token:
+            from kenzy import serviceauth
+
+            auth = serviceauth.sign_node_hello(self._join_token, self._node_id)
         await ws.send(
             protocol.hello(
                 self._room_id,
                 node_id=self._node_id,
                 capabilities=capabilities,
-                token=self._join_token,
+                auth=auth,
                 kenzy_version=kenzy_version(),
             )
         )

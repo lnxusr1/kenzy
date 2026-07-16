@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [3.12.0]
+
+### Added
+
+- **Restore a backup from the dashboard, not just the command line.** Settings now has a **Restore from a backup…** panel next to Download: pick a backup file, type `RESTORE` to confirm, and it's uploaded into the server and applied — configs, curation, voice profiles, schedules, and your custom skills — after which the server restarts and the rest of the fleet re-pulls and self-populates automatically. So a full recovery is now a browser round-trip. It's a deliberate overwrite of live settings (hence the typed confirm), and because a backup can contain custom skills (executable code you wrote), the upload runs under your admin session — the same trust the dashboard's upgrade button already carries. Very large archives that include `models/` still use `kenzy-init --restore`.
+- **Your API keys can live on one host now — the server hands them to the services that need them.** Building on 3.11's signed service channel, the server serves each backend service the secrets it needs (the STT/TTS/LLM services get your OpenAI key, the LLM service also gets the Home Assistant key, the speaker service its HuggingFace token) over the authenticated, encrypted config channel — so you set a key once, on the server, instead of copying `.env` files to every machine. Secrets ride **only** a token-proof request over TLS (never plaintext, never an unauthenticated one), are never written to disk on the receiving host, and the server's value wins over any stale local copy, so rotating a key centrally actually takes effect everywhere. The dashboard's **Settings → API keys** is now genuinely fleet-wide.
+
+### Changed
+
+- **The shared token no longer travels the network at all.** 3.11 introduced signature-based service auth but still sent the raw token alongside for compatibility; 3.12 stops sending it — services and the server prove they hold the token by signature only, and **nodes now prove their join the same way** (the join token no longer rides the `hello` handshake). Combined, the fleet's shared secret is never transmitted, which is the precondition that makes central secret-serving safe. Old releases are still *accepted* for a straggler, but nothing sends the raw token any more.
+
+  !!! Upgrade note
+      Upgrade the **server first** (the dashboard's upgrade-all already does this). A node or service upgraded ahead of its server briefly can't authenticate to the older server and will retry until the server catches up — harmless, but upgrade in order to avoid it.
+
 ## [3.11.0]
 
 ### Added
@@ -11,7 +25,7 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
-- **Restoring a backup keeps TLS on, and a backup never carries your private key.** Two related fixes now that installs can have a TLS certificate: a backup deliberately excludes the certificate/key (private-key material, like `.env`, never enters an archive — wherever it sits), and on `kenzy-init --restore`, when the restored `server.yaml` expects a certificate that isn't there, Kenzy mints a fresh self-signed one at that path. Without this, a restored server would find its cert missing and quietly fall back to plaintext; now a restore preserves the encrypted posture, and — because Kenzy's clients don't pin certificates — a freshly-minted cert is a non-event.
+- **Restoring a backup keeps TLS on, and a backup never carries your private key.** Two related fixes now that installs can have a TLS certificate: a backup deliberately excludes the certificate/key (private-key material, like `.env`, never enters an archive — wherever it sits), and when the restored `server.yaml` expects a certificate that isn't there, Kenzy mints a fresh self-signed one — and if the backup was restored into a **different folder** (a new machine), it relocates the certificate under the new config home and rewrites the `tls:` block, so a cross-machine restore keeps TLS on. Without this, a restored server would find its cert missing and quietly fall back to plaintext; now a restore preserves the encrypted posture, and — because Kenzy's clients don't pin certificates — a freshly-minted cert is a non-event.
 
 ### Changed
 
