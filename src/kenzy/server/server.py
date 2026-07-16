@@ -44,6 +44,7 @@ from websockets.http11 import Request, Response
 
 from kenzy import calibration, kenzy_version, protocol, serviceauth, tlsutil
 from kenzy.config import SERVICES
+from kenzy.server.people import Identity, PeopleStore, resolve_voice_identity
 from kenzy.serviceauth import check_bearer
 from kenzy.speaker import DEFAULT_ENROLL_PROMPTS
 
@@ -360,6 +361,9 @@ class AudioServer:
         from kenzy.config import kenzy_data_root
 
         self._data_root = kenzy_data_root()  # our config home, fixed for this process
+        # Identity core (F1): person records (voiceprint→person). Absent file ⇒
+        # empty store ⇒ the resolver is a passthrough (no behavior change).
+        self._people = PeopleStore(self._data_root / "data" / "people.yaml")
         tls_cfg = cfg.get("tls") or {}
         if isinstance(tls_cfg, dict) and tls_cfg.get("cert") and tls_cfg.get("key"):
             from kenzy import tlsutil
@@ -1940,15 +1944,31 @@ class TranscribingServer(AudioServer):
 
             # STT and speaker ID run in parallel on the same PCM buffer.
             if self._speaker_url:
-                (text, stt_ms), (speaker, spk_ms) = await asyncio.gather(
+                (text, stt_ms), (spk_result, spk_ms) = await asyncio.gather(
                     _timed(self._call_stt(pcm, room_name, session_id)),
                     _timed(self._call_speaker(pcm, room_name)),
                 )
+                spk_name, spk_conf = spk_result
             else:
                 text, stt_ms = await _timed(self._call_stt(pcm, room_name, session_id))
-                speaker, spk_ms = self._unknown_speaker, 0.0
+                spk_name, spk_conf, spk_ms = self._unknown_speaker, 0.0, 0.0
 
-            log.info("[%s] STT: %s | speaker: %s", node_id, text or "(none)", speaker)
+            # Identity core (F1): resolve the voiceprint to a person. Passthrough
+            # when there are no records — `speaker` stays the raw name, exactly
+            # as before; `identity` carries the tier/person for downstream gates.
+            identity = resolve_voice_identity(
+                self._people, spk_name, spk_conf, unknown_name=self._unknown_speaker
+            )
+            speaker = identity.display
+
+            log.info(
+                "[%s] STT: %s | speaker: %s (%s, %.2f)",
+                node_id,
+                text or "(none)",
+                speaker,
+                identity.tier,
+                identity.confidence,
+            )
 
             # Intercom consent: if this node has a pending incoming call, the captured
             # utterance is the accept/decline answer — not a command for the LLM.
@@ -1975,7 +1995,7 @@ class TranscribingServer(AudioServer):
             if self._llm_url:
                 _t = time.monotonic()
                 response_text, voice_prompt, actions, fast, expect_response = await self._call_llm(
-                    text, room_name, session_id, speaker, node_id=node_id
+                    text, room_name, session_id, speaker, node_id=node_id, identity=identity
                 )
                 llm_ms = (time.monotonic() - _t) * 1000.0
                 log.info("[%s] LLM%s: %s", node_id, " (fast)" if fast else "", response_text)
@@ -2089,7 +2109,10 @@ class TranscribingServer(AudioServer):
         if self._followup_turns.pop(node_id, None):
             log.info("[%s] multi-turn dialog ended", node_id)
 
-    async def _call_speaker(self, pcm: bytes, room_id: str) -> str:
+    async def _call_speaker(self, pcm: bytes, room_id: str) -> tuple[str, float]:
+        """Identify the speaker: returns ``(name, confidence)``. The confidence is
+        consumed by the identity resolver (F1) for tiering; the name is already
+        the unknown-speaker name when the score is below the service threshold."""
         import base64
 
         import httpx  # type: ignore[import-untyped]
@@ -2104,10 +2127,11 @@ class TranscribingServer(AudioServer):
                     headers=self._service_headers("POST", self._speaker_url),
                 )
                 resp.raise_for_status()
-            return str(resp.json()["speaker"])
+            data = resp.json()
+            return str(data["speaker"]), float(data.get("confidence", 0.0))
         except Exception as exc:
             log.warning("[%s] speaker ID failed: %s", room_id, exc)
-            return self._unknown_speaker
+            return self._unknown_speaker, 0.0
 
     async def _call_stt(self, pcm: bytes, room_id: str, session_id: str | None) -> str:
         import base64
@@ -2136,6 +2160,7 @@ class TranscribingServer(AudioServer):
         session_id: str | None,
         speaker: str | None = None,
         node_id: str | None = None,
+        identity: Identity | None = None,
     ) -> tuple[str, str, list[dict[str, Any]], bool, bool]:
         import httpx  # type: ignore[import-untyped]
 
@@ -2144,6 +2169,11 @@ class TranscribingServer(AudioServer):
             "room_id": room_id,
             "session_id": session_id,
             "speaker": speaker,
+            # Identity core (F1): the resolved person + confidence tier, so skills
+            # and (later) memory can gate on who's asking and how sure we are.
+            "person_id": identity.person_id if identity else None,
+            "speaker_tier": identity.tier if identity else None,
+            "confidence": round(identity.confidence, 4) if identity else None,
             # Connected room names so the model can target real rooms (announce/intercom).
             "rooms": sorted({s.room_id for s in self._nodes.values()}),
             # The asking node's active timers/alarms/reminders, so the schedule

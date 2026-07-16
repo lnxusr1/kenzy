@@ -67,3 +67,31 @@ embeddings_dir: "data/speakers"
 identify_threshold: 0.28
 unknown_speaker: "unknown"
 ```
+
+## People — mapping voices to a person (`data/people.yaml`)
+
+The speaker service returns a **voiceprint name** (whatever a voice was enrolled
+as). An optional `data/people.yaml` in the server's config home elevates those
+names into **person records** — one household member joining one or more
+voiceprints, plus optional links for later channels — and the pipeline then
+resolves every request to `(person, confidence, tier)` instead of a bare name.
+
+```yaml
+# data/people.yaml — server-owned; rides your backup
+people:
+  john:                        # a stable id
+    name: John                 # spoken/display name
+    voiceprints: [john, johnmark]   # speaker-service names that are this person
+    ha_user: person.john       # optional — for the HA Assist channel (later)
+    phone: null                # optional
+  nicki:
+    name: Nicki
+    voiceprints: [nicki]
+```
+
+- **No file? No change.** Without `people.yaml` the raw voiceprint name passes
+  straight through, exactly as before — this layer is purely additive.
+- **Confidence tier.** A match is `recognized`; a below-threshold voice is
+  `unknown`. Future features (per-person memory, privacy) gate on the tier.
+- **Standalone.** `ha_user`/`phone` are optional — a voiceprint-only household
+  is fully supported. (A dashboard editor for these records is coming.)

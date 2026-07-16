@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Added
+
+- **Identity foundation: Kenzy can now tell *who* is speaking, not just a name (v4 groundwork).** A new person layer maps voiceprints to a household member and carries a **confidence tier** through the pipeline — so a request now arrives as `(person, confidence, room)` rather than a bare speaker string. An optional `data/people.yaml` links one or more enrolled voiceprints to a person (with optional Home Assistant user / phone for later channels); with no file, behavior is exactly as before (the raw speaker name passes straight through). This is the substrate the coming per-person memory and privacy features build on. Fully standalone — voiceprint-only households work, HA links are optional.
+
 ## [3.12.0]
 
 ### Added

@@ -66,6 +66,12 @@ class ProcessRequest(BaseModel):
     # alarm/intercom skills refuse these targets in the reply itself, instead of
     # confirming and then failing when the server actuates the action.
     no_aec_rooms: list[str] = []
+    # Identity core (F1): the resolved person id (None = no record / unknown), the
+    # confidence tier ("unknown"/"recognized"), and the raw voiceprint confidence.
+    # Skills read these via get_request to gate on who's asking.
+    person_id: str | None = None
+    speaker_tier: str | None = None
+    confidence: float | None = None
 
 
 class ProcessResponse(BaseModel):
@@ -356,6 +362,9 @@ async def process(req: ProcessRequest) -> ProcessResponse:
             "schedules": req.schedules,
             "room_id": req.room_id,
             "no_aec_rooms": req.no_aec_rooms,
+            "person_id": req.person_id,
+            "speaker_tier": req.speaker_tier or "unknown",
+            "confidence": req.confidence,
         }
     )
 

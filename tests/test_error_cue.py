@@ -51,7 +51,7 @@ async def test_llm_failure_plays_cue_and_ends_dialog(srv, monkeypatch):
         return "what time is it"
 
     async def spk(*a, **k):
-        return "unknown"
+        return "unknown", 0.0
 
     async def boom(*a, **k):
         raise OSError("llm down")
@@ -70,9 +70,9 @@ async def test_tts_failure_plays_cue(srv, monkeypatch):
         return "hello"
 
     async def spk(*a, **k):
-        return "unknown"
+        return "unknown", 0.0
 
-    async def llm(text, room, sid, speaker=None, node_id=None):
+    async def llm(text, room, sid, speaker=None, node_id=None, identity=None):
         return ("Hi there.", "vp", [], False, False)
 
     async def tts_fail(*a, **k):
@@ -91,9 +91,9 @@ async def test_success_plays_no_cue(srv, monkeypatch):
         return "hello"
 
     async def spk(*a, **k):
-        return "unknown"
+        return "unknown", 0.0
 
-    async def llm(text, room, sid, speaker=None, node_id=None):
+    async def llm(text, room, sid, speaker=None, node_id=None, identity=None):
         return ("Hi there.", "vp", [], False, False)
 
     async def tts_ok(*a, **k):
