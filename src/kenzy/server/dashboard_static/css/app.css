@@ -531,6 +531,8 @@ button { font: inherit; cursor: pointer; }
 
 /* ============================ ACTIVITY ============================ */
 .badge.fast { color: var(--led-up); border-color: color-mix(in srgb, var(--led-up) 50%, transparent); }
+/* F1.3 identity-tier gate: this skill needs a recognized (or better) voice. */
+.badge.tier { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 50%, transparent); }
 .leg { display: flex; gap: var(--s4); margin-bottom: var(--s3); font-size: 11px; color: var(--text-dim); }
 .leg span { display: inline-flex; align-items: center; gap: 6px; }
 .leg .tg { position: static; display: inline-block; width: 14px; height: 10px; border-radius: 2px; }

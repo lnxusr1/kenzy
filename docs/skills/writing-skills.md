@@ -199,12 +199,51 @@ The server injects per-request context that skills and fast intents can read wit
 | `room_id` | The asking room's name |
 | `rooms` | Names of all currently connected rooms (validate targets against this) |
 | `schedules` | The asking node's active timers/alarms/reminders (with ids) |
+| `person_id` | The resolved person's id (People tab), or `None` |
+| `speaker_tier` | Identity confidence: `unknown`, `recognized`, or `verified` |
+| `confidence` | The raw voice-match score behind the tier |
 
 ```python
 from kenzy.llm.skills import get_request
 
 rooms = get_request("rooms") or []
 ```
+
+## Gating a skill by identity (`min_tier`)
+
+Some skills shouldn't work for a voice Kenzy doesn't recognize — anything
+personal (and, once memory lands, anything that writes or reads it). Declare
+the requirement on the decorator and the registry enforces it everywhere:
+
+```python
+@skill(min_tier="recognized")
+async def read_my_notes() -> str:
+    """Read back the speaker's personal notes."""
+    ...
+
+@fast_intent(priority=80, min_tier="recognized")
+async def fast_notes(utterance, room_id, speaker):
+    ...
+```
+
+The tiers are `unknown` (no/low-confidence voice) → `recognized` (an enrolled
+voice, matched) → `verified` (reserved: a voiceprint corroborated by another
+signal — a voiceprint alone is replayable, so anything that sends money or
+messages will require a credentialed surface regardless of tier).
+
+What enforcement means in practice:
+
+- A gated **tool is withheld from the model entirely** for a below-tier
+  request — the LLM can't be talked into calling it, and explains naturally
+  that it doesn't know who's speaking.
+- A direct call anyway (defense in depth) returns a refusal the model relays.
+- A gated **fast intent is never even run** below tier (matchers may stage
+  state, so a skipped matcher must have no side effects); the utterance falls
+  through to the LLM.
+- Skills without `min_tier` are available to everyone — the right default for
+  device control and general Q&A.
+
+The dashboard's Skills tab shows a `recognized+` badge on gated entries.
 
 ## Running blocking code
 

@@ -20,12 +20,14 @@ def clean_registry():
         set(reg._DISABLED),
         dict(reg._COUNTS),
         dict(reg._MODULES),
+        dict(reg._MIN_TIER),
     )
     reg._REGISTRY.clear()
     reg._FAST_REGISTRY.clear()
     reg._DISABLED.clear()
     reg._COUNTS.clear()
     reg._MODULES.clear()
+    reg._MIN_TIER.clear()
     try:
         yield
     finally:
@@ -38,6 +40,8 @@ def clean_registry():
         reg._COUNTS.update(saved[3])
         reg._MODULES.clear()
         reg._MODULES.update(saved[4])
+        reg._MIN_TIER.clear()
+        reg._MIN_TIER.update(saved[5])
 
 
 def _register_demo():
@@ -276,3 +280,98 @@ async def test_unknown_disabled_entry_warns(clean_registry, caplog):
     with caplog.at_level(logging.WARNING, logger="kenzy.llm.skills"):
         sk.set_disabled(["demo_skill"])  # valid → silent
     assert not any("match no skill" in r.message for r in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# F1.3 — identity-tier gating (min_tier consumed as a contract)
+# ---------------------------------------------------------------------------
+
+
+def _register_gated():
+    @reg.skill(min_tier="recognized")
+    async def vault_skill() -> str:
+        """Open the vault."""
+        return "vault open"
+
+    @reg.skill
+    async def open_skill() -> str:
+        """Available to everyone."""
+        return "ok"
+
+    @reg.fast_intent(priority=99, min_tier="recognized")
+    async def vault_fast(utterance, room_id, speaker):  # noqa: ANN001
+        if "vault" in utterance:
+            return reg.FastResult.handled("vault open (fast)")
+        return reg.FastResult.miss()
+
+
+def _as_tier(tier):
+    reg.begin_request({"speaker_tier": tier})
+
+
+async def test_min_tier_hides_tools_from_unknown(clean_registry):
+    _register_gated()
+    _as_tier("unknown")
+    names = [t["function"]["name"] for t in reg.get_tools()]
+    assert names == ["open_skill"]  # the gated tool is withheld entirely
+    _as_tier("recognized")
+    names = [t["function"]["name"] for t in reg.get_tools()]
+    assert set(names) == {"vault_skill", "open_skill"}
+    _as_tier("verified")  # higher tier satisfies a lower requirement
+    assert "vault_skill" in [t["function"]["name"] for t in reg.get_tools()]
+
+
+async def test_min_tier_execute_refuses_below_tier(clean_registry):
+    _register_gated()
+    _as_tier("unknown")
+    out = await reg.execute("vault_skill", {})
+    assert "Refused" in out and "recognized" in out
+    assert reg._COUNTS.get("vault_skill", 0) == 0  # a refusal is not an invocation
+    _as_tier("recognized")
+    assert await reg.execute("vault_skill", {}) == "vault open"
+
+
+async def test_min_tier_fast_intent_never_runs_below_tier(clean_registry):
+    _register_gated()
+    _as_tier("unknown")
+    assert await reg.dispatch_fast("open the vault", "office", None) is None
+    _as_tier("recognized")
+    res = await reg.dispatch_fast("open the vault", "office", None)
+    assert res is not None and res.text == "vault open (fast)"
+
+
+async def test_tier_defaults_to_unknown_outside_request(clean_registry):
+    # Fresh context (no begin_request in THIS context) — anything gated is
+    # withheld: fail-closed for old servers that don't send a tier.
+    import contextvars
+
+    _register_gated()
+
+    def check():
+        assert reg.current_tier() == "unknown"
+        assert [t["function"]["name"] for t in reg.get_tools()] == ["open_skill"]
+
+    contextvars.copy_context().run(check)
+    # An explicit None/garbage tier also degrades to unknown.
+    _as_tier(None)
+    assert reg.current_tier() == "unknown"
+    _as_tier("bogus")
+    assert reg.current_tier() == "unknown"
+
+
+async def test_min_tier_in_registry_info(clean_registry):
+    _register_gated()
+    info = reg.registry_info()
+    tiers = {s["name"]: s["min_tier"] for s in info["skills"]}
+    assert tiers == {"vault_skill": "recognized", "open_skill": None}
+    fast = {f["name"]: f["min_tier"] for f in info["fast_intents"]}
+    assert fast["vault_fast"] == "recognized"
+
+
+async def test_min_tier_validation():
+    with pytest.raises(ValueError):
+
+        @reg.skill(min_tier="sudo")
+        async def bad() -> str:
+            """Nope."""
+            return ""

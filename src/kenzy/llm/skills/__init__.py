@@ -94,11 +94,51 @@ def get_request(key: str, default: Any = None) -> Any:
 
 
 # ---------------------------------------------------------------------------
+# Identity tiers (F1.3) — the confidence contract skills consume.
+# The strings are a WIRE CONTRACT with the server's identity resolver
+# (kenzy.server.people): they ride ProcessRequest.speaker_tier into the
+# request context. Deliberately duplicated here (not imported) so the LLM
+# service never depends on server internals.
+#
+# The contract: UNKNOWN (no/low-confidence voice) gets device control and
+# general Q&A only — no memory writes, no personal reads. RECOGNIZED (a
+# voiceprint match) adds personalization/memory. VERIFIED (voiceprint
+# corroborated by another signal) is reserved — a voiceprint alone is
+# replayable, so anything that sends or spends terminates at a credentialed
+# surface regardless of tier.
+# ---------------------------------------------------------------------------
+
+TIER_UNKNOWN = "unknown"
+TIER_RECOGNIZED = "recognized"
+TIER_VERIFIED = "verified"
+_TIER_ORDER = {TIER_UNKNOWN: 0, TIER_RECOGNIZED: 1, TIER_VERIFIED: 2}
+
+
+def current_tier() -> str:
+    """The requesting speaker's confidence tier (defaults to unknown — outside
+    a request, or when the server predates tiers, nothing gated is offered)."""
+    tier = str(get_request("speaker_tier", TIER_UNKNOWN) or TIER_UNKNOWN)
+    return tier if tier in _TIER_ORDER else TIER_UNKNOWN
+
+
+def tier_allows(name: str) -> bool:
+    """Whether the current request's tier meets ``name``'s declared min_tier."""
+    need = _MIN_TIER.get(name)
+    if need is None:
+        return True
+    return _TIER_ORDER[current_tier()] >= _TIER_ORDER[need]
+
+
+# ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
 
 _REGISTRY: dict[str, tuple[Callable[..., Any], dict[str, Any]]] = {}
 _CONFIG: dict[str, Any] = {}
+
+# name (skill or fast intent) → minimum tier required to use it (F1.3).
+# Absent = available to everyone, including unrecognized voices.
+_MIN_TIER: dict[str, str] = {}
 
 # Deterministic fast-path matchers: (priority, name, async_fn). Higher priority
 # runs first.  Kept sorted descending so dispatch is a simple in-order scan.
@@ -286,13 +326,29 @@ def _generate_schema(func: Callable[..., Any]) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def skill(func: Callable[..., Any]) -> Callable[..., Any]:
-    """Register an async function as a callable skill."""
-    if not asyncio.iscoroutinefunction(func):
-        raise TypeError(f"@skill requires an async function: {func.__name__}")
-    _REGISTRY[func.__name__] = (func, _generate_schema(func))
-    _MODULES[func.__name__] = _module_of(func)
-    return func
+def skill(
+    _func: Callable[..., Any] | None = None, *, min_tier: str | None = None
+) -> Callable[..., Any]:
+    """Register an async function as a callable skill.
+
+    ``min_tier`` (F1.3) declares the identity tier required to use it:
+    ``"recognized"`` hides the tool from unrecognized voices entirely (it's
+    not offered to the model, and a direct call is refused). Usable bare
+    (``@skill``) or with the gate (``@skill(min_tier="recognized")``).
+    """
+    if min_tier is not None and min_tier not in _TIER_ORDER:
+        raise ValueError(f"min_tier must be one of {sorted(_TIER_ORDER)}: {min_tier!r}")
+
+    def wrap(func: Callable[..., Any]) -> Callable[..., Any]:
+        if not asyncio.iscoroutinefunction(func):
+            raise TypeError(f"@skill requires an async function: {func.__name__}")
+        _REGISTRY[func.__name__] = (func, _generate_schema(func))
+        _MODULES[func.__name__] = _module_of(func)
+        if min_tier is not None:
+            _MIN_TIER[func.__name__] = min_tier
+        return func
+
+    return wrap(_func) if _func is not None else wrap
 
 
 # ---------------------------------------------------------------------------
@@ -336,7 +392,7 @@ class FastResult:
 
 
 def fast_intent(
-    _func: Callable[..., Any] | None = None, *, priority: int = 0
+    _func: Callable[..., Any] | None = None, *, priority: int = 0, min_tier: str | None = None
 ) -> Callable[..., Any]:
     """Register an async function as a deterministic fast-path matcher.
 
@@ -345,7 +401,14 @@ def fast_intent(
     priority order; the first that returns a handled/clarify result
     short-circuits the pipeline.  Usable bare (``@fast_intent``) or with a
     priority (``@fast_intent(priority=100)``).
+
+    ``min_tier`` (F1.3): below the declared tier the matcher is never even
+    RUN (matchers may stage actions/state, so a skipped matcher must have no
+    side effects) — the utterance falls through to the LLM, which won't hold
+    the gated tool either and explains naturally.
     """
+    if min_tier is not None and min_tier not in _TIER_ORDER:
+        raise ValueError(f"min_tier must be one of {sorted(_TIER_ORDER)}: {min_tier!r}")
 
     def wrap(func: Callable[..., Any]) -> Callable[..., Any]:
         if not asyncio.iscoroutinefunction(func):
@@ -353,6 +416,8 @@ def fast_intent(
         _FAST_REGISTRY.append((priority, func.__name__, func))
         _FAST_REGISTRY.sort(key=lambda t: t[0], reverse=True)
         _MODULES[func.__name__] = _module_of(func)
+        if min_tier is not None:
+            _MIN_TIER[func.__name__] = min_tier
         return func
 
     return wrap(_func) if _func is not None else wrap
@@ -370,6 +435,10 @@ async def dispatch_fast(
     """
     for _priority, name, func in _FAST_REGISTRY:
         if _inactive(name):
+            continue
+        if not tier_allows(name):
+            # Below the declared tier the matcher is never run (it may stage
+            # actions or per-room state); the LLM tier handles the utterance.
             continue
         try:
             result: FastResult | None = await func(utterance, room_id, speaker)
@@ -516,6 +585,7 @@ def registry_info() -> dict[str, Any]:
                 "disabled": _inactive(name),
                 "calls": _COUNTS.get(name, 0),
                 "fast": any(t[1] == name for t in _FAST_REGISTRY),
+                "min_tier": _MIN_TIER.get(name),
             }
         )
     fast = [
@@ -526,6 +596,7 @@ def registry_info() -> dict[str, Any]:
             "disabled": _inactive(name),
             "calls": _COUNTS.get(name, 0),
             "skill": name in _REGISTRY,
+            "min_tier": _MIN_TIER.get(name),
         }
         for priority, name, _ in _FAST_REGISTRY
     ]
@@ -544,8 +615,14 @@ def registry_info() -> dict[str, Any]:
 
 
 def get_tools() -> list[dict[str, Any]]:
-    """Return the tool definitions to pass to LiteLLM (disabled skills excluded)."""
-    return [schema for name, (_, schema) in _REGISTRY.items() if not _inactive(name)]
+    """Return the tool definitions to pass to LiteLLM — disabled skills excluded,
+    and (F1.3) tools above the requesting speaker's tier withheld entirely, so
+    the model can't be talked into calling what the speaker isn't entitled to."""
+    return [
+        schema
+        for name, (_, schema) in _REGISTRY.items()
+        if not _inactive(name) and tier_allows(name)
+    ]
 
 
 def _coerce_arguments(schema: dict[str, Any], arguments: dict[str, Any]) -> dict[str, Any]:
@@ -567,6 +644,19 @@ async def execute(name: str, arguments: dict[str, Any]) -> str:
         return f"Unknown skill: {name!r}"
     if _inactive(name):  # not advertised in get_tools(), but guard anyway
         return f"Skill {name!r} is disabled."
+    if not tier_allows(name):  # withheld from get_tools(), but guard anyway (F1.3)
+        log.info(
+            "Skill %r refused: requires tier %r, speaker is %r",
+            name,
+            _MIN_TIER[name],
+            current_tier(),
+        )
+        return (
+            f"Refused: {name!r} requires a {_MIN_TIER[name]} voice and the current "
+            "speaker isn't recognized. Tell the user you can't do that for them until "
+            "their voice is enrolled (a household member can enroll them from the "
+            "dashboard's People tab)."
+        )
     func, schema = _REGISTRY[name]
     try:
         result = await func(**_coerce_arguments(schema, arguments))
