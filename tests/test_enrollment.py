@@ -161,6 +161,76 @@ async def test_enroll_capture_loop_collects_and_finishes(monkeypatch, tmp_path):
     assert owner is not None and owner.name == "Alice"
 
 
+async def test_enroll_timeout_rearmed_on_capture(monkeypatch, tmp_path):
+    """The session timeout is inactivity-based: every capture re-arms it, so a
+    slow-but-progressing enrollment (5 prompts through local TTS) never dies
+    mid-flow. Field finding: a real run blew the old 120s TOTAL cap."""
+    from kenzy.server.people import PeopleStore
+
+    srv = _server()
+    srv._people = PeopleStore(tmp_path / "people.yaml")
+    srv._nodes["k"] = NodeSession(ws=_RecWS(), node_id="k", room_id="kitchen")  # type: ignore[arg-type]
+
+    async def call_enroll(pcm, name):  # noqa: ANN001, ANN202
+        return True
+
+    async def prompt(node, room, text):  # noqa: ANN001, ANN202
+        pass
+
+    monkeypatch.setattr(srv, "_call_enroll", call_enroll)
+    monkeypatch.setattr(srv, "_enroll_prompt", prompt)
+    original = asyncio.create_task(asyncio.sleep(0))
+    srv._enroll_sessions["k"] = {
+        "name": "Alice",
+        "room": "kitchen",
+        "collected": 0,
+        "attempts": 0,
+        "prompts": ["one", "two"],
+        "timeout": original,
+    }
+    await srv._handle_enroll_capture("k", "kitchen", b"\x01\x02" * 20000)
+    await asyncio.sleep(0)  # let the old task's cancellation land
+    session = srv._enroll_sessions["k"]
+    assert session["timeout"] is not original  # fresh inactivity window
+    assert original.cancelled() or original.done()
+    srv._end_enroll_session("k")
+
+
+async def test_followup_timeout_retries_enrollment(monkeypatch, tmp_path):
+    """An expired capture window during enrollment re-prompts (a missed sample),
+    rather than silently stranding the session until the inactivity timeout —
+    the node's followup_timeout must reach the enrollment loop."""
+    from kenzy.server.people import PeopleStore
+
+    srv = _server()
+    srv._people = PeopleStore(tmp_path / "people.yaml")
+    srv._nodes["k"] = NodeSession(ws=_RecWS(), node_id="k", room_id="kitchen")  # type: ignore[arg-type]
+    prompts: list[str] = []
+
+    async def prompt(node, room, text):  # noqa: ANN001, ANN202
+        prompts.append(text)
+
+    monkeypatch.setattr(srv, "_enroll_prompt", prompt)
+    srv._enroll_sessions["k"] = {
+        "name": "alice",
+        "room": "kitchen",
+        "collected": 0,
+        "attempts": 0,
+        "prompts": ["one", "two"],
+        "timeout": asyncio.create_task(asyncio.sleep(0)),
+    }
+    srv._followup_timed_out("k")
+    await asyncio.sleep(0)  # let the routed retry task run
+    assert srv._enroll_sessions["k"]["attempts"] == 1
+    assert prompts and "didn't catch" in prompts[0]
+    srv._end_enroll_session("k")
+
+    # Without an enrollment session it stays a dialog event (turn counter clear).
+    srv._followup_turns["k"] = 2
+    srv._followup_timed_out("k")
+    assert "k" not in srv._followup_turns
+
+
 async def test_enroll_resolves_existing_person(monkeypatch, tmp_path):
     """Person-first resolution: enrolling a known person appends to their existing
     voiceprint; a voiceless person gets a profile keyed by their stable id."""

@@ -122,10 +122,15 @@ _CHIME_DEFAULT = "doorbell.wav"
 _CALL_TIMEOUT_SEC = 25.0
 # Voice enrollment: one sample per configured prompt (see _enroll_prompts), min bytes
 # for a usable sample, extra retries allowed beyond the prompt count for unclear audio,
-# and how long an idle enrollment session lives before it's abandoned.
+# and how long the session lives with NO capture arriving before it's abandoned. The
+# timeout is per-stage (re-armed on every capture), not a total budget — five prompts
+# through a slow local TTS legitimately take longer than any reasonable fixed cap
+# (field finding: a real 5-prompt run blew a 120s total cap and died mid-enrollment).
 _ENROLL_MIN_PCM_BYTES = 16000  # ~0.5 s of 16 kHz int16 — shorter captures are retried
 _ENROLL_MAX_RETRIES = 4
-_ENROLL_TIMEOUT_SEC = 120.0
+# Per stage the window covers one prompt's TTS synth+playback plus the reply, so
+# 60s is generous headroom for a slow local TTS — while a walked-away session dies fast.
+_ENROLL_TIMEOUT_SEC = 60.0  # inactivity, re-armed on every capture
 
 # Resource caps (F-10): bound a single capture buffer and inbound WS frame size, and
 # rate-limit new connections per source IP, so a hostile/buggy LAN peer can't exhaust
@@ -2177,6 +2182,17 @@ class TranscribingServer(AudioServer):
         return False
 
     def _followup_timed_out(self, node_id: str) -> None:
+        # An expired capture window during ENROLLMENT is a missed sample, not a
+        # dialog event: route it to the retry path (attempts++, "I didn't catch
+        # that" + a fresh window) instead of leaving the session to die silently
+        # on the inactivity timeout. Field finding (voice rig): a person who
+        # hesitates past the 8s window otherwise gets no retry and no feedback.
+        session = self._enroll_sessions.get(node_id)
+        if session is not None:
+            asyncio.create_task(
+                self._handle_enroll_capture(node_id, str(session.get("room", "")), b"")
+            )
+            return
         self._end_followup_dialog(node_id)
 
     def _end_followup_dialog(self, node_id: str) -> None:
@@ -2765,6 +2781,15 @@ class TranscribingServer(AudioServer):
         if session is None:
             return
         session["attempts"] += 1
+        # A capture arrived — the session is making progress, so re-arm the
+        # timeout (it's an INACTIVITY timeout, not a total budget: five prompts
+        # through a slow local TTS legitimately exceed any fixed session cap).
+        old = session.get("timeout")
+        if old is not None:
+            old.cancel()
+        session["timeout"] = asyncio.create_task(
+            self._enroll_timeout(node_id), name=f"enroll-timeout-{node_id}"
+        )
         ok = len(pcm) >= _ENROLL_MIN_PCM_BYTES and await self._call_enroll(pcm, session["name"])
         if ok:
             session["collected"] += 1
