@@ -214,34 +214,56 @@ shows step-by-step connection guidance instead of an error.
 
 ## People
 
-The **People** tab is everything voice-identity in one place, and the model is
-**person-first**: a person can exist without a voice, but every enrolled voice
-belongs to a person. So the page is just people — add a household member, then
-enroll their voice from a room.
+The **People** tab is the one surface for *who Kenzy knows and what she knows
+about them*. The model is **person-first**: a person can exist without a
+voice, but every enrolled voice belongs to a person — and memory belongs to
+people too, so it lives here rather than as a separate screen.
 
-**People.** A person is a household member Kenzy knows by name — that's what
-lets Kenzy greet someone properly (and what the coming per-person features key
-off). Each card shows their voice status (`voice · 5 samples`, or `no voice
-yet`); click the card to edit inline. Deleting a person removes only the record
-— their enrolled voice stays (it reappears below as unassigned). Person records
-live in `data/people.yaml` on the server — see
-[Speaker configuration](configuration/speaker.md).
+**The list.** Each household member appears as a card with their voice status
+and memory count (`voice · 5 samples · 3 memories`). **Open** a person to
+manage them. Below the list sit the things that belong to no single person: a
+**search across every remembered fact**, **Household memory** (shared-tier
+facts the whole house can ask for), **voices without a person** (from a
+pre-people setup or the `kenzy-enroll` CLI — link them to a person, or delete
+the profile), and **facts without a person** (memories whose person record was
+deleted — forget them, or recreate the person with the same id to reclaim
+them).
 
-**Enroll voice** (on each person's card). Pick the room whose microphone should
-record, and Kenzy prompts the person there to say a few sentences — the
-dashboard never records audio in the browser. The voice profile is stored under
-the person's stable id and linked automatically; **enrolling again later adds
-more samples**, which makes recognition more reliable (different days, distances
-and mics all help). Because this is an authenticated, `controls`-gated operator
-action, it works regardless of the speaker service's `allow_voice_enroll`
-setting (which only governs the hands-free "Hey Kenzy, enroll me as…" voice
-command — and that command is person-first too: it finds or creates the person
-record for the name it hears).
+**The person page** (open a card) manages everything about one member:
 
-**Voices without a person.** Appears only when unowned voice profiles exist
-(from a pre-people setup or the `kenzy-enroll` CLI): assign each to a person
-with one click — or delete it. Deleting a voice profile is permanent, and if it
-was linked to a person, the link is removed from their record automatically.
+- **Identity** — rename them (their voice profile is keyed by a stable id, so
+  renaming never touches it) and choose which enrolled voices are theirs.
+- **Enroll voice** — pick the room whose microphone should record, and Kenzy
+  prompts the person there to say a few sentences; the dashboard never records
+  audio in the browser. The profile is linked automatically, and **enrolling
+  again later adds more samples**, which makes recognition more reliable.
+  As an authenticated, `controls`-gated operator action it works regardless of
+  the speaker service's `allow_voice_enroll` setting (which only governs the
+  hands-free "Hey Kenzy, enroll me as…" command — itself person-first: it
+  finds or creates the person record for the name it hears).
+- **Memories** — what Kenzy holds *for this person* ("Hey Kenzy, remember
+  that…"), with tier, age, and a **Forget** button per fact. Facts they've
+  **shared** with the house are deliberately *not* listed here — they live
+  only under **Household memory** on the People page, so tidying up one
+  person's memories can never accidentally delete a fact the whole household
+  relies on.
+- **Delete person** — removes the record only; their voice profile stays
+  relinkable, their personal facts move to the "facts without a person"
+  bucket, and anything they shared stays in Household memory (it's the
+  house's now).
+
+A note on scope: this tab sees **all memory tiers**, because the dashboard is
+a credentialed admin surface — tiers gate *voices*, not the login. By voice, a
+**private** fact is only ever spoken back to its owner, an **about them** fact
+is readable by anyone Kenzy recognizes, and a **shared** fact belongs to the
+whole house. An unrecognized voice gets no memory at all.
+
+Person records live in `data/people.yaml` and the memory ledger in
+`data/memory/` on the server — both plain text, both riding
+[backups](backup-restore.md) automatically (see
+[Speaker configuration](configuration/speaker.md) for the people schema).
+Editing and re-tiering facts from this screen, retention windows, and the
+consolidation log arrive with the memory hardening phase.
 
 ## Scheduled
 

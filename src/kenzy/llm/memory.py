@@ -83,9 +83,13 @@ TIERS = (TIER_PRIVATE, TIER_PERSONAL, TIER_SHARED)
 
 _RECORD_V = 1  # bump when the record shape changes; the loader up-converts per record
 
-_WORD_RE = re.compile(r"[a-z0-9']+")
+# A word may carry intra-word punctuation ("Wi-Fi", "don't", "v1.2") — captured
+# whole so it can be normalized by JOINING ("wifi"), not split at the dash.
+_WORD_RE = re.compile(r"[a-z0-9]+(?:['\-._][a-z0-9]+)*")
+_PUNCT_RE = re.compile(r"[^a-z0-9]+")
 
-#: Recall words too common to signal relevance on their own.
+#: Recall words too common to signal relevance on their own. Mirrored by the
+#: dashboard's client-side memory search (views/people.js) — keep in sync.
 _STOPWORDS = frozenset(
     "a an and are be did do does for from had has have how i in is it me my of on or "
     "s t that the their them they this to was we what when where which who will you your".split()
@@ -93,7 +97,20 @@ _STOPWORDS = frozenset(
 
 
 def _tokens(text: str) -> set[str]:
-    return {w for w in _WORD_RE.findall(text.lower()) if w not in _STOPWORDS}
+    """Normalized index/query tokens. Punctuated words index BOTH joined and
+    split forms ("Wi-Fi" → wifi, wi, fi) so "wifi", "wi-fi", and "wi fi" all
+    meet in the middle; stopwords never signal relevance (field finding:
+    "wifi" couldn't find "Wi-Fi", and "is/on/the" matched everything)."""
+    out: set[str] = set()
+    for word in _WORD_RE.findall(text.lower()):
+        joined = _PUNCT_RE.sub("", word)
+        if joined and joined not in _STOPWORDS:
+            out.add(joined)
+        if joined != word:  # had intra-word punctuation — index the parts too
+            for part in _PUNCT_RE.split(word):
+                if part and part not in _STOPWORDS:
+                    out.add(part)
+    return out
 
 
 @dataclass
@@ -271,6 +288,16 @@ class MemoryStore:
         del self._facts[fact_id]
         self._rewrite()
         log.info("Memory: forgot %s (asker=%s)", fact_id, asker)
+        return True
+
+    def erase(self, fact_id: str) -> bool:
+        """Admin delete by id, no asker scoping — the dashboard manager (F7.2).
+        Tiers gate *voices*; the wire surface behind this is credentialed."""
+        if fact_id not in self._facts:
+            return False
+        del self._facts[fact_id]
+        self._rewrite()
+        log.info("Memory: erased %s (admin)", fact_id)
         return True
 
     def set_tier(self, asker: str, fact_id: str, tier: str) -> Fact | None:

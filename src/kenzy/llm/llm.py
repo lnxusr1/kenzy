@@ -365,8 +365,11 @@ class RememberBody(BaseModel):
 
 
 class ForgetBody(BaseModel):
-    asker: str
+    # With an asker: voice-style scoped forget (erase rights apply). Without:
+    # admin erase by id — this surface is already token-gated, and the
+    # dashboard manager deletes any fact.
     id: str
+    asker: str = ""
 
 
 def _fact_dict(f: Any) -> dict[str, Any]:
@@ -409,7 +412,8 @@ async def memory_recall(asker: str, q: str = "", limit: int = 5) -> dict[str, An
 @app.post("/memory/forget")
 async def memory_forget(body: ForgetBody) -> dict[str, Any]:
     store = _memory_or_503()
-    if not store.forget(body.asker, body.id):
+    ok = store.forget(body.asker, body.id) if body.asker else store.erase(body.id)
+    if not ok:
         raise HTTPException(status_code=404, detail="no such fact (or not yours to forget)")
     return {"status": "ok"}
 

@@ -1,26 +1,83 @@
 import { html, useState, useEffect } from "../html.js";
-import { getPeople } from "../api.js";
+import { getMemory, getPeople } from "../api.js";
 import { send, notify } from "../store.js";
 
-// People: everything voice-identity in one place. The model is person-first —
-// a person can exist without a voice, but every enrolled voice belongs to a
-// person (enrollment is started FOR a person, and the server adopts any voice
-// enrolled by other paths). So the page is just people: add one, enroll their
-// voice from a room, done. A "voices without a person" section appears only
-// when legacy/CLI-enrolled orphans exist. Reads /api/people; mutations are
-// save_person / delete_person / enroll_speaker / delete_speaker (controls-gated).
-export function PeopleView() {
-  const [data, setData] = useState(null);
+// People: the one surface for who Kenzy knows and what she knows about them.
+// The LIST page shows each household member (voice status + memory count) with
+// a drill-down, plus the page-level buckets that belong to no single person:
+// household-shared memory, voices without a person, unowned facts, and a
+// search across every remembered fact. The DETAIL page (person drill-down,
+// like node → config) carries identity editing, voice enrollment, deletion,
+// and the person's own memories. Person-first invariants unchanged: a person
+// may be voiceless, but every enrolled voice belongs to a person; memory works
+// only for voices linked to a person. Tiers gate *voices* — this credentialed
+// admin surface sees every tier.
+
+const TIER_LABEL = {
+  private: "private",
+  "personal-public": "about them",
+  shared: "shared",
+};
+const TIER_BADGE = {
+  private: "badge tier",
+  "personal-public": "badge",
+  shared: "badge fast",
+};
+
+
+// Normalized memory search — mirrors the ledger's tokenizer in
+// kenzy/llm/memory.py (_tokens; keep the stopword list in sync). Punctuated
+// words match both joined and split forms ("wifi" finds "Wi-Fi"), stopwords
+// ("is", "on", "the", …) never match anything, and every remaining query token
+// must prefix-match some fact token — so typing narrows instead of flooding.
+const STOPWORDS = new Set(
+  ("a an and are be did do does for from had has have how i in is it me my of on or " +
+   "s t that the their them they this to was we what when where which who will you your").split(" "),
+);
+
+function factTokens(text) {
+  const out = new Set();
+  for (const word of text.toLowerCase().match(/[a-z0-9]+(?:['\-._][a-z0-9]+)*/g) || []) {
+    const joined = word.replace(/[^a-z0-9]/g, "");
+    if (joined && !STOPWORDS.has(joined)) out.add(joined);
+    if (joined !== word)
+      for (const part of word.split(/[^a-z0-9]+/))
+        if (part && !STOPWORDS.has(part)) out.add(part);
+  }
+  return out;
+}
+
+function factMatches(query, text) {
+  const q = [...factTokens(query)];
+  if (!q.length) return false; // stopword-only query carries no signal
+  const t = [...factTokens(text)];
+  return q.every((qt) => t.some((tt) => tt.startsWith(qt)));
+}
+
+function ago(ts) {
+  const s = Math.max(0, Date.now() / 1000 - ts);
+  if (s < 90) return "just now";
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 48) return `${h}h ago`;
+  return `${Math.floor(h / 24)}d ago`;
+}
+
+// The drill-down selection is OWNED BY THE SHELL (passed as selected/onSelect,
+// like ServicesView) so clicking "People" in the sidebar always returns to the
+// list — held locally, the nav click would be a no-op re-render of the detail.
+export function PeopleView({ selected, onSelect }) {
+  const [people, setPeople] = useState(null); // /api/people payload
+  const [mem, setMem] = useState(null); // /api/memory payload
   const [err, setErr] = useState("");
-  const [busy, setBusy] = useState("");
-  const [editing, setEditing] = useState(null); // person id, "new", or null
-  const [form, setForm] = useState({ name: "", voiceprints: [] });
-  const [enrolling, setEnrolling] = useState(null); // person id with the room picker open
-  const [enrollRoom, setEnrollRoom] = useState("");
 
   const load = () =>
-    getPeople()
-      .then(setData)
+    Promise.all([getPeople(), getMemory()])
+      .then(([p, m]) => {
+        setPeople(p);
+        setMem(m);
+      })
       .catch((e) => setErr(String(e)));
 
   useEffect(() => {
@@ -28,72 +85,71 @@ export function PeopleView() {
   }, []);
 
   if (err) return html`<div class="empty">Could not load people: ${err}</div>`;
-  if (!data) return html`<div class="empty">Loading…</div>`;
+  if (!people || !mem) return html`<div class="empty">Loading…</div>`;
+
+  const facts = mem.reachable ? mem.facts || [] : [];
+  const person = selected && (people.people || []).find((p) => p.id === selected);
+  if (person)
+    return html`<${PersonDetail} person=${person} data=${people} facts=${facts}
+      memReachable=${mem.reachable} onBack=${() => onSelect(null)} reload=${load} />`;
+  return html`<${PeopleList} data=${people} mem=${mem} facts=${facts}
+    onOpen=${onSelect} reload=${load} />`;
+}
+
+// ---------------------------------------------------------------------------
+// List page
+// ---------------------------------------------------------------------------
+
+function PeopleList({ data, mem, facts, onOpen, reload }) {
+  const [adding, setAdding] = useState(false);
+  const [newName, setNewName] = useState("");
+  const [newVoices, setNewVoices] = useState([]);
+  const [busy, setBusy] = useState("");
+  const [q, setQ] = useState("");
 
   const controls = data.controls;
-  const people = data.people || [];
+  const persons = data.people || [];
   const voiceprints = data.voiceprints || [];
-  const rooms = data.rooms || [];
   const unassigned = voiceprints.filter((v) => !v.person_id);
-  const voicesOf = (p) =>
-    voiceprints.filter((v) => v.person_id === p.id);
+  const personIds = new Set(persons.map((p) => p.id));
+  const shared = facts.filter((f) => f.tier === "shared");
+  const unowned = facts.filter((f) => !personIds.has(f.owner) && f.tier !== "shared");
+  const voicesOf = (p) => voiceprints.filter((v) => v.person_id === p.id);
+  // Shared facts are household property (listed under Household memory only),
+  // so they don't count as a person's own memories.
+  const memoryCount = (p) =>
+    facts.filter((f) => f.owner === p.id && f.tier !== "shared").length;
 
-  function startEdit(p) {
-    setForm({ name: p.name, voiceprints: [...p.voiceprints] });
-    setEditing(p.id);
-    setEnrolling(null);
-  }
-  function startNew(seedVoice) {
-    setForm({ name: "", voiceprints: seedVoice ? [seedVoice] : [] });
-    setEditing("new");
-    setEnrolling(null);
-    if (seedVoice)
-      // The assign buttons live below; the form opens at the top of the People
-      // section — bring it into view so the click visibly did something.
-      setTimeout(() => document.querySelector(".ppl-editing")?.scrollIntoView({ behavior: "smooth", block: "center" }), 50);
-  }
-  function cancel() {
-    setEditing(null);
-  }
+  const summary = (p) => {
+    const voices = voicesOf(p);
+    const samples = voices.reduce((n, v) => n + (v.samples || 0), 0);
+    const voicePart = voices.length
+      ? `voice · ${samples} sample${samples === 1 ? "" : "s"}`
+      : "no voice yet";
+    const n = memoryCount(p);
+    const memPart = mem.reachable
+      ? n
+        ? `${n} memor${n === 1 ? "y" : "ies"}`
+        : "no memories"
+      : null;
+    return memPart ? `${voicePart} · ${memPart}` : voicePart;
+  };
 
-  const toggleVoice = (name) =>
-    setForm((f) => ({
-      ...f,
-      voiceprints: f.voiceprints.some((v) => v.toLowerCase() === name.toLowerCase())
-        ? f.voiceprints.filter((v) => v.toLowerCase() !== name.toLowerCase())
-        : [...f.voiceprints, name],
-    }));
-
-  async function save() {
-    const name = form.name.trim();
+  async function saveNew() {
+    const name = newName.trim();
     if (!name) return;
-    const id = editing === "new" ? "" : editing;
-    setBusy(id || "new");
+    setBusy("new");
     // person id rides as `person_id`: store.send() spreads the payload over the
     // envelope, and a payload `id` would clobber the request/ack correlation id.
-    const res = await send("save_person", { person_id: id, name, voiceprints: form.voiceprints });
+    const res = await send("save_person", { person_id: "", name, voiceprints: newVoices });
     setBusy("");
     if (res.ok) {
-      setEditing(null);
-      await load();
+      setAdding(false);
+      setNewName("");
+      setNewVoices([]);
+      await reload();
       notify(`Saved ${name}.`);
     } else notify(res.error || "Could not save.", "err");
-  }
-
-  async function delPerson(p) {
-    const voices = voicesOf(p);
-    const also = voices.length
-      ? ` Their voice profile stays enrolled and will show below as unassigned.`
-      : "";
-    if (!window.confirm(`Delete “${p.name}”?${also}`)) return;
-    setBusy(p.id);
-    const res = await send("delete_person", { person_id: p.id });
-    setBusy("");
-    if (res.ok) {
-      if (editing === p.id) setEditing(null);
-      await load();
-      notify(`Deleted ${p.name}.`);
-    } else notify(res.error || "Delete failed.", "err");
   }
 
   async function delVoice(v) {
@@ -102,167 +158,143 @@ export function PeopleView() {
     const res = await send("delete_speaker", { name: v.name });
     setBusy("");
     if (res.ok) {
-      await load();
+      await reload();
       notify(`Deleted ${v.name}.`);
     } else notify(res.error || "Delete failed.", "err");
   }
 
-  function openEnroll(p) {
-    setEnrolling(p.id);
-    setEnrollRoom(rooms[0] ? rooms[0].node_id : "");
-    setEditing(null);
-  }
-
-  async function startEnroll(p) {
-    const res = await send("enroll_speaker", { person_id: p.id, node: enrollRoom });
-    if (res.ok) {
-      setEnrolling(null);
-      notify(`Enrolling ${p.name} in ${rooms.find((r) => r.node_id === enrollRoom)?.room || "the room"} — speak when prompted. The sample count updates when it finishes.`);
-    } else notify(res.error || "Could not start enrollment.", "err");
-  }
-
-  // Voice summary line for a person card: "no voice yet" or "voice · N samples".
-  const voiceSummary = (p) => {
-    const voices = voicesOf(p);
-    if (!voices.length) return "no voice yet";
-    const samples = voices.reduce((n, v) => n + (v.samples || 0), 0);
-    const label = voices.length === 1 ? "voice" : `${voices.length} voices`;
-    return `${label} · ${samples} sample${samples === 1 ? "" : "s"}`;
-  };
-
-  // The edit form's voice picker: this person's voices + unowned ones. Other
-  // people's voices aren't offered — enrollment is per-person now, so moving a
-  // voice between people is no longer a first-class flow.
-  const voicePicker = () => {
-    const offer = voiceprints.filter(
-      (v) => !v.person_id || v.person_id === editing,
-    );
-    if (voiceprints.length === 0)
-      return html`<p class="micro">No voices are enrolled yet. Save, then use
-        “Enroll voice” on the person's card.</p>`;
-    if (offer.length === 0)
-      return html`<p class="micro">Every enrolled voice already belongs to someone.
-        Use “Enroll voice” on the card to record this person's voice.</p>`;
-    return html`<div class="ppl-voices">
-      ${offer.map((v) => {
-        const on = form.voiceprints.some((x) => x.toLowerCase() === v.name.toLowerCase());
-        return html`<label class="ha-chk" key=${v.name}>
-          <input type="checkbox" checked=${on} onChange=${() => toggleVoice(v.name)} />
-          <span class="mono">${v.name}</span>
-        </label>`;
-      })}
-    </div>`;
-  };
-
-  const editForm = () => html`
-    <div class="ppl-form">
-      <label class="field">
-        <span class="micro">Name</span>
-        <input autofocus placeholder="e.g. Alice" value=${form.name}
-          onInput=${(e) => setForm((f) => ({ ...f, name: e.target.value }))}
-          onKeyDown=${(e) => {
-            if (e.key === "Enter") save();
-            if (e.key === "Escape") cancel();
-          }} />
-      </label>
-      <div class="field">
-        <span class="micro">Voices — which enrolled voices are this person</span>
-        ${voicePicker()}
-      </div>
-      <div class="ppl-form-actions">
-        <button class="btn-primary" disabled=${!form.name.trim() || busy} onClick=${save}>
-          ${busy ? "Saving…" : "Save"}</button>
-        <button class="btn-ghost" onClick=${cancel}>Cancel</button>
-      </div>
-    </div>`;
-
-  const enrollRow = (p) => html`
-    <div class="ppl-enroll-row">
-      <span class="micro">Enroll from</span>
-      <select value=${enrollRoom} onChange=${(e) => setEnrollRoom(e.target.value)}>
-        ${rooms.map((r) => html`<option value=${r.node_id}>${r.room || r.node_id}</option>`)}
-      </select>
-      <button class="btn-primary" disabled=${!enrollRoom} onClick=${() => startEnroll(p)}>
-        Start</button>
-      <button class="btn-ghost" onClick=${() => setEnrolling(null)}>Cancel</button>
-    </div>`;
+  const searching = !!q.trim();
+  const hits = searching ? facts.filter((f) => factMatches(q, f.text)) : [];
 
   return html`
     <div class="stats">
-      <div class="tile"><div class="micro">People</div><div class="k">${people.length}</div></div>
+      <div class="tile"><div class="micro">People</div><div class="k">${persons.length}</div></div>
       <div class="tile"><div class="micro">Enrolled voices</div><div class="k">${voiceprints.length}</div></div>
-      <div class="tile"><div class="micro">Unassigned voices</div><div class="k">${unassigned.length}</div></div>
+      <div class="tile"><div class="micro">Remembered facts</div>
+        <div class="k">${mem.reachable ? facts.length : "—"}</div></div>
     </div>
 
     ${!data.speaker_reachable
       ? html`<div class="banner warn">⚠ The speaker service isn't reachable, so enrolled voices
-          can't be listed or managed. People still save, but check
-          <span class="mono">speaker.url</span> and that
-          <span class="mono">kenzy-speaker</span> is running.</div>`
+          can't be listed or managed. Check <span class="mono">speaker.url</span> and that
+          ${" "}<span class="mono">kenzy-speaker</span> is running.</div>`
       : null}
 
     <section class="section">
       <header><h2>People</h2><span class="rule"></span></header>
-      <p class="micro">A person is a household member Kenzy knows by name. Add them, then
-        enroll their voice from a room — re-enrolling later adds more samples, which makes
-        recognition more reliable.</p>
+      <p class="micro">A person is a household member Kenzy knows by name. Open one to manage
+        their identity, voice, and what she remembers for them.</p>
 
       ${controls
         ? html`<div class="ppl-actions">
-            <button class="btn-primary" disabled=${editing === "new"} onClick=${() => startNew()}>
+            <button class="btn-primary" disabled=${adding} onClick=${() => setAdding(true)}>
               + Add person</button>
           </div>`
         : html`<p class="micro">Read-only — set <span class="mono">dashboard.controls: true</span>
             to add or edit people.</p>`}
 
-      ${editing === "new"
+      ${adding
         ? html`<div class="card ppl-card ppl-editing">
             <div class="ppl-head"><span class="ppl-name">New person</span></div>
-            ${editForm()}
+            <div class="ppl-form">
+              <label class="field">
+                <span class="micro">Name</span>
+                <input autofocus placeholder="e.g. Alice" value=${newName}
+                  onInput=${(e) => setNewName(e.target.value)}
+                  onKeyDown=${(e) => {
+                    if (e.key === "Enter") saveNew();
+                    if (e.key === "Escape") setAdding(false);
+                  }} />
+              </label>
+              ${unassigned.length
+                ? html`<div class="field">
+                    <span class="micro">Link an existing voice (optional)</span>
+                    <div class="ppl-voices">
+                      ${unassigned.map((v) => {
+                        const on = newVoices.includes(v.name);
+                        return html`<label class="ha-chk" key=${v.name}>
+                          <input type="checkbox" checked=${on}
+                            onChange=${() =>
+                              setNewVoices(
+                                on ? newVoices.filter((x) => x !== v.name) : [...newVoices, v.name],
+                              )} />
+                          <span class="mono">${v.name}</span>
+                        </label>`;
+                      })}
+                    </div>
+                  </div>`
+                : null}
+              <div class="ppl-form-actions">
+                <button class="btn-primary" disabled=${!newName.trim() || busy === "new"}
+                  onClick=${saveNew}>${busy === "new" ? "Saving…" : "Save"}</button>
+                <button class="btn-ghost" onClick=${() => setAdding(false)}>Cancel</button>
+              </div>
+            </div>
           </div>`
         : null}
 
-      ${people.length === 0 && editing !== "new"
+      ${persons.length === 0 && !adding
         ? html`<div class="empty">No people yet. ${controls
             ? "Add one above, then enroll their voice."
             : "Enable controls to add one."}</div>`
         : html`<div class="ppl-list">
-            ${people.map((p) => {
-              const isOpen = editing === p.id;
-              return html`
-                <div class=${"card ppl-card" + (isOpen ? " ppl-editing" : "")} key=${p.id}>
+            ${persons.map(
+              (p) => html`
+                <div class="card ppl-card" key=${p.id}>
                   <div class="ppl-head">
-                    <button class="ppl-title" disabled=${!controls}
-                      onClick=${() => (isOpen ? cancel() : startEdit(p))}>
-                      <span class="sk-chev" aria-hidden="true">${isOpen ? "▾" : "▸"}</span>
+                    <button class="ppl-title" onClick=${() => onOpen(p.id)}>
+                      <span class="sk-chev" aria-hidden="true">▸</span>
                       <span class="ppl-name">${p.name}</span>
                     </button>
-                    ${!isOpen
-                      ? html`<span class=${"ppl-owner" + (voicesOf(p).length ? "" : " ppl-unowned")}>
-                          ${voiceSummary(p)}</span>`
-                      : null}
-                    ${controls
-                      ? html`<div class="ppl-voice-actions">
-                          <button class="btn-ghost" disabled=${!rooms.length || enrolling === p.id}
-                            title=${rooms.length ? "" : "no room nodes connected"}
-                            onClick=${() => openEnroll(p)}>Enroll voice</button>
-                          <button class="btn-ghost danger" disabled=${busy === p.id}
-                            onClick=${() => delPerson(p)}>${busy === p.id ? "…" : "Delete"}</button>
-                        </div>`
-                      : null}
+                    <span class=${"ppl-owner" + (voicesOf(p).length ? "" : " ppl-unowned")}>
+                      ${summary(p)}</span>
+                    <div class="ppl-voice-actions">
+                      <button class="btn-ghost" onClick=${() => onOpen(p.id)}>Open</button>
+                    </div>
                   </div>
-                  ${enrolling === p.id ? enrollRow(p) : null}
-                  ${isOpen ? editForm() : null}
-                </div>`;
-            })}
+                </div>`,
+            )}
           </div>`}
     </section>
+
+    ${mem.reachable
+      ? html`<section class="section">
+          <header><h2>Search memory</h2><span class="rule"></span></header>
+          <div class="mem-filters">
+            <input class="mem-search" placeholder="search every remembered fact…" value=${q}
+              onInput=${(e) => setQ(e.target.value)} />
+          </div>
+          ${searching
+            ? hits.length
+              ? html`<div class="card mem-list">
+                  ${hits.map((f) => html`<${FactRow} f=${f} key=${f.id}
+                    controls=${controls} reload=${reload} showOwner=${true} />`)}
+                </div>`
+              : html`<div class="empty">No facts match.</div>`
+            : null}
+        </section>`
+      : html`<div class="banner warn">⚠ Memory isn't reachable — check that
+          ${" "}<span class="mono">kenzy-llm</span> is running (and
+          ${" "}<span class="mono">memory.enabled</span> isn't false).</div>`}
+
+    ${mem.reachable && shared.length
+      ? html`<section class="section">
+          <header><h2>Household memory</h2><span class="rule"></span></header>
+          <p class="micro">Shared facts — the whole house can ask for these, and anyone
+            recognized can add or erase them by voice.</p>
+          <div class="card mem-list">
+            ${shared.map((f) => html`<${FactRow} f=${f} key=${f.id}
+              controls=${controls} reload=${reload} showOwner=${true} />`)}
+          </div>
+        </section>`
+      : null}
 
     ${unassigned.length && data.speaker_reachable
       ? html`<section class="section">
           <header><h2>Voices without a person</h2><span class="rule"></span></header>
           <p class="micro">Enrolled voices not linked to anyone (from an older setup or the
-            ${" "}<span class="mono">kenzy-enroll</span> CLI). Assign each to a person — or delete it.</p>
+            ${" "}<span class="mono">kenzy-enroll</span> CLI). Add a person above and link
+            them — or delete the profile.</p>
           <div class="card ppl-voice-list">
             ${unassigned.map(
               (v) => html`
@@ -272,8 +304,6 @@ export function PeopleView() {
                     <span class="micro">${v.samples} sample${v.samples === 1 ? "" : "s"}</span>
                   </div>
                   <div class="ppl-voice-actions">
-                    <button class="btn-ghost" disabled=${!controls || editing === "new"}
-                      onClick=${() => startNew(v.name)}>Assign to a person</button>
                     <button class="btn-ghost danger" disabled=${!controls || busy === "vp:" + v.name}
                       onClick=${() => delVoice(v)}>${busy === "vp:" + v.name ? "…" : "Delete"}</button>
                   </div>
@@ -281,5 +311,208 @@ export function PeopleView() {
             )}
           </div>
         </section>`
+      : null}
+
+    ${mem.reachable && unowned.length
+      ? html`<section class="section">
+          <header><h2>Facts without a person</h2><span class="rule"></span></header>
+          <p class="micro">Remembered for someone whose person record was deleted. Forget
+            them, or recreate the person with the same id to reclaim them.</p>
+          <div class="card mem-list">
+            ${unowned.map((f) => html`<${FactRow} f=${f} key=${f.id}
+              controls=${controls} reload=${reload} showOwner=${true} />`)}
+          </div>
+        </section>`
       : null}`;
+}
+
+// ---------------------------------------------------------------------------
+// Person detail (drill-down)
+// ---------------------------------------------------------------------------
+
+function PersonDetail({ person, data, facts, memReachable, onBack, reload }) {
+  const [name, setName] = useState(person.name);
+  const [voices, setVoices] = useState([...person.voiceprints]);
+  const [busy, setBusy] = useState("");
+  const [enrolling, setEnrolling] = useState(false);
+  const [enrollRoom, setEnrollRoom] = useState("");
+  const [q, setQ] = useState("");
+
+  const controls = data.controls;
+  const rooms = data.rooms || [];
+  const voiceprints = data.voiceprints || [];
+  // Offer this person's voices + unowned ones (moving voices between people is
+  // no longer a first-class flow — enrollment is per-person).
+  const offer = voiceprints.filter((v) => !v.person_id || v.person_id === person.id);
+  // Only what Kenzy holds FOR them — shared facts live under Household memory
+  // on the People page, so cleaning up here can't delete household facts.
+  const owned = facts.filter((f) => f.owner === person.id && f.tier !== "shared");
+  const shown = q.trim() ? owned.filter((f) => factMatches(q, f.text)) : owned;
+  const dirty =
+    name.trim() !== person.name ||
+    JSON.stringify([...voices].sort()) !== JSON.stringify([...person.voiceprints].sort());
+
+  async function save() {
+    if (!name.trim()) return;
+    setBusy("save");
+    const res = await send("save_person", {
+      person_id: person.id,
+      name: name.trim(),
+      voiceprints: voices,
+    });
+    setBusy("");
+    if (res.ok) {
+      await reload();
+      notify(`Saved ${name.trim()}.`);
+    } else notify(res.error || "Could not save.", "err");
+  }
+
+  async function delPerson() {
+    const also = owned.length
+      ? ` Their ${owned.length} remembered fact${owned.length === 1 ? "" : "s"} will show under "Facts without a person" until forgotten.`
+      : "";
+    if (!window.confirm(`Delete “${person.name}”? Their enrolled voice stays and can be relinked.${also}`))
+      return;
+    setBusy("del");
+    const res = await send("delete_person", { person_id: person.id });
+    setBusy("");
+    if (res.ok) {
+      notify(`Deleted ${person.name}.`);
+      onBack();
+      await reload();
+    } else notify(res.error || "Delete failed.", "err");
+  }
+
+  async function startEnroll() {
+    const res = await send("enroll_speaker", { person_id: person.id, node: enrollRoom });
+    if (res.ok) {
+      setEnrolling(false);
+      notify(`Enrolling ${person.name} — speak when prompted. Sample counts update when it finishes.`);
+    } else notify(res.error || "Could not start enrollment.", "err");
+  }
+
+  return html`
+    <div class="cfg">
+      <button class="btn-ghost back" onClick=${onBack}>← People</button>
+
+      <section class="section">
+        <header><h2>${person.name}</h2><span class="rule"></span></header>
+        <div class="card pad">
+          <label class="field">
+            <span class="micro">Name</span>
+            <input value=${name} disabled=${!controls}
+              onInput=${(e) => setName(e.target.value)} />
+          </label>
+          <div class="field">
+            <span class="micro">Voices — which enrolled voices are this person</span>
+            ${offer.length === 0
+              ? html`<p class="micro">No voice yet — enroll one below.</p>`
+              : html`<div class="ppl-voices">
+                  ${offer.map((v) => {
+                    const on = voices.some((x) => x.toLowerCase() === v.name.toLowerCase());
+                    return html`<label class="ha-chk" key=${v.name}>
+                      <input type="checkbox" disabled=${!controls} checked=${on}
+                        onChange=${() =>
+                          setVoices(
+                            on
+                              ? voices.filter((x) => x.toLowerCase() !== v.name.toLowerCase())
+                              : [...voices, v.name],
+                          )} />
+                      <span class="mono">${v.name}</span>${" "}
+                      <span class="micro">${v.samples} samples</span>
+                    </label>`;
+                  })}
+                </div>`}
+          </div>
+          ${controls
+            ? html`<div class="ppl-form-actions">
+                <button class="btn-primary" disabled=${!dirty || !name.trim() || busy === "save"}
+                  onClick=${save}>${busy === "save" ? "Saving…" : dirty ? "Save" : "Saved"}</button>
+                <button class="btn-ghost" disabled=${!rooms.length || enrolling}
+                  title=${rooms.length ? "" : "no room nodes connected"}
+                  onClick=${() => {
+                    setEnrolling(true);
+                    setEnrollRoom(rooms[0] ? rooms[0].node_id : "");
+                  }}>Enroll voice</button>
+                <button class="btn-ghost danger" disabled=${busy === "del"}
+                  onClick=${delPerson}>${busy === "del" ? "…" : "Delete person"}</button>
+              </div>`
+            : null}
+          ${enrolling
+            ? html`<div class="ppl-enroll-row">
+                <span class="micro">Enroll from</span>
+                <select value=${enrollRoom} onChange=${(e) => setEnrollRoom(e.target.value)}>
+                  ${rooms.map(
+                    (r) => html`<option value=${r.node_id}>${r.room || r.node_id}</option>`,
+                  )}
+                </select>
+                <button class="btn-primary" disabled=${!enrollRoom} onClick=${startEnroll}>
+                  Start</button>
+                <button class="btn-ghost" onClick=${() => setEnrolling(false)}>Cancel</button>
+              </div>`
+            : null}
+        </div>
+      </section>
+
+      <section class="section">
+        <header><h2>Memories</h2><span class="rule"></span></header>
+        <p class="micro">What Kenzy holds for ${person.name} — <b>private</b> facts are only
+          ever spoken back to them. Facts they've shared with the house live under
+          Household memory on the People page, not here. Say
+          ${" "}<span class="mono">"Hey Kenzy, remember that…"</span> to add more.</p>
+        ${!memReachable
+          ? html`<div class="empty">Memory isn't reachable right now.</div>`
+          : owned.length === 0
+            ? html`<div class="empty">Nothing remembered for ${person.name} yet.</div>`
+            : html`
+                ${owned.length > 5
+                  ? html`<div class="mem-filters">
+                      <input class="mem-search" placeholder="search their facts…" value=${q}
+                        onInput=${(e) => setQ(e.target.value)} />
+                    </div>`
+                  : null}
+                ${shown.length === 0
+                  ? html`<div class="empty">No facts match.</div>`
+                  : html`<div class="card mem-list">
+                      ${shown.map((f) => html`<${FactRow} f=${f} key=${f.id}
+                        controls=${controls} reload=${reload} showOwner=${false} />`)}
+                    </div>`}
+              `}
+      </section>
+    </div>`;
+}
+
+// ---------------------------------------------------------------------------
+// One remembered fact (shared by the detail page and the page-level buckets)
+// ---------------------------------------------------------------------------
+
+function FactRow({ f, controls, reload, showOwner }) {
+  const [busy, setBusy] = useState(false);
+
+  async function del() {
+    if (!window.confirm(`Forget this? “${f.text}” — this can't be undone.`)) return;
+    setBusy(true);
+    const res = await send("forget_memory", { fact_id: f.id });
+    setBusy(false);
+    if (res.ok) {
+      await reload();
+      notify("Forgotten.");
+    } else notify(res.error || "Delete failed.", "err");
+  }
+
+  return html`
+    <div class="mem-row">
+      <div class="mem-main">
+        <div class="mem-text">${f.text}</div>
+        <div class="mem-meta micro">
+          <span class=${TIER_BADGE[f.tier] || "badge"}>${TIER_LABEL[f.tier] || f.tier}</span>
+          ${showOwner ? `${f.owner_name || f.owner} · ` : ""}${ago(f.created)}
+          ${f.source && f.source !== "voice" ? ` · via ${f.source}` : ""}
+        </div>
+      </div>
+      ${controls
+        ? html`<button class="btn-ghost danger" disabled=${busy}
+            onClick=${del}>${busy ? "…" : "Forget"}</button>`
+        : null}
+    </div>`;
 }

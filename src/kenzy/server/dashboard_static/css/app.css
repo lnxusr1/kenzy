@@ -727,3 +727,24 @@ dd.hot { color: var(--led-down); font-weight: 600; }
   .ppl-voice-row { flex-direction: column; align-items: stretch; }
   .ppl-voice-actions { justify-content: flex-end; }
 }
+
+/* Memory manager (F7.2 thin): filter row + fact rows. */
+.mem-filters { display: flex; gap: var(--s3); flex-wrap: wrap; margin-bottom: var(--s4); }
+.mem-filters input, .mem-filters select {
+  background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius);
+  color: var(--text); font: inherit; padding: 8px var(--s3);
+}
+.mem-search { flex: 1 1 220px; min-width: 0; }
+.mem-list { display: flex; flex-direction: column; }
+.mem-row {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--s3);
+  padding: var(--s3) var(--s4); border-bottom: 1px solid var(--border);
+}
+.mem-row:last-child { border-bottom: 0; }
+.mem-main { min-width: 0; }
+.mem-text { overflow-wrap: anywhere; }
+.mem-meta { display: flex; align-items: center; gap: var(--s2); margin-top: 2px; }
+/* .badge's base margin-left:auto is for floating right on cards — here it
+   soaks up the row's slack and shoves the tier badge off the left edge. */
+.mem-meta .badge { margin-left: 0; }
+.mem-row .btn-ghost { flex: none; width: auto; padding-inline: var(--s4); }

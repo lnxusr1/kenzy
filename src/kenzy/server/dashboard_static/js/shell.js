@@ -83,12 +83,14 @@ export function Shell({ user, onLogout }) {
   const [view, setView] = useState("fleet");
   const [node, setNode] = useState(null);
   const [svc, setSvc] = useState(null);
+  const [personSel, setPersonSel] = useState(null);
   const [navOpen, setNavOpen] = useState(false);
   const active = NAV.find((n) => n.id === view) || NAV[0];
   const title = view === "config" ? "Node config" : active.label;
 
   const go = (id) => {
     if (id === "services") setSvc(null); // sidebar Services always opens the list
+    if (id === "people") setPersonSel(null); // likewise People: nav = back to the list
     setView(id);
     setNavOpen(false);
   };
@@ -156,7 +158,7 @@ export function Shell({ user, onLogout }) {
                 : view === "ha"
                   ? html`<${HaView} />`
                   : view === "people"
-                    ? html`<${PeopleView} />`
+                    ? html`<${PeopleView} selected=${personSel} onSelect=${setPersonSel} />`
                   : view === "schedules"
                     ? html`<${SchedulesView} />`
                   : view === "activity"

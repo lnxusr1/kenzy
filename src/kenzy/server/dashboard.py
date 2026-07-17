@@ -753,6 +753,9 @@ class Dashboard:
         if path == "/api/people":
             return self._json(200, await self._people_state())
 
+        if path == "/api/memory":
+            return self._json(200, await self._memory_state())
+
         if path == "/api/backup":
             # Downloadable backup: the local config home merged with the stateful
             # services' slices (complete even multi-host). By default .env/API keys
@@ -1070,6 +1073,54 @@ class Dashboard:
             return data if isinstance(data, dict) else None
         except Exception:
             return None
+
+    async def _llm_memory_request(
+        self, method: str, sub_path: str, payload: dict[str, Any] | None = None
+    ) -> dict[str, Any] | None:
+        """GET/POST a kenzy-llm /memory endpoint; None if unreachable/disabled."""
+        base = self._service_base("llm")  # static config ← auto-registered (right scheme under TLS)
+        if not base:
+            return None
+        import httpx
+
+        url = f"{base}/memory{sub_path}"
+        try:
+            async with httpx.AsyncClient(timeout=8.0, verify=tlsutil.httpx_verify()) as client:
+                if method == "POST":
+                    r = await client.post(
+                        url, json=payload or {}, headers=self._server._service_headers("POST", url)
+                    )
+                else:
+                    r = await client.get(url, headers=self._server._service_headers("GET", url))
+                r.raise_for_status()
+            data = r.json()
+            return data if isinstance(data, dict) else None
+        except Exception:
+            return None
+
+    async def _memory_state(self) -> dict[str, Any]:
+        """The ledger + owner display names (dashboard Memory manager, F7.2 thin).
+
+        The dashboard is a credentialed admin surface: it sees every fact at
+        every tier — tiers gate *voices*, the login cookie gates this."""
+        info = await self._llm_memory_request("GET", "")
+        people = {p["id"]: p["name"] for p in self._server.list_people()}
+        facts = []
+        for f in (info or {}).get("facts", []):
+            f = dict(f)
+            f["owner_name"] = people.get(f.get("owner"), f.get("owner"))
+            facts.append(f)
+        return {
+            "reachable": info is not None,
+            "controls": self._dcfg.controls,
+            "facts": facts,
+        }
+
+    async def _forget_memory(self, fact_id: str) -> tuple[bool, str | None]:
+        res = await self._llm_memory_request("POST", "/forget", {"id": fact_id})
+        if res is None:
+            return False, "memory service not reachable (or memory is disabled)"
+        return True, None
 
     async def _ha_curation_state(self) -> dict[str, Any]:
         info = await self._llm_curation_request("GET")
@@ -1681,6 +1732,14 @@ class Dashboard:
             await ack(ok, err)
             if ok:
                 await connection.send(json.dumps({"type": "speakers_changed"}))
+        elif mtype == "forget_memory":
+            if not self._dcfg.controls:
+                return await ack(False, "controls are disabled (set dashboard.controls: true)")
+            fact_id = str(msg.get("fact_id", "")).strip()
+            if not fact_id:
+                return await ack(False, "a fact id is required")
+            ok, err = await self._forget_memory(fact_id)
+            await ack(ok, err)
         elif mtype == "save_person":
             if not self._dcfg.controls:
                 return await ack(False, "controls are disabled (set dashboard.controls: true)")

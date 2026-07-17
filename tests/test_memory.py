@@ -298,3 +298,82 @@ async def test_fast_recall_marks_private(tmp_path):
         assert res.is_handled and memory.private_touched() is False
     finally:
         memory._store = None
+
+
+# -- admin erase (the dashboard manager path) ---------------------------------
+
+
+def test_admin_erase_ignores_ownership(store):
+    a, b, c, d = _seed(store)
+    assert store.erase(d.id) is True  # any fact, no asker scoping
+    assert store.erase(d.id) is False  # already gone
+
+
+def test_forget_endpoint_admin_mode(client):
+    r = client.post("/memory/remember", json={"owner": "adam", "text": "secret thing"})
+    fid = r.json()["fact"]["id"]
+    # No asker ⇒ admin erase (the surface is token-gated; the dashboard uses this).
+    assert client.post("/memory/forget", json={"id": fid}).status_code == 200
+    assert client.get("/memory").json()["count"] == 0
+
+
+# -- dashboard Memory manager (F7.2 thin) -------------------------------------
+
+
+async def test_dashboard_memory_state_and_forget(monkeypatch):
+    from kenzy.server.dashboard import Dashboard, DashboardConfig
+    from kenzy.server.server import AudioServer
+
+    server = AudioServer({})
+    monkeypatch.setattr(
+        server, "list_people", lambda: [{"id": "adam", "name": "Adam", "voiceprints": ["adam"]}]
+    )
+    dash = Dashboard(server, {}, DashboardConfig(controls=True))
+
+    calls: list[tuple[str, str]] = []
+
+    async def fake_req(method, sub_path, payload=None):
+        calls.append((method, sub_path))
+        if method == "GET":
+            return {"facts": [{"id": "f1", "owner": "adam", "tier": "private", "text": "x"}]}
+        return {"status": "ok"}
+
+    monkeypatch.setattr(dash, "_llm_memory_request", fake_req)
+    state = await dash._memory_state()
+    assert state["reachable"] is True
+    assert state["facts"][0]["owner_name"] == "Adam"  # person id joined to display name
+
+    ok, err = await dash._forget_memory("f1")
+    assert ok and err is None
+    assert ("POST", "/forget") in calls
+
+    async def unreachable(method, sub_path, payload=None):
+        return None
+
+    monkeypatch.setattr(dash, "_llm_memory_request", unreachable)
+    state = await dash._memory_state()
+    assert state["reachable"] is False
+    ok, err = await dash._forget_memory("f1")
+    assert not ok and "not reachable" in err
+
+
+# -- normalized recall tokens (field findings: "wifi" vs "Wi-Fi"; stopwords) ---
+
+
+def test_recall_normalizes_punctuated_words(store):
+    store.remember("adam", "The Wi-Fi password is on the fridge")
+    # All three spellings find the fact.
+    for q in ("wifi", "wi-fi", "wi fi"):
+        assert store.recall("adam", q), f"query {q!r} should match"
+    # And a punctuated query finds a plain fact.
+    store.remember("adam", "the wifi extender is upstairs")
+    assert len(store.recall("adam", "wi-fi", limit=10)) == 2
+
+
+def test_recall_stopwords_carry_no_signal(store):
+    store.remember("adam", "The trash goes out on Tuesday")
+    # Classic short words alone match nothing (they'd cover every fact).
+    for q in ("is", "on", "the", "a", "an", "in", "is on the"):
+        assert store.recall("adam", q) == [], f"query {q!r} should match nothing"
+    # But they don't poison a real query either.
+    assert store.recall("adam", "what day is the trash on?")
