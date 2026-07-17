@@ -4,7 +4,7 @@ Speaker identification lets Kenzy know **who** is talking. Enroll each family me
 
 There are three ways to enroll someone — pick whichever fits:
 
-- **From the dashboard (easiest):** **Speakers → Enroll from a room** — choose a room and a name, and Kenzy walks the person through a few sentences right at that room's microphone. No terminal needed.
+- **From the dashboard (easiest):** on the **People** tab, add the person (or find their card) and click **Enroll voice** — choose the room, and Kenzy walks them through a few sentences right at that room's microphone. No terminal needed, and the voice is linked to the person automatically. Enrolling again later adds more samples, which makes recognition more reliable.
 - **From the terminal:** the `kenzy-enroll` CLI, [below](#running-enrollment).
 - **By voice** ("hey Kenzie, enroll me as Alice") — off by default for a good security reason, [see below](#enrolling-by-voice-from-a-node).
 

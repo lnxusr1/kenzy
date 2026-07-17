@@ -212,20 +212,36 @@ re-enabled — but the screen stays editable, so you can stage curation before
 flipping the feature on. And with no `HA_API_KEY` configured at all, the tab
 shows step-by-step connection guidance instead of an error.
 
-## Speakers
+## People
 
-The **Speakers** tab manages the enrolled voice profiles held by `kenzy-speaker`. It
-lists each enrolled voice with its **sample count** and the service's current
-**identify threshold**. With `dashboard.controls: true` you can **rename** or **delete**
-a profile. Deleting is permanent; renaming just relabels the stored embeddings.
+The **People** tab is everything voice-identity in one place, and the model is
+**person-first**: a person can exist without a voice, but every enrolled voice
+belongs to a person. So the page is just people — add a household member, then
+enroll their voice from a room.
 
-The dashboard does **not** record audio in the browser. To add a voice, either run
-`kenzy-enroll` on the server host, or use **Enroll from a room**: pick a connected room
-node and a name, and Kenzy prompts the person at that room to say a few sentences and
-enrolls them through the room's mic (enrolling an existing name adds more samples to it).
-Because this is an authenticated, `controls`-gated operator action, it works regardless
-of the speaker service's `allow_voice_enroll` setting (which only governs the hands-free
-"Hey Kenzy, enroll me as…" voice command). Requires `dashboard.controls: true`.
+**People.** A person is a household member Kenzy knows by name — that's what
+lets Kenzy greet someone properly (and what the coming per-person features key
+off). Each card shows their voice status (`voice · 5 samples`, or `no voice
+yet`); click the card to edit inline. Deleting a person removes only the record
+— their enrolled voice stays (it reappears below as unassigned). Person records
+live in `data/people.yaml` on the server — see
+[Speaker configuration](configuration/speaker.md).
+
+**Enroll voice** (on each person's card). Pick the room whose microphone should
+record, and Kenzy prompts the person there to say a few sentences — the
+dashboard never records audio in the browser. The voice profile is stored under
+the person's stable id and linked automatically; **enrolling again later adds
+more samples**, which makes recognition more reliable (different days, distances
+and mics all help). Because this is an authenticated, `controls`-gated operator
+action, it works regardless of the speaker service's `allow_voice_enroll`
+setting (which only governs the hands-free "Hey Kenzy, enroll me as…" voice
+command — and that command is person-first too: it finds or creates the person
+record for the name it hears).
+
+**Voices without a person.** Appears only when unowned voice profiles exist
+(from a pre-people setup or the `kenzy-enroll` CLI): assign each to a person
+with one click — or delete it. Deleting a voice profile is permanent, and if it
+was linked to a person, the link is removed from their record automatically.
 
 ## Scheduled
 

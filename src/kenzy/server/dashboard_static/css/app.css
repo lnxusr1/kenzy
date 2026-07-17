@@ -668,3 +668,60 @@ dd.hot { color: var(--led-down); font-weight: 600; }
 .sk-group-head:hover { background: color-mix(in srgb, var(--panel) 80%, var(--bg)); }
 .sk-chev { display: inline-block; width: 1em; color: var(--muted, inherit); font-size: 0.85em; }
 .sk-group .sk-list .sk-row { padding-left: var(--s5, 1.1rem); }
+
+/* People panel: person cards that expand in place to an edit form, plus the
+   voice picker (enrolled voiceprints as checkboxes). Reuses the design system's
+   card / chip / .ha-chk vocabulary. */
+.ppl-actions { margin-bottom: var(--s4); }
+.ppl-actions .btn-primary { width: auto; margin: 0; padding: 10px var(--s5); }
+.ppl-list { display: flex; flex-direction: column; gap: var(--s3); }
+.ppl-card { padding: var(--s3) var(--s4); }
+.ppl-card.ppl-editing { border-color: var(--border-strong); }
+.ppl-head { display: flex; align-items: center; gap: var(--s3); }
+.ppl-title {
+  display: flex; align-items: center; gap: var(--s2);
+  background: none; border: 0; color: var(--text); cursor: pointer;
+  font: inherit; padding: 0; text-align: left;
+}
+.ppl-title:disabled { cursor: default; }
+.ppl-name { font-weight: 700; font-size: 15px; }
+.ppl-head .ppl-owner { flex: 1; min-width: 0; }
+.ppl-head .ppl-voice-actions { margin-left: auto; }
+.ppl-form { margin-top: var(--s3); padding-top: var(--s3); border-top: 1px solid var(--border); }
+.ppl-voices { display: flex; flex-wrap: wrap; gap: var(--s3) var(--s4); }
+/* Voice names are lowercase identifiers — undo the .field label / annotation
+   uppercasing that would otherwise cascade onto the checkbox labels. */
+.ppl-voices .ha-chk {
+  color: var(--text); text-transform: none; letter-spacing: normal;
+  font-family: inherit; font-size: 13px;
+}
+.ppl-owner { color: var(--text-faint); font-size: 12px; }
+.ppl-form-actions { display: flex; gap: var(--s3); margin-top: var(--s4); }
+.ppl-form-actions .btn-primary { width: auto; margin: 0; padding: 10px var(--s5); }
+.ppl-form-actions .btn-ghost { flex: none; width: auto; padding-inline: var(--s4); }
+/* Inline per-person enrollment: pick the room whose mic records the samples. */
+.ppl-enroll-row {
+  display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap;
+  margin-top: var(--s3); padding-top: var(--s3); border-top: 1px solid var(--border);
+}
+.ppl-enroll-row select {
+  background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius);
+  color: var(--text); font: inherit; padding: 7px var(--s3);
+}
+.ppl-enroll-row .btn-primary { width: auto; margin: 0; padding: 8px var(--s5); }
+.ppl-enroll-row .btn-ghost { flex: none; width: auto; padding-inline: var(--s4); }
+/* Enrolled-voices list (the absorbed Speakers tab): one row per voiceprint —
+   name · samples · owner, with assign/rename/delete on the right. */
+.ppl-voice-row {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--s3);
+  padding: var(--s3) var(--s4); border-bottom: 1px solid var(--border);
+}
+.ppl-voice-row:last-child { border-bottom: 0; }
+.ppl-voice { display: flex; align-items: baseline; gap: var(--s3); min-width: 0; flex-wrap: wrap; }
+.ppl-voice-actions { display: flex; gap: var(--s2); flex-shrink: 0; }
+.ppl-voice-actions .btn-ghost { flex: none; width: auto; padding-inline: var(--s4); }
+.ppl-unowned { color: var(--accent); }
+@media (max-width: 640px) {
+  .ppl-voice-row { flex-direction: column; align-items: stretch; }
+  .ppl-voice-actions { justify-content: flex-end; }
+}

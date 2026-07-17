@@ -750,6 +750,9 @@ class Dashboard:
         if path == "/api/speakers":
             return self._json(200, await self._speakers_state())
 
+        if path == "/api/people":
+            return self._json(200, await self._people_state())
+
         if path == "/api/backup":
             # Downloadable backup: the local config home merged with the stateful
             # services' slices (complete even multi-host). By default .env/API keys
@@ -1016,10 +1019,9 @@ class Dashboard:
         self, method: str, payload: dict[str, Any] | None = None
     ) -> dict[str, Any] | None:
         """GET/POST the LLM service's /skills endpoint; None if unreachable."""
-        health_url = self._service_urls.get("llm")
-        if not health_url:
+        base = self._service_base("llm")  # static config ← auto-registered (right scheme under TLS)
+        if not base:
             return None
-        base = health_url[: -len("/health")]
         import httpx
 
         try:
@@ -1045,10 +1047,9 @@ class Dashboard:
         self, method: str, payload: dict[str, Any] | None = None
     ) -> dict[str, Any] | None:
         """GET/POST the LLM service's /ha/curation endpoint; None if unreachable."""
-        health_url = self._service_urls.get("llm")
-        if not health_url:
+        base = self._service_base("llm")  # static config ← auto-registered (right scheme under TLS)
+        if not base:
             return None
-        base = health_url[: -len("/health")]
         import httpx
 
         try:
@@ -1237,10 +1238,13 @@ class Dashboard:
         self, method: str, sub_path: str, payload: dict[str, Any] | None = None
     ) -> tuple[int, Any] | None:
         """Proxy a request to the speaker service; (status, json) or None if unreachable."""
-        health_url = self._service_urls.get("speaker")
-        if not health_url:
+        # Use _service_base (static config ← auto-registered) rather than the
+        # static-only _service_urls: with mesh TLS the service registers itself
+        # as https, and the static server.yaml url may still say http — the
+        # announced base carries the right scheme.
+        base = self._service_base("speaker")
+        if not base:
             return None
-        base = health_url[: -len("/health")]
         import httpx
 
         try:
@@ -1286,6 +1290,8 @@ class Dashboard:
         if res is None:
             return False, "speaker service not reachable"
         if res[0] == 200:
+            # Keep the person records honest: drop the deleted voice from its owner.
+            self._server.remove_person_voiceprint(name)
             return True, None
         detail = res[1].get("detail") if isinstance(res[1], dict) else None
         return False, detail or f"delete failed ({res[0]})"
@@ -1297,9 +1303,50 @@ class Dashboard:
         if res is None:
             return False, "speaker service not reachable"
         if res[0] == 200:
+            # Follow the rename in the person records so the link doesn't break.
+            self._server.rename_person_voiceprint(name, new_name)
             return True, None
         detail = res[1].get("detail") if isinstance(res[1], dict) else None
         return False, detail or f"rename failed ({res[0]})"
+
+    # ------------------------------------------------------------------
+    # People (identity records): group enrolled voices into household members
+    # ------------------------------------------------------------------
+
+    async def _people_state(self) -> dict[str, Any]:
+        """People records merged with the speaker service's enrolled voiceprints,
+        each tagged with the person (if any) that claims it — so the panel can
+        surface unassigned voices and show who owns what. Also carries the
+        connected rooms for the enroll-from-a-room flow (the People tab absorbed
+        the old Speakers tab)."""
+        people = self._server.list_people()
+        owner: dict[str, str] = {}
+        for p in people:
+            for vp in p["voiceprints"]:
+                owner[str(vp).lower()] = p["id"]
+
+        res = await self._speaker_request("GET", "/speakers")
+        voiceprints = []
+        if res and res[0] == 200 and isinstance(res[1], dict):
+            for v in res[1].get("speakers", []):
+                name = str(v.get("name", ""))
+                voiceprints.append(
+                    {
+                        "name": name,
+                        "samples": int(v.get("samples", 0)),
+                        "person_id": owner.get(name.lower()),
+                    }
+                )
+        rooms = [
+            {"node_id": nid, "room": sess.room_id} for nid, sess in self._server._nodes.items()
+        ]
+        return {
+            "controls": self._dcfg.controls,
+            "speaker_reachable": res is not None,
+            "people": people,
+            "voiceprints": voiceprints,
+            "rooms": rooms,
+        }
 
     async def _node_logs(self, node_id: str, request: Request) -> dict[str, Any]:
         if not self._dcfg.logs:
@@ -1634,22 +1681,60 @@ class Dashboard:
             await ack(ok, err)
             if ok:
                 await connection.send(json.dumps({"type": "speakers_changed"}))
+        elif mtype == "save_person":
+            if not self._dcfg.controls:
+                return await ack(False, "controls are disabled (set dashboard.controls: true)")
+            name = str(msg.get("name", "")).strip()
+            if not name:
+                return await ack(False, "a name is required")
+            vps = msg.get("voiceprints") or []
+            if not isinstance(vps, list):
+                return await ack(False, "voiceprints must be a list")
+            # NB: the person id rides as `person_id`, not `id` — the WS envelope
+            # reserves `id` for request/ack correlation (a payload `id` would
+            # clobber it and the ack would never match its caller).
+            try:
+                self._server.save_person(
+                    str(msg.get("person_id", "")).strip(), name, [str(v) for v in vps]
+                )
+            except (ValueError, OSError) as exc:
+                return await ack(False, str(exc))
+            await ack(True)
+        elif mtype == "delete_person":
+            if not self._dcfg.controls:
+                return await ack(False, "controls are disabled (set dashboard.controls: true)")
+            pid = str(msg.get("person_id", "")).strip()
+            if not pid:
+                return await ack(False, "a person id is required")
+            ok = self._server.delete_person(pid)
+            await ack(ok, None if ok else "person not found")
         elif mtype == "enroll_speaker":
             if not self._dcfg.controls:
                 return await ack(False, "controls are disabled (set dashboard.controls: true)")
             from kenzy.server.server import TranscribingServer
 
+            # Person-first: the People tab sends `person_id` (enrollment must
+            # belong to a person). A bare `name` is still accepted for API
+            # clients — the server resolves/creates the person for it.
+            person_id = str(msg.get("person_id", "")).strip()
             name = str(msg.get("name", "")).strip()
             node_id = str(msg.get("node", "")).strip()
             server = self._server
             sess = server._nodes.get(node_id)
-            if not name:
-                return await ack(False, "speaker name is required")
+            if person_id:
+                person = next((p for p in server.list_people() if p["id"] == person_id), None)
+                if person is None:
+                    return await ack(False, "person not found")
+                name = str(person["name"])
+            elif not name:
+                return await ack(False, "a person (or speaker name) is required")
             if sess is None:
                 return await ack(False, "pick a connected room node to enroll from")
             if not isinstance(server, TranscribingServer):
                 return await ack(False, "enrollment is not available on this server")
-            await server.start_enrollment(node_id, sess.room_id, name, operator=True)
+            await server.start_enrollment(
+                node_id, sess.room_id, name, operator=True, person_id=person_id or None
+            )
             await ack(True)
         elif mtype == "boost_trace":
             if not self._dcfg.controls:

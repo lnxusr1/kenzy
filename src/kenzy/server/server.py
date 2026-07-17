@@ -44,7 +44,13 @@ from websockets.http11 import Request, Response
 
 from kenzy import calibration, kenzy_version, protocol, serviceauth, tlsutil
 from kenzy.config import SERVICES
-from kenzy.server.people import Identity, PeopleStore, resolve_voice_identity
+from kenzy.server.people import (
+    Identity,
+    PeopleStore,
+    Person,
+    resolve_voice_identity,
+    slugify,
+)
 from kenzy.serviceauth import check_bearer
 from kenzy.speaker import DEFAULT_ENROLL_PROMPTS
 
@@ -662,6 +668,80 @@ class AudioServer:
         await session.ws.send(protocol.config(self._effective_node_config(node_id)))
         self._notify_state()
         return True
+
+    # ------------------------------------------------------------------
+    # People / identity records (dashboard People panel)
+    # ------------------------------------------------------------------
+
+    def list_people(self) -> list[dict[str, Any]]:
+        """Serialize the person records for the dashboard (name + voiceprints;
+        the reserved ha_user/phone links ride along but aren't UI-editable)."""
+        return [
+            {
+                "id": p.id,
+                "name": p.name,
+                "voiceprints": list(p.voiceprints),
+                "ha_user": p.ha_user,
+                "phone": p.phone,
+            }
+            for p in self._people.all()
+        ]
+
+    def save_person(self, person_id: str, name: str, voiceprints: list[str]) -> str:
+        """Create/update a person and persist ``data/people.yaml``. Returns the id
+        (generated from the name for a new record). The pipeline's resolver sees
+        the change immediately (same store object)."""
+        person = self._people.save_person(id=person_id, name=name, voiceprints=voiceprints)
+        log.info("Saved person %r (%d voiceprint(s))", person.id, len(person.voiceprints))
+        return person.id
+
+    def delete_person(self, person_id: str) -> bool:
+        ok = self._people.delete_person(person_id)
+        if ok:
+            log.info("Deleted person %r", person_id)
+        return ok
+
+    def rename_person_voiceprint(self, old: str, new: str) -> None:
+        """Follow a speaker-service voiceprint rename in the person records."""
+        if self._people.rename_voiceprint(old, new):
+            log.info("Followed voiceprint rename %r → %r in person records", old, new)
+
+    def remove_person_voiceprint(self, name: str) -> None:
+        """Drop a deleted speaker-service voiceprint from its owning person."""
+        if self._people.remove_voiceprint(name):
+            log.info("Removed deleted voiceprint %r from its person record", name)
+
+    def adopt_enrolled_voice(
+        self, voiceprint: str, display: str, person_id: str | None = None
+    ) -> None:
+        """Person-first enrollment invariant: every enrolled voice belongs to a
+        person. Called as soon as an enrollment stores its first sample — link
+        the voiceprint to the intended person (``person_id``), else to whoever
+        already owns it / matches the spoken name, else create the person. This
+        covers every path: the dashboard (pre-picked person), the "enroll me
+        as Alice" voice command, and legacy ``kenzy-enroll`` names."""
+        if person_id:
+            person = self._people.get(person_id)
+            if person is not None:
+                if not any(v.lower() == voiceprint.lower() for v in person.voiceprints):
+                    self._people.save_person(
+                        id=person.id,
+                        name=person.name,
+                        voiceprints=[*person.voiceprints, voiceprint],
+                    )
+                    log.info("Linked voiceprint %r to person %r", voiceprint, person.id)
+                return
+        if self._people.by_voiceprint(voiceprint) is not None:
+            return  # already owned
+        person = self._people.by_name(display)
+        if person is not None:
+            self._people.save_person(
+                id=person.id, name=person.name, voiceprints=[*person.voiceprints, voiceprint]
+            )
+            log.info("Linked voiceprint %r to existing person %r", voiceprint, person.id)
+        else:
+            created = self._people.save_person(id=None, name=display, voiceprints=[voiceprint])
+            log.info("Created person %r for enrolled voiceprint %r", created.id, voiceprint)
 
     # ------------------------------------------------------------------
     # Central service config store (stt/tts/llm/speaker pull this at boot)
@@ -2567,9 +2647,21 @@ class TranscribingServer(AudioServer):
             return False
 
     async def start_enrollment(
-        self, node_id: str, room: str, name: str, *, operator: bool = False
+        self,
+        node_id: str,
+        room: str,
+        name: str,
+        *,
+        operator: bool = False,
+        person_id: str | None = None,
     ) -> None:
-        """Begin a voice-enrollment session for ``name`` on a node.
+        """Begin a voice-enrollment session on a node — **person-first**: every
+        enrolled voice belongs to a person. ``person_id`` (dashboard flow) picks
+        the person directly; a bare ``name`` (the "enroll me as Alice" voice
+        command, legacy callers) resolves to the person it names — or a new
+        person record is created when the first sample lands. The voice profile
+        is keyed by the person's existing voiceprint (more samples) or their
+        stable id (fresh profile), never a free-form name.
 
         ``operator=True`` is for dashboard-initiated enrollment: it bypasses the
         ``allow_voice_enroll`` earshot gate (the request is already authenticated and
@@ -2589,12 +2681,37 @@ class TranscribingServer(AudioServer):
             return
         if node_id in self._enroll_sessions:
             return  # already enrolling on this node
+
+        person: Person | None
+        if person_id:
+            person = self._people.get(person_id)
+            if person is None:
+                await self._say(node_id, room, "I couldn't find that person to enroll.")
+                return
+        else:
+            person = self._people.by_voiceprint(name) or self._people.by_name(name)
+        if person is not None:
+            display = person.name
+            person_id = person.id
+            # Append to the profile they already have (the record's exact
+            # spelling); a voiceless person gets a fresh profile keyed by their
+            # stable id, so renaming the person never touches the file.
+            existing = next((v for v in person.voiceprints if v.lower() == name.lower()), None)
+            voiceprint = existing or (person.voiceprints[0] if person.voiceprints else person.id)
+        else:
+            display = name
+            # New person: key the profile by the slug their record will get on
+            # the first sample, so profile name == person id.
+            voiceprint = slugify(name)
+
         prompts = self._enroll_prompts()
         timeout = asyncio.create_task(
             self._enroll_timeout(node_id), name=f"enroll-timeout-{node_id}"
         )
         self._enroll_sessions[node_id] = {
-            "name": name,
+            "name": voiceprint,
+            "display": display,
+            "person_id": person_id,
             "room": room,
             "collected": 0,
             "attempts": 0,
@@ -2602,10 +2719,14 @@ class TranscribingServer(AudioServer):
             "timeout": timeout,
         }
         log.info(
-            "[%s] voice enrollment started for '%s' (%d prompt(s))", node_id, name, len(prompts)
+            "[%s] voice enrollment started for '%s' (voiceprint '%s', %d prompt(s))",
+            node_id,
+            display,
+            voiceprint,
+            len(prompts),
         )
         await self._enroll_prompt(
-            node_id, room, f"Okay, enrolling {name}. After the tone, please say: {prompts[0]}"
+            node_id, room, f"Okay, enrolling {display}. After the tone, please say: {prompts[0]}"
         )
 
     def _enroll_prompts(self) -> list[str]:
@@ -2647,12 +2768,20 @@ class TranscribingServer(AudioServer):
         ok = len(pcm) >= _ENROLL_MIN_PCM_BYTES and await self._call_enroll(pcm, session["name"])
         if ok:
             session["collected"] += 1
+            if session["collected"] == 1:
+                # First sample stored — enforce the person-first invariant NOW,
+                # so even an interrupted enrollment never orphans a voice.
+                self.adopt_enrolled_voice(
+                    session["name"],
+                    session.get("display") or session["name"],
+                    session.get("person_id"),
+                )
 
         # One sample per configured prompt; `collected` doubles as the index of the
         # next sentence to read, so a failed capture re-reads the same prompt.
         prompts = session.get("prompts") or list(DEFAULT_ENROLL_PROMPTS)
         if session["collected"] >= len(prompts):
-            name = session["name"]
+            name = session.get("display") or session["name"]
             self._end_enroll_session(node_id)
             await self._say(node_id, room, f"All done — I've enrolled {name}.")
             return

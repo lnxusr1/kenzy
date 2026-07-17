@@ -81,3 +81,99 @@ def test_ha_optional(tmp_path):
     s = _store(tmp_path, "people:\n  guest:\n    name: Guest\n    voiceprints: [guest]\n")
     ident = resolve_voice_identity(s, "guest", 0.7, unknown_name="unknown")
     assert ident.person_id == "guest" and ident.ha_user is None
+
+
+# -- write path (dashboard People panel) ------------------------------------
+
+
+def test_save_new_person_generates_slug_id_and_persists(tmp_path):
+    s = PeopleStore(tmp_path / "people.yaml")  # start empty
+    p = s.save_person(id=None, name="Alice Smith", voiceprints=["alice", " ", "alice"])
+    assert p.id == "alice_smith"  # slug from the name
+    assert p.voiceprints == ["alice"]  # trimmed + de-duped, blanks dropped
+    # Written to disk and readable by a fresh store (the pipeline's boot path).
+    fresh = PeopleStore(tmp_path / "people.yaml")
+    assert fresh.by_voiceprint("alice").id == "alice_smith"
+
+
+def test_save_updates_existing_and_reindexes_live(tmp_path):
+    s = _store(tmp_path)
+    s.save_person(id="john", name="John", voiceprints=["john"])  # drop 'johnmark'
+    assert s.by_voiceprint("johnmark") is None  # index updated in-process
+    assert s.by_voiceprint("john").id == "john"
+
+
+def test_save_moves_voiceprint_off_prior_owner(tmp_path):
+    s = _store(tmp_path)
+    # Assign john's 'johnmark' voice to nicki — it must leave john.
+    s.save_person(id="nicki", name="Nicki", voiceprints=["nicki", "johnmark"])
+    assert s.by_voiceprint("johnmark").id == "nicki"
+    assert s.get("john").voiceprints == ["john"]
+
+
+def test_save_preserves_reserved_ha_user_link(tmp_path):
+    s = _store(tmp_path)
+    s.save_person(id="john", name="Johnny", voiceprints=["john", "johnmark"])
+    assert s.get("john").ha_user == "person.john"  # UI never sends it, never clobbers it
+    fresh = PeopleStore(tmp_path / "people.yaml")
+    assert fresh.get("john").ha_user == "person.john"  # round-trips through the file
+
+
+def test_save_slug_id_dedupes_on_name_collision(tmp_path):
+    s = PeopleStore(tmp_path / "people.yaml")
+    a = s.save_person(id=None, name="Sam", voiceprints=[])
+    b = s.save_person(id=None, name="Sam", voiceprints=[])
+    assert (a.id, b.id) == ("sam", "sam_2")
+
+
+def test_save_blank_name_rejected(tmp_path):
+    s = PeopleStore(tmp_path / "people.yaml")
+    try:
+        s.save_person(id=None, name="   ", voiceprints=["x"])
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("blank name should raise")
+
+
+def test_by_name_matches_display_or_id(tmp_path):
+    s = _store(tmp_path)
+    assert s.by_name("john").id == "john"  # by id
+    assert s.by_name(" NICKI ").id == "nicki"  # by display name, case/space-insensitive
+    assert s.by_name("stranger") is None
+
+
+def test_slugify():
+    from kenzy.server.people import slugify
+
+    assert slugify("Alice Smith") == "alice_smith"
+    assert slugify("Uncle Bob!") == "uncle_bob"
+    assert slugify("---") == "person"  # never empty
+
+
+def test_rename_voiceprint_follows_owner(tmp_path):
+    s = _store(tmp_path)
+    assert s.rename_voiceprint("johnmark", "jm") is True
+    assert s.by_voiceprint("jm").id == "john"
+    assert s.by_voiceprint("johnmark") is None
+    fresh = PeopleStore(tmp_path / "people.yaml")
+    assert fresh.get("john").voiceprints == ["john", "jm"]  # persisted
+    assert s.rename_voiceprint("stranger", "x") is False  # unowned voice: no-op
+
+
+def test_remove_voiceprint_drops_from_owner(tmp_path):
+    s = _store(tmp_path)
+    assert s.remove_voiceprint("JOHNMARK") is True  # case-insensitive
+    assert s.get("john").voiceprints == ["john"]  # person stays, voice gone
+    assert s.by_voiceprint("johnmark") is None
+    assert s.remove_voiceprint("stranger") is False
+
+
+def test_delete_person(tmp_path):
+    s = _store(tmp_path)
+    assert s.delete_person("john") is True
+    assert s.get("john") is None
+    assert s.by_voiceprint("johnmark") is None  # index dropped
+    assert s.delete_person("john") is False  # already gone
+    fresh = PeopleStore(tmp_path / "people.yaml")
+    assert {p.id for p in fresh.all()} == {"nicki"}  # persisted

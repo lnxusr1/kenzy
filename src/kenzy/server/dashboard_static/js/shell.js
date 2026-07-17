@@ -4,7 +4,7 @@ import { FleetView } from "./views/fleet.js";
 import { ConfigView } from "./views/config.js";
 import { ServicesView } from "./views/services.js";
 import { SkillsView } from "./views/skills.js";
-import { SpeakersView } from "./views/speakers.js";
+import { PeopleView } from "./views/people.js";
 import { SchedulesView } from "./views/schedules.js";
 import { HaView } from "./views/ha.js";
 import { ActivityView } from "./views/activity.js";
@@ -30,7 +30,7 @@ const NAV = [
   { id: "services", label: "Services", ico: "❏" },
   { id: "skills", label: "Skills", ico: "✦" },
   { id: "ha", label: "Home Assistant", ico: "⌂" },
-  { id: "speakers", label: "Speakers", ico: "☻" },
+  { id: "people", label: "People", ico: "☺" },
   { id: "schedules", label: "Scheduled", ico: "◷" },
   { id: "activity", label: "Activity", ico: "↗" },
   { id: "logs", label: "Logs", ico: "≡" },
@@ -155,8 +155,8 @@ export function Shell({ user, onLogout }) {
                 ? html`<${SkillsView} />`
                 : view === "ha"
                   ? html`<${HaView} />`
-                  : view === "speakers"
-                    ? html`<${SpeakersView} />`
+                  : view === "people"
+                    ? html`<${PeopleView} />`
                   : view === "schedules"
                     ? html`<${SchedulesView} />`
                   : view === "activity"

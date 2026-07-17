@@ -88,8 +88,11 @@ def test_enroll_prompts_from_service_config(monkeypatch):
     assert srv._enroll_prompts() == DEFAULT_ENROLL_PROMPTS
 
 
-async def test_enroll_starts_and_prompts(monkeypatch):
+async def test_enroll_starts_and_prompts(monkeypatch, tmp_path):
+    from kenzy.server.people import PeopleStore
+
     srv = _server()
+    srv._people = PeopleStore(tmp_path / "nope.yaml")  # hermetic: no person records
     monkeypatch.setattr(srv, "_voice_enroll_allowed", lambda: True)
     ws = _RecWS()
     srv._nodes["k"] = NodeSession(ws=ws, node_id="k", room_id="kitchen")  # type: ignore[arg-type]
@@ -101,7 +104,10 @@ async def test_enroll_starts_and_prompts(monkeypatch):
     monkeypatch.setattr(srv, "_run_tts", run_tts)
     await srv.start_enrollment("k", "kitchen", "Alice")
     try:
-        assert srv._enroll_sessions["k"]["name"] == "Alice"
+        # Person-first: no person named Alice exists, so the profile is keyed by
+        # the slug her record will get, while the spoken flow uses her name.
+        assert srv._enroll_sessions["k"]["name"] == "alice"
+        assert srv._enroll_sessions["k"]["display"] == "Alice"
         # The node was armed to capture the next utterance, and prompted by name.
         assert any(json.loads(m).get("type") == "expect_utterance" for m in ws.sent)
         assert tts and "Alice" in tts[0]
@@ -109,8 +115,11 @@ async def test_enroll_starts_and_prompts(monkeypatch):
         srv._end_enroll_session("k")  # cancel the timeout task
 
 
-async def test_enroll_capture_loop_collects_and_finishes(monkeypatch):
+async def test_enroll_capture_loop_collects_and_finishes(monkeypatch, tmp_path):
+    from kenzy.server.people import PeopleStore
+
     srv = _server()
+    srv._people = PeopleStore(tmp_path / "people.yaml")  # hermetic: adoption writes here
     srv._nodes["k"] = NodeSession(ws=_RecWS(), node_id="k", room_id="kitchen")  # type: ignore[arg-type]
     enrolled: list[tuple[int, str]] = []
     prompts: list[str] = []
@@ -146,6 +155,75 @@ async def test_enroll_capture_loop_collects_and_finishes(monkeypatch):
     assert len(prompts) == 2  # re-prompted between samples, not after the last
     assert "k" not in srv._enroll_sessions  # session ended
     assert any("enrolled alice" in d.lower() for d in done)
+    # Person-first invariant: the first stored sample adopted the voice into a
+    # person record (created here, since no person named Alice existed).
+    owner = srv._people.by_voiceprint("Alice")
+    assert owner is not None and owner.name == "Alice"
+
+
+async def test_enroll_resolves_existing_person(monkeypatch, tmp_path):
+    """Person-first resolution: enrolling a known person appends to their existing
+    voiceprint; a voiceless person gets a profile keyed by their stable id."""
+    from kenzy.server.people import PeopleStore
+
+    srv = _server()
+    p = tmp_path / "people.yaml"
+    p.write_text(
+        "people:\n  john:\n    name: John\n    voiceprints: [johnmark]\n  nicki:\n    name: Nicki\n"
+    )
+    srv._people = PeopleStore(p)
+    monkeypatch.setattr(srv, "_voice_enroll_allowed", lambda: True)
+    srv._nodes["k"] = NodeSession(ws=_RecWS(), node_id="k", room_id="kitchen")  # type: ignore[arg-type]
+
+    async def run_tts(node, room, sid, text, vp):  # noqa: ANN001, ANN202
+        pass
+
+    monkeypatch.setattr(srv, "_run_tts", run_tts)
+
+    # Spoken name → existing person: more samples for their existing profile.
+    await srv.start_enrollment("k", "kitchen", "John")
+    sess = srv._enroll_sessions["k"]
+    assert (sess["name"], sess["display"], sess["person_id"]) == ("johnmark", "John", "john")
+    srv._end_enroll_session("k")
+
+    # Dashboard picks a voiceless person by id: fresh profile keyed by the id.
+    await srv.start_enrollment("k", "kitchen", "Nicki", operator=True, person_id="nicki")
+    sess = srv._enroll_sessions["k"]
+    assert (sess["name"], sess["display"], sess["person_id"]) == ("nicki", "Nicki", "nicki")
+    srv._end_enroll_session("k")
+
+    # Unknown person_id refuses (spoken feedback, no session).
+    said: list[str] = []
+
+    async def say(node, room, text):  # noqa: ANN001, ANN202
+        said.append(text)
+
+    monkeypatch.setattr(srv, "_say", say)
+    await srv.start_enrollment("k", "kitchen", "X", operator=True, person_id="ghost")
+    assert "k" not in srv._enroll_sessions and said
+
+
+async def test_adopt_enrolled_voice_paths(tmp_path):
+    """The adopt hook: link to the picked person, else the name match, else create."""
+    from kenzy.server.people import PeopleStore
+    from kenzy.server.server import AudioServer
+
+    srv = AudioServer({})
+    p = tmp_path / "people.yaml"
+    p.write_text("people:\n  nicki:\n    name: Nicki\n")
+    srv._people = PeopleStore(p)
+
+    srv.adopt_enrolled_voice("nicki", "Nicki", "nicki")  # picked person
+    assert srv._people.by_voiceprint("nicki").id == "nicki"
+    srv.adopt_enrolled_voice("nicki", "Nicki", "nicki")  # idempotent
+    assert srv._people.get("nicki").voiceprints == ["nicki"]
+
+    srv.adopt_enrolled_voice("nicki2", "NICKI")  # name match, no person_id
+    assert srv._people.by_voiceprint("nicki2").id == "nicki"
+
+    srv.adopt_enrolled_voice("alice", "Alice")  # no match → person created
+    owner = srv._people.by_voiceprint("alice")
+    assert owner is not None and owner.name == "Alice" and owner.id == "alice"
 
 
 async def test_enroll_short_capture_is_retried(monkeypatch):

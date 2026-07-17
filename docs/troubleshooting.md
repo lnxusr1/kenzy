@@ -160,7 +160,8 @@ kenzy-node` on the device.
 
 - Enroll **in the room, on the mic you actually use** — an enrollment done on a
   different microphone doesn't transfer well. Re-enroll from the dashboard
-  (**Speakers → Enroll from a room**).
+  (**People → Enroll voice** on the person's card — it adds samples to their
+  existing profile).
 - Tune `identify_threshold` (Services → speaker): **lower** it if enrolled people
   keep coming back as "unknown"; **raise** it if the wrong names come back. See
   [Speaker Enrollment](speaker-enrollment.md#tuning-the-identification-threshold).

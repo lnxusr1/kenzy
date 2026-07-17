@@ -21,11 +21,22 @@ are optional fields, so a voiceprint-only household is fully supported
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 log = logging.getLogger(__name__)
+
+#: A person id is a filesystem/YAML-safe slug (the join key downstream keys off).
+_ID_RE = re.compile(r"[a-z0-9][a-z0-9._-]*")
+
+
+def slugify(name: str) -> str:
+    """The slug a display name maps to — used for person ids AND for the
+    voiceprint key of a person-first enrollment (so a person's voice profile is
+    named after their id, and renaming the person never touches the file)."""
+    return re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_") or "person"
 
 #: Confidence tiers a downstream gate consumes as a contract (F1.3). Today the
 #: resolver emits UNKNOWN (no/low-confidence match) and RECOGNIZED (a voiceprint
@@ -109,18 +120,144 @@ class PeopleStore:
                 settings=rec["settings"] if isinstance(rec.get("settings"), dict) else {},
             )
             self._people[person.id] = person
-            for vp in vps:
-                self._by_voiceprint[vp.lower()] = person
+        self._reindex()
         log.info("Loaded %d person record(s) from %s", len(self._people), self._path)
+
+    def _reindex(self) -> None:
+        """Rebuild the voiceprint→person index from the current records."""
+        self._by_voiceprint = {}
+        for person in self._people.values():
+            for vp in person.voiceprints:
+                self._by_voiceprint[vp.lower()] = person
 
     def by_voiceprint(self, name: str) -> Person | None:
         return self._by_voiceprint.get(name.lower())
+
+    def by_name(self, name: str) -> Person | None:
+        """Case-insensitive match on display name or id — how a spoken
+        "enroll me as Alice" finds the existing Alice record."""
+        want = name.strip().lower()
+        for person in self._people.values():
+            if person.name.lower() == want or person.id.lower() == want:
+                return person
+        return None
 
     def get(self, person_id: str) -> Person | None:
         return self._people.get(person_id)
 
     def all(self) -> list[Person]:
         return list(self._people.values())
+
+    # -- write path (dashboard People panel) --------------------------------
+    #
+    # The panel edits only ``name`` + ``voiceprints``; ``ha_user``/``phone``/
+    # ``settings`` are preserved across a save so hand-edited links (or future
+    # channels) survive. Every mutation reindexes and rewrites the file, so the
+    # in-process resolver sees the change immediately (same object the pipeline
+    # holds) — no reload needed.
+
+    def _new_id(self, name: str) -> str:
+        """A unique slug id derived from the display name."""
+        base = slugify(name)
+        pid, n = base, 2
+        while pid in self._people:
+            pid, n = f"{base}_{n}", n + 1
+        return pid
+
+    @staticmethod
+    def _clean_voiceprints(voiceprints: list[str]) -> list[str]:
+        """Strip, drop blanks, de-dup case-insensitively while keeping order."""
+        seen: set[str] = set()
+        out: list[str] = []
+        for raw in voiceprints:
+            vp = str(raw).strip()
+            if vp and vp.lower() not in seen:
+                seen.add(vp.lower())
+                out.append(vp)
+        return out
+
+    def save_person(self, *, id: str | None, name: str, voiceprints: list[str]) -> Person:
+        """Create (blank/unknown ``id``) or update a person. A voiceprint assigned
+        here is removed from any *other* person, so a voice belongs to exactly one
+        person (assigning it elsewhere moves it)."""
+        name = name.strip()
+        if not name:
+            raise ValueError("a name is required")
+        vps = self._clean_voiceprints(voiceprints)
+
+        pid = (id or "").strip()
+        person = self._people.get(pid) if pid else None
+        if person is None:
+            pid = pid if pid and _ID_RE.fullmatch(pid) else self._new_id(name)
+            person = Person(id=pid, name=name)
+            self._people[pid] = person
+
+        # A voiceprint can name only one person — steal it from any prior owner.
+        claimed = {vp.lower() for vp in vps}
+        for other in self._people.values():
+            if other is person:
+                continue
+            other.voiceprints = [v for v in other.voiceprints if v.lower() not in claimed]
+
+        person.name = name
+        person.voiceprints = vps
+        self._reindex()
+        self._write()
+        return person
+
+    def delete_person(self, person_id: str) -> bool:
+        if person_id not in self._people:
+            return False
+        del self._people[person_id]
+        self._reindex()
+        self._write()
+        return True
+
+    def rename_voiceprint(self, old: str, new: str) -> bool:
+        """A voiceprint was renamed in the speaker service — follow it in the
+        owning person's record so the link doesn't silently break. Returns
+        whether any record changed."""
+        person = self.by_voiceprint(old)
+        if person is None:
+            return False
+        person.voiceprints = [new if v.lower() == old.lower() else v for v in person.voiceprints]
+        self._reindex()
+        self._write()
+        return True
+
+    def remove_voiceprint(self, name: str) -> bool:
+        """A voiceprint was deleted from the speaker service — drop it from its
+        owner (the person record itself stays). Returns whether any record changed."""
+        person = self.by_voiceprint(name)
+        if person is None:
+            return False
+        person.voiceprints = [v for v in person.voiceprints if v.lower() != name.lower()]
+        self._reindex()
+        self._write()
+        return True
+
+    def _serialize(self) -> dict[str, Any]:
+        out: dict[str, Any] = {}
+        for p in self._people.values():
+            rec: dict[str, Any] = {"name": p.name}
+            if p.voiceprints:
+                rec["voiceprints"] = list(p.voiceprints)
+            if p.ha_user:
+                rec["ha_user"] = p.ha_user
+            if p.phone:
+                rec["phone"] = p.phone
+            if p.settings:
+                rec["settings"] = p.settings
+            out[p.id] = rec
+        return {"people": out}
+
+    def _write(self) -> None:
+        import yaml
+
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        self._path.write_text(
+            yaml.safe_dump(self._serialize(), default_flow_style=False, sort_keys=True)
+        )
 
 
 def resolve_voice_identity(

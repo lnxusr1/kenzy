@@ -94,4 +94,32 @@ people:
 - **Confidence tier.** A match is `recognized`; a below-threshold voice is
   `unknown`. Future features (per-person memory, privacy) gate on the tier.
 - **Standalone.** `ha_user`/`phone` are optional — a voiceprint-only household
-  is fully supported. (A dashboard editor for these records is coming.)
+  is fully supported.
+
+### Editing people from the dashboard
+
+The dashboard's **People** tab is the easy way to manage these records — you
+rarely need to touch the YAML. Enrollment is **person-first**: a person can
+exist without a voice, but every enrolled voice belongs to a person, so the flow
+is simply *add the person, then enroll their voice*.
+
+- **Add a person**, then click **Enroll voice** on their card and pick the room
+  to record from. The voice profile is stored under the person's stable id and
+  linked automatically — and re-enrolling later adds more samples to the same
+  profile, which makes recognition more reliable. (The hands-free "Hey Kenzy,
+  enroll me as Alice" command is person-first too: it finds or creates the
+  person record for the name it hears.)
+- **Voices without a person** — profiles from a pre-people setup or the
+  `kenzy-enroll` CLI — are listed with a one-click *Assign to a person*, so
+  you're guided from "a voice exists" to "Kenzy knows who that is."
+- Editing is inline: click a person to expand their card, change the name, and
+  save. Renaming a person never touches the voice profile (it's keyed by their
+  id). Deleting a person removes only the record — the enrolled voice itself
+  stays; deleting a voice profile follows through to its person record
+  automatically, so the links in `people.yaml` never silently break.
+
+The tab edits only the name and voices; `ha_user`/`phone` stay as you set them
+in the file (reserved for later channels) and are preserved across saves. Edits
+need `dashboard.controls: true` (otherwise the tab is read-only) and take effect
+immediately — the running pipeline resolves the new mapping on the next request,
+no restart.
