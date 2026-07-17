@@ -29,7 +29,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
 from kenzy import version_info
@@ -40,6 +40,7 @@ from kenzy.fastapi_auth import (
     install_service_auth,
     install_upgrade_endpoint,
 )
+from kenzy.llm import memory
 from kenzy.llm import skills as skill_registry
 from kenzy.logutil import quiet_health_access_log
 
@@ -103,6 +104,10 @@ class _Turn:
     speaker: str  # raw value — "unknown" if not identified
     user_text: str
     assistant_text: str  # spoken text only (no JSON wrapper, no tool internals)
+    # F2 privacy: when this turn's answer was built from private/personal-tier
+    # memory, it replays ONLY for this person id — never for another voice in
+    # the room-history window (a stranger 30s later must not hear the echo).
+    private_to: str | None = None
 
 
 class ConversationHistory:
@@ -122,7 +127,15 @@ class ConversationHistory:
             turns = turns[-self.MAX_TURNS :]
         self._rooms[room_id] = turns
 
-    def add(self, room_id: str, speaker: str, user_text: str, assistant_text: str) -> None:
+    def add(
+        self,
+        room_id: str,
+        speaker: str,
+        user_text: str,
+        assistant_text: str,
+        *,
+        private_to: str | None = None,
+    ) -> None:
         if room_id not in self._rooms:
             self._rooms[room_id] = []
         self._prune(room_id)
@@ -132,14 +145,19 @@ class ConversationHistory:
                 speaker=speaker,
                 user_text=user_text,
                 assistant_text=assistant_text,
+                private_to=private_to,
             )
         )
 
-    def get_messages(self, room_id: str) -> list[dict[str, Any]]:
-        """Return history as alternating role:user / role:assistant dicts."""
+    def get_messages(self, room_id: str, viewer: str | None = None) -> list[dict[str, Any]]:
+        """History as alternating user/assistant dicts, as ``viewer`` (a person
+        id, or None for an unrecognized voice) is allowed to see it: turns
+        tagged private to someone else are withheld."""
         self._prune(room_id)
         out: list[dict[str, Any]] = []
         for turn in self._rooms.get(room_id, []):
+            if turn.private_to and turn.private_to != viewer:
+                continue
             label = turn.speaker if turn.speaker.lower() != "unknown" else "unidentified speaker"
             out.append({"role": "user", "content": f"[{label}] {turn.user_text}"})
             out.append({"role": "assistant", "content": turn.assistant_text})
@@ -147,6 +165,42 @@ class ConversationHistory:
 
 
 _history: ConversationHistory = ConversationHistory()
+
+# F2.1: per-PERSON rolling context (cross-room, cross-session, hours-scale) —
+# complements the per-room minutes-scale history above.
+_short_term: memory.ShortTermContext = memory.ShortTermContext()
+
+
+def _llm_history_tag() -> str | None:
+    """Tag for LLM-path history turns: the person id when private/personal
+    memory shaped the answer (mirrors process()'s fast-path tag)."""
+    pid = skill_registry.get_request("person_id")
+    return str(pid) if (pid and memory.private_touched()) else None
+
+
+def _memory_context(utterance: str) -> str:
+    """The memory block injected into the system prompt for a recognized person:
+    tier-scoped relevant facts (F2.5 auto-recall) + their recent cross-session
+    exchanges (F2.1). Empty for unrecognized voices — the F1.3 contract."""
+    person_id = skill_registry.get_request("person_id")
+    if not person_id or skill_registry.current_tier() == skill_registry.TIER_UNKNOWN:
+        return ""
+    parts: list[str] = []
+    store = memory.store()
+    if store is not None:
+        facts = store.recall(str(person_id), utterance, limit=5)
+        if facts:
+            memory.mark_if_sensitive(facts)  # private facts ⇒ tag this history turn
+            parts.append(
+                "Remembered facts relevant to this request (already tier-scoped to "
+                "this speaker — do not reveal to others):\n"
+                + "\n".join(f"- {f.text}" for f in facts)
+            )
+    recent = _short_term.recent(str(person_id), limit=4)
+    if recent:
+        lines = "\n".join(f"- they said: {u!r} — you replied: {a!r}" for u, a in recent)
+        parts.append(f"Earlier exchanges with this speaker (may be from other rooms):\n{lines}")
+    return "\n".join(parts)
 
 
 # ---------------------------------------------------------------------------
@@ -181,7 +235,8 @@ def _backup_items() -> list[tuple[Path, str]]:
     from kenzy.config import kenzy_data_root
 
     items: list[tuple[Path, str]] = [
-        (kenzy_data_root() / "data" / "home_assistant", "data/home_assistant")
+        (kenzy_data_root() / "data" / "home_assistant", "data/home_assistant"),
+        (kenzy_data_root() / "data" / "memory", "data/memory"),  # the F2 fact ledger
     ]
     if _skills_dir is not None:
         items.append((_skills_dir, "skills"))
@@ -294,6 +349,79 @@ async def set_skills(body: SkillToggle) -> dict[str, Any]:
     return skill_registry.registry_info()
 
 
+# ---------------------------------------------------------------------------
+# Memory (F2) — the token-gated wire contract over the fact ledger. The
+# dashboard proxies these; the voice path uses the skills directly. Tiers gate
+# *voices* — these endpoints are a credentialed admin/service surface (behind
+# install_service_auth), so list/forget take an explicit asker or none at all.
+# ---------------------------------------------------------------------------
+
+
+class RememberBody(BaseModel):
+    owner: str  # person id (F1) — never a display name
+    text: str
+    tier: str = "private"
+    source: str = "api"
+
+
+class ForgetBody(BaseModel):
+    asker: str
+    id: str
+
+
+def _fact_dict(f: Any) -> dict[str, Any]:
+    from dataclasses import asdict
+
+    return asdict(f)
+
+
+def _memory_or_503() -> Any:
+    store = memory.store()
+    if store is None:
+        raise HTTPException(status_code=503, detail="memory is disabled")
+    return store
+
+
+@app.get("/memory")
+async def memory_list() -> dict[str, Any]:
+    """The whole ledger (dashboard manager view / F7.2)."""
+    store = _memory_or_503()
+    return {"facts": [_fact_dict(f) for f in store.all_facts()], "count": len(store)}
+
+
+@app.post("/memory/remember")
+async def memory_remember(body: RememberBody) -> dict[str, Any]:
+    store = _memory_or_503()
+    try:
+        fact = store.remember(body.owner, body.text, tier=body.tier, source=body.source)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"fact": _fact_dict(fact)}
+
+
+@app.get("/memory/recall")
+async def memory_recall(asker: str, q: str = "", limit: int = 5) -> dict[str, Any]:
+    """Tier-scoped recall as ``asker`` would see it."""
+    store = _memory_or_503()
+    return {"facts": [_fact_dict(f) for f in store.recall(asker, q, limit=limit)]}
+
+
+@app.post("/memory/forget")
+async def memory_forget(body: ForgetBody) -> dict[str, Any]:
+    store = _memory_or_503()
+    if not store.forget(body.asker, body.id):
+        raise HTTPException(status_code=404, detail="no such fact (or not yours to forget)")
+    return {"status": "ok"}
+
+
+@app.get("/memory/export")
+async def memory_export(person: str) -> dict[str, Any]:
+    """Everything OWNED by a person — the "what does Kenzy know about me"
+    surface (F7.4 groundwork)."""
+    store = _memory_or_503()
+    return {"facts": [_fact_dict(f) for f in store.export(person)]}
+
+
 class CurationUpdate(BaseModel):
     # The full curation document (exclude / devices / rooms) to write.
     curation: dict[str, Any]
@@ -356,6 +484,7 @@ async def process(req: ProcessRequest) -> ProcessResponse:
     # Request-scoped accumulator for any server-side actions a skill queues, and
     # the server-injected context (rooms, active schedules) skills may read.
     skill_registry.begin_actions()
+    memory.begin_touch()  # tracks whether private-tier memory shapes this answer
     skill_registry.begin_request(
         {
             "rooms": req.rooms,
@@ -368,11 +497,16 @@ async def process(req: ProcessRequest) -> ProcessResponse:
         }
     )
 
+    def _history_tag() -> str | None:
+        # Turns built from private/personal memory replay only for their owner.
+        return req.person_id if (req.person_id and memory.private_touched()) else None
+
     # Deterministic fast path: try local/instant matchers before the LLM.
     fast = await skill_registry.dispatch_fast(req.text, req.room_id, raw_speaker)
     if fast is not None:
         vp = fast.voice_prompt or _voice_prompt
-        _history.add(req.room_id or "", raw_speaker, req.text, fast.text)
+        _history.add(req.room_id or "", raw_speaker, req.text, fast.text, private_to=_history_tag())
+        _short_term.add(req.person_id or "", req.text, fast.text)
         return ProcessResponse(
             text=fast.text,
             voice_prompt=vp,
@@ -384,6 +518,7 @@ async def process(req: ProcessRequest) -> ProcessResponse:
     text, voice_prompt, expect_response = await _run_llm(
         req.text, raw_speaker, req.room_id, available_rooms=req.rooms, schedules=req.schedules
     )
+    _short_term.add(req.person_id or "", req.text, text)
     return ProcessResponse(
         text=text,
         voice_prompt=voice_prompt,
@@ -506,13 +641,17 @@ async def _run_llm(
     user_content = " ".join(parts)
 
     # Inject conversation history between system message and current turn.
-    history_messages = _history.get_messages(room_id or "")
+    viewer = skill_registry.get_request("person_id")
+    history_messages = _history.get_messages(room_id or "", str(viewer) if viewer else None)
 
     system_content = f"{_system_prompt}\n\n{_build_context()}"
     if available_rooms:
         system_content += "\nConnected rooms: " + ", ".join(available_rooms)
     if schedules:
         system_content += "\n" + _schedule_context(schedules)
+    mem = _memory_context(text)
+    if mem:
+        system_content += "\n" + mem
     system_content += f"\n{_JSON_INSTRUCTION}"
 
     messages: list[dict[str, Any]] = [
@@ -567,7 +706,7 @@ async def _run_llm(
 
         if not message.tool_calls:
             spoken, vp, expect = _parse_response(message.content or "")
-            _history.add(room_id or "", speaker, text, spoken)
+            _history.add(room_id or "", speaker, text, spoken, private_to=_llm_history_tag())
             return spoken, vp, expect
 
         # Execute each tool call and append results.
@@ -599,7 +738,7 @@ async def _run_llm(
     spoken, vp, expect = _parse_response(
         message.content or "I wasn't able to complete that request."
     )
-    _history.add(room_id or "", speaker, text, spoken)
+    _history.add(room_id or "", speaker, text, spoken, private_to=_llm_history_tag())
     return spoken, vp, expect
 
 
@@ -664,6 +803,15 @@ def main() -> None:
         log.info("Location: %s (tz=%s)", _location, _timezone or "system local")
 
     log.info("LLM: model=%s base_url=%s", _model, _base_url or "(provider default)")
+
+    # Memory (F2): the fact ledger, on unless the operator turns it off. The
+    # file lives in the config home's data/ tree (rides the llm backup slice).
+    mem_cfg = cfg.get("memory", {}) if isinstance(cfg.get("memory"), dict) else {}
+    if mem_cfg.get("enabled", True):
+        from kenzy.config import kenzy_data_root as _kdr
+
+        rel = str(mem_cfg.get("file", "data/memory/facts.jsonl"))
+        memory.init_store(_kdr() / rel)
 
     # Built-in skills ship inside the package; the configured directory is a
     # user overlay (default: skills/ under the config home — repo root in a dev

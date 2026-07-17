@@ -136,3 +136,10 @@ skills:
     # Comfort clamp (°F) for relative "make it warmer/cooler" adjustments.
     thermo_min: 65
     thermo_max: 85
+
+# Memory (v4 F2) — the fact ledger behind "remember/recall/forget". A plain
+# JSONL file in the config home's data/ tree (rides backups; human-readable).
+# Only voices Kenzy recognizes (the People tab) can use memory at all.
+memory:
+  enabled: true
+  # file: data/memory/facts.jsonl   # config-home-relative (the default)
