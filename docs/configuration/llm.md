@@ -115,7 +115,7 @@ Everything below is the full reference — useful when you're tuning; skippable 
 | `port` | `8766` | HTTP port |
 | `log_level` | `"info"` | What the service prints to its console |
 | `log_capture_level` | `"debug"` | How deep the dashboard log viewer can see, independent of `log_level` |
-| `model` | `"gpt-4o"` | LiteLLM model string (see [Model strings](#model-strings)) |
+| `model` | `"gpt-5.1"` *(shipped config)* | LiteLLM model string (see [Model strings](#model-strings)) |
 | `base_url` | — | Provider base URL. Required for Ollama, LM Studio, and similar local providers. |
 | `fallback.model` | — | Optional **local fallback**: when the primary model call fails (cloud outage, provider error), the request is silently retried once against this model — e.g. `"ollama/qwen2.5:14b"`. If the fallback also fails, the user just hears the error cue. Unset = no fallback. |
 | `fallback.base_url` | — | The fallback model's endpoint, e.g. `"http://127.0.0.1:11434"` |

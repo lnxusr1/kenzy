@@ -2273,6 +2273,7 @@ class TranscribingServer(AudioServer):
 
         if not self._check_service_token(request):
             return self._http_json(401, {"error": "invalid service token"})
+        self.mark_assist_seen()  # reveals the dashboard's HA surfaces for app-only households
         qs = parse_qs(urlsplit(request.path).query)
         text = (qs.get("text") or [""])[0].strip()
         if not text:
@@ -2283,7 +2284,9 @@ class TranscribingServer(AudioServer):
         identity = resolve_assist_identity(
             self._people, ha_user, unknown_name=self._unknown_speaker
         )
-        lane = f"assist:{identity.person_id or 'guest'}"
+        # Unmapped users get their OWN guest lane (keyed by HA user) so two
+        # guests chatting concurrently never see each other's context.
+        lane = f"assist:{identity.person_id or 'guest:' + (ha_user or 'anon')}"
         try:
             reply, _vp, actions, fast, _expect = await self._call_llm(
                 text, lane, None, speaker=identity.display, identity=identity, channel="assist"

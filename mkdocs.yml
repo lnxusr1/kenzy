@@ -71,7 +71,7 @@ nav:
   - Setup Guides:
     - Overview: getting-started.md
     - "Part 1 — First Conversation": guides/part1-first-conversation.md
-    - "Part 2 — Rooms & People": guides/part2-rooms-and-people.md
+    - "Part 2 — People & Rooms": guides/part2-rooms-and-people.md
     - "Part 3 — Home Assistant Basics": guides/part3-home-assistant.md
     - "Part 4 — Home Assistant, the Works": guides/part4-ha-complete.md
   - Using Kenzy:

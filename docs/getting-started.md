@@ -7,7 +7,7 @@ whenever you're ready.
 1. **[Part 1 — First Conversation](guides/part1-first-conversation.md)** —
    one computer, one command, and a spoken answer to "hey Kenzie, what time
    is it?" *(under an hour)*
-2. **[Part 2 — Rooms & People](guides/part2-rooms-and-people.md)** — a device
+2. **[Part 2 — People & Rooms](guides/part2-rooms-and-people.md)** — a device
    in each room, and Kenzy knowing who's talking (which unlocks per-person
    memory).
 3. **[Part 3 — Home Assistant Basics](guides/part3-home-assistant.md)** —
@@ -79,7 +79,7 @@ curl -fsSL https://kenzy.ai/install.sh | bash -s -- --profile node --token <toke
 | `--version` | `KENZY_VERSION` | *(latest ≥3)* | Pin a specific PyPI version |
 | `--package` | `KENZY_PACKAGE` | *(PyPI)* | Install a local wheel/sdist/source dir instead of PyPI |
 | `--constraints` | `KENZY_CONSTRAINTS` | *(none)* | A pip constraints file of dependency pins to honor on install **and every future auto-upgrade** (seeds the config home's `constraints.txt`) |
-| `--tls` / `--no-tls` | `KENZY_TLS` | *(ask)* | Server/all installs ask whether to [enable TLS](configuration/server.md#tls-optional) — node audio (wss), the dashboard (https), and the backend services all encrypt — with a **generated self-signed cert**; these flags answer without the prompt. Default (and `--yes`) is plaintext. |
+| `--tls` / `--no-tls` | `KENZY_TLS` | *(ask)* | Server/all installs ask whether to [enable TLS](configuration/server.md#tls-optional) — node audio (wss), the dashboard (https), and the backend services all encrypt — with a **generated self-signed cert**; these flags answer without the prompt. **TLS is on by default** (including under `--yes`); use `--no-tls` for plaintext. |
 | `--tls-cert` / `--tls-key` | `KENZY_TLS_CERT` / `KENZY_TLS_KEY` | *(generated)* | Use your own certificate pair instead of generating one (both required; implies `--tls`) |
 | `--no-service` | — | — | Install + config only; skip the systemd units |
 | `--yes` | `KENZY_YES` | `0` | Assume defaults / no prompts (CI) |
@@ -132,9 +132,11 @@ kenzy-llm
 kenzy-speaker
 ```
 
-Each service finds its config in your config home automatically; pass an explicit
-path (e.g. `kenzy-server configs/server.yaml`) only to override. For systemd units
-and fleet management, see [Deployment](deployment.md).
+The server reads its config from your config home; the backend services
+(stt/tts/llm/speaker) **pull theirs from the server** at boot — start the
+server first. Pass an explicit path (e.g. `kenzy-stt configs/stt.yaml`) only
+to force a local file (dev/offline). For systemd units and fleet management,
+see [Deployment](deployment.md).
 
 ### Room node
 

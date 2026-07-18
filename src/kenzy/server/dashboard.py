@@ -1081,8 +1081,12 @@ class Dashboard:
 
         now = _t.monotonic()
         cached: tuple[float, dict[str, Any]] | None = getattr(self, "_ha_flags_cache", None)
+        # NB: the fetch is identical with or without persons (the endpoint
+        # always returns them when reachable) — with_persons must NOT force a
+        # refetch on empty results, or an unreachable HA turns every People
+        # page load into a fresh 10s-timeout roundtrip.
         stale = cached is None or now - cached[0] > 30.0
-        if cached is None or stale or (with_persons and not cached[1].get("persons")):
+        if cached is None or stale:
             base = self._service_base("llm")
             info: dict[str, Any] = {}
             if base:
@@ -1464,33 +1468,71 @@ class Dashboard:
 
     async def _revoke_person(self, person_id: str) -> tuple[bool, str | None]:
         """F7.4 revoke-all (guest departure): erase every owned non-shared fact,
-        delete the enrolled voiceprints, and remove the person record. Memory
-        first — if the ledger can't be reached we abort rather than half-forget."""
+        delete the enrolled voiceprints, then remove the person record.
+
+        Ordered for retryability: memory first (unreachable ⇒ abort, nothing
+        half-forgotten — but a deliberate 503 from ``memory.enabled: false``
+        counts as "no ledger to erase" and proceeds), and the person record is
+        kept when any voiceprint delete fails, so the operation can simply be
+        re-run (an unowned voiceprint would otherwise stay RECOGNIZED with no
+        person left to revoke)."""
         person = next(
             (p for p in self._server.list_people() if p["id"] == person_id), None
         )
         if person is None:
             return False, "no such person"
-        mem = await self._llm_memory_request("POST", "/erase_person", {"person": person_id})
-        if mem is None:
+        status, mem = await self._llm_memory_status(
+            "POST", "/erase_person", {"person": person_id}
+        )
+        if status == 503:
+            mem = {"erased": 0}  # memory disabled — nothing to erase, proceed
+        elif status != 200 or not isinstance(mem, dict):
             return False, "memory service unreachable — nothing was removed"
         failures: list[str] = []
         for vp in person["voiceprints"]:
             ok, err = await self._delete_speaker(str(vp))
-            if ok:
-                self._server.remove_person_voiceprint(str(vp))
-            else:
+            if not ok:
                 failures.append(f"voice {vp!r}: {err or 'delete failed'}")
+        if failures:
+            # Keep the record so revoke can be re-run once the speaker service
+            # is back — their remaining voiceprints must not outlive the person.
+            return False, (
+                "their memories were erased, but voice deletion failed — fix and "
+                "run Remove again: " + "; ".join(failures)
+            )
         self._server.delete_person(person_id)
         log.info(
             "Revoked person %r: %s fact(s) erased, %d voiceprint(s) deleted",
             person_id,
             mem.get("erased", "?"),
-            len(person["voiceprints"]) - len(failures),
+            len(person["voiceprints"]),
         )
-        if failures:
-            return False, "record and memory removed, but: " + "; ".join(failures)
         return True, None
+
+    async def _llm_memory_status(
+        self, method: str, sub_path: str, payload: dict[str, Any] | None = None
+    ) -> tuple[int, dict[str, Any] | None]:
+        """Like _llm_memory_request, but surfaces the HTTP status so callers can
+        tell a deliberate 503 (memory disabled) from an outage. 0 = no service."""
+        base = self._service_base("llm")
+        if not base:
+            return 0, None
+        import httpx
+
+        url = f"{base}/memory{sub_path}"
+        try:
+            async with httpx.AsyncClient(timeout=8.0, verify=tlsutil.httpx_verify()) as client:
+                if method == "POST":
+                    r = await client.post(
+                        url, json=payload or {}, headers=self._server._service_headers("POST", url)
+                    )
+                else:
+                    r = await client.get(url, headers=self._server._service_headers("GET", url))
+            ctype = r.headers.get("content-type", "")
+            data = r.json() if ctype.startswith("application/json") else None
+            return r.status_code, data if isinstance(data, dict) else None
+        except Exception:
+            return 0, None
 
     async def _people_state(self) -> dict[str, Any]:
         """People records merged with the speaker service's enrolled voiceprints,
@@ -1897,6 +1939,23 @@ class Dashboard:
                 )
             except (ValueError, OSError) as exc:
                 return await ack(False, str(exc))
+            await ack(True)
+        elif mtype == "erase_person_memory":
+            # The opt-out's companion action: erase a person's existing owned
+            # facts (shared stays with the house) without touching voice/record.
+            if not self._dcfg.controls:
+                return await ack(False, "controls are disabled (set dashboard.controls: true)")
+            pid = str(msg.get("person_id", "")).strip()
+            if not pid:
+                return await ack(False, "a person id is required")
+            status, mem = await self._llm_memory_status(
+                "POST", "/erase_person", {"person": pid}
+            )
+            if status == 503:
+                return await ack(True)  # memory disabled — nothing to erase
+            if status != 200:
+                return await ack(False, "memory service unreachable — nothing was erased")
+            log.info("Erased %s fact(s) for %r (opt-out cleanup)", (mem or {}).get("erased"), pid)
             await ack(True)
         elif mtype == "revoke_person":
             if not self._dcfg.controls:

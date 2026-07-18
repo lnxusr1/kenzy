@@ -11,7 +11,7 @@ setups there's nothing to change here.
 ```yaml
 provider: "whisper"    # local, the default — or "openai" (cloud)
 whisper:
-  model: "base"        # bigger = more accurate, slower: tiny/base/small/medium
+  model: "tiny"        # bigger = more accurate, slower: tiny/base/small/medium
 ```
 
 The cloud option exists for two honest reasons: your server hardware is too

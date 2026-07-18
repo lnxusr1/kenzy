@@ -374,6 +374,22 @@ function PersonDetail({ person, data, facts, memReachable, onBack, reload }) {
     setBusy("");
     if (res.ok) {
       setHaUser(ha);
+      // Turning the opt-out ON offers to also erase what's already stored —
+      // "don't remember me" usually means the existing facts too. Shared
+      // facts stay with the house (same rule as Remove completely).
+      if (memOptOut && !person.memory_opt_out && owned.length) {
+        const n = owned.length;
+        if (
+          window.confirm(
+            `Also erase the ${n} fact${n === 1 ? "" : "s"} Kenzy already holds for ${name.trim()}? ` +
+              `Facts they shared with the house stay. This can't be undone.`,
+          )
+        ) {
+          const r = await send("erase_person_memory", { person_id: person.id });
+          if (r.ok) notify(`Erased ${name.trim()}'s stored facts.`);
+          else notify(r.error || "Could not erase their facts.", "err");
+        }
+      }
       await reload();
       notify(`Saved ${name.trim()}.`);
     } else notify(res.error || "Could not save.", "err");

@@ -94,10 +94,12 @@ person's **Privacy & data** section covers the bigger hammers:
 - **Export their data** — one downloadable file: their person record, voice
   profile info, and every remembered fact. The "what does Kenzy know about
   me" answer, in writing.
-- **Don't remember them** — a per-person opt-out. Kenzy keeps and reads *no*
+- **Don't remember…** — the per-person opt-out toggle. Kenzy keeps and reads *no*
   facts about them while they stay a fully recognized voice for device
   control and questions. Asking her to remember something gets an honest
-  "memory is turned off for you at your request."
+  "memory is turned off for you at your request." Turning it on also offers
+  to erase what's already stored for them (facts they shared with the house
+  stay).
 - **Remove completely** — the guest-departure case: erases their facts,
   deletes their voice, removes their record, in one confirmed action.
   Household-shared facts they contributed stay with the house (the gate code

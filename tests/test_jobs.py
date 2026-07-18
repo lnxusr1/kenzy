@@ -193,3 +193,23 @@ async def test_failed_run_reschedules_at_retry_after():
     by = {s["name"]: s for s in r.status()}
     assert 890 <= by["bad"]["next_due_in"] <= 900  # retry soon, not tomorrow
     assert by["good"]["next_due_in"] > 86000  # success waits out the backstop
+
+
+async def test_kick_during_run_is_honored():
+    # A kick that lands WHILE the job runs (e.g. the run's own writes) must
+    # not be clobbered by the end-of-run backstop reschedule.
+    import time as _time
+
+    from kenzy.jobs import Job, JobRunner
+
+    runner = JobRunner()
+
+    async def fn():
+        runner.kick("j")  # a write during the run kicks the same job
+        return "ok"
+
+    runner.register(Job(name="j", interval=86400, fn=fn, cooldown=1))
+    await runner.run_once("j")
+    state = runner._jobs["j"]
+    # Next run is due ~cooldown from now, not a day away.
+    assert state.next_due - _time.monotonic() < 5

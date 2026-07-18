@@ -111,6 +111,7 @@ class JobRunner:
         state = self._jobs[name]
         started = time.time()
         t0 = time.monotonic()
+        due_before = state.next_due  # detect a kick() that lands DURING the run
         try:
             summary = await state.job.fn()
             record = _RunRecord(
@@ -137,7 +138,18 @@ class JobRunner:
         # Success ⇒ backstop cadence; failure ⇒ the (sooner) retry, so transient
         # outages self-heal without waiting out a long backstop interval.
         delay = state.job.interval if record.ok else (state.job.retry_after or state.job.interval)
-        state.next_due = state.last_end + delay
+        backstop = state.last_end + delay
+        # A kick() that arrived WHILE the job ran moved next_due (e.g. a write
+        # performed BY the run — semantic consolidation's own merges). Honor
+        # it: the sooner of the kicked target and the backstop wins, so the
+        # promised follow-up run happens instead of waiting out the interval.
+        kicked_during_run = state.next_due != due_before
+        if kicked_during_run and record.ok:
+            state.next_due = min(
+                backstop, max(state.next_due, state.last_end + state.job.cooldown)
+            )
+        else:
+            state.next_due = backstop
         return record
 
     def kick(self, name: str) -> None:

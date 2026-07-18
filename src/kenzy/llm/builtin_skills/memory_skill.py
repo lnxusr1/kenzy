@@ -78,6 +78,11 @@ async def remember(fact: str, shared: bool = False) -> str:
         return _NO_STORE
     owner = _asker()
     if owner is None:
+        # The spoken utterance carries the would-be secret even though we
+        # refuse to store it — tag the history turn so the echo never replays
+        # to anyone else in the room (same protection a successful private
+        # write gets).
+        memory.mark_private_touch()
         return _refusal_msg()
     tier = memory.TIER_SHARED if shared else memory.TIER_PRIVATE
     f = store.remember(owner, fact, tier=tier)
@@ -209,6 +214,7 @@ async def fast_memory(utterance: str, room_id: str | None, speaker: str | None) 
         if fact.lower().startswith("to "):
             return FastResult.miss()  # "remember to …" — probably a reminder; LLM decides
         if owner is None:
+            memory.mark_private_touch()  # the utterance carries the secret — no echo
             return FastResult.handled(_refusal_msg(), _VOICE_PROMPT)
         shared = bool(m.group("share"))
         stored = store.remember(

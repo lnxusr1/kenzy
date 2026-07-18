@@ -359,11 +359,16 @@ async def test_assist_endpoint(tmp_path, monkeypatch):
             _http_get, "http://127.0.0.1:8792/assist?text=hi&ha_user=person.guest"
         )
         assert status == 200 and body["recognized"] is False
-        assert seen[-1][1] == "assist:guest" and seen[-1][2].tier == "unknown"
+        # Guests get a PER-HA-USER lane so two guests never share context.
+        assert seen[-1][1] == "assist:guest:person.guest" and seen[-1][2].tier == "unknown"
 
         # Missing text → 400.
         status, _ = await asyncio.to_thread(_http_get, "http://127.0.0.1:8792/assist")
         assert status == 400
+
+        # The endpoint itself flips the assist-seen marker (HA-surface reveal
+        # for app-only households) — regression: it was once wired to /announce.
+        assert server.assist_seen() is True
     finally:
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)

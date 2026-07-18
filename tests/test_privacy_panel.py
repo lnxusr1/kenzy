@@ -184,30 +184,54 @@ async def test_revoke_person_composes_and_aborts_without_memory(tmp_path, monkey
 
     # Memory unreachable ⇒ abort, nothing deleted.
     async def mem_down(method, sub_path, payload=None):
-        return None
+        return 0, None
 
-    monkeypatch.setattr(dash, "_llm_memory_request", mem_down)
+    monkeypatch.setattr(dash, "_llm_memory_status", mem_down)
     ok, err = await dash._revoke_person(pid)
     assert not ok and "nothing was removed" in err
     assert server._people.get(pid) is not None
 
-    # Full path: memory ok, speaker deletes ok ⇒ person gone.
-    erased: list[dict] = []
-
+    # A voiceprint delete failure keeps the record (retryable — the voice
+    # must not outlive the person).
     async def mem_ok(method, sub_path, payload=None):
         erased.append(payload)
-        return {"erased": 2}
+        return 200, {"erased": 2}
 
+    erased: list[dict] = []
+
+    async def del_fail(name):
+        return False, "speaker down"
+
+    monkeypatch.setattr(dash, "_llm_memory_status", mem_ok)
+    monkeypatch.setattr(dash, "_delete_speaker", del_fail)
+    ok, err = await dash._revoke_person(pid)
+    assert not ok and "run Remove again" in err
+    assert server._people.get(pid) is not None
+
+    # Full path: memory ok, speaker deletes ok ⇒ person gone.
     deleted: list[str] = []
 
     async def del_speaker(name):
         deleted.append(name)
         return True, None
 
-    monkeypatch.setattr(dash, "_llm_memory_request", mem_ok)
     monkeypatch.setattr(dash, "_delete_speaker", del_speaker)
     ok, err = await dash._revoke_person(pid)
     assert ok and err is None
-    assert erased == [{"person": pid}]
     assert deleted == ["guestvoice"]
+    assert server._people.get(pid) is None
+
+
+async def test_revoke_person_proceeds_when_memory_disabled(tmp_path, monkeypatch):
+    # memory.enabled: false answers 503 — that's "no ledger to erase", not an
+    # outage; voice + record removal must still work.
+    dash, server = _dash(tmp_path, monkeypatch)
+    pid = server.save_person("", "Guest", [])
+
+    async def mem_disabled(method, sub_path, payload=None):
+        return 503, None
+
+    monkeypatch.setattr(dash, "_llm_memory_status", mem_disabled)
+    ok, err = await dash._revoke_person(pid)
+    assert ok and err is None
     assert server._people.get(pid) is None

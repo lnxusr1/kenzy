@@ -260,7 +260,8 @@ them).
 - **Privacy & data** — the section that answers "what does Kenzy know about
   me" and "make her forget me". **Export their data** downloads one file:
   person record, voice-profile info, and every remembered fact. **Don't
-  remember them** is a per-person opt-out — no memory writes or reads while
+  remember…** is a per-person opt-out (turning it on offers to erase what's
+  already stored for them) — no memory writes or reads while
   they stay a recognized voice for everything else. **Remove completely** is
   the guest-departure case: one typed-confirm action erases their facts,
   deletes their voice, and removes the record (household-shared facts they

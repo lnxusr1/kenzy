@@ -380,6 +380,12 @@ class MemoryStore:
         for f in self._facts.values():
             if f.id in remove:
                 continue
+            if f.superseded_by:
+                # Tombstones never compete in dedupe: they're already out of
+                # recall, and deleting one as a "duplicate" of its own merged
+                # survivor would silently void the retention window (or worse,
+                # keep the tombstone and delete the live fact).
+                continue
             key = (f.owner, f.tier, _squash(f.text))
             best = newest.get(key)
             if best is None:

@@ -32,6 +32,11 @@ _RATE = 16000
 #: Default port — the Wyoming/whisper convention, so HA operators guess right.
 DEFAULT_PORT = 10300
 
+#: Per-connection audio cap (~5 min @ 16 kHz mono int16). Wyoming is plain
+#: unauthenticated TCP; a client streaming forever without audio-stop must
+#: not exhaust memory.
+_MAX_AUDIO_BYTES = 10 * 1024 * 1024
+
 
 def install_wyoming_stt(
     app: Any,
@@ -163,6 +168,13 @@ def _handler_factory(
                 self._rate, self._width, self._channels = meta.rate, meta.width, meta.channels
                 return True
             if AudioChunk.is_type(event.type):
+                if len(self._audio) > _MAX_AUDIO_BYTES:
+                    log.warning("[wyoming] audio buffer cap hit — dropping the request")
+                    await self.write_event(
+                        Error(text="audio too long", code="audio-too-long").event()
+                    )
+                    self._audio.clear()
+                    return False  # disconnect the runaway client
                 self._audio.extend(AudioChunk.from_event(event).audio)
                 return True
             if not AudioStop.is_type(event.type):

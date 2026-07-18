@@ -197,14 +197,22 @@ def apply_decisions(
                 or not target.live(time.time())
                 or target.owner != fact.owner
                 or target.tier != fact.tier
+                or target.created > fact.created
             ):
+                # The direction guard (created check) stops a confused model
+                # from superseding a NEWER fact with an older one — which
+                # could leave a tombstone outliving the only live copy.
                 ok = False
                 break
             sup_facts.append(target)
 
         if action == "merge":
             text = " ".join(str(d.get("text", "")).split())
-            if not ok or not text or len(text) > _MAX_MERGED_LEN:
+            live_now = store.get_fact(fact.id)
+            if not ok or not text or len(text) > _MAX_MERGED_LEN or live_now is None:
+                # live_now: the user may have hard-deleted the pending fact
+                # ("actually, forget that") while the model call was in flight
+                # — a merge must not resurrect deleted content.
                 summary["rejected"] += 1
                 summary["kept"] += 1
                 continue
