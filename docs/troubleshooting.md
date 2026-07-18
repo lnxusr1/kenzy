@@ -175,6 +175,23 @@ kenzy-node` on the device.
   fix is usually **naming**: give the device a spoken alias in the dashboard's
   **Home Assistant** tab. Full guide: [Home Assistant](skills/home-assistant.md).
 
+## A new feature won't turn on after an upgrade
+
+Symptom: you upgraded Kenzy, enabled a newer feature (say, the
+[Wyoming listeners](phone.md#kenzys-voice-and-ears-optional-recommended)),
+the config is right — and nothing happens. The service log says a package
+is "not installed" (dashboard → **Logs** → pick the service).
+
+Cause: a plain package upgrade brings new *code* but doesn't always bring the
+new *dependencies* a feature needs — the feature then logs the missing
+package and politely skips itself rather than crashing the service.
+
+Fix: use the service's **Upgrade** button (dashboard → **Services** → the
+service → Upgrade), not just Restart. Upgrade re-resolves the service's full
+dependency set — installing anything new — and restarts it. If the service
+is already on the latest version it's still safe: missing dependencies get
+installed, everything else is left alone.
+
 ## Starting over
 
 **First: grab a backup** if there's anything worth keeping (enrolled voices,

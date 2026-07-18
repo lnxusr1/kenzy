@@ -8,12 +8,16 @@ Kenzy and Home Assistant connect in **three** independent ways — use any
 combination:
 
 - **The [HA *skill*](../skills/home-assistant.md)** (Kenzy → HA): "turn on
-  the kitchen lights" — Kenzy controls your devices by voice.
+  the kitchen lights" — Kenzy controls your devices by voice. *Installs:
+  nothing on the HA side — just an HA access token in Kenzy.*
 - **The [MQTT bridge](#the-mqtt-bridge)** (HA → Kenzy, this page): Kenzy's
   room nodes appear in HA as devices your automations can see and command.
+  *Installs: HA's core MQTT integration + a broker — no HACS, no custom code.*
 - **The [Kenzy integration](#the-kenzy-integration-kenzy-hass)** (HA → Kenzy,
   this page): Kenzy as your Assist conversation agent — ask her from your
-  phone, in her own voice.
+  phone, in her own voice. *Installs: HACS custom repository (the one piece
+  that does need HACS); her voice/ears ride HA's built-in Wyoming Protocol
+  integration — see [On Your Phone](../phone.md#what-installs-where).*
 
 ## The MQTT bridge
 

@@ -11,7 +11,21 @@ This is the flip side of the [Home Assistant skill](skills/home-assistant.md)
 behind it. You need a running Home Assistant with the companion app already
 set up.
 
-## Install the integration
+## What installs where
+
+Three pieces make up the full phone experience, and they install through
+**different channels** — this trips people up, so here's the map:
+
+| Piece | What it gives you | How it installs |
+|---|---|---|
+| **Kenzy conversation agent** (`kenzy-hass`) | Ask Kenzy from Assist — text or voice, as *you* | **HACS custom repository** (it's a custom integration; HA's Apps/add-on store will reject it) |
+| **Kenzy's voice & ears** (Wyoming) | Assist *speaks* with Kenzy's voice and *hears* with her STT | **Built into HA — no HACS.** Just *Add Integration → "Wyoming Protocol"*, which ships with Home Assistant |
+| **[MQTT bridge](integrations/home-assistant.md#the-mqtt-bridge)** (optional, separate feature) | Kenzy's rooms appear *in* HA as devices for automations | HA's core MQTT integration + a broker — no HACS, no custom code |
+
+Only the first one involves HACS. If you're being asked to add a custom
+repository for Wyoming, you're in the wrong dialog — it's a core integration.
+
+## Install the integration (HACS)
 
 The `kenzy-hass` integration makes Kenzy an HA **conversation agent**.
 
@@ -76,6 +90,10 @@ By default the HA pipeline uses its own speech-to-text and text-to-speech
 around Kenzy's brain. Two [Wyoming protocol](https://github.com/rhasspy/wyoming)
 listeners make the whole voice loop hers:
 
+**No HACS for this part** — the "Wyoming Protocol" integration is built into
+Home Assistant. The work is on the Kenzy side (turning the listeners on),
+then two Add-Integration dialogs in HA.
+
 1. **On the Kenzy side**, enable them (dashboard → **Services** → tts / stt,
    or the service configs), then restart the services:
 
@@ -92,9 +110,37 @@ listeners make the whole voice loop hers:
    listeners deliberately follow the service bind, so they're loopback-only
    until you make that call for your network.
 
-2. **In HA**: **Add Integration → Wyoming Protocol**, once per port. Both
-   show up as **kenzy**. Then in your voice assistant's pipeline, pick kenzy
-   for **Speech-to-text** and **Text-to-speech**.
+2. **Verify the listeners are up** before touching HA — on the service host:
+
+   ```bash
+   ss -tln | grep -E '10200|10300'
+   ```
+
+   You want both ports on `0.0.0.0` (or your LAN address). `127.0.0.1` means
+   the bind didn't take; nothing listed means the listener didn't start —
+   the service log says why (dashboard → **Logs**).
+
+3. **In HA**: **Settings → Devices & Services → Add Integration** → search
+   **"Wyoming Protocol"** (core — no HACS). Add it **twice**, once per
+   listener:
+
+   - host = the machine running kenzy-tts, port **10200**
+   - host = the machine running kenzy-stt, port **10300**
+
+   Each creates an entry named **kenzy** (they look identical in the list —
+   rename them "Kenzy voice" / "Kenzy ears" if you want labels).
+
+4. **Pick them in the pipeline**: **Settings → Voice assistants** → your
+   assistant → set **Speech-to-text** and **Text-to-speech** to **kenzy**
+   (they only appear in these dropdowns *after* step 3 — the Wyoming
+   entries are what put them there).
+
+!!! tip "HA says \"failed to connect\"?"
+    Check the service's log (dashboard → Logs) — if it says the `wyoming`
+    package is not installed, your install was upgraded before the feature
+    existed: use the service's **Upgrade** button (not just Restart) to pull
+    the new dependency in. Details:
+    [a new feature won't turn on after an upgrade](troubleshooting.md#a-new-feature-wont-turn-on-after-an-upgrade).
 
 Now a spoken question in the companion app is transcribed by your configured
 STT (one whisper/cloud setup for the whole house, fallback chain included),

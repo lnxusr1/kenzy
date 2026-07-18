@@ -215,10 +215,14 @@ def test_short_term_context_rolls_and_expires(monkeypatch):
     assert len(st._by_person["adam"]) == memory.ShortTermContext.MAX_EXCHANGES
 
 
-def test_memory_context_injection(tmp_path):
+def test_memory_context_injection(tmp_path, monkeypatch):
     from kenzy.llm import llm as llm_app
     from kenzy.llm import skills as reg
 
+    # Injection mechanics, not locality: pin a local model so the 4.0.2
+    # private-to-cloud gate doesn't withhold the private fixture facts.
+    monkeypatch.setattr(llm_app, "_model", "ollama/test-model")
+    monkeypatch.setattr(llm_app, "_base_url", "http://127.0.0.1:11434")
     store = memory.init_store(tmp_path / "facts.jsonl")
     try:
         store.remember("adam", "The gate code is 4312")

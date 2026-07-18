@@ -166,3 +166,4 @@ history is visible on the service's token-gated `GET /jobs`).
 | `memory.superseded_keep_days` | `30` | How long a superseded fact stays on disk (recoverable) before the sweep removes it. |
 | `memory.semantic_interval` | `86400` | The daily backstop for **semantic consolidation** (merging restatements with your configured model). The real trigger is each "remember…" — this catches anything a failed run left behind. `0` disables the semantic layer entirely. |
 | `memory.semantic_cooldown` | `30` | Rate limit between model-driven consolidation runs — dictating five facts in a row costs one model call, not five. |
+| `memory.private_to_cloud` | `false` | By default, **private**-tier facts are withheld from a *cloud* model's context and consolidation (they still answer by voice, and consolidate on a local model). `true` opts out of the protection. |

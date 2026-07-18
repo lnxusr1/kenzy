@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [4.0.2]
+
+### Added
+
+- **Private memories no longer ride along to a cloud model.** The memory tiers have always controlled which *voices* hear a fact back — but a relevant private fact was still injected into the language model's context, and compared by the consolidation pass, using whatever model you configured. With a cloud brain, that meant the gate code went to the provider. Now **private-tier facts are withheld from cloud models entirely**: not in context, not in consolidation. Nothing you'd notice changes — private facts still answer instantly by voice (the fast path needs no model), and they consolidate normally once a local model is configured. Household-shared and about-them facts, visible to the whole house by design, still inject. If you'd rather have the old behavior, `memory.private_to_cloud: true` turns the protection off. (This is the first slice of the coming lockbox — full secret handling with encryption at rest arrives in a later release.)
+
+### Fixed
+
+- **The server can now be restarted from the dashboard without editing anything.** The Settings page only offered "Save & restart server," so a plain restart required a config change (or a terminal). A standalone **Restart server** button now sits beside it — confirm, restart, reconnect.
+
 ## [4.0.1]
 
 ### Added

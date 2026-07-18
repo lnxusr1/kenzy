@@ -199,6 +199,15 @@ def _memory_context(utterance: str) -> str:
     store = memory.store()
     if store is not None:
         facts = store.recall(str(person_id), utterance, limit=5)
+        if facts and not _private_to_cloud:
+            from kenzy.llm.locality import model_is_local
+
+            if not model_is_local(_model, _base_url):
+                # 4.0.2: a private fact must not leave the house just because
+                # the brain is a cloud model. Personal-public/shared tiers are
+                # household-visible by design and still inject; the fast-path
+                # recall (no model) still answers private facts by voice.
+                facts = [f for f in facts if f.tier != memory.TIER_PRIVATE]
         if facts:
             memory.mark_if_sensitive(facts)  # private facts ⇒ tag this history turn
             parts.append(
@@ -221,6 +230,9 @@ app = FastAPI(title="Kenzy LLM Service", version="0.1.0")
 
 _model: str = "gpt-4o"
 _base_url: str | None = None
+#: 4.0.2 privacy slice — operator opt-OUT of the protection (default: private
+#: facts never ride into a cloud model's context or consolidation).
+_private_to_cloud: bool = False
 _system_prompt: str = "You are Kenzy, a helpful home assistant. Be concise."
 _voice_prompt: str = "Respond in a friendly, conversational tone."
 _max_tool_iterations: int = 5
@@ -866,7 +878,9 @@ def main() -> None:
 
     # Memory (F2): the fact ledger, on unless the operator turns it off. The
     # file lives in the config home's data/ tree (rides the llm backup slice).
+    global _private_to_cloud
     mem_cfg = cfg.get("memory", {}) if isinstance(cfg.get("memory"), dict) else {}
+    _private_to_cloud = bool(mem_cfg.get("private_to_cloud", False))
     if mem_cfg.get("enabled", True):
         from kenzy.config import kenzy_data_root as _kdr
 
@@ -899,7 +913,7 @@ def main() -> None:
     if store_now is not None and sem_interval > 0:
         from kenzy.llm import memory_semantic
 
-        memory_semantic.configure(_model, _base_url)
+        memory_semantic.configure(_model, _base_url, private_to_cloud=_private_to_cloud)
 
         async def _semantic() -> dict[str, Any] | None:
             store = memory.store()

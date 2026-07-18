@@ -1812,6 +1812,14 @@ class Dashboard:
             # the WS drops and the SPA reconnects to the restored server.
             log.warning("Restore applied (%d files) — restarting server", len(restored))
             asyncio.get_running_loop().call_later(0.8, self._server.restart_server)
+        elif mtype == "restart_server":
+            # Standalone restart — previously only reachable as a side effect of
+            # saving a config change (founder-reported UX gap).
+            if not self._dcfg.controls:
+                return await ack(False, "controls are disabled (set dashboard.controls: true)")
+            await ack(True)
+            log.info("Dashboard requested a server restart")
+            asyncio.get_running_loop().call_later(0.8, self._server.restart_server)
         elif mtype == "upgrade_server":
             if not self._dcfg.controls:
                 return await ack(False, "controls are disabled (set dashboard.controls: true)")

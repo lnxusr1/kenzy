@@ -115,6 +115,8 @@ async def test_opt_out_off_behaves_normally(tmp_path, monkeypatch):
 
 
 def test_memory_context_empty_when_opted_out(tmp_path, monkeypatch):
+    monkeypatch.setattr(llm_app, "_model", "ollama/test-model")
+    monkeypatch.setattr(llm_app, "_base_url", "http://127.0.0.1:11434")
     s = _store(tmp_path)
     s.remember("john", "john hates cilantro", tier=memory.TIER_PRIVATE)
     monkeypatch.setattr(memory, "_store", s)

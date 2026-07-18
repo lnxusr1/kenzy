@@ -12,6 +12,16 @@ from kenzy.llm import memory_semantic as sem
 from kenzy.llm.memory import TIER_SHARED, MemoryStore
 
 
+@pytest.fixture(autouse=True)
+def _local_model():
+    """These tests exercise consolidation mechanics, not locality — pin a
+    local model so the 4.0.2 private-to-cloud gate stays out of the way
+    (their fixtures use the default PRIVATE tier)."""
+    sem.configure("ollama/test-model", "http://127.0.0.1:11434")
+    yield
+    sem._MODEL.clear()
+
+
 @pytest.fixture
 def store(tmp_path):
     return MemoryStore(tmp_path / "facts.jsonl")

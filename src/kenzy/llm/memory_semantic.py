@@ -51,9 +51,10 @@ _MAX_MERGED_LEN = 300
 _MODEL: dict[str, Any] = {}
 
 
-def configure(model: str, base_url: str | None = None) -> None:
+def configure(model: str, base_url: str | None = None, *, private_to_cloud: bool = False) -> None:
     _MODEL["model"] = model
     _MODEL["base_url"] = base_url
+    _MODEL["private_to_cloud"] = private_to_cloud
 
 
 # ---------------------------------------------------------------------------
@@ -252,11 +253,38 @@ async def run_pass(store: MemoryStore) -> dict[str, Any]:
     pending = pending_facts(store, mark)
     if not pending:
         return {"pending": 0}
+    # The mark target covers the FULL pending set — including any facts the
+    # privacy gate below withholds — so nothing loops back every run.
+    mark_target = max(f.created for f in pending)
+
+    # 4.0.2 privacy slice: when the configured model is CLOUD, private-tier
+    # facts never enter the consolidation prompt — they stay unconsolidated
+    # (the mechanical dedupe still covers exact repeats) until a local model
+    # exists. Neighbors are same-owner+tier, so filtering pending private
+    # facts removes every private exposure path.
+    skipped_private = 0
+    if not _MODEL.get("private_to_cloud", False):
+        from kenzy.llm.locality import model_is_local
+
+        if not model_is_local(str(_MODEL.get("model", "")), _MODEL.get("base_url")):
+            visible = [f for f in pending if f.tier != memory.TIER_PRIVATE]
+            skipped_private = len(pending) - len(visible)
+            if skipped_private:
+                log.info(
+                    "Semantic consolidation: %d private fact(s) withheld from the "
+                    "cloud model (kept unconsolidated)",
+                    skipped_private,
+                )
+            if not visible:
+                _save_mark(store, mark_target)
+                return {"pending": len(pending), "kept": len(pending),
+                        "private_withheld": skipped_private}  # fmt: skip
+            pending = visible
 
     batch = [(f, neighbors_for(store, f)) for f in pending]
     if all(not ns for _f, ns in batch):
         # Nothing to compare against — everything is trivially distinct.
-        _save_mark(store, max(f.created for f in pending))
+        _save_mark(store, mark_target)
         return {"pending": len(pending), "kept": len(pending)}
 
     # No temperature pin: reasoning-family models (gpt-5.x) reject anything but
@@ -271,5 +299,5 @@ async def run_pass(store: MemoryStore) -> dict[str, Any]:
     raw = response.choices[0].message.content or ""
 
     summary = apply_decisions(store, pending, parse_decisions(raw))
-    _save_mark(store, max(f.created for f in pending))
+    _save_mark(store, mark_target)
     return {"pending": len(pending), **summary}

@@ -145,10 +145,15 @@ memory:
   # file: data/memory/facts.jsonl   # config-home-relative (the default)
   # Mechanical upkeep (expired facts, superseded tombstones past their keep
   # window, exact duplicates) runs as a background job — see GET /jobs.
-  # maintenance_interval: 3600      # seconds between runs; 0 disables
-  # superseded_keep_days: 30        # tombstone retention before removal
+  maintenance_interval: 3600      # seconds between runs; 0 disables
+  superseded_keep_days: 30        # tombstone retention before removal
   # Semantic consolidation: your configured model merges same-thought
   # restatements seconds after each "remember…" (never deletes — superseded
   # facts stay recoverable for the keep window above). 0 disables.
-  # semantic_interval: 86400        # daily backstop sweep
-  # semantic_cooldown: 30           # min seconds between model runs
+  semantic_interval: 86400        # daily backstop sweep
+  semantic_cooldown: 30           # min seconds between model runs
+  # Privacy: private-tier facts never enter a CLOUD model's context or
+  # consolidation (they still answer by voice via the fast path, and
+  # consolidate once a local model is configured). Set true to opt out of
+  # the protection and let private facts ride to your cloud provider.
+  private_to_cloud: false

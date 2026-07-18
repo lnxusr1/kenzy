@@ -120,6 +120,16 @@ function ServerSettings() {
     );
   }
 
+  async function restartOnly() {
+    if (!window.confirm("Restart the server now? The dashboard will briefly disconnect."))
+      return;
+    const res = await send("restart_server", {});
+    notify(
+      res.ok ? "Server restarting — the dashboard will reconnect." : res.error || "Restart failed.",
+      res.ok ? "ok" : "err",
+    );
+  }
+
   const row = (f) => {
     const v = vals[f.key];
     const isSet = v !== null && v !== undefined && v !== "";
@@ -152,6 +162,7 @@ function ServerSettings() {
     <div class="cfg-actions">
       <button class="btn-primary" disabled=${busy} onClick=${save}>
         ${busy ? "Saving…" : "Save & restart server"}</button>
+      <button class="btn-ghost" disabled=${busy} onClick=${restartOnly}>Restart server</button>
     </div>`;
 }
 

@@ -74,10 +74,16 @@ their own and respect the same privacy rules.
 Saying roughly the same thing twice doesn't leave two facts lying around:
 
 - **Moments after each "remember…"**, Kenzy compares the new fact against
-  similar ones from the same person at the same tier — using the language
-  model *you* configured, so facts never leave your setup on account of
-  memory. Restatements merge; corrections supersede ("the plumber is Sam
-  now" retires "the plumber is Joe").
+  similar ones from the same person at the same tier. Restatements merge;
+  corrections supersede ("the plumber is Sam now" retires "the plumber is
+  Joe").
+- **Private facts don't ride to a cloud model.** If your language model is a
+  cloud provider, private-tier facts are withheld from the model's context
+  and from consolidation — they still answer by voice (the instant fast
+  path needs no model), and they consolidate once a local model is
+  configured. Shared and about-them facts, being household-visible by
+  design, still inject. (`memory.private_to_cloud: true` opts out of the
+  protection.)
 - Superseded facts leave recall instantly but stay on disk for 30 days
   (`memory.superseded_keep_days`) before a maintenance sweep removes them —
   so a wrong merge is recoverable.

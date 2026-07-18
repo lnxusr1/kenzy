@@ -24,8 +24,8 @@ appear via MQTT discovery — no HA-side configuration at all.
 
 ## 2. Kenzy on your phone
 
-Install the **kenzy-hass** integration (via HACS) and pick Kenzy as your
-voice assistant's conversation agent — then map each household member to
+Install the **kenzy-hass** integration — via HACS, the one piece of Part 4
+that needs it — and pick Kenzy as your voice assistant's conversation agent — then map each household member to
 their HA login on the **People** tab so phone requests arrive *as them*.
 
 The complete walkthrough is **[On Your Phone](../phone.md)** — install,
@@ -44,8 +44,9 @@ speech recognition transcribing, her voice answering:
 
 1. Kenzy dashboard → **Services** → `tts` and `stt` → set
    `wyoming.enabled: true` on each, save (the services restart themselves).
-2. HA → **Add Integration → Wyoming Protocol** — once for port `10200`
-   (voice) and once for `10300` (ears). Both appear as **kenzy**.
+2. HA → **Add Integration → Wyoming Protocol** (built into HA — no HACS
+   for this one) — once for port `10200` (voice) and once for `10300`
+   (ears). Both appear as **kenzy**.
 3. In your voice assistant's pipeline, select kenzy for **Text-to-speech**
    and **Speech-to-text**.
 
