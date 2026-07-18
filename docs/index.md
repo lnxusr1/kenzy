@@ -19,6 +19,12 @@ Assistant, and it can recognize **who** is talking.
 - **Get answers that know who's asking** — enroll your voice and Kenzy can tell
   family members apart, and can require a recognized voice for sensitive actions
   like unlocking a door.
+- **Ask her to remember things** — "remember that the gate code is 4312" stores a
+  fact *for you*; private facts are only ever spoken back to their owner, and
+  "everyone should know…" shares one with the house.
+- **Take her with you on your phone** — through the Home Assistant companion app,
+  the same Kenzy (your memory, your identity) answers from anywhere — and can
+  speak in her own voice.
 - **Manage it all from a web page** — the built-in dashboard shows every room and
   service, and is where you name rooms, tune microphones, and update everything with
   a click.
@@ -62,9 +68,11 @@ how it all fits together.
 
 - **[Talking to Kenzy](talking-to-kenzy.md)** — the five-minute guide to using her: waking, interrupting, canceling, muting, conversations
 
-- [Getting Started](getting-started.md) — install it and have your first conversation
+- [Setup Guides](getting-started.md) — Part 1: first conversation → Part 4: everything connected, each part short and ending with something working
 - [Troubleshooting](troubleshooting.md) — when something doesn't work
 - [Dashboard](dashboard.md) — the web page where you manage everything
 - [Home Assistant](skills/home-assistant.md) — voice-control your smart home
 - [Speaker Enrollment](speaker-enrollment.md) — teach Kenzy who's who
+- [Memory](memory.md) — what she remembers, for whom, and how to manage it
+- [On Your Phone](phone.md) — Kenzy through the Home Assistant companion app
 - [Skills](skills/index.md) — add new abilities with a small Python file

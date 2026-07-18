@@ -10,7 +10,7 @@ so the model can say something like "Calling the living room…".
 
 from __future__ import annotations
 
-from kenzy.llm.skills import add_action, get_request, skill  # type: ignore[import]
+from kenzy.llm.skills import add_action, get_request, request_channel, skill  # type: ignore[import]
 
 
 def _no_aec(room: str) -> bool:
@@ -32,6 +32,8 @@ async def connect_room(room: str) -> str:
     room = room.strip()
     if not room:
         return "No room was given to call."
+    if request_channel() != "voice":  # F3: a call needs a node at BOTH ends
+        return "Intercom calls connect two room speakers — I can't place one from here."
     # Two-way live audio needs echo cancellation at BOTH ends — refuse in the
     # reply itself rather than confirm a call the server would have to reject.
     here = str(get_request("room_id") or "")

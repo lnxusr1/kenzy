@@ -80,6 +80,10 @@ function ConnPill() {
 export function Shell({ user, onLogout }) {
   const { data } = useFleet();
   const logsOn = !!(data && data.flags && data.flags.logs);
+  // No-HA households see no HA surfaces (flag = HA configured OR the app
+  // front door in use, and the home_assistant module not disabled). Absent
+  // flag (older server) keeps the tab.
+  const haOn = !data || !data.flags || data.flags.ha_active !== false;
   const [view, setView] = useState("fleet");
   const [node, setNode] = useState(null);
   const [svc, setSvc] = useState(null);
@@ -112,7 +116,7 @@ export function Shell({ user, onLogout }) {
         <div class="brand"><a href="#" class="wordmark" aria-label="Kenzy — go to Fleet"
           onClick=${(e) => { e.preventDefault(); go("fleet"); }}><span class="glyph"></span><span class="name">Kenzy</span></a></div>
         <nav class="nav">
-          ${NAV.map((n) => {
+          ${NAV.filter((n) => n.id !== "ha" || haOn).map((n) => {
             // Logs and Activity are gated by the server's `dashboard.logs` flag
             // (Activity records carry transcripts, like logs).
             const disabled = (n.id === "logs" || n.id === "activity") && !logsOn;

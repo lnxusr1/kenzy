@@ -93,6 +93,22 @@ def get_request(key: str, default: Any = None) -> Any:
         return default
 
 
+def request_channel() -> str:
+    """Which front door this request came through: "voice" (a room node — the
+    default, incl. legacy servers that don't send the field) or "assist"
+    (HA Assist, F3 — no asking node exists). Node-bound skills use this to
+    refuse gracefully instead of silently targeting a node that isn't there."""
+    return str(get_request("channel", "voice") or "voice")
+
+
+def is_node_bound_refused() -> str | None:
+    """Refusal text for node-bound skills on nodeless channels, or None when
+    a room node is asking and the skill may proceed."""
+    if request_channel() == "voice":
+        return None
+    return "That needs a room speaker — ask me from one of the room devices instead."
+
+
 # ---------------------------------------------------------------------------
 # Identity tiers (F1.3) — the confidence contract skills consume.
 # The strings are a WIRE CONTRACT with the server's identity resolver

@@ -177,3 +177,60 @@ def test_delete_person(tmp_path):
     assert s.delete_person("john") is False  # already gone
     fresh = PeopleStore(tmp_path / "people.yaml")
     assert {p.id for p in fresh.all()} == {"nicki"}  # persisted
+
+
+# -- F3: HA Assist identity (the second front door) ---------------------------
+
+
+def test_by_ha_user_and_assist_resolution(tmp_path):
+    from kenzy.server.people import resolve_assist_identity
+
+    s = _store(
+        tmp_path,
+        "people:\n"
+        "  john:\n    name: John\n    voiceprints: [johnmark]\n    ha_user: person.john_mark\n"
+        "  nicki:\n    name: Nicki\n    voiceprints: [nicki]\n    ha_user: person.nicki\n",
+    )
+    assert s.by_ha_user("person.john_mark").id == "john"
+    assert s.by_ha_user("PERSON.NICKI").id == "nicki"  # case-insensitive
+    assert s.by_ha_user("person.stranger") is None
+    assert s.by_ha_user("") is None
+
+    ident = resolve_assist_identity(s, "person.john_mark", unknown_name="unknown")
+    assert ident.display == "John" and ident.person_id == "john"
+    assert ident.tier == TIER_RECOGNIZED and ident.recognized
+    # Unmapped HA user ⇒ unknown, fail closed (no memory, gated skills withheld).
+    ident = resolve_assist_identity(s, "person.guest", unknown_name="unknown")
+    assert ident.tier == TIER_UNKNOWN and not ident.recognized and ident.person_id is None
+
+
+def test_save_person_ha_user_three_state(tmp_path):
+    s = PeopleStore(tmp_path / "people.yaml")
+    p = s.save_person(id=None, name="John", voiceprints=[], ha_user="person.john_mark")
+    assert p.ha_user == "person.john_mark"
+    # Omitted ⇒ preserved (the dashboard's name/voice-only saves).
+    s.save_person(id=p.id, name="Johnny", voiceprints=[])
+    assert s.get(p.id).ha_user == "person.john_mark"
+    # Explicit empty ⇒ cleared.
+    s.save_person(id=p.id, name="Johnny", voiceprints=[], ha_user="")
+    assert s.get(p.id).ha_user is None
+    # Round-trips through the file.
+    s.save_person(id=p.id, name="Johnny", voiceprints=[], ha_user="person.j")
+    assert PeopleStore(tmp_path / "people.yaml").by_ha_user("person.j") is not None
+
+
+def test_audioserver_save_person_ha_user_passthrough(tmp_path, monkeypatch):
+    # The dashboard mutation threads ha_user through AudioServer.save_person
+    # with the same three-state semantics as the store.
+    monkeypatch.setenv("KENZY_HOME", str(tmp_path))
+    from kenzy.server.server import AudioServer
+
+    s = AudioServer({})
+    pid = s.save_person("", "John", [], ha_user="person.john_mark")
+    assert s._people.get(pid).ha_user == "person.john_mark"
+    # Omitted ⇒ preserved.
+    s.save_person(pid, "John", [])
+    assert s._people.get(pid).ha_user == "person.john_mark"
+    # Explicit empty ⇒ cleared.
+    s.save_person(pid, "John", [], ha_user="")
+    assert s._people.get(pid).ha_user is None

@@ -39,7 +39,19 @@ def _asker() -> str | None:
     """The owner for every memory operation: the resolved person id, never a
     display name. None ⇒ no person record (min_tier already filtered unknown)."""
     pid = get_request("person_id")
+    if get_request("memory_opt_out"):
+        return None  # F7.4 "don't remember me": no ledger identity at all
     return str(pid) if pid else None
+
+
+def _refusal_msg() -> str:
+    """Why memory isn't available to this speaker — opted out vs. no record."""
+    if get_request("memory_opt_out"):
+        return (
+            "Memory is turned off for you at your request — I'm not keeping "
+            "or reading any facts about you."
+        )
+    return _NO_PERSON
 
 
 def _fact_lines(facts: list[memory.Fact]) -> str:
@@ -66,7 +78,7 @@ async def remember(fact: str, shared: bool = False) -> str:
         return _NO_STORE
     owner = _asker()
     if owner is None:
-        return _NO_PERSON
+        return _refusal_msg()
     tier = memory.TIER_SHARED if shared else memory.TIER_PRIVATE
     f = store.remember(owner, fact, tier=tier)
     memory.mark_if_sensitive([f])  # a private write's echo shouldn't replay to others
@@ -87,7 +99,7 @@ async def recall(topic: str) -> str:
         return _NO_STORE
     owner = _asker()
     if owner is None:
-        return _NO_PERSON
+        return _refusal_msg()
     facts = store.recall(owner, topic, limit=5)
     if not facts:
         return f"Nothing remembered about {topic}."
@@ -108,7 +120,7 @@ async def forget(topic: str) -> str:
         return _NO_STORE
     owner = _asker()
     if owner is None:
-        return _NO_PERSON
+        return _refusal_msg()
     matches = [f for f in store.recall(owner, topic, limit=5) if f.erasable_by(owner)]
     if not matches:
         return f"Nothing remembered about {topic}."
@@ -148,7 +160,7 @@ async def _retier(topic: str, tier: str, verb: str) -> str:
         return _NO_STORE
     owner = _asker()
     if owner is None:
-        return _NO_PERSON
+        return _refusal_msg()
     matches = [f for f in store.recall(owner, topic, limit=5) if f.owner == owner]
     if not matches:
         return f"Nothing of yours remembered about {topic}."
@@ -197,7 +209,7 @@ async def fast_memory(utterance: str, room_id: str | None, speaker: str | None) 
         if fact.lower().startswith("to "):
             return FastResult.miss()  # "remember to …" — probably a reminder; LLM decides
         if owner is None:
-            return FastResult.handled(_NO_PERSON, _VOICE_PROMPT)
+            return FastResult.handled(_refusal_msg(), _VOICE_PROMPT)
         shared = bool(m.group("share"))
         stored = store.remember(
             owner, fact, tier=memory.TIER_SHARED if shared else memory.TIER_PRIVATE
@@ -210,7 +222,7 @@ async def fast_memory(utterance: str, room_id: str | None, speaker: str | None) 
     m = _RECALL_RE.match(text)
     if m:
         if owner is None:
-            return FastResult.handled(_NO_PERSON, _VOICE_PROMPT)
+            return FastResult.handled(_refusal_msg(), _VOICE_PROMPT)
         facts = store.recall(owner, m.group("topic"), limit=3)
         if not facts:
             return FastResult.miss()  # nothing remembered — the LLM may still know
@@ -224,7 +236,7 @@ async def fast_memory(utterance: str, room_id: str | None, speaker: str | None) 
         if topic.lower() in ("it", "that", "this", "everything"):
             return FastResult.miss()
         if owner is None:
-            return FastResult.handled(_NO_PERSON, _VOICE_PROMPT)
+            return FastResult.handled(_refusal_msg(), _VOICE_PROMPT)
         matches = [f for f in store.recall(owner, topic, limit=5) if f.erasable_by(owner)]
         if len(matches) != 1:
             return FastResult.miss()  # none or ambiguous — the LLM tool can clarify

@@ -59,3 +59,13 @@ kokoro:
   # Language code — derived automatically from the first character of the
   # voice name if omitted (af_heart → 'a', bf_emma → 'b').
   # lang_code: "a"
+
+# --- Wyoming protocol listener (Home Assistant voice pipelines) -------------
+# Expose this service's voice as a Wyoming TTS provider so HA's Assist
+# pipeline SPEAKS with Kenzy's voice (HA: Add integration → Wyoming Protocol,
+# pointed at this host + port). Plain TCP, no auth — the listener follows the
+# service bind (loopback unless KENZY_BIND/--listen-all opens the LAN).
+# Requires: pip install wyoming
+wyoming:
+  enabled: false
+  port: 10200

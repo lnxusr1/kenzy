@@ -90,11 +90,20 @@ async def health() -> dict[str, object]:
 
 @app.post("/transcribe", response_model=TranscribeResponse)
 async def transcribe(req: TranscribeRequest) -> TranscribeResponse:
-    loop = asyncio.get_running_loop()
     pcm = base64.b64decode(req.audio_b64)
+    text = await transcribe_pcm(pcm)
+    log.info("[%s] %s", req.room_id or "?", text or "(no speech detected)")
+    return TranscribeResponse(text=text)
+
+
+async def transcribe_pcm(pcm: bytes) -> str:
+    """Transcribe 16 kHz mono int16 PCM via the configured provider (with the
+    cloud→local fallback chain). Shared by ``POST /transcribe`` and the
+    Wyoming listener (F3.4)."""
+    loop = asyncio.get_running_loop()
     if _provider == "openai":
         try:
-            text = await loop.run_in_executor(None, _run_openai, pcm)
+            return await loop.run_in_executor(None, _run_openai, pcm)
         except Exception as exc:
             if not _openai_fallback:
                 raise
@@ -102,13 +111,10 @@ async def transcribe(req: TranscribeRequest) -> TranscribeResponse:
             # fails too (package missing, model never cached and no internet),
             # the exception propagates and the user just gets the error cue.
             log.warning("OpenAI STT failed (%s) — falling back to local whisper", exc)
-            text = await _whisper_fallback(pcm, loop)
-    else:
-        assert _sem is not None
-        async with _sem:
-            text = await loop.run_in_executor(None, _run_whisper, pcm)
-    log.info("[%s] %s", req.room_id or "?", text or "(no speech detected)")
-    return TranscribeResponse(text=text)
+            return await _whisper_fallback(pcm, loop)
+    assert _sem is not None
+    async with _sem:
+        return await loop.run_in_executor(None, _run_whisper, pcm)
 
 
 async def _whisper_fallback(pcm: bytes, loop: asyncio.AbstractEventLoop) -> str:
@@ -249,6 +255,16 @@ def main() -> None:
         log.info("Whisper model ready.")
 
     from kenzy import tlsutil
+    from kenzy.stt.wyoming_server import install_wyoming_stt
+
+    # Wyoming listener (F3.4): HA voice pipelines transcribe through Kenzy's STT.
+    install_wyoming_stt(
+        app,
+        cfg,
+        transcribe_pcm,
+        model_name=_openai_model if _provider == "openai" else _model_size,
+        bind=effective_bind(cfg),
+    )
 
     uvicorn.run(
         app,

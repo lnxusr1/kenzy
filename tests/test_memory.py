@@ -377,3 +377,73 @@ def test_recall_stopwords_carry_no_signal(store):
         assert store.recall("adam", q) == [], f"query {q!r} should match nothing"
     # But they don't poison a real query either.
     assert store.recall("adam", "what day is the trash on?")
+
+
+# -- F2.7 mechanical consolidation (the memory-consolidation job's body) -------
+
+
+def test_consolidate_expiry_and_supersession(store):
+    now = time.time()
+    a = store.remember("adam", "expires soon")
+    a.expires = now - 1
+    b = store.remember("adam", "superseded long ago")
+    b.superseded_by = "xyz"
+    b.updated = now - 40 * 86400  # past the 30-day keep window
+    c = store.remember("adam", "superseded recently")
+    c.superseded_by = "xyz"  # updated = now → tombstone kept for now
+    keep = store.remember("adam", "a live fact")
+
+    summary = store.consolidate(now)
+    assert summary == {"expired": 1, "superseded_removed": 1, "deduped": 0}
+    ids = {f.id for f in store.all_facts()}
+    assert keep.id in ids and c.id in ids
+    assert a.id not in ids and b.id not in ids
+
+
+def test_consolidate_exact_dedupe_normalized(store):
+    old = store.remember("adam", "The Wi-Fi code is 4312")
+    old.created -= 10  # make it clearly older
+    new = store.remember("adam", "the wifi code is 4312.")  # same fact, respelled
+    store.remember("nicki", "The Wi-Fi code is 4312")  # different owner — kept
+    store.remember("adam", "The Wi-Fi code is 4312", tier=TIER_SHARED)  # different tier — kept
+
+    summary = store.consolidate()
+    assert summary["deduped"] == 1
+    ids = {f.id for f in store.all_facts()}
+    assert new.id in ids and old.id not in ids  # newest spelling wins
+    assert len(store) == 3
+
+
+def test_consolidate_idempotent_and_persistent(tmp_path):
+    path = tmp_path / "facts.jsonl"
+    s = MemoryStore(path)
+    s.remember("adam", "dup fact")
+    s.remember("adam", "dup fact")
+    assert s.consolidate()["deduped"] == 1
+    # Second run: nothing to do (and no rewrite churn).
+    assert s.consolidate() == {"expired": 0, "superseded_removed": 0, "deduped": 0}
+    # The removal survived the atomic rewrite.
+    assert len(MemoryStore(path)) == 1
+
+
+async def test_consolidation_job_summary(tmp_path):
+    """The job wrapper shape: run the store's consolidate through a JobRunner
+    and see the summary land in the run record (what GET /jobs shows)."""
+    from kenzy.jobs import Job, JobRunner
+
+    s = memory.init_store(tmp_path / "facts.jsonl")
+    try:
+        s.remember("adam", "same thing")
+        s.remember("adam", "same thing")
+
+        async def consolidate():
+            st = memory.store()
+            return st.consolidate() if st else None
+
+        r = JobRunner()
+        r.register(Job("memory-consolidation", 3600, consolidate, scope="memory"))
+        rec = await r.run_once("memory-consolidation")
+        assert rec.ok and rec.summary["deduped"] == 1
+        assert len(s) == 1
+    finally:
+        memory._store = None

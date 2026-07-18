@@ -63,6 +63,7 @@ stt = [
     "openai>=1.0.0",
     "python-dotenv>=1.0.0",
     "zeroconf>=0.130",
+    "wyoming>=1.6.0",
 ]
 
 # Install on the TTS service host
@@ -72,6 +73,7 @@ tts = [
     "openai>=1.0.0",
     "python-dotenv>=1.0.0",
     "zeroconf>=0.130",
+    "wyoming>=1.6.0",
 ]
 
 # Install on the speaker identification host

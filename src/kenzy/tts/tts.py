@@ -313,6 +313,16 @@ def main() -> None:
         )
 
     from kenzy import tlsutil
+    from kenzy.tts.wyoming_server import install_wyoming_tts
+
+    # Wyoming listener (F3.3): HA voice pipelines speak with Kenzy's voice.
+    install_wyoming_tts(
+        app,
+        cfg,
+        _synthesise,
+        voice_name=_kokoro_voice if _provider == "kokoro" else _voice,
+        bind=effective_bind(cfg),
+    )
 
     uvicorn.run(
         app,

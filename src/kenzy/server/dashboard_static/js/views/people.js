@@ -132,7 +132,8 @@ function PeopleList({ data, mem, facts, onOpen, reload }) {
         ? `${n} memor${n === 1 ? "y" : "ies"}`
         : "no memories"
       : null;
-    return memPart ? `${voicePart} · ${memPart}` : voicePart;
+    const parts = [voicePart, memPart, p.ha_user ? "HA app" : null].filter(Boolean);
+    return parts.join(" · ");
   };
 
   async function saveNew() {
@@ -333,6 +334,8 @@ function PeopleList({ data, mem, facts, onOpen, reload }) {
 function PersonDetail({ person, data, facts, memReachable, onBack, reload }) {
   const [name, setName] = useState(person.name);
   const [voices, setVoices] = useState([...person.voiceprints]);
+  const [haUser, setHaUser] = useState(person.ha_user || "");
+  const [memOptOut, setMemOptOut] = useState(!!person.memory_opt_out);
   const [busy, setBusy] = useState("");
   const [enrolling, setEnrolling] = useState(false);
   const [enrollRoom, setEnrollRoom] = useState("");
@@ -350,18 +353,27 @@ function PersonDetail({ person, data, facts, memReachable, onBack, reload }) {
   const shown = q.trim() ? owned.filter((f) => factMatches(q, f.text)) : owned;
   const dirty =
     name.trim() !== person.name ||
+    haUser.trim() !== (person.ha_user || "") ||
+    memOptOut !== !!person.memory_opt_out ||
     JSON.stringify([...voices].sort()) !== JSON.stringify([...person.voiceprints].sort());
 
   async function save() {
     if (!name.trim()) return;
     setBusy("save");
+    // Mirror the server's normalization (bare object_id → person.<id>) so the
+    // field matches the stored value after save instead of reading as dirty.
+    let ha = haUser.trim().toLowerCase();
+    if (ha && !ha.includes(".")) ha = `person.${ha}`;
     const res = await send("save_person", {
       person_id: person.id,
       name: name.trim(),
       voiceprints: voices,
+      ha_user: ha,
+      memory_opt_out: memOptOut,
     });
     setBusy("");
     if (res.ok) {
+      setHaUser(ha);
       await reload();
       notify(`Saved ${name.trim()}.`);
     } else notify(res.error || "Could not save.", "err");
@@ -381,6 +393,77 @@ function PersonDetail({ person, data, facts, memReachable, onBack, reload }) {
       onBack();
       await reload();
     } else notify(res.error || "Delete failed.", "err");
+  }
+
+  // The "HA person" field only exists for households where HA is in the
+  // picture (configured, or the app front door in use). Four states:
+  // module disabled → read-only note; no HA at all → hidden (editable only
+  // if a mapping already exists); HA reachable → dropdown of real persons;
+  // configured but unreachable → free-text fallback.
+  function haField() {
+    const ha = data.ha || {};
+    const label = html`<span class="micro">Home Assistant person — links their
+      HA app login so Assist requests arrive as them (blank = not linked)</span>`;
+    if (ha.skill_disabled) {
+      return haUser.trim()
+        ? html`<div class="field"><span class="micro">HA app:
+            ${" "}<span class="mono">${haUser}</span> — Home Assistant features are
+            disabled in Skills, so this link is inactive.</span></div>`
+        : null;
+    }
+    if (!ha.configured && !ha.assist_seen && !haUser.trim()) return null;
+    const persons = ha.persons || [];
+    if (persons.length) {
+      const known = persons.some((p) => p.entity_id === haUser.trim());
+      return html`<label class="field">
+        ${label}
+        <select value=${haUser} disabled=${!controls}
+          onChange=${(e) => setHaUser(e.target.value)}>
+          <option value="">— not linked —</option>
+          ${!known && haUser.trim()
+            ? html`<option value=${haUser}>${haUser} (not in HA)</option>`
+            : null}
+          ${persons.map(
+            (p) => html`<option value=${p.entity_id} key=${p.entity_id}>
+              ${p.name} (${p.entity_id})</option>`,
+          )}
+        </select>
+      </label>`;
+    }
+    return html`<label class="field">
+      ${label}
+      <input value=${haUser} disabled=${!controls} placeholder="person.…"
+        onInput=${(e) => setHaUser(e.target.value)} />
+    </label>`;
+  }
+
+  function exportPerson() {
+    const a = document.createElement("a");
+    a.href = `/api/people/${encodeURIComponent(person.id)}/export`;
+    a.download = `kenzy-${person.id}-export.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  }
+
+  async function revokePerson() {
+    const facts = owned.length;
+    const vp = person.voiceprints.length;
+    const typed = window.prompt(
+      `Remove ${person.name} completely: erase their ${facts} remembered fact${facts === 1 ? "" : "s"}, ` +
+        `delete ${vp} enrolled voice${vp === 1 ? "" : "s"}, and remove their person record. ` +
+        `Household-shared facts they contributed stay with the house. This cannot be undone.\n\n` +
+        `Type REMOVE to confirm:`,
+    );
+    if (typed !== "REMOVE") return;
+    setBusy("revoke");
+    const res = await send("revoke_person", { person_id: person.id });
+    setBusy("");
+    if (res.ok) {
+      notify(`${person.name} has been removed — Kenzy no longer knows them.`);
+      onBack();
+      await reload();
+    } else notify(res.error || "Revoke failed.", "err");
   }
 
   async function startEnroll() {
@@ -403,6 +486,7 @@ function PersonDetail({ person, data, facts, memReachable, onBack, reload }) {
             <input value=${name} disabled=${!controls}
               onInput=${(e) => setName(e.target.value)} />
           </label>
+          ${haField()}
           <div class="field">
             <span class="micro">Voices — which enrolled voices are this person</span>
             ${offer.length === 0
@@ -478,6 +562,33 @@ function PersonDetail({ person, data, facts, memReachable, onBack, reload }) {
                         controls=${controls} reload=${reload} showOwner=${false} />`)}
                     </div>`}
               `}
+      </section>
+
+      <section class="section">
+        <header><h2>Privacy & data</h2><span class="rule"></span></header>
+        <div class="card pad">
+          <label class="ha-chk">
+            <input type="checkbox" disabled=${!controls} checked=${memOptOut}
+              onChange=${(e) => setMemOptOut(e.target.checked)} />
+            <span>Don't remember ${person.name} — Kenzy keeps and reads no facts
+              about them (they stay a recognized voice for device control and
+              questions).${memOptOut !== !!person.memory_opt_out ? " Save to apply." : ""}</span>
+          </label>
+          <div class="ppl-form-actions">
+            <button class="btn-ghost" onClick=${exportPerson}
+              title="Download their person record, voice-profile info, and every remembered fact as a file">
+              Export their data</button>
+            ${controls
+              ? html`<button class="btn-ghost danger" disabled=${busy === "revoke"}
+                  onClick=${revokePerson}
+                  title="Erase their facts, delete their voice, and remove them — the guest-departure case">
+                  ${busy === "revoke" ? "Removing…" : "Remove completely"}</button>`
+              : null}
+          </div>
+          <p class="micro">Export answers "what does Kenzy know about me". Remove
+            is total: memories, voice, record — household-shared facts they
+            contributed stay with the house.</p>
+        </div>
       </section>
     </div>`;
 }

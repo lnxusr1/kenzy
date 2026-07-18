@@ -73,6 +73,14 @@ class ProcessRequest(BaseModel):
     person_id: str | None = None
     speaker_tier: str | None = None
     confidence: float | None = None
+    # Which front door the request came through (F3): "voice" (a room node) or
+    # "assist" (HA Assist — no asking node exists). Node-bound skills refuse
+    # gracefully on non-voice channels instead of silently targeting nothing.
+    channel: str = "voice"
+    # F7.4 "don't remember me": the resolved person opted out of memory —
+    # no context injection, no writes, no reads (the server sets this from
+    # the person record; skills read it via the request context).
+    memory_opt_out: bool = False
 
 
 class ProcessResponse(BaseModel):
@@ -185,6 +193,8 @@ def _memory_context(utterance: str) -> str:
     person_id = skill_registry.get_request("person_id")
     if not person_id or skill_registry.current_tier() == skill_registry.TIER_UNKNOWN:
         return ""
+    if skill_registry.get_request("memory_opt_out"):
+        return ""  # F7.4 "don't remember me" — no ledger context for them
     parts: list[str] = []
     store = memory.store()
     if store is not None:
@@ -418,6 +428,21 @@ async def memory_forget(body: ForgetBody) -> dict[str, Any]:
     return {"status": "ok"}
 
 
+class ErasePersonBody(BaseModel):
+    person: str
+    include_shared: bool = False
+
+
+@app.post("/memory/erase_person")
+async def memory_erase_person(body: ErasePersonBody) -> dict[str, Any]:
+    """Revoke-all (F7.4): hard-delete every fact the person owns. Shared facts
+    stay with the house unless ``include_shared``. Credentialed surface only."""
+    store = _memory_or_503()
+    if not body.person.strip():
+        raise HTTPException(status_code=400, detail="a person id is required")
+    return {"erased": store.erase_person(body.person.strip(), include_shared=body.include_shared)}
+
+
 @app.get("/memory/export")
 async def memory_export(person: str) -> dict[str, Any]:
     """Everything OWNED by a person — the "what does Kenzy know about me"
@@ -429,6 +454,33 @@ async def memory_export(person: str) -> dict[str, Any]:
 class CurationUpdate(BaseModel):
     # The full curation document (exclude / devices / rooms) to write.
     curation: dict[str, Any]
+
+
+@app.get("/ha/persons")
+async def get_ha_persons() -> dict[str, Any]:
+    """HA person entities + HA-availability flags — the People page's "HA
+    person" dropdown and the dashboard's HA-surface gating (F3). Cheap when HA
+    isn't configured (no HA call at all)."""
+    import os
+
+    from kenzy.llm.builtin_skills import ha_model
+
+    configured = bool(os.environ.get("HA_API_KEY"))
+    skill_disabled = skill_registry.is_disabled("home_assistant")
+    persons: list[dict[str, str]] = []
+    reachable = False
+    if configured and not skill_disabled:
+        try:
+            persons = await ha_model.fetch_persons()
+            reachable = True
+        except Exception as exc:
+            log.warning("HA persons unavailable: %s", exc)
+    return {
+        "configured": configured,
+        "skill_disabled": skill_disabled,
+        "reachable": reachable,
+        "persons": persons,
+    }
 
 
 @app.get("/ha/curation")
@@ -498,6 +550,8 @@ async def process(req: ProcessRequest) -> ProcessResponse:
             "person_id": req.person_id,
             "speaker_tier": req.speaker_tier or "unknown",
             "confidence": req.confidence,
+            "channel": req.channel or "voice",
+            "memory_opt_out": bool(req.memory_opt_out),
         }
     )
 
@@ -510,7 +564,8 @@ async def process(req: ProcessRequest) -> ProcessResponse:
     if fast is not None:
         vp = fast.voice_prompt or _voice_prompt
         _history.add(req.room_id or "", raw_speaker, req.text, fast.text, private_to=_history_tag())
-        _short_term.add(req.person_id or "", req.text, fast.text)
+        if not req.memory_opt_out:
+            _short_term.add(req.person_id or "", req.text, fast.text)
         return ProcessResponse(
             text=fast.text,
             voice_prompt=vp,
@@ -522,7 +577,8 @@ async def process(req: ProcessRequest) -> ProcessResponse:
     text, voice_prompt, expect_response = await _run_llm(
         req.text, raw_speaker, req.room_id, available_rooms=req.rooms, schedules=req.schedules
     )
-    _short_term.add(req.person_id or "", req.text, text)
+    if not req.memory_opt_out:
+        _short_term.add(req.person_id or "", req.text, text)
     return ProcessResponse(
         text=text,
         voice_prompt=voice_prompt,
@@ -816,6 +872,51 @@ def main() -> None:
 
         rel = str(mem_cfg.get("file", "data/memory/facts.jsonl"))
         memory.init_store(_kdr() / rel)
+
+    # Background jobs (F5.5 thin): the one runner for this service's periodic
+    # work. GET /jobs shows every run; interval 0 disables a job (the runner
+    # still mounts).
+    from kenzy.jobs import Job, JobRunner, install_jobs_endpoint
+
+    runner = JobRunner()
+    interval = float(mem_cfg.get("maintenance_interval", 3600))
+    keep_days = float(mem_cfg.get("superseded_keep_days", 30))
+    if memory.store() is not None and interval > 0:
+        # Mechanical consolidation (F2.7's no-model half): expiry, supersession
+        # retention, exact dedupe. Hourly, free.
+        async def _consolidate() -> dict[str, Any] | None:
+            store = memory.store()
+            return store.consolidate(superseded_keep_days=keep_days) if store else None
+
+        runner.register(Job("memory-consolidation", interval, _consolidate, scope="memory"))
+
+    # Semantic consolidation (model-assisted): same-thought merging/updating.
+    # Kicked by every remember (write hook), 30s cooldown coalesces bursts,
+    # failed runs retry in ~15 min, the daily interval is only the backstop.
+    sem_interval = float(mem_cfg.get("semantic_interval", 86400))
+    sem_cooldown = float(mem_cfg.get("semantic_cooldown", 30))
+    store_now = memory.store()
+    if store_now is not None and sem_interval > 0:
+        from kenzy.llm import memory_semantic
+
+        memory_semantic.configure(_model, _base_url)
+
+        async def _semantic() -> dict[str, Any] | None:
+            store = memory.store()
+            return await memory_semantic.run_pass(store) if store else None
+
+        runner.register(
+            Job(
+                "memory-consolidation-semantic",
+                sem_interval,
+                _semantic,
+                scope="memory",
+                cooldown=sem_cooldown,
+                retry_after=900,
+            )
+        )
+        store_now.on_write = lambda: runner.kick("memory-consolidation-semantic")
+    install_jobs_endpoint(app, runner)
 
     # Built-in skills ship inside the package; the configured directory is a
     # user overlay (default: skills/ under the config home — repo root in a dev

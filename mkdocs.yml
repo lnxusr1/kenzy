@@ -68,27 +68,37 @@ markdown_extensions:
 
 nav:
   - Home: index.md
-  - Getting Started: getting-started.md
-  - Talking to Kenzy: talking-to-kenzy.md
-  - Troubleshooting: troubleshooting.md
-  - Architecture: architecture.md
-  - Dashboard: dashboard.md
-  - Configuration:
-    - Overview: configuration/index.md
-    - Node: configuration/node.md
-    - Server: configuration/server.md
-    - STT: configuration/stt.md
-    - TTS: configuration/tts.md
-    - LLM: configuration/llm.md
-    - Speaker ID: configuration/speaker.md
-  - Skills:
-    - Overview: skills/index.md
-    - Built-in Skills: skills/builtin.md
-    - Writing Skills: skills/writing-skills.md
-    - Home Assistant: skills/home-assistant.md
-  - Integrations:
-    - Home Assistant: integrations/home-assistant.md
-  - Speaker Enrollment: speaker-enrollment.md
-  - Running Fully Local: fully-local.md
-  - Backup & Restore: backup-restore.md
-  - Deployment: deployment.md
+  - Setup Guides:
+    - Overview: getting-started.md
+    - "Part 1 — First Conversation": guides/part1-first-conversation.md
+    - "Part 2 — Rooms & People": guides/part2-rooms-and-people.md
+    - "Part 3 — Home Assistant Basics": guides/part3-home-assistant.md
+    - "Part 4 — Home Assistant, the Works": guides/part4-ha-complete.md
+  - Using Kenzy:
+    - Talking to Kenzy: talking-to-kenzy.md
+    - Memory: memory.md
+    - On Your Phone: phone.md
+    - Speaker Enrollment: speaker-enrollment.md
+  - Managing It:
+    - Dashboard: dashboard.md
+    - Backup & Restore: backup-restore.md
+    - Troubleshooting: troubleshooting.md
+  - Reference:
+    - Configuration:
+      - Overview: configuration/index.md
+      - The Language Model: configuration/llm.md
+      - Her Voice (TTS): configuration/tts.md
+      - Speech Recognition (STT): configuration/stt.md
+      - Node: configuration/node.md
+      - Server: configuration/server.md
+      - Speaker ID: configuration/speaker.md
+    - Skills:
+      - Overview: skills/index.md
+      - Built-in Skills: skills/builtin.md
+      - Writing Skills: skills/writing-skills.md
+      - Home Assistant: skills/home-assistant.md
+    - Integrations:
+      - Home Assistant: integrations/home-assistant.md
+    - Running Fully Local: fully-local.md
+    - Architecture: architecture.md
+    - Deployment: deployment.md

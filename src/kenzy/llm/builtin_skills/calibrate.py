@@ -11,7 +11,13 @@ from __future__ import annotations
 
 import re
 
-from kenzy.llm.skills import FastResult, add_action, fast_intent, skill  # type: ignore[import]
+from kenzy.llm.skills import (  # type: ignore[import]
+    FastResult,
+    add_action,
+    fast_intent,
+    is_node_bound_refused,
+    skill,
+)
 
 _VOICE_PROMPT = "Calm, brief acknowledgement."
 
@@ -37,6 +43,9 @@ async def calibrate_audio() -> str:
     "this room is noisy, recalibrate". Keep your reply very short: the guided
     flow speaks its own instructions right after.
     """
+    refused = is_node_bound_refused()  # F3: calibration happens AT a node
+    if refused:
+        return refused
     add_action({"type": "start_calibration"})
     return "Starting calibration — follow the spoken instructions."
 
@@ -47,5 +56,8 @@ async def fast_calibrate(utterance: str, room_id: str | None, speaker: str | Non
     text = _normalize(utterance)
     if not (_CALIBRATE_RE.match(text) or _RUN_RE.match(text)):
         return FastResult.miss()
+    refused = is_node_bound_refused()
+    if refused:
+        return FastResult.handled(refused, _VOICE_PROMPT)
     add_action({"type": "start_calibration"})
     return FastResult.handled("Okay, let's calibrate.", _VOICE_PROMPT)

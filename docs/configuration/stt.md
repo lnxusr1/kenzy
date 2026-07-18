@@ -1,17 +1,33 @@
-# STT Configuration
+# Setting Up Speech Recognition
 
 **File:** `configs/stt.yaml`  
 **Command:** `kenzy-stt [config_path]`
 
-The STT service accepts POST requests with base64-encoded PCM audio and returns a transcript. Two providers are supported, selected via the `provider` key:
+This service is Kenzy's ears — audio in, transcript out. The default is
+**local** ([faster-whisper](https://github.com/SYSTRAN/faster-whisper) on
+your own hardware): **your voice never leaves your network**, and for most
+setups there's nothing to change here.
 
-- **`whisper`** (default) — local [faster-whisper](https://github.com/SYSTRAN/faster-whisper); your voice never leaves your network.
-- **`openai`** — OpenAI's cloud transcription API; no local model to download or run, which makes it a good fit for underpowered server hardware — at the cost of sending each captured utterance to OpenAI.
+```yaml
+provider: "whisper"    # local, the default — or "openai" (cloud)
+whisper:
+  model: "base"        # bigger = more accurate, slower: tiny/base/small/medium
+```
+
+The cloud option exists for two honest reasons: your server hardware is too
+light to transcribe quickly (a lone Raspberry Pi), or you want to *rule out*
+local transcription while troubleshooting accuracy — switch in the dashboard
+(**Services → stt**), test, switch back. The trade is explicit: each captured
+utterance (what you say after the wake word) is sent to the provider.
 
 !!! note "Pulled from the server"
     `kenzy-stt` pulls this config from the server at boot — it discovers the server via mDNS (or `KENZY_SERVER_URL`) and blocks until it answers, so start the server first. Edit it from the dashboard's **Services** tab (writes `configs/services/stt.yaml` on the server and restarts the service). Passing an explicit path (`kenzy-stt configs/stt.yaml`) loads locally instead — a dev/offline escape hatch. See [central config for backend services](server.md#central-config-for-backend-services).
 
-## Provider selection
+## Advanced
+
+Everything below is the full reference.
+
+### Provider selection
 
 | Key | Default | Description |
 |---|---|---|
@@ -28,7 +44,7 @@ Common service keys:
 
 ---
 
-## Whisper provider (local)
+### Whisper provider (local)
 
 Runs entirely on your hardware with no API key — the default, and the recommended path if you care that spoken audio never leaves the box.
 
@@ -66,7 +82,7 @@ whisper:
 
 ---
 
-## OpenAI provider (cloud)
+### OpenAI provider (cloud)
 
 **Requires:** `OPENAI_API_KEY` in `.env` (the same key the default TTS/LLM setup already uses)
 
@@ -93,3 +109,20 @@ openai:
 ```
 
 Switching provider is also a two-click change in the dashboard: **Services → stt**, pick the provider from the dropdown, Save (the service restarts and re-pulls its config).
+
+
+#### Wyoming listener (Home Assistant voice pipelines)
+
+Expose this service as a native HA **speech-to-text** provider, so the HA
+pipeline transcribes through Kenzy's STT — one whisper/cloud setup for the
+whole house, fallback chain included — see
+[On Your Phone](../phone.md) for the full setup.
+
+| Key | Default | Description |
+|---|---|---|
+| `wyoming.enabled` | `false` | Start the [Wyoming protocol](https://github.com/rhasspy/wyoming) listener alongside the HTTP service. Uses the exact same transcription path (provider, model, fallback chain) as `/transcribe`; incoming audio is converted to 16 kHz mono as needed. Requires the `wyoming` package (included in the `stt` extra). |
+| `wyoming.port` | `10300` | Listener port (the whisper convention, so HA operators guess right). |
+
+Wyoming is plain, unauthenticated TCP — the listener follows the service
+bind, so it stays loopback-only unless you've deliberately opened the
+service to the LAN (`KENZY_BIND=0.0.0.0` / `--listen-all`).

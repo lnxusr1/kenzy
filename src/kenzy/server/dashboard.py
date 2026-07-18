@@ -461,6 +461,8 @@ class Dashboard:
             "flags": {
                 "logs": self._dcfg.logs,
                 "controls": self._dcfg.controls,
+                # Gate the HA nav tab: no-HA households see no HA surfaces.
+                "ha_active": (await self._ha_flags())["active"],
             },
         }
 
@@ -756,6 +758,26 @@ class Dashboard:
         if path == "/api/memory":
             return self._json(200, await self._memory_state())
 
+        if path.startswith("/api/people/") and path.endswith("/export"):
+            pid = path[len("/api/people/") : -len("/export")]
+            body = await self._person_export(pid)
+            if body is None:
+                return self._json(404, {"error": "no such person"})
+            import json as _json_mod
+
+            return Response(
+                200,
+                "OK",
+                Headers(
+                    {
+                        "Content-Type": "application/json",
+                        "Content-Disposition": f'attachment; filename="kenzy-{pid}-export.json"',
+                        "Cache-Control": "no-store",
+                    }
+                ),
+                _json_mod.dumps(body, indent=2, ensure_ascii=False).encode(),
+            )
+
         if path == "/api/backup":
             # Downloadable backup: the local config home merged with the stateful
             # services' slices (complete even multi-host). By default .env/API keys
@@ -1045,6 +1067,52 @@ class Dashboard:
             return data if isinstance(data, dict) else None
         except Exception:
             return None
+
+    async def _ha_flags(self, *, with_persons: bool = False) -> dict[str, Any]:
+        """HA-availability flags for surface gating (cached ~30 s), from the
+        LLM service's ``GET /ha/persons`` plus the server's own signals.
+
+        ``active`` = HA is in this household's picture: the control side is
+        configured (HA_API_KEY) OR the app front door has been used
+        (``assist_seen``) — and the home_assistant module isn't disabled.
+        No-HA households therefore see no HA surfaces at all."""
+        import os
+        import time as _t
+
+        now = _t.monotonic()
+        cached: tuple[float, dict[str, Any]] | None = getattr(self, "_ha_flags_cache", None)
+        stale = cached is None or now - cached[0] > 30.0
+        if cached is None or stale or (with_persons and not cached[1].get("persons")):
+            base = self._service_base("llm")
+            info: dict[str, Any] = {}
+            if base:
+                import httpx
+
+                try:
+                    async with httpx.AsyncClient(
+                        timeout=10.0, verify=tlsutil.httpx_verify()
+                    ) as client:
+                        r = await client.get(
+                            f"{base}/ha/persons",
+                            headers=self._server._service_headers("GET", f"{base}/ha/persons"),
+                        )
+                        r.raise_for_status()
+                        info = r.json()
+                except Exception:
+                    info = {}
+            configured = bool(info.get("configured")) or bool(os.environ.get("HA_API_KEY"))
+            skill_disabled = bool(info.get("skill_disabled", False))
+            flags = {
+                "configured": configured,
+                "skill_disabled": skill_disabled,
+                "reachable": bool(info.get("reachable")),
+                "assist_seen": self._server.assist_seen(),
+                "persons": info.get("persons") or [],
+            }
+            flags["active"] = (configured or flags["assist_seen"]) and not skill_disabled
+            cached = (now, flags)
+            self._ha_flags_cache = cached
+        return dict(cached[1])
 
     async def _llm_curation_request(
         self, method: str, payload: dict[str, Any] | None = None
@@ -1364,6 +1432,66 @@ class Dashboard:
     # People (identity records): group enrolled voices into household members
     # ------------------------------------------------------------------
 
+    async def _person_export(self, person_id: str) -> dict[str, Any] | None:
+        """The F7.4 "what does Kenzy know about me" download: person record +
+        voice profiles + every memory fact they own (all tiers)."""
+        person = next(
+            (p for p in self._server.list_people() if p["id"] == person_id), None
+        )
+        if person is None:
+            return None
+        voices: list[dict[str, Any]] = []
+        res = await self._speaker_request("GET", "/speakers")
+        if res and res[0] == 200 and isinstance(res[1], dict):
+            wanted = {str(v).lower() for v in person["voiceprints"]}
+            voices = [
+                {"name": v.get("name"), "samples": v.get("samples", 0)}
+                for v in res[1].get("speakers", [])
+                if str(v.get("name", "")).lower() in wanted
+            ]
+        mem = await self._llm_memory_request("GET", f"/export?person={quote(person_id)}")
+        import time as _t
+
+        return {
+            "exported_at": _t.strftime("%Y-%m-%d %H:%M:%S"),
+            "person": person,
+            "voice_profiles": voices,
+            "memory": {
+                "available": mem is not None,
+                "facts": (mem or {}).get("facts", []),
+            },
+        }
+
+    async def _revoke_person(self, person_id: str) -> tuple[bool, str | None]:
+        """F7.4 revoke-all (guest departure): erase every owned non-shared fact,
+        delete the enrolled voiceprints, and remove the person record. Memory
+        first — if the ledger can't be reached we abort rather than half-forget."""
+        person = next(
+            (p for p in self._server.list_people() if p["id"] == person_id), None
+        )
+        if person is None:
+            return False, "no such person"
+        mem = await self._llm_memory_request("POST", "/erase_person", {"person": person_id})
+        if mem is None:
+            return False, "memory service unreachable — nothing was removed"
+        failures: list[str] = []
+        for vp in person["voiceprints"]:
+            ok, err = await self._delete_speaker(str(vp))
+            if ok:
+                self._server.remove_person_voiceprint(str(vp))
+            else:
+                failures.append(f"voice {vp!r}: {err or 'delete failed'}")
+        self._server.delete_person(person_id)
+        log.info(
+            "Revoked person %r: %s fact(s) erased, %d voiceprint(s) deleted",
+            person_id,
+            mem.get("erased", "?"),
+            len(person["voiceprints"]) - len(failures),
+        )
+        if failures:
+            return False, "record and memory removed, but: " + "; ".join(failures)
+        return True, None
+
     async def _people_state(self) -> dict[str, Any]:
         """People records merged with the speaker service's enrolled voiceprints,
         each tagged with the person (if any) that claims it — so the panel can
@@ -1394,6 +1522,7 @@ class Dashboard:
         return {
             "controls": self._dcfg.controls,
             "speaker_reachable": res is not None,
+            "ha": await self._ha_flags(with_persons=True),
             "people": people,
             "voiceprints": voiceprints,
             "rooms": rooms,
@@ -1752,13 +1881,31 @@ class Dashboard:
             # NB: the person id rides as `person_id`, not `id` — the WS envelope
             # reserves `id` for request/ack correlation (a payload `id` would
             # clobber it and the ack would never match its caller).
+            kwargs: dict[str, Any] = {}
+            if "memory_opt_out" in msg:  # absent ⇒ preserve
+                kwargs["memory_opt_out"] = bool(msg.get("memory_opt_out"))
+            if "ha_user" in msg:  # absent ⇒ preserve (three-state, see PeopleStore)
+                ha = str(msg.get("ha_user") or "").strip().lower()
+                if ha and " " in ha:
+                    return await ack(False, "HA person can't contain spaces")
+                if ha and "." not in ha:
+                    ha = f"person.{ha}"  # accept the bare object_id
+                kwargs["ha_user"] = ha
             try:
                 self._server.save_person(
-                    str(msg.get("person_id", "")).strip(), name, [str(v) for v in vps]
+                    str(msg.get("person_id", "")).strip(), name, [str(v) for v in vps], **kwargs
                 )
             except (ValueError, OSError) as exc:
                 return await ack(False, str(exc))
             await ack(True)
+        elif mtype == "revoke_person":
+            if not self._dcfg.controls:
+                return await ack(False, "controls are disabled (set dashboard.controls: true)")
+            pid = str(msg.get("person_id", "")).strip()
+            if not pid:
+                return await ack(False, "a person id is required")
+            ok, err = await self._revoke_person(pid)
+            await ack(ok, err)
         elif mtype == "delete_person":
             if not self._dcfg.controls:
                 return await ack(False, "controls are disabled (set dashboard.controls: true)")

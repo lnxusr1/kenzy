@@ -114,7 +114,8 @@ async def test_dashboard_http_surfaces():
             assert state["nodes"][0]["streaming"] is True
             assert state["services"] == []  # none configured
             # logs/controls default ON when the keys are absent (matching the shipped config).
-            assert state["flags"] == {"logs": True, "controls": True}
+            assert state["flags"]["logs"] is True and state["flags"]["controls"] is True
+            assert "ha_active" in state["flags"]  # HA-surface gate (F3)
 
             # per-node effective config (read-only, authed)
             r = await c.get("/api/nodes/den/config", headers=auth)

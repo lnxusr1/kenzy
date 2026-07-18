@@ -143,3 +143,12 @@ skills:
 memory:
   enabled: true
   # file: data/memory/facts.jsonl   # config-home-relative (the default)
+  # Mechanical upkeep (expired facts, superseded tombstones past their keep
+  # window, exact duplicates) runs as a background job — see GET /jobs.
+  # maintenance_interval: 3600      # seconds between runs; 0 disables
+  # superseded_keep_days: 30        # tombstone retention before removal
+  # Semantic consolidation: your configured model merges same-thought
+  # restatements seconds after each "remember…" (never deletes — superseded
+  # facts stay recoverable for the keep window above). 0 disables.
+  # semantic_interval: 86400        # daily backstop sweep
+  # semantic_cooldown: 30           # min seconds between model runs

@@ -32,6 +32,7 @@ import os
 import re
 import time
 import uuid
+from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -158,7 +159,15 @@ class MemoryStore:
     def __init__(self, path: Path) -> None:
         self._path = path
         self._facts: dict[str, Fact] = {}
+        # Fired after every successful remember() (all write paths: skills,
+        # fast intents, HTTP) — kenzy-llm points this at JobRunner.kick so the
+        # semantic-consolidation job runs seconds behind each new fact.
+        self.on_write: Callable[[], None] | None = None
         self._load()
+
+    @property
+    def path(self) -> Path:
+        return self._path
 
     # -- persistence ---------------------------------------------------------
 
@@ -259,7 +268,28 @@ class MemoryStore:
         self._facts[fact.id] = fact
         self._append(fact)
         log.info("Memory: remembered %s (%s, owner=%s)", fact.id, tier, owner)
+        if self.on_write is not None:
+            try:
+                self.on_write()
+            except Exception:  # a scheduling hiccup must never fail a write
+                log.debug("Memory write hook raised", exc_info=True)
         return fact
+
+    def get_fact(self, fact_id: str) -> Fact | None:
+        return self._facts.get(fact_id)
+
+    def supersede(self, fact_id: str, *, by: str) -> bool:
+        """Mark a fact superseded (semantic consolidation's ONLY destructive
+        verb — and it isn't one: the fact leaves recall immediately but stays
+        on disk until the mechanical sweep's retention window expires, so
+        every model decision is reversible for ~30 days)."""
+        fact = self._facts.get(fact_id)
+        if fact is None or fact_id == by:
+            return False
+        fact.superseded_by = by
+        fact.updated = time.time()
+        self._rewrite()
+        return True
 
     def recall(self, asker: str, query: str = "", *, limit: int = 5) -> list[Fact]:
         """Scope-first (the ACL), then relevance: keyword overlap with a recency
@@ -312,6 +342,88 @@ class MemoryStore:
         self._rewrite()
         log.info("Memory: %s → %s (asker=%s)", fact_id, tier, asker)
         return fact
+
+    def consolidate(
+        self, now: float | None = None, *, superseded_keep_days: float = 30.0
+    ) -> dict[str, int]:
+        """Mechanical ledger maintenance (F2.7's no-model half) — the
+        memory-consolidation job's body. NO model is involved: maintenance has
+        no LLM in its critical path (plan of record). Three passes:
+
+        1. expiry — facts past their ``expires`` are removed (the write path
+           doesn't set expiry yet; the sweep makes decay real the moment F2.4
+           starts setting policies),
+        2. supersession retention — superseded facts already never recall;
+           after ``superseded_keep_days`` the tombstone is removed too,
+        3. exact dedupe — same owner + tier + identical *normalized* text
+           (case/punctuation folded: "the Wi-Fi code" ≡ "The wifi code")
+           keeps the newest. Fuzzy merging stays LLM-assisted phase 2.
+
+        Every removal is logged individually (the "every merge/prune logged"
+        contract). One atomic rewrite iff anything changed; idempotent, so a
+        second run reports all zeros. Returns the run summary.
+        """
+        now = time.time() if now is None else now
+        remove: dict[str, str] = {}  # id → reason
+
+        for f in self._facts.values():
+            if f.expires is not None and f.expires <= now:
+                remove[f.id] = "expired"
+            elif f.superseded_by and now - f.updated >= superseded_keep_days * 86400:
+                remove[f.id] = "superseded"
+
+        # Dedupe among what survives: normalized text joins the spelling variants.
+        def _squash(text: str) -> str:
+            return " ".join(_PUNCT_RE.sub("", w) for w in _WORD_RE.findall(text.lower()))
+
+        newest: dict[tuple[str, str, str], Fact] = {}
+        for f in self._facts.values():
+            if f.id in remove:
+                continue
+            key = (f.owner, f.tier, _squash(f.text))
+            best = newest.get(key)
+            if best is None:
+                newest[key] = f
+            elif f.created > best.created:
+                remove[best.id] = "duplicate"
+                newest[key] = f
+            else:
+                remove[f.id] = "duplicate"
+
+        summary = {"expired": 0, "superseded_removed": 0, "deduped": 0}
+        key_of = {"expired": "expired", "superseded": "superseded_removed", "duplicate": "deduped"}
+        for fact_id, reason in remove.items():
+            f = self._facts.pop(fact_id)
+            summary[key_of[reason]] += 1
+            log.info(
+                "Memory consolidation: removed %s (%s, owner=%s, tier=%s): %r",
+                fact_id,
+                reason,
+                f.owner,
+                f.tier,
+                f.text[:80],
+            )
+        if remove:
+            self._rewrite()
+        return summary
+
+    def erase_person(self, person_id: str, *, include_shared: bool = False) -> int:
+        """Hard-delete every fact a person owns — the F7.4 revoke-all (guest
+        departure). Household-``shared`` facts they contributed stay with the
+        house by default (they're household knowledge now — the gate code
+        doesn't leave with the guest); ``include_shared`` erases those too.
+        Returns the number of facts removed."""
+        doomed = [
+            fid
+            for fid, f in self._facts.items()
+            if f.owner == person_id and (include_shared or f.tier != TIER_SHARED)
+        ]
+        for fid in doomed:
+            del self._facts[fid]
+        if doomed:
+            self._rewrite()
+        log.info("Memory: erased %d fact(s) for %s (revoke-all)", len(doomed), person_id)
+        return len(doomed)
 
     def export(self, person_id: str) -> list[Fact]:
         """Everything owned BY a person (any tier) — the F7.4 "what does Kenzy

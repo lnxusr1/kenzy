@@ -13,7 +13,12 @@ from __future__ import annotations
 
 import re
 
-from kenzy.llm.skills import FastResult, add_action, fast_intent  # type: ignore[import]
+from kenzy.llm.skills import (  # type: ignore[import]
+    FastResult,
+    add_action,
+    fast_intent,
+    is_node_bound_refused,
+)
 
 _VOICE_PROMPT = "Speak naturally at a conversational pace."
 
@@ -72,6 +77,9 @@ async def fast_volume(utterance: str, room_id: str | None, speaker: str | None) 
     result = classify(utterance)
     if result is None:
         return FastResult.miss()
+    refused = is_node_bound_refused()  # F3: no asking node on the assist channel
+    if refused:
+        return FastResult.handled(refused, _VOICE_PROMPT)
     kind, value = result
 
     if kind == "mute":

@@ -1,21 +1,38 @@
-# TTS Configuration
+# Setting Up Her Voice
 
 **File:** `configs/tts.yaml`  
 **Command:** `kenzy-tts [config_path]`
 
-The TTS service accepts POST requests with text and returns raw int16 PCM audio at 24 kHz mono. Two providers are supported, selected via the `provider` key.
+This service is Kenzy's voice — text in, speech out. Out of the box it uses a
+cloud voice (OpenAI's TTS) because it needs zero downloads and sounds good on
+day one — but the voice can live **entirely in your house**: the
+[Kokoro](https://github.com/hexgrad/kokoro) provider runs locally on your own
+hardware, and only what Kenzy *says* (never what you say) goes to a cloud
+provider in the default setup anyway.
+
+```yaml
+provider: "openai"    # or "kokoro" — the local voice, no third party
+```
+
+Switching is a dropdown in the dashboard (**Services → tts**), and
+[Running Fully Local](../fully-local.md) walks the local path end to end,
+including the one system package Kokoro needs.
 
 !!! note "Pulled from the server"
     `kenzy-tts` pulls this config from the server at boot — it discovers the server via mDNS (or `KENZY_SERVER_URL`) and blocks until it answers, so start the server first. Edit it from the dashboard's **Services** tab (writes `configs/services/tts.yaml` on the server and restarts the service). Passing an explicit path loads locally instead (dev/offline). `log_level` (console) and `log_capture_level` (dashboard viewer depth, default `debug`) work like every service. See [central config for backend services](server.md#central-config-for-backend-services).
 
-## Service
+## Advanced
+
+Everything below is the full reference.
+
+### Service
 
 | Key | Default | Description |
 |---|---|---|
 | `host` | `"127.0.0.1"` | Bind address |
 | `port` | `8769` | HTTP port |
 
-## Provider selection
+### Provider selection
 
 | Key | Default | Description |
 |---|---|---|
@@ -23,7 +40,7 @@ The TTS service accepts POST requests with text and returns raw int16 PCM audio 
 
 ---
 
-## OpenAI provider
+### OpenAI provider
 
 **Requires:** `OPENAI_API_KEY` in `.env`
 
@@ -53,7 +70,7 @@ openai:
 
 ---
 
-## Kokoro provider
+### Kokoro provider
 
 **Requires:**
 - The `kokoro` extra: `pip install 'kenzy[kokoro]'` (or `pip install -e ".[kokoro]"` in a source checkout) — installs the `kokoro` package and PyTorch
@@ -117,3 +134,19 @@ pip install 'kenzy[kokoro]'
 # Pre-download model weights
 kenzy-setup
 ```
+
+
+### Wyoming listener (Home Assistant voice pipelines)
+
+Expose this service as a native HA **text-to-speech** provider, so Assist
+replies on your phone are spoken in Kenzy's actual voice — see
+[On Your Phone](../phone.md) for the full setup.
+
+| Key | Default | Description |
+|---|---|---|
+| `wyoming.enabled` | `false` | Start the [Wyoming protocol](https://github.com/rhasspy/wyoming) listener alongside the HTTP service. Uses the exact same synthesis path (provider, voice, fallback chain) as `/speak`. Requires the `wyoming` package (included in the `tts` extra). |
+| `wyoming.port` | `10200` | Listener port (the Piper convention, so HA operators guess right). |
+
+Wyoming is plain, unauthenticated TCP — the listener follows the service
+bind, so it stays loopback-only unless you've deliberately opened the
+service to the LAN (`KENZY_BIND=0.0.0.0` / `--listen-all`).

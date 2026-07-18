@@ -1,10 +1,19 @@
 # Getting Started
 
-By the end of this page you'll say **"hey Kenzie"** to a device in your home and get
-a spoken answer back. The path of least resistance:
+Kenzy sets up in **parts** — each one short, each one ending with something
+working. Do Part 1 today and stop there happily; come back for the rest
+whenever you're ready.
 
-1. [Set up everything on one computer](#step-1-install-everything-on-one-computer) and have your first conversation.
-2. [Add a room device](#step-4-add-a-room-node-optional) (a Raspberry Pi with a speakerphone) whenever you're ready — the one-computer setup keeps working either way.
+1. **[Part 1 — First Conversation](guides/part1-first-conversation.md)** —
+   one computer, one command, and a spoken answer to "hey Kenzie, what time
+   is it?" *(under an hour)*
+2. **[Part 2 — Rooms & People](guides/part2-rooms-and-people.md)** — a device
+   in each room, and Kenzy knowing who's talking (which unlocks per-person
+   memory).
+3. **[Part 3 — Home Assistant Basics](guides/part3-home-assistant.md)** —
+   "turn off the kitchen lights": voice control of your smart home.
+4. **[Part 4 — Home Assistant, the Works](guides/part4-ha-complete.md)** —
+   Kenzy on your phone in her own voice, and Kenzy's rooms inside HA.
 
 If anything doesn't behave the way a step says it should, jump to
 [Troubleshooting](troubleshooting.md) — it's organized by symptom.
@@ -25,11 +34,16 @@ If anything doesn't behave the way a step says it should, jump to
   and Kenzy adapts honestly — intercom and alarm ring-loops are disabled there
   (with a polite spoken explanation) instead of misbehaving; everything else
   works normally. See [rooms without echo cancellation](configuration/node.md#rooms-without-echo-cancellation-hardware_aec-false).
-- **An OpenAI API key** (from [platform.openai.com](https://platform.openai.com)).
-  The default setup uses OpenAI for the "thinking" and the voice — it's just the
-  quickest way to get going (one key, no model downloads, works on a single Pi).
-  Running **locally** is kind of the point of Kenzy; switch whenever you're
-  ready — see [Running Fully Local](fully-local.md).
+- **A language model — Kenzy's "brain."** Kenzy needs a large language model
+  (LLM) to do the thinking. It can come from a compatible third-party service
+  or a locally hosted platform — **OpenAI is just the default** (quickest to a
+  working setup: one key, no downloads, runs beside everything else on a small
+  box), but Ollama (fully local), Claude, OpenRouter, and others work too —
+  see [Setting Up the Language Model](configuration/llm.md). A third-party
+  service means an API key from that provider; for the OpenAI default that's
+  [platform.openai.com](https://platform.openai.com). Running locally is kind
+  of the point of Kenzy — switch whenever you're ready:
+  [Running Fully Local](fully-local.md).
 - **Optional:** [Home Assistant](https://www.home-assistant.io/), if you want voice
   control of your smart home. You can add it any time.
 
@@ -38,149 +52,8 @@ If anything doesn't behave the way a step says it should, jump to
     and `~/.config/kenzy`) plus a few standard system packages via `apt`. It doesn't
     need root for Kenzy itself, and `install.sh --uninstall` removes it cleanly.
 
-## Step 1 — Install everything on one computer
 
-Plug in your speakerphone first (so setup can find it), then run:
-
-```bash
-curl -fsSL https://kenzy.ai/install.sh | bash
-```
-
-When it asks what to install, choose **all** (everything on this machine). The
-installer then:
-
-- creates a private Python environment and installs Kenzy from PyPI,
-- downloads the wake-word and voice-identification models,
-- creates your **config home** at `~/.config/kenzy` (all your settings live there),
-- sets the services to start automatically, and starts them now.
-
-It prints a **join token** near the end — that's the password room devices will use
-to connect later. Don't worry about copying it; the dashboard can show it to you
-any time.
-
-## Step 2 — Add your OpenAI key
-
-!!! note "Wait — isn't Kenzy supposed to be local?"
-    It is — every stage can run on your own hardware, and this step is the
-    deliberate exception, not the fine print. OpenAI is the **quick-start
-    brain**: one key, no model downloads, and it works even when everything
-    runs on a single Pi (which can't run a capable language model). Your voice
-    audio still stays home — the ears (speech-to-text) are local by default;
-    only the transcribed *text* goes to the model. Once you're up and talking,
-    moving the brain and the voice into your house is a config change:
-    [Running Fully Local](fully-local.md#configuring-the-brain-the-llm).
-
-To get going now, open the settings file the installer created:
-
-```bash
-nano ~/.config/kenzy/.env
-```
-
-Find the `OPENAI_API_KEY` line, paste your key between the quotes, save (in nano:
-`Ctrl+O`, `Enter`, `Ctrl+X`), then restart the services so they pick it up:
-
-```bash
-systemctl --user restart 'kenzy-*'
-```
-
-!!! tip "Prefer the browser?"
-    You can also set keys from the dashboard once it's up (next step): **Settings →
-    API keys**, paste the value, then restart the services from the **Services** tab.
-
-## Step 3 — Open the dashboard and say hello
-
-In a browser on the same network, open:
-
-```
-http://localhost:8770        (or http://<the-computer's-IP>:8770 from another machine)
-```
-
-Log in with **`admin` / `password`**.
-
-!!! note "✓ Checkpoint"
-    You should see the **fleet view**: a card for this computer's room node, and
-    health indicators for the four backend services (STT, TTS, LLM, Speaker) — all
-    green within a minute or so of starting. If a service shows unhealthy or the
-    page won't load, see [Troubleshooting](troubleshooting.md#a-service-shows-unhealthy-in-the-dashboard).
-
-Two things to do while you're here:
-
-1. **Change the password** — Settings → change password. The dashboard is reachable
-   from your whole network by default, so don't leave it on the default login.
-2. **Name your room** — open the node's **Configure** page and set its room name
-   (e.g. "office"). Kenzy uses room names in conversation and for announcements.
-
-Now talk to it. Say:
-
-> **"Hey Kenzie"** … *(you'll hear a chime)* … **"what time is it?"**
-
-!!! note "✓ Checkpoint"
-    Chime after the wake word, spoken answer a moment later. If there's no chime,
-    see [Kenzy doesn't hear the wake word](troubleshooting.md#kenzy-doesnt-hear-the-wake-word);
-    if it chimes but never answers, see
-    [It hears me but never replies](troubleshooting.md#it-hears-me-but-never-replies).
-
-If the wake word feels deaf or trigger-happy, run the guided tuner: the node's
-Configure page → **Set up / calibrate audio…**. It measures your actual room and mic
-and applies the right thresholds — much better than guessing numbers
-([details](dashboard.md#calibrating-a-nodes-audio)).
-
-**That's a working Kenzy.** Everything below is optional.
-
-## Step 4 — Add a room node (optional)
-
-A room node is a small device whose only job is to listen and speak — an
-**Orange Pi Zero 3 / 2W** or **Raspberry Pi 3/4/5** with a USB speakerphone. The
-thinking still happens on your server.
-
-1. Set up the board with its standard OS (Raspberry Pi OS Lite is fine), connected
-   to the same network.
-2. In the dashboard, go to **Settings → Node provisioning** and copy the **join
-   token**.
-3. On the new device, run:
-
-    ```bash
-    curl -fsSL https://kenzy.ai/install.sh | bash -s -- --profile node --token PASTE_TOKEN_HERE
-    ```
-
-That's the whole install. The node finds your server on the network by itself,
-connects with the token, and pulls all its settings from the server — there's
-nothing to configure on the device.
-
-!!! note "✓ Checkpoint"
-    Within a minute the new node appears as a card in the dashboard's fleet view.
-    Open its **Configure** page to name its room, then run **Set up / calibrate
-    audio…** to pick its microphone and tune it — all from your browser. Then walk
-    over and say "hey Kenzie."
-
-Repeat for as many rooms as you like. With more than one room you can try:
-
-> "Hey Kenzie… **tell everyone dinner's ready**" (speaks in every room)
->
-> "Hey Kenzie… **call the living room**" (live intercom — the other room says "yes" to accept)
-
-## Step 5 — Point it at your smart home (optional)
-
-If you run Home Assistant, give Kenzy a long-lived access token (`HA_API_KEY` in
-`~/.config/kenzy/.env`) and set your HA URL — then "turn on the kitchen lights" just
-works, using the names and rooms you already have in HA. The full walkthrough,
-including giving devices natural spoken names, is at
-[Home Assistant](skills/home-assistant.md).
-
-## Next steps
-
-Now teach the house to use her: [Talking to Kenzy](talking-to-kenzy.md) is the
-five-minute guide — waking her, interrupting, canceling, muting, and how
-conversations work.
-
-
-- [Enroll voices](speaker-enrollment.md) so Kenzy knows who's talking
-- [Explore the dashboard](dashboard.md) — updates, logs, activity view, per-room tuning
-- [See what it can do](skills/builtin.md) — weather, news, announcements, and more
-- [Write a skill](skills/writing-skills.md) — add abilities with a small Python file
-- [Running Fully Local](fully-local.md) — swap the default OpenAI quick-start
-  for models running on your own hardware, stage by stage; nothing spoken at
-  home has to leave your network
+All set? Great! — **[Continue](guides/part1-first-conversation.md)** to **[Part 1 — First Conversation](guides/part1-first-conversation.md)**.
 
 ---
 

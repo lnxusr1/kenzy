@@ -39,3 +39,13 @@ openai:
   # whisper model was previously cached; otherwise the failure surfaces as the
   # error cue.
   fallback: true
+
+# --- Wyoming protocol listener (Home Assistant voice pipelines) -------------
+# Expose this service's transcription as a Wyoming ASR provider so HA's
+# Assist pipeline transcribes through Kenzy's STT (HA: Add integration →
+# Wyoming Protocol, pointed at this host + port). Plain TCP, no auth — the
+# listener follows the service bind (loopback unless KENZY_BIND/--listen-all
+# opens the LAN). Requires: pip install wyoming
+wyoming:
+  enabled: false
+  port: 10300

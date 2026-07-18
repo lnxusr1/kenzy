@@ -31,12 +31,17 @@ log = logging.getLogger(__name__)
 #: A person id is a filesystem/YAML-safe slug (the join key downstream keys off).
 _ID_RE = re.compile(r"[a-z0-9][a-z0-9._-]*")
 
+#: Sentinel for save_person's three-state ha_user (omitted vs set vs cleared).
+_UNSET: Any = object()
+UNSET: Any = _UNSET  # public alias for callers outside this module
+
 
 def slugify(name: str) -> str:
     """The slug a display name maps to — used for person ids AND for the
     voiceprint key of a person-first enrollment (so a person's voice profile is
     named after their id, and renaming the person never touches the file)."""
     return re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_") or "person"
+
 
 #: Confidence tiers a downstream gate consumes as a contract (F1.3). Today the
 #: resolver emits UNKNOWN (no/low-confidence match) and RECOGNIZED (a voiceprint
@@ -58,6 +63,9 @@ class Person:
     voiceprints: list[str] = field(default_factory=list)
     ha_user: str | None = None
     phone: str | None = None
+    #: F7.4 "don't remember me": memory refuses writes AND reads for this
+    #: person — still a recognized voice (device control, Q&A), no ledger.
+    memory_opt_out: bool = False
     settings: dict[str, Any] = field(default_factory=dict)
 
 
@@ -117,6 +125,7 @@ class PeopleStore:
                 voiceprints=vps,
                 ha_user=(str(rec["ha_user"]).strip() or None) if rec.get("ha_user") else None,
                 phone=(str(rec["phone"]).strip() or None) if rec.get("phone") else None,
+                memory_opt_out=bool(rec.get("memory_opt_out", False)),
                 settings=rec["settings"] if isinstance(rec.get("settings"), dict) else {},
             )
             self._people[person.id] = person
@@ -139,6 +148,17 @@ class PeopleStore:
         want = name.strip().lower()
         for person in self._people.values():
             if person.name.lower() == want or person.id.lower() == want:
+                return person
+        return None
+
+    def by_ha_user(self, entity_id: str) -> Person | None:
+        """Match on the HA person entity id (F3 Assist channel) — the stable
+        id the operator maps in people.yaml (e.g. ``person.john_mark``)."""
+        want = entity_id.strip().lower()
+        if not want:
+            return None
+        for person in self._people.values():
+            if (person.ha_user or "").lower() == want:
                 return person
         return None
 
@@ -176,10 +196,20 @@ class PeopleStore:
                 out.append(vp)
         return out
 
-    def save_person(self, *, id: str | None, name: str, voiceprints: list[str]) -> Person:
+    def save_person(
+        self,
+        *,
+        id: str | None,
+        name: str,
+        voiceprints: list[str],
+        ha_user: str | None = _UNSET,
+        memory_opt_out: bool | None = None,
+    ) -> Person:
         """Create (blank/unknown ``id``) or update a person. A voiceprint assigned
         here is removed from any *other* person, so a voice belongs to exactly one
-        person (assigning it elsewhere moves it)."""
+        person (assigning it elsewhere moves it). ``ha_user`` (the HA person
+        entity id, F3) is three-state: omitted ⇒ preserved, a string ⇒ set,
+        ""/None ⇒ cleared."""
         name = name.strip()
         if not name:
             raise ValueError("a name is required")
@@ -201,6 +231,10 @@ class PeopleStore:
 
         person.name = name
         person.voiceprints = vps
+        if ha_user is not _UNSET:  # omitted ⇒ preserve; explicit value ⇒ set/clear
+            person.ha_user = str(ha_user).strip() or None if ha_user else None
+        if memory_opt_out is not None:  # None ⇒ preserve
+            person.memory_opt_out = bool(memory_opt_out)
         self._reindex()
         self._write()
         return person
@@ -246,6 +280,8 @@ class PeopleStore:
                 rec["ha_user"] = p.ha_user
             if p.phone:
                 rec["phone"] = p.phone
+            if p.memory_opt_out:
+                rec["memory_opt_out"] = True
             if p.settings:
                 rec["settings"] = p.settings
             out[p.id] = rec
@@ -258,6 +294,28 @@ class PeopleStore:
         self._path.write_text(
             yaml.safe_dump(self._serialize(), default_flow_style=False, sort_keys=True)
         )
+
+
+def resolve_assist_identity(store: PeopleStore, ha_user: str, *, unknown_name: str) -> Identity:
+    """Resolve an HA Assist request (F3 — the second front door) to the SAME
+    person records the voice channel uses, by HA person entity id.
+
+    A matched person is RECOGNIZED — an HA session is a credentialed login, at
+    least as strong an identity signal as a voiceprint (VERIFIED stays reserved
+    for multi-signal corroboration). No mapping ⇒ UNKNOWN, fail closed: no
+    memory, gated skills withheld — exactly like an unrecognized voice.
+    """
+    person = store.by_ha_user(ha_user)
+    if person is None:
+        return Identity(display=unknown_name, tier=TIER_UNKNOWN, confidence=0.0)
+    return Identity(
+        display=person.name,
+        tier=TIER_RECOGNIZED,
+        confidence=1.0,  # not a similarity score — a credentialed match
+        person_id=person.id,
+        name=person.name,
+        ha_user=person.ha_user,
+    )
 
 
 def resolve_voice_identity(
