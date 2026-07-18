@@ -197,6 +197,12 @@ makes Kenzy a Home Assistant **conversation agent**, so the companion app's
 Assist screen (phone, tablet, watch) talks to *your* Kenzy — same identity,
 same memory, same skills.
 
+!!! warning "Not an App / add-on"
+    Don't add this repo under HA's **Apps** screen (the add-on store) — it
+    will be rejected as "not a valid app format." Apps are supervised Docker
+    containers; kenzy-hass is a **custom integration** (code that runs inside
+    HA itself), and integrations install through **HACS** or a manual copy.
+
 **Install via HACS** (recommended):
 
 1. In HACS, open the **⋮** menu → **Custom repositories** → add

@@ -154,7 +154,7 @@ _SERVICE_PEERS: dict[str, tuple[str, ...]] = {"speaker": ("tts",)}
 _SERVICE_SECRETS: dict[str, tuple[str, ...]] = {
     "stt": ("OPENAI_API_KEY",),
     "tts": ("OPENAI_API_KEY",),
-    "llm": ("OPENAI_API_KEY", "HA_API_KEY", "CUSTOM_LLM_API_KEY"),
+    "llm": ("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "HA_API_KEY", "CUSTOM_LLM_API_KEY"),
     "speaker": ("HF_TOKEN",),
 }
 # Words that count as accepting an incoming call. Default-deny: anything else declines.

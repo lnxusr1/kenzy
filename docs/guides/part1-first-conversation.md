@@ -71,6 +71,10 @@ one key, no downloads. Using something else?  **[Setting Up the Language Model](
     [Running Fully Local](../fully-local.md#configuring-the-brain-the-llm) for
     more information.
 
+!!! tip "The installer already asked"
+    Newer installs ask this question during setup — provider chosen, key
+    pasted, done. If that was you, skip ahead to the next step.
+
 Okay, fine print out of the way.  If you're using OpenAI (or most cloud providers) then you'll need to grab an API key from your provider's account page — for OpenAI that's:<br />→ [platform.openai.com](https://platform.openai.com) → **API keys** → **create**
 
 Give it to Kenzy right in the dashboard:

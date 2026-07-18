@@ -17,7 +17,9 @@ The `kenzy-hass` integration makes Kenzy an HA **conversation agent**.
 
 1. In HACS: **⋮ → Custom repositories** → add
    `https://github.com/lnxusr1/kenzy-hass` (category **Integration**), then
-   find **Kenzy**, download it, and restart Home Assistant.
+   find **Kenzy**, download it, and restart Home Assistant. (Use HACS, not
+   HA's *Apps* screen — that's the add-on store and rejects integration
+   repos.)
 2. **Settings → Devices & Services → Add Integration → Kenzy**:
 
    | Field | Value |

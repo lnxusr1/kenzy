@@ -49,6 +49,9 @@ extra:
     - icon: fontawesome/brands/github
       name: Kenzy on GitHub
       link: https://github.com/lnxusr1/kenzy
+    - icon: fontawesome/brands/x-twitter
+      name: "@KenzyAi on X"
+      link: https://x.com/KenzyAi
 
 extra_css:
   - css/extra.css

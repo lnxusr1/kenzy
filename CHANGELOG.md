@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [4.0.1]
+
+### Added
+
+- **The installer now asks where Kenzy's thinking should happen.** Server installs offer the choice up front — OpenAI (the quick-start default), Anthropic Claude, Ollama on your own hardware, or decide later — take the API key right there (hidden input, skippable), and write the choice into the dashboard-owned service config. Picking a non-OpenAI brain also offers the **fully local voice** (Kokoro) in the same breath, since the voice would otherwise still need an OpenAI key — making "everything in your house" a single installer path instead of a docs page. Scripted installs keep today's behavior (`--llm`, `--llm-model`, `--llm-url` flags for automation). Server-side: `ANTHROPIC_API_KEY` joins the central secrets the server distributes to the LLM service, so Claude works on multi-host deployments too.
+
 ## [4.0.0]
 
 ### Added

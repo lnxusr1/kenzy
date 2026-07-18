@@ -79,6 +79,10 @@ curl -fsSL https://kenzy.ai/install.sh | bash -s -- --profile node --token <toke
 | `--version` | `KENZY_VERSION` | *(latest ≥3)* | Pin a specific PyPI version |
 | `--package` | `KENZY_PACKAGE` | *(PyPI)* | Install a local wheel/sdist/source dir instead of PyPI |
 | `--constraints` | `KENZY_CONSTRAINTS` | *(none)* | A pip constraints file of dependency pins to honor on install **and every future auto-upgrade** (seeds the config home's `constraints.txt`) |
+| `--llm` | `KENZY_LLM` | *(ask)* | Server/all installs ask where the "thinking" happens — `openai` (quick-start default), `claude`, `ollama` (fully local), or `skip` (decide in the dashboard). This flag answers without the prompt; `--yes`/no-TTY defaults to `openai` |
+| `--llm-model` | `KENZY_LLM_MODEL` | *(per choice)* | Override the model string, LiteLLM format (e.g. `anthropic/claude-sonnet-5`, `ollama/qwen3:8b`) |
+| `--llm-url` | `KENZY_LLM_URL` | `http://127.0.0.1:11434` | The model server's URL (Ollama choice) |
+| `--local-voice` | `KENZY_LOCAL_VOICE` | *(ask when non-OpenAI brain)* | Use the local Kokoro voice — installs the `kokoro` extra + `espeak-ng` and sets the tts service's provider; nothing spoken leaves your network |
 | `--tls` / `--no-tls` | `KENZY_TLS` | *(ask)* | Server/all installs ask whether to [enable TLS](configuration/server.md#tls-optional) — node audio (wss), the dashboard (https), and the backend services all encrypt — with a **generated self-signed cert**; these flags answer without the prompt. **TLS is on by default** (including under `--yes`); use `--no-tls` for plaintext. |
 | `--tls-cert` / `--tls-key` | `KENZY_TLS_CERT` / `KENZY_TLS_KEY` | *(generated)* | Use your own certificate pair instead of generating one (both required; implies `--tls`) |
 | `--no-service` | — | — | Install + config only; skip the systemd units |
