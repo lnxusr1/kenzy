@@ -95,7 +95,7 @@ def collect_local(root: Path) -> dict[str, bytes]:
 #: same safe archiving/extraction; the path doubles as the archive prefix.
 DATA_SLICES: dict[str, tuple[str, ...]] = {
     "speaker": ("data/speakers",),
-    "llm": ("skills", "data/home_assistant"),
+    "llm": ("skills", "data/home_assistant", "data/memory"),
 }
 
 

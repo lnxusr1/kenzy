@@ -368,6 +368,24 @@ async def fetch_todo_lists() -> list[dict[str, str]]:
     return sorted(out, key=lambda x: x["entity_id"])
 
 
+async def fetch_persons() -> list[dict[str, str]]:
+    """The ``person`` entities HA currently has, name + id — the People page's
+    "HA person" dropdown (F3): mapping a household member to their HA login
+    picks from real entities instead of typing one."""
+    base, headers = ha_conn()
+    async with httpx.AsyncClient(timeout=10) as client:
+        resp = await client.get(f"{base}/api/states", headers=headers)
+        resp.raise_for_status()
+    out: list[dict[str, str]] = []
+    for st in resp.json():
+        eid = str(st.get("entity_id", ""))
+        if eid.startswith("person."):
+            attrs = st.get("attributes") or {}
+            name = str(attrs.get("friendly_name") or eid.split(".", 1)[1].replace("_", " "))
+            out.append({"entity_id": eid, "name": name})
+    return sorted(out, key=lambda x: x["entity_id"])
+
+
 async def fetch_raw() -> list[dict[str, Any]]:
     """Render the topology template through HA and return the raw entity rows.
 

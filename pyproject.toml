@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "kenzy"
-version = "3.12.0"
+version = "4.0.0"
 description = "Distributed home voice-assistant: kenzy-node, kenzy-server, kenzy-stt, kenzy-tts, kenzy-llm, kenzy-speaker"
 requires-python = ">=3.11"
 readme = "README.md"
@@ -63,6 +63,7 @@ stt = [
     "openai>=1.0.0",
     "python-dotenv>=1.0.0",
     "zeroconf>=0.130",
+    "wyoming>=1.6.0",
 ]
 
 # Install on the TTS service host
@@ -72,6 +73,7 @@ tts = [
     "openai>=1.0.0",
     "python-dotenv>=1.0.0",
     "zeroconf>=0.130",
+    "wyoming>=1.6.0",
 ]
 
 # Install on the speaker identification host

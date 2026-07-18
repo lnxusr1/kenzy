@@ -309,3 +309,107 @@ def test_fetch_service_config_best_effort(tmp_path, monkeypatch):
     # Unreachable server → None, no retry/block (dead port).
     monkeypatch.setenv("KENZY_SERVER_URL", "http://127.0.0.1:1")
     assert fetch_service_config("speaker", timeout=0.5) is None
+
+
+# ---------------------------------------------------------------------------
+# Always-on /assist endpoint (F3 — the HA Assist conversation channel)
+# ---------------------------------------------------------------------------
+
+
+async def test_assist_endpoint(tmp_path, monkeypatch):
+    from kenzy.server.people import PeopleStore
+
+    monkeypatch.delenv("KENZY_SERVICE_TOKEN", raising=False)
+    monkeypatch.setenv("KENZY_HOME", str(tmp_path))
+    (tmp_path / "configs").mkdir(parents=True)
+    server = TranscribingServer(
+        {"host": "127.0.0.1", "port": 8792, "llm": {"url": "http://llm:8766/process"}}
+    )
+    pfile = tmp_path / "people.yaml"
+    pfile.write_text(
+        "people:\n  john:\n    name: John\n    voiceprints: [johnmark]\n"
+        "    ha_user: person.john_mark\n"
+    )
+    server._people = PeopleStore(pfile)
+    seen: list[tuple[str, str, object]] = []
+
+    async def fake_llm(
+        text, room_id, session_id, speaker=None, node_id=None, identity=None, channel="voice"
+    ):
+        seen.append((text, room_id, identity, channel))
+        return (f"Hi {speaker}!", "vp", [], True, False)
+
+    monkeypatch.setattr(server, "_call_llm", fake_llm)
+    task = await _serve(server)
+    try:
+        # Mapped HA person → recognized identity, per-person assist lane.
+        status, body = await asyncio.to_thread(
+            _http_get,
+            "http://127.0.0.1:8792/assist?text=hello%20there&ha_user=person.john_mark",
+        )
+        assert status == 200
+        assert body == {"text": "Hi John!", "speaker": "John", "recognized": True, "fast": True}
+        text, lane, identity, channel = seen[-1]
+        assert text == "hello there" and lane == "assist:john"
+        assert identity.person_id == "john" and identity.tier == "recognized"
+        assert channel == "assist"  # F3.2: skills see the nodeless channel
+
+        # Unmapped HA user → unknown, fail closed (still answers, ungated tier).
+        status, body = await asyncio.to_thread(
+            _http_get, "http://127.0.0.1:8792/assist?text=hi&ha_user=person.guest"
+        )
+        assert status == 200 and body["recognized"] is False
+        # Guests get a PER-HA-USER lane so two guests never share context.
+        assert seen[-1][1] == "assist:guest:person.guest" and seen[-1][2].tier == "unknown"
+
+        # Missing text → 400.
+        status, _ = await asyncio.to_thread(_http_get, "http://127.0.0.1:8792/assist")
+        assert status == 400
+
+        # The endpoint itself flips the assist-seen marker (HA-surface reveal
+        # for app-only households) — regression: it was once wired to /announce.
+        assert server.assist_seen() is True
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+async def test_assist_endpoint_token_gated_and_base_stub(tmp_path, monkeypatch):
+    monkeypatch.delenv("KENZY_SERVICE_TOKEN", raising=False)
+    monkeypatch.setenv("KENZY_HOME", str(tmp_path))
+    (tmp_path / "configs").mkdir(parents=True)
+    # Token set ⇒ unauthenticated /assist is refused.
+    server = TranscribingServer(
+        {"host": "127.0.0.1", "port": 8791, "discovery": {"token": "s3cret"},
+         "llm": {"url": "http://llm:8766/process"}}
+    )
+    task = await _serve(server)
+    try:
+        status, _ = await asyncio.to_thread(_http_get, "http://127.0.0.1:8791/assist?text=hi")
+        assert status == 401
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+    # The base AudioServer (no pipeline) answers 501, not a crash.
+    base = AudioServer({"host": "127.0.0.1", "port": 8790})
+    task = await _serve(base)
+    try:
+        status, _ = await asyncio.to_thread(_http_get, "http://127.0.0.1:8790/assist?text=hi")
+        assert status == 501
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+def test_service_signature_wire_format_is_frozen():
+    """The KENZY-HMAC request signature is a WIRE CONTRACT reimplemented by
+    external clients (kenzy-hass carries a byte-for-byte copy with this same
+    vector). Changing the derivation breaks every deployed integration —
+    this test makes that a loud, deliberate decision."""
+    from kenzy.serviceauth import sign_service_request
+
+    assert sign_service_request("test-fleet-token", "GET", "/assist", ts=1700000000) == (
+        "KENZY-HMAC ts=1700000000, "
+        "sig=eb3e55be3ad06bc15573b6b3e5807a6706a3db9e92a5fae6ad2fbc44c5a99e68"
+    )

@@ -83,3 +83,49 @@ async def test_dispatch_ignores_unknown_action(tmp_path, monkeypatch):
     s._nodes["n-1"] = NodeSession(ws=_WS(), node_id="n-1", room_id="office")
     # Should not raise on an unrecognized action type.
     await s._dispatch_actions([{"type": "teleport", "to": "moon"}], "n-1", "office")
+
+
+async def test_dispatch_skips_node_bound_actions_without_source_node(tmp_path, monkeypatch):
+    # The assist lane (F3) dispatches with source_node_id="" — node-bound
+    # actions must be skipped, not crash (the skills refuse them already;
+    # this is the server-side backstop for custom skills).
+    monkeypatch.setenv("KENZY_HOME", str(tmp_path))
+    s = TranscribingServer({})
+    called: list[str] = []
+
+    async def boom(*a, **k):
+        called.append("x")
+
+    for name in ("set_node_volume", "set_node_muted", "start_intercom",
+                 "start_enrollment", "start_calibration"):
+        monkeypatch.setattr(s, name, boom)
+    await s._dispatch_actions(
+        [
+            {"type": "set_volume", "delta": 10},
+            {"type": "set_volume", "muted": True},
+            {"type": "start_intercom", "room": "office"},
+            {"type": "start_enrollment", "name": "Bob"},
+            {"type": "start_calibration"},
+            {"type": "set_schedule", "kind": "timer", "seconds": 60, "label": ""},
+        ],
+        "",
+        "assist:john",
+    )
+    assert called == []
+
+
+async def test_dispatch_room_targeted_schedule_works_without_source_node(tmp_path, monkeypatch):
+    # An explicit-room schedule from the assist lane must still be stored.
+    monkeypatch.setenv("KENZY_HOME", str(tmp_path))
+    s = TranscribingServer({})
+    s._nodes["n-kit"] = NodeSession(ws=_WS(), node_id="n-kit", room_id="kitchen")
+    stored: list[dict] = []
+    monkeypatch.setattr(
+        s, "_action_set_schedule", lambda a, nid, room, spk: stored.append(a)
+    )
+    await s._dispatch_actions(
+        [{"type": "set_schedule", "kind": "timer", "seconds": 60, "label": "", "room": "kitchen"}],
+        "",
+        "assist:john",
+    )
+    assert len(stored) == 1 and stored[0]["room"] == "kitchen"

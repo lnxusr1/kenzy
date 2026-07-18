@@ -67,3 +67,59 @@ embeddings_dir: "data/speakers"
 identify_threshold: 0.28
 unknown_speaker: "unknown"
 ```
+
+## People — mapping voices to a person (`data/people.yaml`)
+
+The speaker service returns a **voiceprint name** (whatever a voice was enrolled
+as). An optional `data/people.yaml` in the server's config home elevates those
+names into **person records** — one household member joining one or more
+voiceprints, plus optional links for later channels — and the pipeline then
+resolves every request to `(person, confidence, tier)` instead of a bare name.
+
+```yaml
+# data/people.yaml — server-owned; rides your backup
+people:
+  john:                        # a stable id
+    name: John                 # spoken/display name
+    voiceprints: [john, johnmark]   # speaker-service names that are this person
+    ha_user: person.john       # optional — for the HA Assist channel (later)
+    phone: null                # optional
+  nicki:
+    name: Nicki
+    voiceprints: [nicki]
+```
+
+- **No file? No change.** Without `people.yaml` the raw voiceprint name passes
+  straight through, exactly as before — this layer is purely additive.
+- **Confidence tier.** A match is `recognized`; a below-threshold voice is
+  `unknown`. Future features (per-person memory, privacy) gate on the tier.
+- **Standalone.** `ha_user`/`phone` are optional — a voiceprint-only household
+  is fully supported.
+
+### Editing people from the dashboard
+
+The dashboard's **People** tab is the easy way to manage these records — you
+rarely need to touch the YAML. Enrollment is **person-first**: a person can
+exist without a voice, but every enrolled voice belongs to a person, so the flow
+is simply *add the person, then enroll their voice*.
+
+- **Add a person**, then click **Enroll voice** on their card and pick the room
+  to record from. The voice profile is stored under the person's stable id and
+  linked automatically — and re-enrolling later adds more samples to the same
+  profile, which makes recognition more reliable. (The hands-free "Hey Kenzy,
+  enroll me as Alice" command is person-first too: it finds or creates the
+  person record for the name it hears.)
+- **Voices without a person** — profiles from a pre-people setup or the
+  `kenzy-enroll` CLI — are listed with a one-click *Assign to a person*, so
+  you're guided from "a voice exists" to "Kenzy knows who that is."
+- Editing is inline: click a person to expand their card, change the name, and
+  save. Renaming a person never touches the voice profile (it's keyed by their
+  id). Deleting a person removes only the record — the enrolled voice itself
+  stays; deleting a voice profile follows through to its person record
+  automatically, so the links in `people.yaml` never silently break.
+
+The tab edits only the name and voices; `ha_user`/`phone` stay as you set them
+in the file (reserved for later channels) and are preserved across saves. Edits
+need `dashboard.controls: true` (otherwise the tab is read-only) and take effect
+immediately — the running pipeline resolves the new mapping on the next request,
+no restart.

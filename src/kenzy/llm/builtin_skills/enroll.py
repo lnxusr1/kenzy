@@ -10,7 +10,7 @@ kenzy-speaker service. Enrollment is gated server-side by
 
 from __future__ import annotations
 
-from kenzy.llm.skills import add_action, skill  # type: ignore[import]
+from kenzy.llm.skills import add_action, request_channel, skill  # type: ignore[import]
 
 
 @skill
@@ -25,5 +25,10 @@ async def enroll_speaker(name: str) -> str:
     name = name.strip()
     if not name:
         return "I need a name to enroll the voice under — ask the user who this is."
+    if request_channel() != "voice":  # F3: enrollment records at a room's mic
+        return (
+            "Voice enrollment happens at a room speaker — ask from a room device, "
+            "or start it from the dashboard's People page."
+        )
     add_action({"type": "start_enrollment", "name": name})
     return f"Starting voice enrollment for {name}."

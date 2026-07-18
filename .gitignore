@@ -1,5 +1,18 @@
 # Environment / secrets
 .env
+.env.*
+!.env.example
+# Key material anywhere in the tree (dev certs live under /configs/, but a
+# stray openssl output must never land in a public repo either)
+*.key
+*.pem
+*.crt
+# Backup archives (dashboard "Download backup" bundles configs + household data;
+# with ?secrets=1 they can even carry .env) — root-anchored so packaged test
+# fixtures under src/ or tests/ could still be tracked deliberately if ever needed
+/*.tar.gz
+# Stray runtime logs
+*.log
 
 # Python
 __pycache__/
@@ -25,12 +38,17 @@ htmlcov/
 .coverage
 coverage.xml
 
-# Downloaded ML models
-./models/
+# Downloaded ML models (the `./` form was a no-op in gitignore syntax — anchor properly)
+/models/
 
-# Runtime data
-/data/speakers/
-/data/home_assistant/
+# Operator/runtime data — the WHOLE tree. In a dev checkout the repo root is the
+# config home, so everything under /data/ is this household's live state, never
+# fixture data: voice embeddings (data/speakers/), the HA curation layer, the
+# schedule store (schedules.json), person records (people.yaml — voiceprint↔person
+# links), and the memory fact ledger (data/memory/ — the most personal thing
+# Kenzy holds). None of it belongs in a public repository. Tests use tmp dirs;
+# the docs show example schemas inline.
+/data/
 
 # Operator/site-specific config — never commit (it holds your rooms, HA URL, location,
 # auth, etc.). Generic templates live in examples/. (.env is ignored above.)
@@ -67,6 +85,3 @@ publish.sh
 dev_stack.py
 # Voice test rig (dev-box specific: BY Y02 speaker/mic beside the node)
 voice_probe.py
-
-# Dev-box household curation (John's real HA layer — not fixture data)
-/data/home_assistant/curation.yaml

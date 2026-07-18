@@ -21,7 +21,14 @@ import re
 from datetime import datetime
 from typing import Any
 
-from kenzy.llm.skills import FastResult, add_action, fast_intent, get_request, skill
+from kenzy.llm.skills import (
+    FastResult,
+    add_action,
+    fast_intent,
+    get_request,
+    request_channel,
+    skill,
+)
 
 DAY_NAMES = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 _DAY_FULL = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
@@ -180,6 +187,15 @@ def _fmt_days(days: list[str]) -> str:
 
 
 def _describe(entry: dict[str, Any]) -> str:
+    text = _describe_bare(entry)
+    # A nodeless channel (assist) lists the whole house's entries — the
+    # listener isn't standing in any of the rooms, so say where each one is.
+    if request_channel() != "voice" and entry.get("room"):
+        text += f" in the {entry['room']}"
+    return text
+
+
+def _describe_bare(entry: dict[str, Any]) -> str:
     kind = entry.get("kind", "?")
     label = str(entry.get("label") or "")
     if entry.get("at"):
@@ -244,13 +260,28 @@ def _known_room(name: str) -> str | None:
     return None
 
 
+def _assist_roomless(action: dict[str, Any]) -> bool:
+    """True when a set arrived from a nodeless channel (HA Assist, F3) with no
+    explicit room — there is no asking node to deliver in, so the set must
+    name a room. Fast handlers miss (the LLM converses to get the room);
+    LLM tools return _NEEDS_ROOM so the model asks and retries."""
+    return request_channel() != "voice" and not action.get("room")
+
+
+_NEEDS_ROOM = (
+    "Error: this request didn't come from a room speaker, so there is no "
+    "asking room to deliver in. Ask the user which room it's for, then retry "
+    "with `room` set to one of the connected rooms."
+)
+
+
 # ---------------------------------------------------------------------------
 # LLM tools (the fuzzy tier)
 # ---------------------------------------------------------------------------
 
 
 @skill
-async def set_timer(duration_seconds: int, label: str = "") -> str:
+async def set_timer(duration_seconds: int, label: str = "", room: str = "") -> str:
     """Start a countdown timer that announces itself in the asking room when done.
 
     Use for relative durations ("set a timer for 10 minutes", "a two hour
@@ -259,17 +290,24 @@ async def set_timer(duration_seconds: int, label: str = "") -> str:
 
     duration_seconds: total duration in seconds (must be positive)
     label: optional short name for the timer
+    room: announce in this room instead of the asking room (required when the
+        request doesn't come from a room speaker)
     """
     if duration_seconds <= 0:
         return "Error: duration_seconds must be positive."
-    add_action(
-        {
-            "type": "set_schedule",
-            "kind": "timer",
-            "seconds": int(duration_seconds),
-            "label": label.strip(),
-        }
-    )
+    action: dict[str, Any] = {
+        "type": "set_schedule",
+        "kind": "timer",
+        "seconds": int(duration_seconds),
+        "label": label.strip(),
+    }
+    if room.strip():
+        if _known_room(room) is None:
+            return f"Error: no connected room named {room!r}."
+        action["room"] = _known_room(room)
+    if _assist_roomless(action):
+        return _NEEDS_ROOM
+    add_action(action)
     name = f"{label.strip()} timer" if label.strip() else "timer"
     return f"Scheduled: {name} for {_fmt_duration(int(duration_seconds))}."
 
@@ -307,6 +345,8 @@ async def set_alarm(time: str, days: str = "", room: str = "") -> str:
     blocked = _alarm_blocked_room(action.get("room"))
     if blocked is not None:
         return _alarm_refusal(blocked, here=not room.strip())
+    if _assist_roomless(action):
+        return _NEEDS_ROOM
     add_action(action)
     suffix = f" {_fmt_days(day_list)}" if day_list else ""
     return f"Scheduled: alarm at {_fmt_clock(time.strip())}{suffix}."
@@ -359,6 +399,8 @@ async def set_reminder(
         if _known_room(room) is None:
             return f"Error: no connected room named {room!r}."
         action["room"] = _known_room(room)
+    if _assist_roomless(action):
+        return _NEEDS_ROOM
     add_action(action)
     return f"Scheduled: reminder {when}."
 
@@ -372,12 +414,13 @@ async def list_schedules() -> str:
     """
     items = _entries()
     if not items:
-        return "No active timers, alarms, or reminders in this room."
+        where = " in this room" if request_channel() == "voice" else ""
+        return f"No active timers, alarms, or reminders{where}."
     return "\n".join(f"[{e.get('id')}] {_describe(e)}" for e in items)
 
 
 @skill
-async def run_later(command: str, in_seconds: int = 0, time: str = "") -> str:
+async def run_later(command: str, in_seconds: int = 0, time: str = "", room: str = "") -> str:
     """Defer a voice command to run later ("turn on the lights in 30 seconds").
 
     Use when the user wants an *action* performed after a delay or at a clock
@@ -391,6 +434,8 @@ async def run_later(command: str, in_seconds: int = 0, time: str = "") -> str:
         (e.g. "turn on the porch light")
     in_seconds: run this many seconds from now
     time: 24-hour clock time as "HH:MM"
+    room: run in this room's context instead of the asking room (required when
+        the request doesn't come from a room speaker)
     """
     if not command.strip():
         return "Error: the command text is empty."
@@ -398,6 +443,10 @@ async def run_later(command: str, in_seconds: int = 0, time: str = "") -> str:
         return "Error: give exactly one of in_seconds or time."
     action: dict[str, Any] = {"type": "set_schedule", "kind": "command",
                               "label": command.strip(), "days": []}  # fmt: skip
+    if room.strip():
+        if _known_room(room) is None:
+            return f"Error: no connected room named {room!r}."
+        action["room"] = _known_room(room)
     if in_seconds > 0:
         action["seconds"] = int(in_seconds)
         when = f"in {_fmt_duration(int(in_seconds))}"
@@ -406,6 +455,8 @@ async def run_later(command: str, in_seconds: int = 0, time: str = "") -> str:
             return 'Error: time must be 24-hour "HH:MM".'
         action["at"] = time.strip()
         when = f"at {_fmt_clock(time.strip())}"
+    if _assist_roomless(action):
+        return _NEEDS_ROOM
     add_action(action)
     return f"Scheduled: the command will run {when}."
 
@@ -519,6 +570,8 @@ def _handle_set_timer(text: str) -> FastResult | None:
         if seconds is None:
             return None  # "set a timer for my roast" → let the LLM ask
         label = (m.groupdict().get("label") or "").strip()
+        if request_channel() != "voice":
+            return FastResult.miss()  # no asking room — LLM tier asks for one
         add_action({"type": "set_schedule", "kind": "timer", "seconds": seconds, "label": label})
         name = f"{label.capitalize()} timer" if label else "Timer"
         return FastResult.handled(f"{name} set for {_fmt_duration(seconds)}.", _VOICE)
@@ -605,6 +658,8 @@ def _handle_set_alarm(text: str) -> FastResult | None:
     blocked = _alarm_blocked_room(room)
     if blocked is not None:
         return FastResult.handled(_alarm_refusal(blocked, here=not room), _VOICE)
+    if _assist_roomless(action):
+        return FastResult.miss()  # LLM tier asks for the room
     add_action(action)
     reply = f"Alarm set for {_fmt_clock(hhmm)}"
     if days:
@@ -644,6 +699,8 @@ def _handle_reminder(text: str) -> FastResult | None:
             when = f"at {_fmt_clock(hhmm)}"
         if room:
             action["room"] = room
+        if _assist_roomless(action):
+            return FastResult.miss()  # LLM tier asks for the room
         add_action(action)
         reply = f"Okay — I'll remind you {when}"
         if room:
@@ -653,6 +710,8 @@ def _handle_reminder(text: str) -> FastResult | None:
 
 
 def _handle_deferred(text: str) -> FastResult | None:
+    if request_channel() != "voice":
+        return None  # no asking room for the replay — LLM tier (run_later) asks
     m = _DEFER_IN_RE.match(text)
     if m:
         seconds = parse_duration(m.group("dur"))

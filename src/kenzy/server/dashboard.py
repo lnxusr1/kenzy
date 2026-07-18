@@ -461,6 +461,8 @@ class Dashboard:
             "flags": {
                 "logs": self._dcfg.logs,
                 "controls": self._dcfg.controls,
+                # Gate the HA nav tab: no-HA households see no HA surfaces.
+                "ha_active": (await self._ha_flags())["active"],
             },
         }
 
@@ -750,6 +752,32 @@ class Dashboard:
         if path == "/api/speakers":
             return self._json(200, await self._speakers_state())
 
+        if path == "/api/people":
+            return self._json(200, await self._people_state())
+
+        if path == "/api/memory":
+            return self._json(200, await self._memory_state())
+
+        if path.startswith("/api/people/") and path.endswith("/export"):
+            pid = path[len("/api/people/") : -len("/export")]
+            body = await self._person_export(pid)
+            if body is None:
+                return self._json(404, {"error": "no such person"})
+            import json as _json_mod
+
+            return Response(
+                200,
+                "OK",
+                Headers(
+                    {
+                        "Content-Type": "application/json",
+                        "Content-Disposition": f'attachment; filename="kenzy-{pid}-export.json"',
+                        "Cache-Control": "no-store",
+                    }
+                ),
+                _json_mod.dumps(body, indent=2, ensure_ascii=False).encode(),
+            )
+
         if path == "/api/backup":
             # Downloadable backup: the local config home merged with the stateful
             # services' slices (complete even multi-host). By default .env/API keys
@@ -1016,10 +1044,9 @@ class Dashboard:
         self, method: str, payload: dict[str, Any] | None = None
     ) -> dict[str, Any] | None:
         """GET/POST the LLM service's /skills endpoint; None if unreachable."""
-        health_url = self._service_urls.get("llm")
-        if not health_url:
+        base = self._service_base("llm")  # static config ← auto-registered (right scheme under TLS)
+        if not base:
             return None
-        base = health_url[: -len("/health")]
         import httpx
 
         try:
@@ -1041,14 +1068,63 @@ class Dashboard:
         except Exception:
             return None
 
+    async def _ha_flags(self, *, with_persons: bool = False) -> dict[str, Any]:
+        """HA-availability flags for surface gating (cached ~30 s), from the
+        LLM service's ``GET /ha/persons`` plus the server's own signals.
+
+        ``active`` = HA is in this household's picture: the control side is
+        configured (HA_API_KEY) OR the app front door has been used
+        (``assist_seen``) — and the home_assistant module isn't disabled.
+        No-HA households therefore see no HA surfaces at all."""
+        import os
+        import time as _t
+
+        now = _t.monotonic()
+        cached: tuple[float, dict[str, Any]] | None = getattr(self, "_ha_flags_cache", None)
+        # NB: the fetch is identical with or without persons (the endpoint
+        # always returns them when reachable) — with_persons must NOT force a
+        # refetch on empty results, or an unreachable HA turns every People
+        # page load into a fresh 10s-timeout roundtrip.
+        stale = cached is None or now - cached[0] > 30.0
+        if cached is None or stale:
+            base = self._service_base("llm")
+            info: dict[str, Any] = {}
+            if base:
+                import httpx
+
+                try:
+                    async with httpx.AsyncClient(
+                        timeout=10.0, verify=tlsutil.httpx_verify()
+                    ) as client:
+                        r = await client.get(
+                            f"{base}/ha/persons",
+                            headers=self._server._service_headers("GET", f"{base}/ha/persons"),
+                        )
+                        r.raise_for_status()
+                        info = r.json()
+                except Exception:
+                    info = {}
+            configured = bool(info.get("configured")) or bool(os.environ.get("HA_API_KEY"))
+            skill_disabled = bool(info.get("skill_disabled", False))
+            flags = {
+                "configured": configured,
+                "skill_disabled": skill_disabled,
+                "reachable": bool(info.get("reachable")),
+                "assist_seen": self._server.assist_seen(),
+                "persons": info.get("persons") or [],
+            }
+            flags["active"] = (configured or flags["assist_seen"]) and not skill_disabled
+            cached = (now, flags)
+            self._ha_flags_cache = cached
+        return dict(cached[1])
+
     async def _llm_curation_request(
         self, method: str, payload: dict[str, Any] | None = None
     ) -> dict[str, Any] | None:
         """GET/POST the LLM service's /ha/curation endpoint; None if unreachable."""
-        health_url = self._service_urls.get("llm")
-        if not health_url:
+        base = self._service_base("llm")  # static config ← auto-registered (right scheme under TLS)
+        if not base:
             return None
-        base = health_url[: -len("/health")]
         import httpx
 
         try:
@@ -1069,6 +1145,54 @@ class Dashboard:
             return data if isinstance(data, dict) else None
         except Exception:
             return None
+
+    async def _llm_memory_request(
+        self, method: str, sub_path: str, payload: dict[str, Any] | None = None
+    ) -> dict[str, Any] | None:
+        """GET/POST a kenzy-llm /memory endpoint; None if unreachable/disabled."""
+        base = self._service_base("llm")  # static config ← auto-registered (right scheme under TLS)
+        if not base:
+            return None
+        import httpx
+
+        url = f"{base}/memory{sub_path}"
+        try:
+            async with httpx.AsyncClient(timeout=8.0, verify=tlsutil.httpx_verify()) as client:
+                if method == "POST":
+                    r = await client.post(
+                        url, json=payload or {}, headers=self._server._service_headers("POST", url)
+                    )
+                else:
+                    r = await client.get(url, headers=self._server._service_headers("GET", url))
+                r.raise_for_status()
+            data = r.json()
+            return data if isinstance(data, dict) else None
+        except Exception:
+            return None
+
+    async def _memory_state(self) -> dict[str, Any]:
+        """The ledger + owner display names (dashboard Memory manager, F7.2 thin).
+
+        The dashboard is a credentialed admin surface: it sees every fact at
+        every tier — tiers gate *voices*, the login cookie gates this."""
+        info = await self._llm_memory_request("GET", "")
+        people = {p["id"]: p["name"] for p in self._server.list_people()}
+        facts = []
+        for f in (info or {}).get("facts", []):
+            f = dict(f)
+            f["owner_name"] = people.get(f.get("owner"), f.get("owner"))
+            facts.append(f)
+        return {
+            "reachable": info is not None,
+            "controls": self._dcfg.controls,
+            "facts": facts,
+        }
+
+    async def _forget_memory(self, fact_id: str) -> tuple[bool, str | None]:
+        res = await self._llm_memory_request("POST", "/forget", {"id": fact_id})
+        if res is None:
+            return False, "memory service not reachable (or memory is disabled)"
+        return True, None
 
     async def _ha_curation_state(self) -> dict[str, Any]:
         info = await self._llm_curation_request("GET")
@@ -1237,10 +1361,13 @@ class Dashboard:
         self, method: str, sub_path: str, payload: dict[str, Any] | None = None
     ) -> tuple[int, Any] | None:
         """Proxy a request to the speaker service; (status, json) or None if unreachable."""
-        health_url = self._service_urls.get("speaker")
-        if not health_url:
+        # Use _service_base (static config ← auto-registered) rather than the
+        # static-only _service_urls: with mesh TLS the service registers itself
+        # as https, and the static server.yaml url may still say http — the
+        # announced base carries the right scheme.
+        base = self._service_base("speaker")
+        if not base:
             return None
-        base = health_url[: -len("/health")]
         import httpx
 
         try:
@@ -1286,6 +1413,8 @@ class Dashboard:
         if res is None:
             return False, "speaker service not reachable"
         if res[0] == 200:
+            # Keep the person records honest: drop the deleted voice from its owner.
+            self._server.remove_person_voiceprint(name)
             return True, None
         detail = res[1].get("detail") if isinstance(res[1], dict) else None
         return False, detail or f"delete failed ({res[0]})"
@@ -1297,9 +1426,149 @@ class Dashboard:
         if res is None:
             return False, "speaker service not reachable"
         if res[0] == 200:
+            # Follow the rename in the person records so the link doesn't break.
+            self._server.rename_person_voiceprint(name, new_name)
             return True, None
         detail = res[1].get("detail") if isinstance(res[1], dict) else None
         return False, detail or f"rename failed ({res[0]})"
+
+    # ------------------------------------------------------------------
+    # People (identity records): group enrolled voices into household members
+    # ------------------------------------------------------------------
+
+    async def _person_export(self, person_id: str) -> dict[str, Any] | None:
+        """The F7.4 "what does Kenzy know about me" download: person record +
+        voice profiles + every memory fact they own (all tiers)."""
+        person = next(
+            (p for p in self._server.list_people() if p["id"] == person_id), None
+        )
+        if person is None:
+            return None
+        voices: list[dict[str, Any]] = []
+        res = await self._speaker_request("GET", "/speakers")
+        if res and res[0] == 200 and isinstance(res[1], dict):
+            wanted = {str(v).lower() for v in person["voiceprints"]}
+            voices = [
+                {"name": v.get("name"), "samples": v.get("samples", 0)}
+                for v in res[1].get("speakers", [])
+                if str(v.get("name", "")).lower() in wanted
+            ]
+        mem = await self._llm_memory_request("GET", f"/export?person={quote(person_id)}")
+        import time as _t
+
+        return {
+            "exported_at": _t.strftime("%Y-%m-%d %H:%M:%S"),
+            "person": person,
+            "voice_profiles": voices,
+            "memory": {
+                "available": mem is not None,
+                "facts": (mem or {}).get("facts", []),
+            },
+        }
+
+    async def _revoke_person(self, person_id: str) -> tuple[bool, str | None]:
+        """F7.4 revoke-all (guest departure): erase every owned non-shared fact,
+        delete the enrolled voiceprints, then remove the person record.
+
+        Ordered for retryability: memory first (unreachable ⇒ abort, nothing
+        half-forgotten — but a deliberate 503 from ``memory.enabled: false``
+        counts as "no ledger to erase" and proceeds), and the person record is
+        kept when any voiceprint delete fails, so the operation can simply be
+        re-run (an unowned voiceprint would otherwise stay RECOGNIZED with no
+        person left to revoke)."""
+        person = next(
+            (p for p in self._server.list_people() if p["id"] == person_id), None
+        )
+        if person is None:
+            return False, "no such person"
+        status, mem = await self._llm_memory_status(
+            "POST", "/erase_person", {"person": person_id}
+        )
+        if status == 503:
+            mem = {"erased": 0}  # memory disabled — nothing to erase, proceed
+        elif status != 200 or not isinstance(mem, dict):
+            return False, "memory service unreachable — nothing was removed"
+        failures: list[str] = []
+        for vp in person["voiceprints"]:
+            ok, err = await self._delete_speaker(str(vp))
+            if not ok:
+                failures.append(f"voice {vp!r}: {err or 'delete failed'}")
+        if failures:
+            # Keep the record so revoke can be re-run once the speaker service
+            # is back — their remaining voiceprints must not outlive the person.
+            return False, (
+                "their memories were erased, but voice deletion failed — fix and "
+                "run Remove again: " + "; ".join(failures)
+            )
+        self._server.delete_person(person_id)
+        log.info(
+            "Revoked person %r: %s fact(s) erased, %d voiceprint(s) deleted",
+            person_id,
+            mem.get("erased", "?"),
+            len(person["voiceprints"]),
+        )
+        return True, None
+
+    async def _llm_memory_status(
+        self, method: str, sub_path: str, payload: dict[str, Any] | None = None
+    ) -> tuple[int, dict[str, Any] | None]:
+        """Like _llm_memory_request, but surfaces the HTTP status so callers can
+        tell a deliberate 503 (memory disabled) from an outage. 0 = no service."""
+        base = self._service_base("llm")
+        if not base:
+            return 0, None
+        import httpx
+
+        url = f"{base}/memory{sub_path}"
+        try:
+            async with httpx.AsyncClient(timeout=8.0, verify=tlsutil.httpx_verify()) as client:
+                if method == "POST":
+                    r = await client.post(
+                        url, json=payload or {}, headers=self._server._service_headers("POST", url)
+                    )
+                else:
+                    r = await client.get(url, headers=self._server._service_headers("GET", url))
+            ctype = r.headers.get("content-type", "")
+            data = r.json() if ctype.startswith("application/json") else None
+            return r.status_code, data if isinstance(data, dict) else None
+        except Exception:
+            return 0, None
+
+    async def _people_state(self) -> dict[str, Any]:
+        """People records merged with the speaker service's enrolled voiceprints,
+        each tagged with the person (if any) that claims it — so the panel can
+        surface unassigned voices and show who owns what. Also carries the
+        connected rooms for the enroll-from-a-room flow (the People tab absorbed
+        the old Speakers tab)."""
+        people = self._server.list_people()
+        owner: dict[str, str] = {}
+        for p in people:
+            for vp in p["voiceprints"]:
+                owner[str(vp).lower()] = p["id"]
+
+        res = await self._speaker_request("GET", "/speakers")
+        voiceprints = []
+        if res and res[0] == 200 and isinstance(res[1], dict):
+            for v in res[1].get("speakers", []):
+                name = str(v.get("name", ""))
+                voiceprints.append(
+                    {
+                        "name": name,
+                        "samples": int(v.get("samples", 0)),
+                        "person_id": owner.get(name.lower()),
+                    }
+                )
+        rooms = [
+            {"node_id": nid, "room": sess.room_id} for nid, sess in self._server._nodes.items()
+        ]
+        return {
+            "controls": self._dcfg.controls,
+            "speaker_reachable": res is not None,
+            "ha": await self._ha_flags(with_persons=True),
+            "people": people,
+            "voiceprints": voiceprints,
+            "rooms": rooms,
+        }
 
     async def _node_logs(self, node_id: str, request: Request) -> dict[str, Any]:
         if not self._dcfg.logs:
@@ -1634,22 +1903,103 @@ class Dashboard:
             await ack(ok, err)
             if ok:
                 await connection.send(json.dumps({"type": "speakers_changed"}))
+        elif mtype == "forget_memory":
+            if not self._dcfg.controls:
+                return await ack(False, "controls are disabled (set dashboard.controls: true)")
+            fact_id = str(msg.get("fact_id", "")).strip()
+            if not fact_id:
+                return await ack(False, "a fact id is required")
+            ok, err = await self._forget_memory(fact_id)
+            await ack(ok, err)
+        elif mtype == "save_person":
+            if not self._dcfg.controls:
+                return await ack(False, "controls are disabled (set dashboard.controls: true)")
+            name = str(msg.get("name", "")).strip()
+            if not name:
+                return await ack(False, "a name is required")
+            vps = msg.get("voiceprints") or []
+            if not isinstance(vps, list):
+                return await ack(False, "voiceprints must be a list")
+            # NB: the person id rides as `person_id`, not `id` — the WS envelope
+            # reserves `id` for request/ack correlation (a payload `id` would
+            # clobber it and the ack would never match its caller).
+            kwargs: dict[str, Any] = {}
+            if "memory_opt_out" in msg:  # absent ⇒ preserve
+                kwargs["memory_opt_out"] = bool(msg.get("memory_opt_out"))
+            if "ha_user" in msg:  # absent ⇒ preserve (three-state, see PeopleStore)
+                ha = str(msg.get("ha_user") or "").strip().lower()
+                if ha and " " in ha:
+                    return await ack(False, "HA person can't contain spaces")
+                if ha and "." not in ha:
+                    ha = f"person.{ha}"  # accept the bare object_id
+                kwargs["ha_user"] = ha
+            try:
+                self._server.save_person(
+                    str(msg.get("person_id", "")).strip(), name, [str(v) for v in vps], **kwargs
+                )
+            except (ValueError, OSError) as exc:
+                return await ack(False, str(exc))
+            await ack(True)
+        elif mtype == "erase_person_memory":
+            # The opt-out's companion action: erase a person's existing owned
+            # facts (shared stays with the house) without touching voice/record.
+            if not self._dcfg.controls:
+                return await ack(False, "controls are disabled (set dashboard.controls: true)")
+            pid = str(msg.get("person_id", "")).strip()
+            if not pid:
+                return await ack(False, "a person id is required")
+            status, mem = await self._llm_memory_status(
+                "POST", "/erase_person", {"person": pid}
+            )
+            if status == 503:
+                return await ack(True)  # memory disabled — nothing to erase
+            if status != 200:
+                return await ack(False, "memory service unreachable — nothing was erased")
+            log.info("Erased %s fact(s) for %r (opt-out cleanup)", (mem or {}).get("erased"), pid)
+            await ack(True)
+        elif mtype == "revoke_person":
+            if not self._dcfg.controls:
+                return await ack(False, "controls are disabled (set dashboard.controls: true)")
+            pid = str(msg.get("person_id", "")).strip()
+            if not pid:
+                return await ack(False, "a person id is required")
+            ok, err = await self._revoke_person(pid)
+            await ack(ok, err)
+        elif mtype == "delete_person":
+            if not self._dcfg.controls:
+                return await ack(False, "controls are disabled (set dashboard.controls: true)")
+            pid = str(msg.get("person_id", "")).strip()
+            if not pid:
+                return await ack(False, "a person id is required")
+            ok = self._server.delete_person(pid)
+            await ack(ok, None if ok else "person not found")
         elif mtype == "enroll_speaker":
             if not self._dcfg.controls:
                 return await ack(False, "controls are disabled (set dashboard.controls: true)")
             from kenzy.server.server import TranscribingServer
 
+            # Person-first: the People tab sends `person_id` (enrollment must
+            # belong to a person). A bare `name` is still accepted for API
+            # clients — the server resolves/creates the person for it.
+            person_id = str(msg.get("person_id", "")).strip()
             name = str(msg.get("name", "")).strip()
             node_id = str(msg.get("node", "")).strip()
             server = self._server
             sess = server._nodes.get(node_id)
-            if not name:
-                return await ack(False, "speaker name is required")
+            if person_id:
+                person = next((p for p in server.list_people() if p["id"] == person_id), None)
+                if person is None:
+                    return await ack(False, "person not found")
+                name = str(person["name"])
+            elif not name:
+                return await ack(False, "a person (or speaker name) is required")
             if sess is None:
                 return await ack(False, "pick a connected room node to enroll from")
             if not isinstance(server, TranscribingServer):
                 return await ack(False, "enrollment is not available on this server")
-            await server.start_enrollment(node_id, sess.room_id, name, operator=True)
+            await server.start_enrollment(
+                node_id, sess.room_id, name, operator=True, person_id=person_id or None
+            )
             await ack(True)
         elif mtype == "boost_trace":
             if not self._dcfg.controls:

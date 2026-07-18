@@ -121,3 +121,25 @@ async def test_dashboard_delete_and_rename_errors(monkeypatch):
     monkeypatch.setattr(dash, "_speaker_request", conflict)
     ok, err = await dash._rename_speaker("alice", "bob")
     assert not ok and err == "exists"
+
+
+async def test_dashboard_rename_delete_propagate_to_people(monkeypatch, tmp_path):
+    """A voiceprint rename/delete in the speaker service follows through to the
+    person records, so a person's voice link never silently breaks."""
+    from kenzy.server.dashboard import Dashboard, DashboardConfig
+    from kenzy.server.people import PeopleStore
+    from kenzy.server.server import AudioServer
+
+    dash = Dashboard(AudioServer({}), {}, DashboardConfig(controls=True))
+    pfile = tmp_path / "people.yaml"
+    pfile.write_text("people:\n  a:\n    name: A\n    voiceprints: [alice]\n")
+    dash._server._people = PeopleStore(pfile)
+
+    async def ok200(method, sub_path, payload=None):
+        return 200, {}
+
+    monkeypatch.setattr(dash, "_speaker_request", ok200)
+    ok, _ = await dash._rename_speaker("alice", "alison")
+    assert ok and dash._server._people.by_voiceprint("alison").id == "a"
+    ok, _ = await dash._delete_speaker("alison")
+    assert ok and dash._server._people.get("a").voiceprints == []

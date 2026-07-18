@@ -4,7 +4,7 @@ import { FleetView } from "./views/fleet.js";
 import { ConfigView } from "./views/config.js";
 import { ServicesView } from "./views/services.js";
 import { SkillsView } from "./views/skills.js";
-import { SpeakersView } from "./views/speakers.js";
+import { PeopleView } from "./views/people.js";
 import { SchedulesView } from "./views/schedules.js";
 import { HaView } from "./views/ha.js";
 import { ActivityView } from "./views/activity.js";
@@ -30,7 +30,7 @@ const NAV = [
   { id: "services", label: "Services", ico: "❏" },
   { id: "skills", label: "Skills", ico: "✦" },
   { id: "ha", label: "Home Assistant", ico: "⌂" },
-  { id: "speakers", label: "Speakers", ico: "☻" },
+  { id: "people", label: "People", ico: "☺" },
   { id: "schedules", label: "Scheduled", ico: "◷" },
   { id: "activity", label: "Activity", ico: "↗" },
   { id: "logs", label: "Logs", ico: "≡" },
@@ -80,15 +80,21 @@ function ConnPill() {
 export function Shell({ user, onLogout }) {
   const { data } = useFleet();
   const logsOn = !!(data && data.flags && data.flags.logs);
+  // No-HA households see no HA surfaces (flag = HA configured OR the app
+  // front door in use, and the home_assistant module not disabled). Absent
+  // flag (older server) keeps the tab.
+  const haOn = !data || !data.flags || data.flags.ha_active !== false;
   const [view, setView] = useState("fleet");
   const [node, setNode] = useState(null);
   const [svc, setSvc] = useState(null);
+  const [personSel, setPersonSel] = useState(null);
   const [navOpen, setNavOpen] = useState(false);
   const active = NAV.find((n) => n.id === view) || NAV[0];
   const title = view === "config" ? "Node config" : active.label;
 
   const go = (id) => {
     if (id === "services") setSvc(null); // sidebar Services always opens the list
+    if (id === "people") setPersonSel(null); // likewise People: nav = back to the list
     setView(id);
     setNavOpen(false);
   };
@@ -110,7 +116,7 @@ export function Shell({ user, onLogout }) {
         <div class="brand"><a href="#" class="wordmark" aria-label="Kenzy — go to Fleet"
           onClick=${(e) => { e.preventDefault(); go("fleet"); }}><span class="glyph"></span><span class="name">Kenzy</span></a></div>
         <nav class="nav">
-          ${NAV.map((n) => {
+          ${NAV.filter((n) => n.id !== "ha" || haOn).map((n) => {
             // Logs and Activity are gated by the server's `dashboard.logs` flag
             // (Activity records carry transcripts, like logs).
             const disabled = (n.id === "logs" || n.id === "activity") && !logsOn;
@@ -155,8 +161,8 @@ export function Shell({ user, onLogout }) {
                 ? html`<${SkillsView} />`
                 : view === "ha"
                   ? html`<${HaView} />`
-                  : view === "speakers"
-                    ? html`<${SpeakersView} />`
+                  : view === "people"
+                    ? html`<${PeopleView} selected=${personSel} onSelect=${setPersonSel} />`
                   : view === "schedules"
                     ? html`<${SchedulesView} />`
                   : view === "activity"

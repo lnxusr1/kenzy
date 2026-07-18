@@ -144,6 +144,11 @@ export function SkillsView() {
                         <div class="sk-name">
                           <span class="mono">${s.name}</span>
                           ${s.fast ? html`<span class="badge fast">fast</span>` : null}
+                          ${s.min_tier
+                            ? html`<span class="badge tier"
+                                title="only for voices Kenzy recognizes at this tier or above (People tab)">
+                                ${s.min_tier}+</span>`
+                            : null}
                           ${s.disabled ? html`<span class="badge off">disabled</span>` : null}
                         </div>
                         <div class="sk-desc micro">${s.description || "—"}</div>

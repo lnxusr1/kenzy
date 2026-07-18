@@ -44,6 +44,15 @@ from websockets.http11 import Request, Response
 
 from kenzy import calibration, kenzy_version, protocol, serviceauth, tlsutil
 from kenzy.config import SERVICES
+from kenzy.server.people import (
+    UNSET,
+    Identity,
+    PeopleStore,
+    Person,
+    resolve_assist_identity,
+    resolve_voice_identity,
+    slugify,
+)
 from kenzy.serviceauth import check_bearer
 from kenzy.speaker import DEFAULT_ENROLL_PROMPTS
 
@@ -115,10 +124,15 @@ _CHIME_DEFAULT = "doorbell.wav"
 _CALL_TIMEOUT_SEC = 25.0
 # Voice enrollment: one sample per configured prompt (see _enroll_prompts), min bytes
 # for a usable sample, extra retries allowed beyond the prompt count for unclear audio,
-# and how long an idle enrollment session lives before it's abandoned.
+# and how long the session lives with NO capture arriving before it's abandoned. The
+# timeout is per-stage (re-armed on every capture), not a total budget — five prompts
+# through a slow local TTS legitimately take longer than any reasonable fixed cap
+# (field finding: a real 5-prompt run blew a 120s total cap and died mid-enrollment).
 _ENROLL_MIN_PCM_BYTES = 16000  # ~0.5 s of 16 kHz int16 — shorter captures are retried
 _ENROLL_MAX_RETRIES = 4
-_ENROLL_TIMEOUT_SEC = 120.0
+# Per stage the window covers one prompt's TTS synth+playback plus the reply, so
+# 60s is generous headroom for a slow local TTS — while a walked-away session dies fast.
+_ENROLL_TIMEOUT_SEC = 60.0  # inactivity, re-armed on every capture
 
 # Resource caps (F-10): bound a single capture buffer and inbound WS frame size, and
 # rate-limit new connections per source IP, so a hostile/buggy LAN peer can't exhaust
@@ -360,6 +374,14 @@ class AudioServer:
         from kenzy.config import kenzy_data_root
 
         self._data_root = kenzy_data_root()  # our config home, fixed for this process
+        # Identity core (F1): person records (voiceprint→person). Absent file ⇒
+        # empty store ⇒ the resolver is a passthrough (no behavior change).
+        self._people = PeopleStore(self._data_root / "data" / "people.yaml")
+        # F3: has this server EVER received an /assist request? Persistent
+        # marker — the dashboard uses it to reveal HA surfaces for app-only
+        # households (no HA_API_KEY, but the companion-app front door in use).
+        self._assist_seen_path = self._data_root / "data" / ".assist-seen"
+        self._assist_seen = self._assist_seen_path.exists()
         tls_cfg = cfg.get("tls") or {}
         if isinstance(tls_cfg, dict) and tls_cfg.get("cert") and tls_cfg.get("key"):
             from kenzy import tlsutil
@@ -660,6 +682,116 @@ class AudioServer:
         return True
 
     # ------------------------------------------------------------------
+    # People / identity records (dashboard People panel)
+    # ------------------------------------------------------------------
+
+    def _person_memory_opt_out(self, identity: Identity | None) -> bool:
+        if identity is None or not identity.person_id:
+            return False
+        person = self._people.get(identity.person_id)
+        return bool(person and person.memory_opt_out)
+
+    def assist_seen(self) -> bool:
+        """True once any /assist request has ever reached this server (F3)."""
+        return self._assist_seen
+
+    def mark_assist_seen(self) -> None:
+        if self._assist_seen:
+            return
+        self._assist_seen = True
+        try:
+            self._assist_seen_path.parent.mkdir(parents=True, exist_ok=True)
+            self._assist_seen_path.write_text("")
+        except OSError as exc:  # marker is best-effort; the in-memory flag stands
+            log.debug("could not persist assist-seen marker: %s", exc)
+
+    def list_people(self) -> list[dict[str, Any]]:
+        """Serialize the person records for the dashboard (name + voiceprints;
+        the reserved ha_user/phone links ride along but aren't UI-editable)."""
+        return [
+            {
+                "id": p.id,
+                "name": p.name,
+                "voiceprints": list(p.voiceprints),
+                "ha_user": p.ha_user,
+                "phone": p.phone,
+                "memory_opt_out": p.memory_opt_out,
+            }
+            for p in self._people.all()
+        ]
+
+    def save_person(
+        self,
+        person_id: str,
+        name: str,
+        voiceprints: list[str],
+        ha_user: str | None = UNSET,
+        memory_opt_out: bool | None = None,
+    ) -> str:
+        """Create/update a person and persist ``data/people.yaml``. Returns the id
+        (generated from the name for a new record). ``ha_user`` (the HA person
+        entity linking their phone identity, F3) is three-state: omitted ⇒
+        preserved, a string ⇒ set, ""/None ⇒ cleared. The pipeline's resolver
+        sees the change immediately (same store object)."""
+        person = self._people.save_person(
+            id=person_id,
+            name=name,
+            voiceprints=voiceprints,
+            ha_user=ha_user,
+            memory_opt_out=memory_opt_out,
+        )
+        log.info("Saved person %r (%d voiceprint(s))", person.id, len(person.voiceprints))
+        return person.id
+
+    def delete_person(self, person_id: str) -> bool:
+        ok = self._people.delete_person(person_id)
+        if ok:
+            log.info("Deleted person %r", person_id)
+        return ok
+
+    def rename_person_voiceprint(self, old: str, new: str) -> None:
+        """Follow a speaker-service voiceprint rename in the person records."""
+        if self._people.rename_voiceprint(old, new):
+            log.info("Followed voiceprint rename %r → %r in person records", old, new)
+
+    def remove_person_voiceprint(self, name: str) -> None:
+        """Drop a deleted speaker-service voiceprint from its owning person."""
+        if self._people.remove_voiceprint(name):
+            log.info("Removed deleted voiceprint %r from its person record", name)
+
+    def adopt_enrolled_voice(
+        self, voiceprint: str, display: str, person_id: str | None = None
+    ) -> None:
+        """Person-first enrollment invariant: every enrolled voice belongs to a
+        person. Called as soon as an enrollment stores its first sample — link
+        the voiceprint to the intended person (``person_id``), else to whoever
+        already owns it / matches the spoken name, else create the person. This
+        covers every path: the dashboard (pre-picked person), the "enroll me
+        as Alice" voice command, and legacy ``kenzy-enroll`` names."""
+        if person_id:
+            person = self._people.get(person_id)
+            if person is not None:
+                if not any(v.lower() == voiceprint.lower() for v in person.voiceprints):
+                    self._people.save_person(
+                        id=person.id,
+                        name=person.name,
+                        voiceprints=[*person.voiceprints, voiceprint],
+                    )
+                    log.info("Linked voiceprint %r to person %r", voiceprint, person.id)
+                return
+        if self._people.by_voiceprint(voiceprint) is not None:
+            return  # already owned
+        person = self._people.by_name(display)
+        if person is not None:
+            self._people.save_person(
+                id=person.id, name=person.name, voiceprints=[*person.voiceprints, voiceprint]
+            )
+            log.info("Linked voiceprint %r to existing person %r", voiceprint, person.id)
+        else:
+            created = self._people.save_person(id=None, name=display, voiceprints=[voiceprint])
+            log.info("Created person %r for enrolled voiceprint %r", created.id, voiceprint)
+
+    # ------------------------------------------------------------------
     # Central service config store (stt/tts/llm/speaker pull this at boot)
     # ------------------------------------------------------------------
 
@@ -861,6 +993,8 @@ class AudioServer:
         path = request.path.split("?", 1)[0]
         if path == "/announce":
             return await self._http_announce(request)
+        if path == "/assist":
+            return await self._http_assist(request)
         if path == "/register":
             return self._http_register(request, connection)
         if path.startswith("/data/"):
@@ -888,6 +1022,11 @@ class AudioServer:
         cfg = self._effective_service_config(service, include_secrets=with_secrets)
         return self._signed_json(200, cfg, ts)
 
+    async def _http_assist(self, request: Request) -> Response:
+        """``GET /assist`` — the HA Assist channel (F3). Base server has no
+        pipeline; ``TranscribingServer`` overrides."""
+        return self._http_json(501, {"error": "assist is not available on this server"})
+
     async def _http_announce(self, request: Request) -> Response:
         """Handle ``/announce?text=…&rooms=…`` — speak a message aloud in rooms.
 
@@ -898,6 +1037,7 @@ class AudioServer:
 
         if not self._check_service_token(request):
             return self._http_json(401, {"error": "invalid service token"})
+        self.mark_assist_seen()
         qs = parse_qs(urlsplit(request.path).query)
         text = (qs.get("text") or [""])[0].strip()
         if not text:
@@ -1940,15 +2080,31 @@ class TranscribingServer(AudioServer):
 
             # STT and speaker ID run in parallel on the same PCM buffer.
             if self._speaker_url:
-                (text, stt_ms), (speaker, spk_ms) = await asyncio.gather(
+                (text, stt_ms), (spk_result, spk_ms) = await asyncio.gather(
                     _timed(self._call_stt(pcm, room_name, session_id)),
                     _timed(self._call_speaker(pcm, room_name)),
                 )
+                spk_name, spk_conf = spk_result
             else:
                 text, stt_ms = await _timed(self._call_stt(pcm, room_name, session_id))
-                speaker, spk_ms = self._unknown_speaker, 0.0
+                spk_name, spk_conf, spk_ms = self._unknown_speaker, 0.0, 0.0
 
-            log.info("[%s] STT: %s | speaker: %s", node_id, text or "(none)", speaker)
+            # Identity core (F1): resolve the voiceprint to a person. Passthrough
+            # when there are no records — `speaker` stays the raw name, exactly
+            # as before; `identity` carries the tier/person for downstream gates.
+            identity = resolve_voice_identity(
+                self._people, spk_name, spk_conf, unknown_name=self._unknown_speaker
+            )
+            speaker = identity.display
+
+            log.info(
+                "[%s] STT: %s | speaker: %s (%s, %.2f)",
+                node_id,
+                text or "(none)",
+                speaker,
+                identity.tier,
+                identity.confidence,
+            )
 
             # Intercom consent: if this node has a pending incoming call, the captured
             # utterance is the accept/decline answer — not a command for the LLM.
@@ -1975,7 +2131,7 @@ class TranscribingServer(AudioServer):
             if self._llm_url:
                 _t = time.monotonic()
                 response_text, voice_prompt, actions, fast, expect_response = await self._call_llm(
-                    text, room_name, session_id, speaker, node_id=node_id
+                    text, room_name, session_id, speaker, node_id=node_id, identity=identity
                 )
                 llm_ms = (time.monotonic() - _t) * 1000.0
                 log.info("[%s] LLM%s: %s", node_id, " (fast)" if fast else "", response_text)
@@ -2077,6 +2233,17 @@ class TranscribingServer(AudioServer):
         return False
 
     def _followup_timed_out(self, node_id: str) -> None:
+        # An expired capture window during ENROLLMENT is a missed sample, not a
+        # dialog event: route it to the retry path (attempts++, "I didn't catch
+        # that" + a fresh window) instead of leaving the session to die silently
+        # on the inactivity timeout. Field finding (voice rig): a person who
+        # hesitates past the 8s window otherwise gets no retry and no feedback.
+        session = self._enroll_sessions.get(node_id)
+        if session is not None:
+            asyncio.create_task(
+                self._handle_enroll_capture(node_id, str(session.get("room", "")), b"")
+            )
+            return
         self._end_followup_dialog(node_id)
 
     def _end_followup_dialog(self, node_id: str) -> None:
@@ -2089,7 +2256,63 @@ class TranscribingServer(AudioServer):
         if self._followup_turns.pop(node_id, None):
             log.info("[%s] multi-turn dialog ended", node_id)
 
-    async def _call_speaker(self, pcm: bytes, room_id: str) -> str:
+    async def _http_assist(self, request: Request) -> Response:
+        """``GET /assist?text=…&ha_user=…`` — the HA Assist channel (F3).
+
+        The second front door: the kenzy-hass conversation agent sends the
+        typed/spoken text plus the HA **person entity id** it resolved from the
+        session, and gets the pipeline's text reply. Identity resolves through
+        the SAME person records as voice (``resolve_assist_identity``) — a
+        mapped person is recognized (memory, gated skills), an unmapped HA user
+        is unknown (fail closed). Query-string because the websockets request
+        hook exposes no HTTP body (the /register precedent); token-gated like
+        every always-on endpoint. Conversation continuity rides a per-person
+        synthetic room lane (``assist:<person>``) through the existing history.
+        """
+        from urllib.parse import parse_qs, urlsplit
+
+        if not self._check_service_token(request):
+            return self._http_json(401, {"error": "invalid service token"})
+        self.mark_assist_seen()  # reveals the dashboard's HA surfaces for app-only households
+        qs = parse_qs(urlsplit(request.path).query)
+        text = (qs.get("text") or [""])[0].strip()
+        if not text:
+            return self._http_json(400, {"error": "missing 'text' query parameter"})
+        if not self._llm_url:
+            return self._http_json(503, {"error": "LLM service not configured"})
+        ha_user = (qs.get("ha_user") or [""])[0].strip()
+        identity = resolve_assist_identity(
+            self._people, ha_user, unknown_name=self._unknown_speaker
+        )
+        # Unmapped users get their OWN guest lane (keyed by HA user) so two
+        # guests chatting concurrently never see each other's context.
+        lane = f"assist:{identity.person_id or 'guest:' + (ha_user or 'anon')}"
+        try:
+            reply, _vp, actions, fast, _expect = await self._call_llm(
+                text, lane, None, speaker=identity.display, identity=identity, channel="assist"
+            )
+        except Exception as exc:
+            log.warning("Assist pipeline failed: %s", exc)
+            return self._http_json(502, {"error": "assist pipeline failed"})
+        if actions:
+            # Room-targeting actions (announce, explicit-room schedules) work
+            # from anywhere; node-bound ones no-op against the synthetic lane.
+            await self._dispatch_actions(actions, "", lane, source_speaker=identity.display)
+        log.info("[%s] assist (%s): %s", lane, identity.display, text)
+        return self._http_json(
+            200,
+            {
+                "text": reply,
+                "speaker": identity.display,
+                "recognized": identity.recognized,
+                "fast": fast,
+            },
+        )
+
+    async def _call_speaker(self, pcm: bytes, room_id: str) -> tuple[str, float]:
+        """Identify the speaker: returns ``(name, confidence)``. The confidence is
+        consumed by the identity resolver (F1) for tiering; the name is already
+        the unknown-speaker name when the score is below the service threshold."""
         import base64
 
         import httpx  # type: ignore[import-untyped]
@@ -2104,10 +2327,11 @@ class TranscribingServer(AudioServer):
                     headers=self._service_headers("POST", self._speaker_url),
                 )
                 resp.raise_for_status()
-            return str(resp.json()["speaker"])
+            data = resp.json()
+            return str(data["speaker"]), float(data.get("confidence", 0.0))
         except Exception as exc:
             log.warning("[%s] speaker ID failed: %s", room_id, exc)
-            return self._unknown_speaker
+            return self._unknown_speaker, 0.0
 
     async def _call_stt(self, pcm: bytes, room_id: str, session_id: str | None) -> str:
         import base64
@@ -2136,6 +2360,8 @@ class TranscribingServer(AudioServer):
         session_id: str | None,
         speaker: str | None = None,
         node_id: str | None = None,
+        identity: Identity | None = None,
+        channel: str = "voice",
     ) -> tuple[str, str, list[dict[str, Any]], bool, bool]:
         import httpx  # type: ignore[import-untyped]
 
@@ -2144,14 +2370,26 @@ class TranscribingServer(AudioServer):
             "room_id": room_id,
             "session_id": session_id,
             "speaker": speaker,
+            # Identity core (F1): the resolved person + confidence tier, so skills
+            # and (later) memory can gate on who's asking and how sure we are.
+            "person_id": identity.person_id if identity else None,
+            "speaker_tier": identity.tier if identity else None,
+            "confidence": round(identity.confidence, 4) if identity else None,
+            # F7.4 "don't remember me": the person's opt-out rides every request
+            # so the LLM service keeps no ledger (context, writes, reads) on them.
+            "memory_opt_out": self._person_memory_opt_out(identity),
             # Connected room names so the model can target real rooms (announce/intercom).
             "rooms": sorted({s.room_id for s in self._nodes.values()}),
             # The asking node's active timers/alarms/reminders, so the schedule
             # skill / fast intents can answer status and cancel by id locally.
-            "schedules": self._schedule_payload(node_id) if node_id else [],
+            # A nodeless channel (assist, F3) gets the whole house's entries —
+            # from the phone, "what timers are set?" means everywhere.
+            "schedules": self._schedule_payload(node_id),
             # Rooms whose speakers lack AEC (hardware_aec: false) — alarm and
             # intercom skills refuse these targets in the reply itself.
             "no_aec_rooms": self._no_aec_rooms(),
+            # Which front door (F3): node-bound skills refuse on nodeless channels.
+            "channel": channel,
         }
         async with httpx.AsyncClient(verify=tlsutil.httpx_verify()) as client:
             resp = await client.post(
@@ -2188,6 +2426,21 @@ class TranscribingServer(AudioServer):
         """
         for action in actions:
             atype = action.get("type")
+            # Node-bound actions need an asking node; a nodeless source (the
+            # assist lane, F3) can't satisfy them. The skills refuse these on
+            # the assist channel already — this is the server-side backstop so
+            # a custom skill queueing one can't crash dispatch.
+            if not source_node_id and atype in (
+                "start_intercom",
+                "start_enrollment",
+                "start_calibration",
+                "set_volume",
+            ):
+                log.info("[%s] skipping node-bound action %r — no asking node", source_room, atype)
+                continue
+            if not source_node_id and atype == "set_schedule" and not action.get("room"):
+                log.info("[%s] skipping roomless schedule — no asking node", source_room)
+                continue
             if atype == "announce":
                 msg = str(action.get("text", "")).strip()
                 if not msg:
@@ -2273,8 +2526,9 @@ class TranscribingServer(AudioServer):
         except ValueError as exc:
             log.warning("[%s] rejected schedule action %r: %s", source_node_id, action, exc)
 
-    def _schedule_payload(self, node_id: str) -> list[dict[str, Any]]:
-        """The asking node's active entries, as injected into /process."""
+    def _schedule_payload(self, node_id: str | None) -> list[dict[str, Any]]:
+        """The asking node's active entries (all nodes' when ``node_id`` is
+        None — the nodeless assist channel), as injected into /process."""
         return [
             {
                 "id": e.id,
@@ -2537,9 +2791,21 @@ class TranscribingServer(AudioServer):
             return False
 
     async def start_enrollment(
-        self, node_id: str, room: str, name: str, *, operator: bool = False
+        self,
+        node_id: str,
+        room: str,
+        name: str,
+        *,
+        operator: bool = False,
+        person_id: str | None = None,
     ) -> None:
-        """Begin a voice-enrollment session for ``name`` on a node.
+        """Begin a voice-enrollment session on a node — **person-first**: every
+        enrolled voice belongs to a person. ``person_id`` (dashboard flow) picks
+        the person directly; a bare ``name`` (the "enroll me as Alice" voice
+        command, legacy callers) resolves to the person it names — or a new
+        person record is created when the first sample lands. The voice profile
+        is keyed by the person's existing voiceprint (more samples) or their
+        stable id (fresh profile), never a free-form name.
 
         ``operator=True`` is for dashboard-initiated enrollment: it bypasses the
         ``allow_voice_enroll`` earshot gate (the request is already authenticated and
@@ -2559,12 +2825,37 @@ class TranscribingServer(AudioServer):
             return
         if node_id in self._enroll_sessions:
             return  # already enrolling on this node
+
+        person: Person | None
+        if person_id:
+            person = self._people.get(person_id)
+            if person is None:
+                await self._say(node_id, room, "I couldn't find that person to enroll.")
+                return
+        else:
+            person = self._people.by_voiceprint(name) or self._people.by_name(name)
+        if person is not None:
+            display = person.name
+            person_id = person.id
+            # Append to the profile they already have (the record's exact
+            # spelling); a voiceless person gets a fresh profile keyed by their
+            # stable id, so renaming the person never touches the file.
+            existing = next((v for v in person.voiceprints if v.lower() == name.lower()), None)
+            voiceprint = existing or (person.voiceprints[0] if person.voiceprints else person.id)
+        else:
+            display = name
+            # New person: key the profile by the slug their record will get on
+            # the first sample, so profile name == person id.
+            voiceprint = slugify(name)
+
         prompts = self._enroll_prompts()
         timeout = asyncio.create_task(
             self._enroll_timeout(node_id), name=f"enroll-timeout-{node_id}"
         )
         self._enroll_sessions[node_id] = {
-            "name": name,
+            "name": voiceprint,
+            "display": display,
+            "person_id": person_id,
             "room": room,
             "collected": 0,
             "attempts": 0,
@@ -2572,10 +2863,14 @@ class TranscribingServer(AudioServer):
             "timeout": timeout,
         }
         log.info(
-            "[%s] voice enrollment started for '%s' (%d prompt(s))", node_id, name, len(prompts)
+            "[%s] voice enrollment started for '%s' (voiceprint '%s', %d prompt(s))",
+            node_id,
+            display,
+            voiceprint,
+            len(prompts),
         )
         await self._enroll_prompt(
-            node_id, room, f"Okay, enrolling {name}. After the tone, please say: {prompts[0]}"
+            node_id, room, f"Okay, enrolling {display}. After the tone, please say: {prompts[0]}"
         )
 
     def _enroll_prompts(self) -> list[str]:
@@ -2614,15 +2909,32 @@ class TranscribingServer(AudioServer):
         if session is None:
             return
         session["attempts"] += 1
+        # A capture arrived — the session is making progress, so re-arm the
+        # timeout (it's an INACTIVITY timeout, not a total budget: five prompts
+        # through a slow local TTS legitimately exceed any fixed session cap).
+        old = session.get("timeout")
+        if old is not None:
+            old.cancel()
+        session["timeout"] = asyncio.create_task(
+            self._enroll_timeout(node_id), name=f"enroll-timeout-{node_id}"
+        )
         ok = len(pcm) >= _ENROLL_MIN_PCM_BYTES and await self._call_enroll(pcm, session["name"])
         if ok:
             session["collected"] += 1
+            if session["collected"] == 1:
+                # First sample stored — enforce the person-first invariant NOW,
+                # so even an interrupted enrollment never orphans a voice.
+                self.adopt_enrolled_voice(
+                    session["name"],
+                    session.get("display") or session["name"],
+                    session.get("person_id"),
+                )
 
         # One sample per configured prompt; `collected` doubles as the index of the
         # next sentence to read, so a failed capture re-reads the same prompt.
         prompts = session.get("prompts") or list(DEFAULT_ENROLL_PROMPTS)
         if session["collected"] >= len(prompts):
-            name = session["name"]
+            name = session.get("display") or session["name"]
             self._end_enroll_session(node_id)
             await self._say(node_id, room, f"All done — I've enrolled {name}.")
             return

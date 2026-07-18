@@ -37,9 +37,9 @@ def _mock_pipeline(srv, monkeypatch, *, response: str, expect: bool) -> None:
         return "tell me a knock knock joke"
 
     async def spk(pcm, room):  # noqa: ANN001, ANN202
-        return "alice"
+        return "alice", 0.9  # (name, confidence) — identity core (F1)
 
-    async def llm(text, room, sid, speaker, node_id=None):  # noqa: ANN001, ANN202
+    async def llm(text, room, sid, speaker, node_id=None, identity=None):  # noqa: ANN001, ANN202
         return (response, "vp", [], False, expect)
 
     async def tts(*a):  # noqa: ANN002, ANN202

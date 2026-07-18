@@ -1,20 +1,27 @@
 # Home Assistant integration
 
-Kenzy can surface itself **into** Home Assistant over MQTT, the same way Frigate
-does — Kenzy stays a standalone product, and HA reaches in to see and control it.
-Each room node shows up in HA as a **device** with sensors and controls, with no
-custom component and no HA-side configuration: it uses **HA MQTT Discovery**.
+Kenzy stays a standalone product — and plugs into Home Assistant from both
+sides: HA can talk **to** Kenzy (the conversation agent on your phone) and
+see **into** her (room nodes as HA devices, the same pattern Frigate uses).
 
-This is separate from the [Home Assistant *skill*](../skills/home-assistant.md),
-which lets Kenzy **control** your HA devices by voice. This page is the other
-direction: putting **Kenzy** into HA.
+Kenzy and Home Assistant connect in **three** independent ways — use any
+combination:
 
-!!! note "Two-way, but distinct"
-    - **Skill (Kenzy → HA):** "turn on the kitchen lights" — Kenzy calls HA.
-    - **Integration (HA → Kenzy):** Kenzy's nodes appear in HA; automations can
-      trigger a node, announce, set volume, or mute.
+- **The [HA *skill*](../skills/home-assistant.md)** (Kenzy → HA): "turn on
+  the kitchen lights" — Kenzy controls your devices by voice.
+- **The [MQTT bridge](#the-mqtt-bridge)** (HA → Kenzy, this page): Kenzy's
+  room nodes appear in HA as devices your automations can see and command.
+- **The [Kenzy integration](#the-kenzy-integration-kenzy-hass)** (HA → Kenzy,
+  this page): Kenzy as your Assist conversation agent — ask her from your
+  phone, in her own voice.
 
-## Prerequisites
+## The MQTT bridge
+
+Everything below covers the MQTT bridge: each Kenzy room node shows up in HA
+as a **device** with sensors and controls, via **HA MQTT Discovery** — no
+HA-side configuration at all.
+
+### Prerequisites
 
 - An MQTT broker. If you run Home Assistant, the **Mosquitto broker** add-on is the
   easiest — install it and add a login (Add-on → Configuration → `logins:`), or use
@@ -26,7 +33,7 @@ direction: putting **Kenzy** into HA.
     pip install "kenzy[server,mqtt]"
     ```
 
-## Enable it
+### Enable it
 
 In your server config (`server.yaml`):
 
@@ -62,7 +69,7 @@ It is **off by default** and adds zero overhead until enabled.
     (The server needs an on-disk `server.yaml` for the override to have a writable
     home — see note below.)
 
-## What appears in Home Assistant
+### What appears in Home Assistant
 
 One device per node, with these entities:
 
@@ -83,7 +90,7 @@ Entities show **Unavailable** unless *both* the bridge and that node are online.
     presence (who was heard, where, and when), and timing leave the box. To review
     what was said, use the dashboard's **Activity** tab instead.
 
-## Driving Kenzy from automations
+### Driving Kenzy from automations
 
 When `commands: true`, automations can publish to these topics (e.g. with the
 `mqtt.publish` service). `<node_id>` is the node's id (its slug — for friendly ids
@@ -175,7 +182,7 @@ Tips:
   milliseconds, so modes never really compete — the debounce condition is what
   prevents repeat announcements.
 
-## How it works
+### How it works
 
 The server publishes to MQTT using HA MQTT Discovery (retained config messages on
 `<discovery_prefix>/<component>/…/config`), so HA builds the entities itself. A
@@ -183,8 +190,37 @@ bridge **availability** topic with a last-will marks everything unavailable if t
 server crashes or stops. Inbound command topics map to the same actions the
 dashboard uses (trigger/stop/volume/mute/announce/chime). No spoken text is ever sent.
 
-## Roadmap
+## The Kenzy integration (kenzy-hass)
 
-A **HACS custom integration** (config-flow setup) and a **Home Assistant add-on**
-(one-click install) are planned as separate projects. The integration described
-here works today over MQTT without either of them.
+The [`kenzy-hass`](https://github.com/lnxusr1/kenzy-hass) custom integration
+makes Kenzy a Home Assistant **conversation agent**, so the companion app's
+Assist screen (phone, tablet, watch) talks to *your* Kenzy — same identity,
+same memory, same skills.
+
+**Install via HACS** (recommended):
+
+1. In HACS, open the **⋮** menu → **Custom repositories** → add
+   `https://github.com/lnxusr1/kenzy-hass` with category **Integration**.
+2. Find **Kenzy** in HACS, click **Download**, then restart Home Assistant.
+3. **Settings → Devices & Services → Add Integration → Kenzy** and fill in:
+
+    | Field | Value |
+    |---|---|
+    | Host / Port | Your kenzy-server (port `8765` by default) |
+    | Fleet token | Kenzy dashboard → **Settings** (leave empty if you run without a token) |
+    | Use TLS | On for a TLS-enabled server (the install default) |
+    | Verify TLS | Off for self-signed certificates (the LAN default) |
+
+4. **Settings → Voice assistants** — pick **Kenzy** as your assistant's
+   conversation agent.
+
+(No HACS? Copy `custom_components/kenzy/` from the repo into your HA `config/`
+directory and restart — HACS just automates that and delivers updates.)
+
+Then map each household member to their HA login (Kenzy dashboard →
+**People**) so phone requests arrive *as them* — the full walkthrough,
+including Kenzy's own voice in the HA pipeline via Wyoming, is
+**[On Your Phone](../phone.md)**.
+
+(A one-click **Home Assistant add-on** is planned as a separate project;
+everything on this page works today without it.)
