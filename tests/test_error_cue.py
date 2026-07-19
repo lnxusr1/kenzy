@@ -9,7 +9,7 @@ import asyncio
 import pytest
 
 from kenzy.server import tones
-from kenzy.server.server import NodeSession, TranscribingServer
+from kenzy.server.server import LlmReply, NodeSession, TranscribingServer
 
 
 class _WS:
@@ -73,7 +73,7 @@ async def test_tts_failure_plays_cue(srv, monkeypatch):
         return "unknown", 0.0
 
     async def llm(text, room, sid, speaker=None, node_id=None, identity=None):
-        return ("Hi there.", "vp", [], False, False, False, [])
+        return LlmReply("Hi there.", "vp")
 
     async def tts_fail(*a, **k):
         return False  # synthesis/streaming failed
@@ -94,7 +94,7 @@ async def test_success_plays_no_cue(srv, monkeypatch):
         return "unknown", 0.0
 
     async def llm(text, room, sid, speaker=None, node_id=None, identity=None):
-        return ("Hi there.", "vp", [], False, False, False, [])
+        return LlmReply("Hi there.", "vp")
 
     async def tts_ok(*a, **k):
         return True

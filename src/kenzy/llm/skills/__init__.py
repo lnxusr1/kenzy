@@ -93,6 +93,25 @@ def get_request(key: str, default: Any = None) -> Any:
         return default
 
 
+def current_request_dict() -> dict[str, Any] | None:
+    """The live request-context dict (shared object). The ask() runner captures
+    it so a resume can update the parked task's view IN PLACE with the
+    answerer's identity — contextvar .set() can't reach into a task's copied
+    context, but mutating the shared dict can."""
+    try:
+        return _request_ctx.get()
+    except LookupError:
+        return None
+
+
+def current_actions_list() -> list[dict[str, Any]] | None:
+    """The live action accumulator (shared object) — same in-place rationale."""
+    try:
+        return _actions.get()
+    except LookupError:
+        return None
+
+
 def request_channel() -> str:
     """Which front door this request came through: "voice" (a room node — the
     default, incl. legacy servers that don't send the field) or "assist"
@@ -458,6 +477,24 @@ def fast_intent(
         return func
 
     return wrap(_func) if _func is not None else wrap
+
+
+async def ask(prompt: str, timeout: float | None = None) -> str | None:
+    """Speak ``prompt`` and return the user's spoken answer (the 4.2 ask()
+    primitive) — or None on wake-word cancel / timeout. Import from here in
+    skill files: ``from kenzy.llm.skills import ask``. See kenzy.llm.asking."""
+    from kenzy.llm import asking
+
+    reply = await asking.ask(prompt, timeout)
+    return reply if isinstance(reply, str) else None
+
+
+async def ask_audio(prompt: str, timeout: float | None = None) -> bytes | None:
+    """Speak ``prompt`` and return the user's raw spoken reply as 16 kHz PCM
+    bytes (record-after-the-tone; no STT). None on cancel/timeout."""
+    from kenzy.llm import asking
+
+    return await asking.ask_audio(prompt, timeout)
 
 
 async def dispatch_fast(

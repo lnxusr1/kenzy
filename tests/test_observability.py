@@ -8,7 +8,7 @@ import asyncio
 import httpx
 
 from kenzy.server.dashboard import Dashboard, DashboardConfig
-from kenzy.server.server import AudioServer, NodeSession, TranscribingServer
+from kenzy.server.server import AudioServer, LlmReply, NodeSession, TranscribingServer
 
 
 class _StubWS:
@@ -34,7 +34,7 @@ def _mock_pipeline(srv, monkeypatch, *, fast: bool) -> None:
         return "alice", 0.9  # (name, confidence) — identity core (F1)
 
     async def llm(text, room, sid, speaker, node_id=None, identity=None):  # noqa: ANN001, ANN202
-        return ("Done.", "vp", [], fast, False, False, [])
+        return LlmReply("Done.", "vp", fast=fast)
 
     async def tts(*a, **k):  # noqa: ANN002, ANN003, ANN202
         return True
@@ -121,7 +121,7 @@ async def test_secret_exchange_withheld_from_activity(monkeypatch):
         return "john", 0.9
 
     async def llm(text, room, sid, speaker, node_id=None, identity=None):  # noqa: ANN001, ANN202
-        return ("Locked away — only you can ask me for it.", "vp", [], True, False, True, [])
+        return LlmReply("Locked away — only you can ask me for it.", "vp", fast=True, secret=True)
 
     async def tts(*a, **k):  # noqa: ANN002, ANN003, ANN202
         return True
@@ -161,7 +161,7 @@ async def test_session_record_carries_llm_spans(monkeypatch):
     ]
 
     async def llm(text, room, sid, speaker, node_id=None, identity=None):  # noqa: ANN001, ANN202
-        return ("Done.", "vp", [], False, False, False, spans)
+        return LlmReply("Done.", "vp", spans=spans)
 
     async def tts(*a, **k):  # noqa: ANN002, ANN003, ANN202
         return True

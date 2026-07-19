@@ -25,13 +25,12 @@ import asyncio
 import logging
 import os
 import re
-import time
 from typing import Any
 
 import httpx
 
 from kenzy.llm.builtin_skills import ha_model
-from kenzy.llm.skills import FastResult, fast_intent, get_request, is_disabled, skill
+from kenzy.llm.skills import FastResult, ask, fast_intent, is_disabled, skill
 
 log = logging.getLogger(__name__)
 
@@ -469,10 +468,10 @@ async def create_list(name: str, items: list[str] | None = None) -> str:
 @skill
 async def delete_list(name: str) -> str:
     """Delete an ENTIRE to-do list from Home Assistant (not items on it — use
-    remove_from_list for items). This never deletes immediately: it returns a
-    confirmation question — relay it to the user verbatim and expect their
-    answer; the deletion happens only if they say yes. Only locally-stored
-    lists can be deleted; lists synced from outside services can't be.
+    remove_from_list for items). This asks the user for spoken confirmation
+    itself and reports the outcome — deletion only ever happens on their yes.
+    Only locally-stored lists can be deleted; lists synced from outside
+    services can't be.
 
     name: the exact list name as the user said it, e.g. "grocery list"
     """
@@ -484,8 +483,7 @@ async def delete_list(name: str) -> str:
             return err
         names = ", ".join(entry["name"] for entry in available) or "none"
         return f"Error: no list matches {name!r} exactly. The lists are: {names}."
-    key = str(get_request("room_id") or "").strip().lower()
-    return await _stage_delete(key, entity_id, _display(available, entity_id))
+    return await _confirm_delete(entity_id, _display(available, entity_id))
 
 
 # ---------------------------------------------------------------------------
@@ -510,17 +508,11 @@ _DELETE_LIST_RE = re.compile(r"^(?:delete|get rid of|erase|throw away|trash) (?P
 
 _VOICE = "Speak briefly and clearly, like a helpful assistant confirming a request."
 
-# Pending create-a-list confirmations, keyed by room: (list name, items to add,
-# expiry). Set when an "add …" hits a household with zero lists; consumed by the
-# next utterance from that room (the clarify holds the mic open). Nothing is
-# ever created without the spoken yes.
-_pending_create: dict[str, tuple[str, list[str], float]] = {}
-# Pending delete-a-list confirmations, keyed by room: (config entry id, display
-# name, expiry). Deletion is destructive and voice is a lossy channel, so it is
-# NEVER performed on the first utterance — only by the spoken yes that follows
-# the item-count confirmation question.
-_pending_delete: dict[str, tuple[str, str, float]] = {}
-_PENDING_TTL_S = 90.0
+# Confirmations ride the 4.2 ask() primitive: the skill parks on the spoken
+# question and resumes with the answer — the server routes the room's next
+# utterance back here, and the wake word always cancels (reply None). Nothing
+# is ever created or deleted without the spoken yes, exactly as before; the
+# per-room TTL'd pending dicts this replaces are gone.
 _YES = frozenset(
     {
         "yes",
@@ -553,6 +545,15 @@ _NO = frozenset(
 )
 
 
+def _is_yes(answer: str | None) -> bool:
+    return answer is not None and _normalize(answer) in _YES
+
+
+def _is_no(answer: str | None) -> bool:
+    return answer is not None and _normalize(answer) in _NO
+
+
+
 def _proposed_name(spoken_list: str) -> str:
     """A sensible name for the list we offer to create ("the shopping list" →
     "Shopping list"; a bare "the list" → "Shopping list")."""
@@ -581,19 +582,33 @@ _DELETE_FAILED = (
 )
 
 
-async def _stage_delete(key: str, entity_id: str, name: str) -> str:
-    """Verify the list is ours to delete, then stage the confirmation. Returns the
-    question (or refusal) to speak; the deletion itself only ever happens when the
-    next utterance from the room is a yes."""
+async def _delete_question(entity_id: str, name: str) -> tuple[str, str | None]:
+    """Verify the list is ours to delete; return (question-or-refusal, entry_id).
+    entry_id None ⇒ refusal (synced provider) — nothing to confirm."""
     entry_id = await _local_entry_id(entity_id)
     if entry_id is None:
-        return _NOT_DELETABLE
+        return _NOT_DELETABLE, None
     count = len(await _get_items(entity_id))
-    _pending_delete[key] = (entry_id, name, time.time() + _PENDING_TTL_S)
     if count:
         things = "1 item" if count == 1 else f"{count} items"
-        return f"The {name} still has {things} on it. Delete it for good?"
-    return f"Delete the {name}? It's empty."
+        return f"The {name} still has {things} on it. Delete it for good?", entry_id
+    return f"Delete the {name}? It's empty.", entry_id
+
+
+async def _confirm_delete(entity_id: str, name: str) -> str:
+    """The whole confirmed-deletion conversation, on ask(): question → spoken
+    yes → delete. A no (or anything that isn't a yes) keeps the list; a wake
+    cancel abandons silently (the reply is discarded by design)."""
+    question, entry_id = await _delete_question(entity_id, name)
+    if entry_id is None:
+        return question  # refusal — no confirmation loop
+    answer = await ask(question)
+    if answer is None:
+        return "Okay."  # canceled — discarded upstream
+    if _is_yes(answer):
+        ok = await _delete_entry(entry_id)
+        return f"Deleted the {name}." if ok else _DELETE_FAILED
+    return f"Okay, keeping the {name}."
 
 
 def _fallthrough(err: str | None, list_text: str) -> FastResult:
@@ -626,50 +641,26 @@ async def fast_lists(utterance: str, room_id: str | None, speaker: str | None) -
         return FastResult.miss()  # lists are an HA feature; without HA, stay out
     text = _normalize(utterance)
 
-    # A pending "delete it for good?" confirmation for this room? (Checked first:
-    # it's the destructive one, and its yes must never create anything.)
-    key = (room_id or "").strip().lower()
-    pending_del = _pending_delete.pop(key, None)
-    if pending_del is not None:
-        entry_id, name, expires = pending_del
-        if time.time() <= expires:
-            if text in _YES:
-                ok = await _delete_entry(entry_id)
-                return FastResult.handled(
-                    f"Deleted the {name}." if ok else _DELETE_FAILED, _VOICE
-                )
-            if text in _NO:
-                return FastResult.handled(f"Okay, keeping the {name}.", _VOICE)
-        # Expired or the user moved on — fall through and process normally.
-
-    # A pending "should I create one?" confirmation for this room?
-    pending = _pending_create.pop(key, None)
-    if pending is not None:
-        name, items, expires = pending
-        if time.time() <= expires:
-            if text in _YES:
-                return FastResult.handled(await _create_and_add(name, items), _VOICE)
-            if text in _NO:
-                return FastResult.handled("Okay, I won't create one.", _VOICE)
-        # Expired or the user moved on — fall through and process normally.
-
     m = _ADD_RE.match(text)
     if m:
         entity_id, err, available = await _resolve_list(m.group("list"))
         if entity_id is None:
             if err == _NO_LISTS and _looks_like_list(m.group("list")):
                 # Offer to create one (confirmed, never implicit — a misheard
-                # command must not conjure infrastructure in HA).
+                # command must not conjure infrastructure in HA). ask() parks
+                # here; the room's spoken answer resumes us.
                 name = _proposed_name(m.group("list"))
-                _pending_create[key] = (
-                    name,
-                    _split_items(m.group("items")),
-                    time.time() + _PENDING_TTL_S,
-                )
-                return FastResult.clarify(
+                answer = await ask(
                     "You don't have any to-do lists in Home Assistant yet. "
                     f"Should I create one called {name}?"
                 )
+                if answer is None:
+                    return FastResult.handled("Okay.", _VOICE)  # canceled — discarded
+                if _is_yes(answer):
+                    return FastResult.handled(
+                        await _create_and_add(name, _split_items(m.group("items"))), _VOICE
+                    )
+                return FastResult.handled("Okay, I won't create one.", _VOICE)
             return _fallthrough(err, m.group("list"))
         reply = await _do_add(
             entity_id, _display(available, entity_id), _split_items(m.group("items"))
@@ -717,9 +708,8 @@ async def fast_lists(utterance: str, room_id: str | None, speaker: str | None) -
             if err:  # bare "delete the list" — ask which; nothing is staged
                 return FastResult.clarify(err)
             return FastResult.miss()  # unknown name ("delete broccoli") → LLM
-        question = await _stage_delete(key, entity_id, _display(available, entity_id))
-        if key not in _pending_delete:  # refusal (synced provider) — no confirm loop
-            return FastResult.handled(question, _VOICE)
-        return FastResult.clarify(question)
+        return FastResult.handled(
+            await _confirm_delete(entity_id, _display(available, entity_id)), _VOICE
+        )
 
     return FastResult.miss()

@@ -12,7 +12,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import pytest
 
-from kenzy.server.server import AudioServer, NodeSession, TranscribingServer
+from kenzy.server.server import AudioServer, LlmReply, NodeSession, TranscribingServer
 from kenzy.serviceboot import _http_base, bootstrap_config
 
 
@@ -337,7 +337,7 @@ async def test_assist_endpoint(tmp_path, monkeypatch):
         text, room_id, session_id, speaker=None, node_id=None, identity=None, channel="voice"
     ):
         seen.append((text, room_id, identity, channel))
-        return (f"Hi {speaker}!", "vp", [], True, False, False, [])
+        return LlmReply(f"Hi {speaker}!", "vp", fast=True)
 
     monkeypatch.setattr(server, "_call_llm", fake_llm)
     task = await _serve(server)

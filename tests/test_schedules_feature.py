@@ -9,7 +9,7 @@ import asyncio
 from kenzy.llm import skills as sk
 from kenzy.llm.builtin_skills import schedule as sched
 from kenzy.server import tones
-from kenzy.server.server import NodeSession, TranscribingServer
+from kenzy.server.server import LlmReply, NodeSession, TranscribingServer
 
 
 class _WS:
@@ -361,9 +361,8 @@ async def test_dispatch_stores_speaker_and_command_replays_it(tmp_path, monkeypa
 
     async def fake_llm(text, room, sid, speaker=None, node_id=None):
         llm_calls.append((text, room, speaker, node_id))
-        return (
-            "The lights are on.", "vp", [{"type": "set_volume", "level": 10}], True, False,
-            False, []
+        return LlmReply(
+            "The lights are on.", "vp", actions=[{"type": "set_volume", "level": 10}], fast=True
         )
 
     async def fake_tts(node_id, room, sid, text, vp):

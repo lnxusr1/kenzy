@@ -48,31 +48,32 @@ log = logging.getLogger(__name__)
 # owner heard the fact back verbatim — every tier wall held, history leaked).
 # ---------------------------------------------------------------------------
 
-_private_touch: contextvars.ContextVar[bool] = contextvars.ContextVar("kenzy_memory_private")
+#: The touch markers live in a MUTABLE dict inside the contextvar (not bare
+#: bools): a skill parked in an asyncio.Task (the ask() continuation model)
+#: runs in a COPY of the request context, where contextvar .set() would be
+#: invisible to the handler — in-place mutation of the shared dict is what
+#: keeps marks (lockbox/private) flowing out of parked coroutines.
+_touch: contextvars.ContextVar[dict[str, bool]] = contextvars.ContextVar("kenzy_memory_touch")
 
 
 def begin_touch() -> None:
     """Reset the markers for a new request (called next to begin_request)."""
-    _private_touch.set(False)
-    _lockbox_touch.set(False)
+    _touch.set({"private": False, "lockbox": False})
 
 
 def mark_private_touch() -> None:
     """Record that private/personal-tier memory shaped this request's answer."""
     try:
-        _private_touch.set(True)
+        _touch.get()["private"] = True
     except LookupError:  # outside a request — nothing to mark
         pass
 
 
 def private_touched() -> bool:
     try:
-        return _private_touch.get()
+        return _touch.get()["private"]
     except LookupError:
         return False
-
-
-_lockbox_touch: contextvars.ContextVar[bool] = contextvars.ContextVar("kenzy_memory_lockbox")
 
 
 def mark_lockbox_touch() -> None:
@@ -83,16 +84,25 @@ def mark_lockbox_touch() -> None:
     short-term for the whole exchange, and the server redacts its logs and
     the Activity record."""
     try:
-        _lockbox_touch.set(True)
+        _touch.get()["lockbox"] = True
     except LookupError:
         pass
 
 
 def lockbox_touched() -> bool:
     try:
-        return _lockbox_touch.get()
+        return _touch.get()["lockbox"]
     except LookupError:
         return False
+
+
+def current_touch_dict() -> dict[str, bool] | None:
+    """The live touch-marker dict (shared object) — captured by the ask()
+    runner so a /process/continue handler can read marks a parked task set."""
+    try:
+        return _touch.get()
+    except LookupError:
+        return None
 
 
 def mark_if_sensitive(facts: list[Fact]) -> None:

@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Added
+
+- **Skills can ask questions — `ask()` (the 4.2 headliner).** A skill that needs the user's answer mid-flow finally has a first-class path: `reply = await ask("Should I create a list called Groceries?")` speaks the question, holds the room's floor (no wake word needed to answer), and resumes the skill exactly where it paused — whether it's a fast intent or a tool call deep in the model's loop. The wake word *always* cancels a pending question (the household's universal escape hatch — the skill sees `None` and its result is discarded), the reply window is the node's own dialog timeout, and the answer carries the *answerer's* identity so permission-gated skills can re-check who's actually talking. Questions chain naturally, and continuations are deliberately in-memory and mortal — a service restart forgets them and the room quietly moves on.
+- **Enrollment is an ask() conversation now — and ask() learned to hear.** `ask_audio()` returns the user's raw spoken reply (the record-after-the-tone capture) instead of a transcript, and voice enrollment was rebuilt on it as the proof of generality: the whole prompt/sample/retry/confirm flow is one readable coroutine in the enrollment skill, replacing the server's hand-rolled session state machine (prompt loops, retry counters, inactivity timers — all gone). Same behavior at the microphone — chime-then-speak per prompt, "I didn't catch that" retries (an expired window arrives as an empty sample), the wake word bails out, person-first adoption on the first stored sample — plus one improvement: the enrollment sentences now come from the speaker service's own `GET /enroll/info`, so the dashboard-editable prompts are read exactly where they're owned.
+- **List confirmations ride ask() now.** "Should I create one called Shopping list?" and "Delete it for good?" are real suspended conversations instead of per-room pending-state with timers — same guarantees (nothing is ever created or deleted without the spoken yes; a wake word or an expired window changes nothing), less machinery, and the LLM-tier `delete_list` tool now runs its own confirmation instead of asking the model to relay one.
+
 ## [4.1.0]
 
 ### Added

@@ -1,14 +1,180 @@
-"""Tests for voice speaker enrollment: the enroll_speaker skill, the server-side
-session (gating, prompt/capture loop, /enroll routing), and disconnect cleanup."""
+"""Voice enrollment on ask_audio() (4.2): the skill-driven conversation, the
+server's audio-ask routing, the dashboard directive entry, and the person-first
+adoption bookkeeping."""
 
 from __future__ import annotations
 
-import asyncio
-import json
+import pytest
 
+from kenzy.llm import asking
 from kenzy.llm import skills as sk
-from kenzy.llm.builtin_skills.enroll import enroll_speaker
-from kenzy.server.server import NodeSession, TranscribingServer
+from kenzy.llm.builtin_skills import enroll
+from kenzy.server.server import LlmReply, NodeSession, TranscribingServer
+
+GOOD = b"\x01\x02" * 20000  # > _MIN_PCM_BYTES
+SHORT = b"\x01\x02" * 100
+
+
+@pytest.fixture(autouse=True)
+def _clean():
+    yield
+    for cid in list(asking._PENDING):
+        asking._PENDING.pop(cid).task.cancel()
+
+
+@pytest.fixture()
+def speaker_svc(monkeypatch):
+    """Fake speaker service: /enroll/info + /enroll capture."""
+    state = {
+        "info": {"prompts": ["one", "two", "three"], "allow_voice_enroll": True},
+        "samples": [],
+    }
+
+    async def info(base):
+        return dict(state["info"]) if state["info"] else None
+
+    async def post(base, voiceprint, pcm):
+        state["samples"].append((voiceprint, len(pcm)))
+        return True
+
+    monkeypatch.setattr(enroll, "_enroll_info", info)
+    monkeypatch.setattr(enroll, "_post_sample", post)
+    monkeypatch.setattr(enroll, "_speaker_base", lambda: "http://spk:8768")
+    return state
+
+
+async def _drive(coro, answers):
+    """Run an enrollment coroutine, feeding scripted ask_audio answers.
+    Returns (final_text_or_None, prompts)."""
+    sk.begin_actions()
+    sk.begin_request({"channel": "voice", "people": answers.pop("people", [])})
+    outcome = await asking.run_askable(coro, kind="llm")
+    prompts: list[str] = []
+    script = answers["replies"]
+    while not outcome.finished:
+        prompts.append(outcome.parked.channel.prompt)
+        if not script:
+            await asking.cancel(outcome.parked.id)
+            return None, prompts
+        outcome = await asking.resume(outcome.parked.id, script.pop(0))
+    return outcome.value, prompts
+
+
+# ---------------------------------------------------------------------------
+# The skill-driven conversation
+# ---------------------------------------------------------------------------
+
+
+async def test_enroll_happy_path(speaker_svc):
+    text, prompts = await _drive(
+        enroll._run_enrollment("Alice", operator=False),
+        {"replies": [GOOD, GOOD, GOOD]},
+    )
+    assert text == "All done — I've enrolled Alice."
+    assert len(prompts) == 3
+    assert "After the tone, please say: one" in prompts[0]
+    assert "Next, please say: two" in prompts[1]
+    # New name → profile keyed by the slug the person record will get.
+    assert speaker_svc["samples"] == [("alice", len(GOOD))] * 3
+    # Person-first: the adopt action queued on the FIRST stored sample.
+    actions = sk.take_actions()
+    assert {"type": "adopt_voice", "voiceprint": "alice", "display": "Alice",
+            "person_id": None} in actions  # fmt: skip
+
+
+async def test_short_and_empty_samples_retry_same_prompt(speaker_svc):
+    # An expired reply window arrives as b"" (the server maps expiry to an
+    # empty sample) — both it and a too-short capture re-read the SAME prompt.
+    text, prompts = await _drive(
+        enroll._run_enrollment("Alice", operator=False),
+        {"replies": [SHORT, b"", GOOD, GOOD, GOOD]},
+    )
+    assert text == "All done — I've enrolled Alice."
+    assert "please say: one" in prompts[0]
+    assert "I didn't catch that. Please say: one" in prompts[1]
+    assert "I didn't catch that. Please say: one" in prompts[2]
+    assert len(speaker_svc["samples"]) == 3
+
+
+async def test_attempt_cap_gives_up(speaker_svc):
+    text, prompts = await _drive(
+        enroll._run_enrollment("Alice", operator=False),
+        {"replies": [SHORT] * 10},
+    )
+    assert "couldn't get enough clear audio" in text
+    assert len(prompts) == len(speaker_svc["info"]["prompts"]) + enroll._MAX_RETRIES
+
+
+async def test_wake_cancel_mid_enrollment(speaker_svc):
+    text, prompts = await _drive(
+        enroll._run_enrollment("Alice", operator=False),
+        {"replies": [GOOD]},  # one sample, then the script runs dry → cancel
+    )
+    assert text is None and len(prompts) == 2  # canceled while parked on prompt 2
+    assert len(speaker_svc["samples"]) == 1  # the stored sample stays (adopted)
+
+
+async def test_earshot_gate_and_operator_bypass(speaker_svc):
+    speaker_svc["info"]["allow_voice_enroll"] = False
+    sk.begin_actions()
+    sk.begin_request({"channel": "voice", "people": []})
+    out = await asking.run_askable(
+        enroll._run_enrollment("Alice", operator=False), kind="llm"
+    )
+    assert out.finished and out.value == "Voice enrollment is turned off."
+
+    # operator=True (dashboard) bypasses the gate.
+    text, prompts = await _drive(
+        enroll._run_enrollment("Alice", operator=True),
+        {"replies": [GOOD, GOOD, GOOD]},
+    )
+    assert text and "enrolled Alice" in text
+
+
+async def test_person_first_profile_keying(speaker_svc):
+    people = [
+        {"id": "nicki", "name": "Nicki", "voiceprints": ["nicki_old"]},
+        {"id": "bob", "name": "Bob", "voiceprints": []},
+    ]
+    # Existing person by name → append to their existing profile.
+    text, _ = await _drive(
+        enroll._run_enrollment("Nicki", operator=False),
+        {"replies": [GOOD, GOOD, GOOD], "people": list(people)},
+    )
+    assert speaker_svc["samples"][0][0] == "nicki_old"
+    assert "enrolled Nicki" in text
+
+    # person_id (dashboard) with a voiceless person → profile keyed by id.
+    speaker_svc["samples"].clear()
+    text, _ = await _drive(
+        enroll._run_enrollment("", operator=True, person_id="bob"),
+        {"replies": [GOOD, GOOD, GOOD], "people": list(people)},
+    )
+    assert speaker_svc["samples"][0][0] == "bob"
+
+    # Unknown person_id → honest refusal, no asking.
+    sk.begin_actions()
+    sk.begin_request({"channel": "voice", "people": []})
+    out = await asking.run_askable(
+        enroll._run_enrollment("", operator=True, person_id="ghost"), kind="llm"
+    )
+    assert out.finished and "couldn't find that person" in out.value
+
+
+async def test_directive_fast_intent(speaker_svc):
+    m = enroll._DIRECTIVE_RE.match("[[enroll]] operator=1 person=bob name=")
+    assert m and m.group("op") == "1" and m.group("pid") == "bob"
+    m = enroll._DIRECTIVE_RE.match("[[enroll]] operator=0 person= name=Alice Smith")
+    assert m and m.group("name") == "Alice Smith" and not m.group("pid")
+    # Ordinary speech never matches.
+    assert enroll._DIRECTIVE_RE.match("enroll me as Alice") is None
+    r = await enroll.fast_enroll_directive("what time is it", "office", None)
+    assert r.status == "miss"
+
+
+# ---------------------------------------------------------------------------
+# Server side: audio-ask routing + the dashboard entry
+# ---------------------------------------------------------------------------
 
 
 class _RecWS:
@@ -20,257 +186,87 @@ class _RecWS:
 
 
 def _server() -> TranscribingServer:
-    return TranscribingServer({"speaker": {"url": "http://spk:8768/identify"}})
-
-
-# ---------------------------------------------------------------------------
-# Skill
-# ---------------------------------------------------------------------------
-
-
-async def test_enroll_skill_queues_action():
-    sk.begin_actions()
-    out = await enroll_speaker("Alice")
-    assert "Alice" in out
-    assert sk.take_actions() == [{"type": "start_enrollment", "name": "Alice"}]
-
-
-async def test_enroll_skill_rejects_empty():
-    sk.begin_actions()
-    await enroll_speaker("   ")
-    assert sk.take_actions() == []
-
-
-# ---------------------------------------------------------------------------
-# Server: gating + session lifecycle
-# ---------------------------------------------------------------------------
-
-
-async def test_enroll_disabled_by_default(monkeypatch):
-    srv = _server()
-    monkeypatch.setattr(srv, "_voice_enroll_allowed", lambda: False)
-    srv._nodes["k"] = NodeSession(ws=_RecWS(), node_id="k", room_id="kitchen")  # type: ignore[arg-type]
-    said: list[str] = []
-
-    async def say(node, room, text):  # noqa: ANN001, ANN202
-        said.append(text)
-
-    monkeypatch.setattr(srv, "_say", say)
-    await srv.start_enrollment("k", "kitchen", "Alice")
-    assert "k" not in srv._enroll_sessions
-    assert said and "off" in said[0].lower()
-
-
-async def test_voice_enroll_flag_from_service_config(tmp_path, monkeypatch):
-    monkeypatch.setenv("KENZY_HOME", str(tmp_path))
-    services = tmp_path / "configs" / "services"
-    services.mkdir(parents=True)
-    srv = _server()
-    assert srv._voice_enroll_allowed() is False  # packaged default
-    (services / "speaker.yaml").write_text("allow_voice_enroll: true\n")
-    assert srv._voice_enroll_allowed() is True  # dashboard override enables it (live read)
-
-
-def test_enroll_prompts_from_service_config(monkeypatch):
-    from kenzy.speaker import DEFAULT_ENROLL_PROMPTS
-
-    srv = _server()
-    # The dashboard-editable speaker-service config is the single source of truth.
-    monkeypatch.setattr(
-        srv,
-        "_effective_service_config",
-        lambda svc: {"enroll_prompts": ["Read this.", "  ", "And this."]},
+    srv = TranscribingServer(
+        {
+            "stt": {"url": "http://x/transcribe"},
+            "speaker": {"url": "http://x/identify"},
+            "llm": {"url": "http://x/process"},
+        }
     )
-    assert srv._enroll_prompts() == ["Read this.", "And this."]  # blanks dropped
-
-    # Falls back to the bundled defaults when unset/empty.
-    monkeypatch.setattr(srv, "_effective_service_config", lambda svc: {"enroll_prompts": []})
-    assert srv._enroll_prompts() == DEFAULT_ENROLL_PROMPTS
+    srv._nodes["k"] = NodeSession(ws=_RecWS(), node_id="k", room_id="office")  # type: ignore[arg-type]
+    return srv
 
 
-async def test_enroll_starts_and_prompts(monkeypatch, tmp_path):
-    from kenzy.server.people import PeopleStore
-
+async def test_audio_ask_routes_pcm_not_stt(monkeypatch):
     srv = _server()
-    srv._people = PeopleStore(tmp_path / "nope.yaml")  # hermetic: no person records
-    monkeypatch.setattr(srv, "_voice_enroll_allowed", lambda: True)
-    ws = _RecWS()
-    srv._nodes["k"] = NodeSession(ws=ws, node_id="k", room_id="kitchen")  # type: ignore[arg-type]
-    tts: list[str] = []
+    seen = {}
 
-    async def run_tts(node, room, sid, text, vp):  # noqa: ANN001, ANN202
-        tts.append(text)
+    async def stt(pcm, room, sid):  # noqa: ANN001, ANN202
+        raise AssertionError("STT must never run on an enrollment sample")
 
-    monkeypatch.setattr(srv, "_run_tts", run_tts)
-    await srv.start_enrollment("k", "kitchen", "Alice")
-    try:
-        # Person-first: no person named Alice exists, so the profile is keyed by
-        # the slug her record will get, while the spoken flow uses her name.
-        assert srv._enroll_sessions["k"]["name"] == "alice"
-        assert srv._enroll_sessions["k"]["display"] == "Alice"
-        # The node was armed to capture the next utterance, and prompted by name.
-        assert any(json.loads(m).get("type") == "expect_utterance" for m in ws.sent)
-        assert tts and "Alice" in tts[0]
-    finally:
-        srv._end_enroll_session("k")  # cancel the timeout task
+    async def cont_audio(cont_id, pcm):  # noqa: ANN001, ANN202
+        seen["cont"] = (cont_id, len(pcm))
+        return LlmReply("Got it. Next, please say: two", "vp", fast=True,
+                        expect_response=True, continuation="c2",
+                        ask_capture="audio", ask_cue=True)  # fmt: skip
 
-
-async def test_enroll_capture_loop_collects_and_finishes(monkeypatch, tmp_path):
-    from kenzy.server.people import PeopleStore
-
-    srv = _server()
-    srv._people = PeopleStore(tmp_path / "people.yaml")  # hermetic: adoption writes here
-    srv._nodes["k"] = NodeSession(ws=_RecWS(), node_id="k", room_id="kitchen")  # type: ignore[arg-type]
-    enrolled: list[tuple[int, str]] = []
-    prompts: list[str] = []
-    done: list[str] = []
-
-    async def call_enroll(pcm, name):  # noqa: ANN001, ANN202
-        enrolled.append((len(pcm), name))
+    async def tts(*a, **k):  # noqa: ANN002, ANN003, ANN202
         return True
 
-    async def prompt(node, room, text):  # noqa: ANN001, ANN202
-        prompts.append(text)
-
-    async def say(node, room, text):  # noqa: ANN001, ANN202
-        done.append(text)
-
-    monkeypatch.setattr(srv, "_call_enroll", call_enroll)
-    monkeypatch.setattr(srv, "_enroll_prompt", prompt)
-    monkeypatch.setattr(srv, "_say", say)
-
-    srv._enroll_sessions["k"] = {
-        "name": "Alice",
-        "room": "kitchen",
-        "collected": 0,
-        "attempts": 0,
-        "prompts": ["one", "two", "three"],
-        "timeout": asyncio.create_task(asyncio.sleep(0)),
-    }
-    pcm = b"\x01\x02" * 20000  # comfortably over the min-bytes threshold
-    for _ in range(3):
-        await srv._handle_enroll_capture("k", "kitchen", pcm)
-
-    assert len(enrolled) == 3  # three samples POSTed to /enroll (one per prompt)
-    assert len(prompts) == 2  # re-prompted between samples, not after the last
-    assert "k" not in srv._enroll_sessions  # session ended
-    assert any("enrolled alice" in d.lower() for d in done)
-    # Person-first invariant: the first stored sample adopted the voice into a
-    # person record (created here, since no person named Alice existed).
-    owner = srv._people.by_voiceprint("Alice")
-    assert owner is not None and owner.name == "Alice"
+    monkeypatch.setattr(srv, "_call_stt", stt)
+    monkeypatch.setattr(srv, "_call_llm_continue_audio", cont_audio)
+    monkeypatch.setattr(srv, "_run_tts", tts)
+    srv._pending_ask["k"] = {"id": "c1", "capture": "audio"}
+    await srv._transcribe("k", "office", "s1", GOOD)
+    assert seen["cont"] == ("c1", len(GOOD))
+    # The chained audio ask re-registered and the cue-bearing floor hold armed.
+    assert srv._pending_ask["k"] == {"id": "c2", "capture": "audio"}
+    ws = srv._nodes["k"].ws
+    assert any('"cue": true' in m or '"cue":true' in m for m in ws.sent)  # type: ignore[attr-defined]
 
 
-async def test_enroll_timeout_rearmed_on_capture(monkeypatch, tmp_path):
-    """The session timeout is inactivity-based: every capture re-arms it, so a
-    slow-but-progressing enrollment (5 prompts through local TTS) never dies
-    mid-flow. Field finding: a real run blew the old 120s TOTAL cap."""
-    from kenzy.server.people import PeopleStore
+async def test_window_expiry_on_audio_ask_sends_empty_sample(monkeypatch):
+    import asyncio
 
     srv = _server()
-    srv._people = PeopleStore(tmp_path / "people.yaml")
-    srv._nodes["k"] = NodeSession(ws=_RecWS(), node_id="k", room_id="kitchen")  # type: ignore[arg-type]
+    seen = {}
 
-    async def call_enroll(pcm, name):  # noqa: ANN001, ANN202
+    async def cont_audio(cont_id, pcm):  # noqa: ANN001, ANN202
+        seen["cont"] = (cont_id, pcm)
+        return LlmReply("I didn't catch that. Please say: one", "vp", fast=True,
+                        expect_response=True, continuation="c9",
+                        ask_capture="audio", ask_cue=True)  # fmt: skip
+
+    async def tts(*a, **k):  # noqa: ANN002, ANN003, ANN202
         return True
 
-    async def prompt(node, room, text):  # noqa: ANN001, ANN202
-        pass
-
-    monkeypatch.setattr(srv, "_call_enroll", call_enroll)
-    monkeypatch.setattr(srv, "_enroll_prompt", prompt)
-    original = asyncio.create_task(asyncio.sleep(0))
-    srv._enroll_sessions["k"] = {
-        "name": "Alice",
-        "room": "kitchen",
-        "collected": 0,
-        "attempts": 0,
-        "prompts": ["one", "two"],
-        "timeout": original,
-    }
-    await srv._handle_enroll_capture("k", "kitchen", b"\x01\x02" * 20000)
-    await asyncio.sleep(0)  # let the old task's cancellation land
-    session = srv._enroll_sessions["k"]
-    assert session["timeout"] is not original  # fresh inactivity window
-    assert original.cancelled() or original.done()
-    srv._end_enroll_session("k")
-
-
-async def test_followup_timeout_retries_enrollment(monkeypatch, tmp_path):
-    """An expired capture window during enrollment re-prompts (a missed sample),
-    rather than silently stranding the session until the inactivity timeout —
-    the node's followup_timeout must reach the enrollment loop."""
-    from kenzy.server.people import PeopleStore
-
-    srv = _server()
-    srv._people = PeopleStore(tmp_path / "people.yaml")
-    srv._nodes["k"] = NodeSession(ws=_RecWS(), node_id="k", room_id="kitchen")  # type: ignore[arg-type]
-    prompts: list[str] = []
-
-    async def prompt(node, room, text):  # noqa: ANN001, ANN202
-        prompts.append(text)
-
-    monkeypatch.setattr(srv, "_enroll_prompt", prompt)
-    srv._enroll_sessions["k"] = {
-        "name": "alice",
-        "room": "kitchen",
-        "collected": 0,
-        "attempts": 0,
-        "prompts": ["one", "two"],
-        "timeout": asyncio.create_task(asyncio.sleep(0)),
-    }
+    monkeypatch.setattr(srv, "_call_llm_continue_audio", cont_audio)
+    monkeypatch.setattr(srv, "_run_tts", tts)
+    srv._pending_ask["k"] = {"id": "c1", "capture": "audio"}
     srv._followup_timed_out("k")
-    await asyncio.sleep(0)  # let the routed retry task run
-    assert srv._enroll_sessions["k"]["attempts"] == 1
-    assert prompts and "didn't catch" in prompts[0]
-    srv._end_enroll_session("k")
-
-    # Without an enrollment session it stays a dialog event (turn counter clear).
-    srv._followup_turns["k"] = 2
-    srv._followup_timed_out("k")
-    assert "k" not in srv._followup_turns
+    await asyncio.sleep(0.05)
+    assert seen["cont"] == ("c1", b"")  # empty sample = the retry path
+    assert srv._pending_ask["k"]["id"] == "c9"
 
 
-async def test_enroll_resolves_existing_person(monkeypatch, tmp_path):
-    """Person-first resolution: enrolling a known person appends to their existing
-    voiceprint; a voiceless person gets a profile keyed by their stable id."""
-    from kenzy.server.people import PeopleStore
-
+async def test_start_enrollment_sends_directive(monkeypatch):
     srv = _server()
-    p = tmp_path / "people.yaml"
-    p.write_text(
-        "people:\n  john:\n    name: John\n    voiceprints: [johnmark]\n  nicki:\n    name: Nicki\n"
-    )
-    srv._people = PeopleStore(p)
-    monkeypatch.setattr(srv, "_voice_enroll_allowed", lambda: True)
-    srv._nodes["k"] = NodeSession(ws=_RecWS(), node_id="k", room_id="kitchen")  # type: ignore[arg-type]
+    seen = {}
 
-    async def run_tts(node, room, sid, text, vp):  # noqa: ANN001, ANN202
-        pass
+    async def llm(text, room, sid, speaker, node_id=None, identity=None):  # noqa: ANN001, ANN202
+        seen["text"] = text
+        return LlmReply("Okay, enrolling Bob. After the tone, please say: one", "vp",
+                        fast=True, expect_response=True, continuation="c1",
+                        ask_capture="audio", ask_cue=True)  # fmt: skip
 
-    monkeypatch.setattr(srv, "_run_tts", run_tts)
+    async def tts(*a, **k):  # noqa: ANN002, ANN003, ANN202
+        return True
 
-    # Spoken name → existing person: more samples for their existing profile.
-    await srv.start_enrollment("k", "kitchen", "John")
-    sess = srv._enroll_sessions["k"]
-    assert (sess["name"], sess["display"], sess["person_id"]) == ("johnmark", "John", "john")
-    srv._end_enroll_session("k")
-
-    # Dashboard picks a voiceless person by id: fresh profile keyed by the id.
-    await srv.start_enrollment("k", "kitchen", "Nicki", operator=True, person_id="nicki")
-    sess = srv._enroll_sessions["k"]
-    assert (sess["name"], sess["display"], sess["person_id"]) == ("nicki", "Nicki", "nicki")
-    srv._end_enroll_session("k")
-
-    # Unknown person_id refuses (spoken feedback, no session).
-    said: list[str] = []
-
-    async def say(node, room, text):  # noqa: ANN001, ANN202
-        said.append(text)
-
-    monkeypatch.setattr(srv, "_say", say)
-    await srv.start_enrollment("k", "kitchen", "X", operator=True, person_id="ghost")
-    assert "k" not in srv._enroll_sessions and said
+    monkeypatch.setattr(srv, "_call_llm", llm)
+    monkeypatch.setattr(srv, "_run_tts", tts)
+    await srv.start_enrollment("k", "office", "", operator=True, person_id="bob")
+    assert seen["text"] == "[[enroll]] operator=1 person=bob name="
+    assert srv._pending_ask["k"] == {"id": "c1", "capture": "audio"}
 
 
 async def test_adopt_enrolled_voice_paths(tmp_path):
@@ -296,76 +292,16 @@ async def test_adopt_enrolled_voice_paths(tmp_path):
     assert owner is not None and owner.name == "Alice" and owner.id == "alice"
 
 
-async def test_enroll_short_capture_is_retried(monkeypatch):
+async def test_adopt_voice_action_dispatch(tmp_path, monkeypatch):
+    from kenzy.server.people import PeopleStore
+
     srv = _server()
-    enrolled: list[str] = []
-
-    async def call_enroll(pcm, name):  # noqa: ANN001, ANN202
-        enrolled.append(name)
-        return True
-
-    async def prompt(node, room, text):  # noqa: ANN001, ANN202
-        pass
-
-    monkeypatch.setattr(srv, "_call_enroll", call_enroll)
-    monkeypatch.setattr(srv, "_enroll_prompt", prompt)
-    srv._enroll_sessions["k"] = {
-        "name": "A",
-        "room": "r",
-        "collected": 0,
-        "attempts": 0,
-        "prompts": ["one", "two", "three"],
-        "timeout": asyncio.create_task(asyncio.sleep(0)),
-    }
-    await srv._handle_enroll_capture("k", "r", b"\x00\x00")  # too short
-    assert enrolled == []  # not sent
-    assert srv._enroll_sessions["k"]["collected"] == 0
-    srv._end_enroll_session("k")
-
-
-# ---------------------------------------------------------------------------
-# Server: routing + disconnect cleanup
-# ---------------------------------------------------------------------------
-
-
-async def test_transcribe_routes_to_enrollment(monkeypatch):
-    srv = _server()
-    handled: list[tuple[str, int]] = []
-    stt_calls: list[object] = []
-
-    async def handle(node, room, pcm):  # noqa: ANN001, ANN202
-        handled.append((node, len(pcm)))
-
-    async def stt(*a):  # noqa: ANN002, ANN202
-        stt_calls.append(a)
-        return "hello"
-
-    monkeypatch.setattr(srv, "_handle_enroll_capture", handle)
-    monkeypatch.setattr(srv, "_call_stt", stt)
-    srv._enroll_sessions["k"] = {
-        "name": "A",
-        "room": "r",
-        "collected": 0,
-        "attempts": 0,
-        "timeout": None,
-    }
-
-    await srv._transcribe("k", "kitchen", "sid", b"1234")
-    assert handled == [("k", 4)]
-    assert stt_calls == []  # enrollment capture must NOT go through STT/LLM
-
-
-async def test_disconnect_clears_enroll_session():
-    srv = _server()
-    t = asyncio.create_task(asyncio.sleep(100))
-    srv._enroll_sessions["k"] = {
-        "name": "A",
-        "room": "r",
-        "collected": 0,
-        "attempts": 0,
-        "timeout": t,
-    }
-    srv._cleanup_on_disconnect("k")
-    assert "k" not in srv._enroll_sessions
-    await asyncio.gather(t, return_exceptions=True)
-    assert t.cancelled()
+    p = tmp_path / "people.yaml"
+    srv._people = PeopleStore(p)
+    await srv._dispatch_actions(
+        [{"type": "adopt_voice", "voiceprint": "alice", "display": "Alice", "person_id": None}],
+        "k",
+        "office",
+    )
+    owner = srv._people.by_voiceprint("alice")
+    assert owner is not None and owner.name == "Alice"

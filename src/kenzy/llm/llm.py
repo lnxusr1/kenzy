@@ -69,6 +69,12 @@ class ProcessRequest(BaseModel):
     # alarm/intercom skills refuse these targets in the reply itself, instead of
     # confirming and then failing when the server actuates the action.
     no_aec_rooms: list[str] = []
+    # Person records (id/name/voiceprints), server-injected like rooms/schedules —
+    # lets skills resolve spoken names to people (enrollment's person-first flow).
+    people: list[dict[str, Any]] = []
+    # The speaker service base URL (server-resolved: static ← auto-registered),
+    # for the enrollment skill's /enroll calls.
+    speaker_url: str | None = None
     # Identity core (F1): the resolved person id (None = no record / unknown), the
     # confidence tier ("unknown"/"recognized"), and the raw voiceprint confidence.
     # Skills read these via get_request to gate on who's asking.
@@ -111,6 +117,18 @@ class ProcessResponse(BaseModel):
     # [{kind: "fast"|"model"|"tool", name, ms}] — names and durations ONLY,
     # never arguments or content (safe even on secret exchanges).
     spans: list[dict[str, Any]] = []
+    # ask() (4.2): set when a skill parked on a question. text IS the prompt;
+    # expect_response is forced true. The server speaks it, arms the reply
+    # window, routes the next utterance to POST /process/continue with this id
+    # (wake word / window expiry → POST /process/cancel).
+    continuation: str | None = None
+    # Optional per-question override of the node's reply window (seconds).
+    ask_timeout_s: float | None = None
+    # What the parked skill wants back: "text" (the transcript — default) or
+    # "audio" (the RAW captured PCM, base64 on the wire; STT never runs).
+    ask_capture: str = "text"
+    # Whether the node should play its record-tone when the window opens.
+    ask_cue: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -683,6 +701,134 @@ async def set_ha_curation(body: CurationUpdate) -> dict[str, Any]:
     return {"ok": True, "curation": ha_model.load_curation()}
 
 
+def _ask_prompt_response(outcome: Any, *, fast: bool) -> ProcessResponse:
+    """A skill parked on ask(): the reply IS the question. The server speaks
+    it, holds the floor (expect_response), and routes the answer to
+    /process/continue. Actions queued BEFORE the ask are actuated now."""
+    from kenzy.llm import asking
+
+    parked = outcome.parked
+    assert isinstance(parked, asking.Parked)
+    ch = parked.channel
+    return ProcessResponse(
+        text=ch.prompt,
+        voice_prompt=_voice_prompt,
+        expect_response=True,
+        actions=skill_registry.take_actions(),
+        fast=fast,
+        secret=bool(ch.touch and ch.touch.get("lockbox")),
+        spans=list(parked.meta.get("spans") or []),
+        continuation=parked.id,
+        ask_timeout_s=ch.timeout,
+        ask_capture=ch.capture,
+        ask_cue=ch.cue,
+    )
+
+
+class ContinueRequest(BaseModel):
+    """The user's answer to a parked ask() — identity is the ANSWERER's.
+    ``audio_b64`` carries the raw capture for audio-mode asks (text ignored)."""
+
+    continuation: str
+    text: str = ""
+    audio_b64: str | None = None
+    speaker: str | None = None
+    person_id: str | None = None
+    speaker_tier: str | None = None
+    confidence: float | None = None
+    tts_local: bool = False
+    memory_opt_out: bool = False
+
+
+@app.post("/process/continue", response_model=ProcessResponse)
+async def process_continue(req: ContinueRequest) -> ProcessResponse:
+    from kenzy import redact
+    from kenzy.llm import asking, lockbox
+
+    parked = asking.pending(req.continuation)
+    if parked is None:
+        raise HTTPException(status_code=404, detail="no such continuation")
+    ch, meta, kind = parked.channel, parked.meta, parked.kind
+    log.info("[continue/%s] %s", req.speaker or "?", redact.loggable(req.text))
+    answerer = {
+        "person_id": req.person_id,
+        "speaker_tier": req.speaker_tier or "unknown",
+        "confidence": req.confidence,
+        "speaker": req.speaker,
+        "tts_local": bool(req.tts_local),
+        "memory_opt_out": bool(req.memory_opt_out),
+    }
+    # Snapshot the ANSWERED question's capture mode before resume — a chained
+    # ask would overwrite the channel's fields with the NEXT question's.
+    was_audio = parked.channel.capture == "audio"
+    reply: Any = req.text
+    if was_audio:
+        import base64
+
+        # b"" is a REAL value here (window expiry = empty sample → the skill's
+        # retry path); None is reserved for cancel, which never reaches continue.
+        reply = base64.b64decode(req.audio_b64 or "")
+    outcome = await asking.resume(req.continuation, reply, answerer)
+    if not outcome.finished:
+        return _ask_prompt_response(outcome, fast=(kind == "fast"))
+
+    actions = list(ch.actions or [])
+    if ch.actions:
+        ch.actions.clear()
+    touched_lockbox = bool(ch.touch and ch.touch.get("lockbox"))
+    touched_private = bool(ch.touch and ch.touch.get("private"))
+    room = str(meta.get("room_id") or "")
+    speaker = req.speaker or "unknown"
+
+    if kind == "fast":
+        fast_res = outcome.value
+        # A resumed matcher that ultimately MISSES is a skill bug (the prompt
+        # already went out) — close the dialog honestly rather than re-dispatch.
+        text = fast_res.text if fast_res is not None else "Sorry — I lost track of that."
+        vp = (fast_res.voice_prompt if fast_res else None) or _voice_prompt
+        expect = bool(fast_res.expect_response) if fast_res else False
+    else:
+        text, vp, expect = outcome.value
+
+    if not touched_lockbox and not was_audio:
+        _history.add(
+            room, speaker, req.text, text,
+            private_to=(req.person_id if (req.person_id and touched_private) else None),
+        )  # fmt: skip
+        if not req.memory_opt_out:
+            _short_term.add(req.person_id or "", req.text, text)
+    secret_hits = 0
+    if kind == "llm":
+        text, secret_hits = lockbox.substitute(
+            text, req.person_id, speak_values=bool(req.tts_local)
+        )
+    return ProcessResponse(
+        text=text,
+        voice_prompt=vp,
+        expect_response=expect,
+        actions=actions,
+        fast=(kind == "fast"),
+        secret=touched_lockbox or bool(secret_hits),
+        spans=list(meta.get("spans") or []),
+    )
+
+
+class CancelRequest(BaseModel):
+    continuation: str
+    reason: str = "canceled"
+
+
+@app.post("/process/cancel")
+async def process_cancel(req: CancelRequest) -> dict[str, Any]:
+    """Wake word / reply-window expiry / node disconnect: the parked skill
+    gets None from ask() and its result is discarded. Unknown ids are fine
+    (the answer won the race)."""
+    from kenzy.llm import asking
+
+    await asking.cancel(req.continuation, req.reason)
+    return {"ok": True}
+
+
 @app.post("/process", response_model=ProcessResponse)
 async def process(req: ProcessRequest) -> ProcessResponse:
     # Preserve raw speaker for history; derive display name for logging.
@@ -712,6 +858,8 @@ async def process(req: ProcessRequest) -> ProcessResponse:
             "memory_opt_out": bool(req.memory_opt_out),
             "memory_capture": req.memory_capture or "explicit",
             "tts_local": bool(req.tts_local),
+            "people": req.people,
+            "speaker_url": req.speaker_url,
         }
     )
 
@@ -720,8 +868,19 @@ async def process(req: ProcessRequest) -> ProcessResponse:
         return req.person_id if (req.person_id and memory.private_touched()) else None
 
     # Deterministic fast path: try local/instant matchers before the LLM.
+    # Wrapped askable (4.2): a fast intent may await ask(...) — the dispatch
+    # parks mid-matcher and the prompt goes back as a continuation.
+    from kenzy.llm import asking
+
     _t0 = time.monotonic()
-    fast = await skill_registry.dispatch_fast(req.text, req.room_id, raw_speaker)
+    outcome = await asking.run_askable(
+        skill_registry.dispatch_fast(req.text, req.room_id, raw_speaker),
+        kind="fast",
+        meta={"room_id": req.room_id or "", "utterance": req.text, "spans": []},
+    )
+    if not outcome.finished:
+        return _ask_prompt_response(outcome, fast=True)
+    fast = outcome.value
     if fast is not None:
         fast_span = [
             {"kind": "fast", "name": fast.name, "ms": round((time.monotonic() - _t0) * 1000)}
@@ -749,14 +908,21 @@ async def process(req: ProcessRequest) -> ProcessResponse:
         )
 
     spans: list[dict[str, Any]] = []
-    text, voice_prompt, expect_response = await _run_llm(
-        req.text,
-        raw_speaker,
-        req.room_id,
-        available_rooms=req.rooms,
-        schedules=req.schedules,
-        spans=spans,
+    outcome = await asking.run_askable(
+        _run_llm(
+            req.text,
+            raw_speaker,
+            req.room_id,
+            available_rooms=req.rooms,
+            schedules=req.schedules,
+            spans=spans,
+        ),
+        kind="llm",
+        meta={"room_id": req.room_id or "", "utterance": req.text, "spans": spans},
     )
+    if not outcome.finished:
+        return _ask_prompt_response(outcome, fast=False)
+    text, voice_prompt, expect_response = outcome.value
     if not req.memory_opt_out:
         # Deliberately BEFORE substitution: short-term context (a future model
         # input) keeps the placeholder, never the secret value.

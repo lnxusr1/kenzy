@@ -214,6 +214,41 @@ from kenzy.llm.skills import get_request
 rooms = get_request("rooms") or []
 ```
 
+## Asking the user a question (`ask()`)
+
+When a skill needs an answer mid-flow — a confirmation, a choice, a missing
+detail — don't return a question and hope the next utterance finds its way
+back. Ask directly:
+
+```python
+from kenzy.llm.skills import FastResult, ask, fast_intent
+
+@fast_intent(priority=80)
+async def plant_reminder(utterance, room_id, speaker):
+    if "water the plants" not in utterance.lower():
+        return FastResult.miss()
+    answer = await ask("Every day, or just weekdays?")
+    if answer is None:  # wake word / window expired / restart — never assume
+        return FastResult.handled("Okay, never mind.")
+    ...
+```
+
+Kenzy speaks the prompt, re-opens the mic in that room (no wake word), and
+your coroutine resumes with the spoken reply. Rules worth knowing:
+
+- **`None` means the question was abandoned** — the wake word always cancels
+  (not disableable), the reply window can expire, and a service restart
+  forgets pending questions. Handle it; your return value is discarded in
+  those cases, so keep it side-effect-free after a `None`.
+- **Re-check identity for anything gated.** The reply carries the *answerer's*
+  identity — `get_request("person_id")` / `speaker_tier` reflect whoever
+  spoke the answer, which may not be who asked.
+- Questions chain (`await ask(...)` again), and it works identically inside
+  `@skill` tools — the model's tool call simply takes as long as the
+  conversation does.
+- The window defaults to the node's `dialog_no_speech_timeout_ms`;
+  `ask(prompt, timeout=seconds)` overrides per question.
+
 ## Gating a skill by identity (`min_tier`)
 
 Some skills shouldn't work for a voice Kenzy doesn't recognize — anything
