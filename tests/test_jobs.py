@@ -213,3 +213,11 @@ async def test_kick_during_run_is_honored():
     state = runner._jobs["j"]
     # Next run is due ~cooldown from now, not a day away.
     assert state.next_due - _time.monotonic() < 5
+
+
+def test_kick_unregistered_job_is_noop():
+    # A disabled job's kicker (e.g. maintenance_interval: 0) must not crash
+    # the kicking job.
+    from kenzy.jobs import JobRunner
+
+    JobRunner().kick("not-registered")

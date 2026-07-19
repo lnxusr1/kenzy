@@ -31,6 +31,7 @@ from kenzy.fastapi_auth import (
     install_logs_endpoint,
     install_restart_endpoint,
     install_service_auth,
+    install_unit_endpoint,
     install_upgrade_endpoint,
 )
 from kenzy.logutil import quiet_health_access_log
@@ -46,6 +47,9 @@ class SpeakRequest(BaseModel):
     text: str
     voice_prompt: str | None = None
     room_id: str | None = None
+    # The caller (server) flags lockbox replies: the spoken text carries a
+    # secret value, so this service's own log line must withhold it.
+    sensitive: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -76,17 +80,20 @@ _kokoro_speed: float = 1.0
 
 @app.get("/health")
 async def health() -> dict[str, object]:
+    # "local": speech never leaves the box (the lockbox's spoken-recall gate).
     if _provider == "kokoro":
         return {
             "status": "ok",
             **version_info(),
             "provider": "kokoro",
+            "local": True,
             "voice": _kokoro_voice,
         }
     return {
         "status": "ok",
         **version_info(),
         "provider": "openai",
+        "local": False,
         "model": _model,
         "voice": _voice,
     }
@@ -95,7 +102,11 @@ async def health() -> dict[str, object]:
 @app.post("/speak")
 async def speak(req: SpeakRequest) -> Response:
     loop = asyncio.get_running_loop()
-    log.info("[%s] speak: %s", req.room_id or "?", req.text[:80])
+    log.info(
+        "[%s] speak: %s",
+        req.room_id or "?",
+        "[lockbox reply — content withheld]" if req.sensitive else req.text[:80],
+    )
     pcm = await loop.run_in_executor(None, _synthesise, req.text, req.voice_prompt or "")
     return Response(
         content=pcm,
@@ -265,6 +276,42 @@ def main() -> None:
     )
     install_restart_endpoint(app)
     install_upgrade_endpoint(app, "tts")
+    install_unit_endpoint(app, "kenzy-tts.service")
+
+    from kenzy.fastapi_auth import install_features_endpoint, install_fill_endpoint
+    from kenzy.features import feature, probe_binary, probe_import
+    from kenzy.tts import wyoming_server as _wy
+
+    def _features() -> list[dict[str, Any]]:
+        wcfg = cfg.get("wyoming") or {}
+        kokoro_wanted = _provider == "kokoro" or bool(
+            (cfg.get("openai") or {}).get("fallback", True)
+        )
+        espeak = probe_binary("espeak-ng")
+        return [
+            feature(
+                "wyoming",
+                configured=bool(wcfg.get("enabled", False)),
+                available=probe_import("wyoming"),
+                active=_wy.is_active(),
+                note="Home Assistant voice pipelines speak with Kenzy's voice.",
+            ),
+            feature(
+                "kokoro",
+                configured=kokoro_wanted,
+                available=probe_import("kokoro") and espeak,
+                active=_kokoro_pipeline is not None,
+                install="pip" if espeak else "apt",
+                note=(
+                    "The local voice (provider or cloud-failure fallback)."
+                    if espeak
+                    else "Needs a system package first: sudo apt-get install espeak-ng"
+                ),
+            ),
+        ]
+
+    install_features_endpoint(app, _features)
+    install_fill_endpoint(app, "tts,kokoro")
 
     _provider = str(cfg.get("provider", "openai")).lower()
 

@@ -8,7 +8,8 @@ from kenzy.llm import skills as sk
 from kenzy.llm.builtin_skills import web_search
 
 _FAKE = [
-    {"title": "Mount Everest", "href": "https://en.wikipedia.org/wiki/Everest", "body": "  8,849 m   tall.  "},
+    {"title": "Mount Everest", "href": "https://en.wikipedia.org/wiki/Everest",
+     "body": "  8,849 m   tall.  "},
     {"title": "K2", "href": "https://www.example.com/k2", "body": "Second highest."},
 ]
 

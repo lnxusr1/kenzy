@@ -202,6 +202,11 @@ The server injects per-request context that skills and fast intents can read wit
 | `person_id` | The resolved person's id (People tab), or `None` |
 | `speaker_tier` | Identity confidence: `unknown`, `recognized`, or `verified` |
 | `confidence` | The raw voice-match score behind the tier |
+| `channel` | Which front door: `voice` (a room node) or `assist` (HA / the phone) |
+| `no_aec_rooms` | Rooms whose speakers lack echo cancellation (refuse alarm/intercom targets) |
+| `memory_opt_out` | This person asked not to be remembered — skills must not store facts about them |
+| `memory_capture` | Their capture mode: `explicit`, `suggest`, or `auto` |
+| `tts_local` | Whether the reply's speech stays on-box — secret values must not be spoken when false |
 
 ```python
 from kenzy.llm.skills import get_request
@@ -212,7 +217,8 @@ rooms = get_request("rooms") or []
 ## Gating a skill by identity (`min_tier`)
 
 Some skills shouldn't work for a voice Kenzy doesn't recognize — anything
-personal (and, once memory lands, anything that writes or reads it). Declare
+personal (memory being the canonical example — every memory skill requires
+`recognized`). Declare
 the requirement on the decorator and the registry enforces it everywhere:
 
 ```python

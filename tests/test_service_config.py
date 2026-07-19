@@ -337,7 +337,7 @@ async def test_assist_endpoint(tmp_path, monkeypatch):
         text, room_id, session_id, speaker=None, node_id=None, identity=None, channel="voice"
     ):
         seen.append((text, room_id, identity, channel))
-        return (f"Hi {speaker}!", "vp", [], True, False)
+        return (f"Hi {speaker}!", "vp", [], True, False, False)
 
     monkeypatch.setattr(server, "_call_llm", fake_llm)
     task = await _serve(server)

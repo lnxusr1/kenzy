@@ -214,7 +214,7 @@ def set_fallback(model: str | None, base_url: str | None) -> None:
 
 
 async def acompletion_with_fallback(
-    kwargs: dict[str, Any], state: dict[str, Any] | None = None
+    kwargs: dict[str, Any], state: dict[str, Any] | None = None, *, local_only: bool = False
 ) -> Any:
     """LiteLLM call with a single silent retry on the configured local fallback.
 
@@ -222,14 +222,27 @@ async def acompletion_with_fallback(
     pinned to the fallback so a multi-iteration tool loop doesn't re-pay the
     primary's timeout on every turn. No fallback configured ⇒ behaves exactly
     like a plain ``acompletion`` call.
+
+    ``local_only``: the caller's content must never reach a cloud model (the
+    memory classifier / private-fact consolidation) — the fallback is used
+    only when it is itself local; otherwise the primary's failure propagates.
     """
     from litellm import acompletion  # type: ignore[import-untyped]
+
+    def _fallback_ok() -> bool:
+        if not _FALLBACK.get("model"):
+            return False
+        if not local_only:
+            return True
+        from kenzy.llm.locality import model_is_local
+
+        return model_is_local(str(_FALLBACK.get("model", "")), _FALLBACK.get("base_url"))
 
     if not (state and state.get("fallback")):
         try:
             return await acompletion(**kwargs)
         except Exception as exc:
-            if not _FALLBACK.get("model"):
+            if not _fallback_ok():
                 raise
             log.warning(
                 "Primary model %r failed (%s) — falling back to %s",

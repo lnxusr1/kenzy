@@ -9,6 +9,8 @@ with some effort, one part not at all:
 - Backend service settings (models, voices, skills configuration)
 - Your Home Assistant curation (aliases, room defaults, exclusions)
 - Custom skills and dependency pins (`constraints.txt`)
+- Remembered facts and lockbox secrets (`data/memory/` — the ledger, the
+  encrypted lockbox, and by default its decryption key)
 - Active timers, alarms, and reminders
 
 A backup is a single small `.tar.gz` of all of it — and it's **complete even when
@@ -23,7 +25,15 @@ Open the dashboard → **Settings → Backup → Download backup**. That's it �
 file (`kenzy-backup-<date>.tar.gz`) downloads to your browser. Keep a copy
 somewhere that isn't the server.
 
-Two things stay out **by default**, each with an opt-in checkbox:
+The archive carries the **lockbox key by default** — a backup's job is to bring
+everything back, and the key is data (without it, restored secrets are unreadable
+ciphertext). That also means the default archive can *decrypt* your stored
+secrets: treat it like a password file, or untick **Include the lockbox key**
+for a shareable archive that carries only unreadable ciphertext. (Restoring a
+key-less archive later: the lockbox preserves the unreadable file aside and
+starts fresh — drop the matching `lockbox.key` beside it to recover.)
+
+Two more things stay out **by default**, each with an opt-in checkbox:
 
 - **Include secrets** adds `.env` (your API keys). Off by default because the
   archive then carries **live credentials** — whatever your setup keeps there,
@@ -41,7 +51,8 @@ Two things stay out **by default**, each with an opt-in checkbox:
 
 **Settings → Restore from a backup…** — pick your backup file, type `RESTORE` to
 confirm, and it's uploaded to the server and applied: configuration, Home Assistant
-curation, enrolled voice profiles, schedules, and any custom skills. The server then
+curation, enrolled voice profiles, memories and lockbox secrets, schedules, and any
+custom skills. The server then
 restarts, and the rest of the fleet re-pulls its config and repopulates its own data
 automatically — so a whole-deployment recovery is one browser round-trip.
 
@@ -69,8 +80,9 @@ Then finish up:
 3. Restart the services: `systemctl --user restart 'kenzy-*'`
 
 !!! note "TLS survives a restore — even onto a new machine"
-    A backup never contains your TLS certificate or private key (private-key
-    material stays on its host, like `.env`). If the restored config had TLS
+    A backup never contains your TLS certificate or private key (host security
+    material stays on its host, like `.env` — the one deliberate exception is
+    the lockbox key, which is data). If the restored config had TLS
     enabled, the restore mints a fresh self-signed certificate in its place, so
     the restored server keeps speaking `https`/`wss` — Kenzy's clients don't pin
     certificates, so a new one is seamless. And because `server.yaml` stores an
@@ -97,5 +109,6 @@ reconnect and pull their restored settings automatically.
 - Download a fresh backup after enrolling voices, curating Home Assistant
   devices, or any calibration session you'd rather not redo.
 - Before a big upgrade or hardware change, grab one — it's one click.
-- The archive contains your configuration (including the node join token), so
-  treat it like the config itself: private, not something to post publicly.
+- The archive contains your configuration (including the node join token) and,
+  by default, the lockbox **and its key** — treat it like a password file:
+  private and preferably encrypted at rest, never posted anywhere public.

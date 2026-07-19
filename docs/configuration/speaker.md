@@ -82,8 +82,10 @@ people:
   john:                        # a stable id
     name: John                 # spoken/display name
     voiceprints: [john, johnmark]   # speaker-service names that are this person
-    ha_user: person.john       # optional — for the HA Assist channel (later)
+    ha_user: person.john       # optional — links the HA Assist channel identity
     phone: null                # optional
+    memory_opt_out: false      # optional — "don't remember me" (People page toggle)
+    memory_capture: explicit   # optional — explicit (default) | suggest | auto
   nicki:
     name: Nicki
     voiceprints: [nicki]
@@ -92,7 +94,8 @@ people:
 - **No file? No change.** Without `people.yaml` the raw voiceprint name passes
   straight through, exactly as before — this layer is purely additive.
 - **Confidence tier.** A match is `recognized`; a below-threshold voice is
-  `unknown`. Future features (per-person memory, privacy) gate on the tier.
+  `unknown`. Per-person [memory](../memory.md) (and everything privacy-gated)
+  gates on the tier — an unknown voice gets no memory at all.
 - **Standalone.** `ha_user`/`phone` are optional — a voiceprint-only household
   is fully supported.
 

@@ -760,7 +760,13 @@ class Dashboard:
 
         if path.startswith("/api/people/") and path.endswith("/export"):
             pid = path[len("/api/people/") : -len("/export")]
-            body = await self._person_export(pid)
+            eqs = parse_qs(urlsplit(request.path).query or "")
+            # Plaintext secret values ride only when the dashboard has controls
+            # (same trust level as the Reveal button) — a read-only dashboard
+            # exports the count line instead.
+            inc_secrets = (eqs.get("secrets") or ["1"])[0] not in ("0", "false")
+            inc_secrets = inc_secrets and self._dcfg.controls
+            body = await self._person_export(pid, include_secrets=inc_secrets)
             if body is None:
                 return self._json(404, {"error": "no such person"})
             import json as _json_mod
@@ -793,7 +799,16 @@ class Dashboard:
                 return (qs.get(key) or ["0"])[0].lower() in ("1", "true", "yes")
 
             data = await self._server.create_backup_archive(
-                include_secrets=_flag("secrets"), include_models=_flag("full")
+                include_secrets=_flag("secrets") and self._dcfg.controls,
+                include_models=_flag("full"),
+                # The lockbox KEY rides by default (a backup restores everything);
+                # ?lockbox_key=0 builds a shareable archive (ciphertext only). A
+                # read-only dashboard (controls: false) gets ciphertext-only too —
+                # the key is the same trust level as Reveal.
+                include_lockbox_key=(
+                    (qs.get("lockbox_key") or ["1"])[0] not in ("0", "false")
+                    and self._dcfg.controls
+                ),
             )
             headers = Headers()
             headers["Content-Type"] = "application/gzip"
@@ -828,10 +843,27 @@ class Dashboard:
                     "config": cfg,  # effective, secret-stripped
                     "defaults": defaults,  # inherited layer only (field placeholders)
                     "override": override,
-                    "reachable": name in self._service_urls,
+                    "reachable": self._service_base(name) is not None,
                     "controls": self._dcfg.controls,
                 },
             )
+
+        if path.startswith("/api/secrets/") and path.endswith("/reveal"):
+            if not self._dcfg.controls:
+                return self._json(403, {"error": "controls are disabled"})
+            sid = path[len("/api/secrets/") : -len("/reveal")]
+            res = await self._llm_memory_request("GET", f"/lockbox/reveal?id={quote(sid)}")
+            if res is None:
+                return self._json(404, {"error": "no such secret (or lockbox unreachable)"})
+            return self._json(200, res)
+
+        if path.startswith("/api/services/") and path.endswith("/unit"):
+            name = path[len("/api/services/") : -len("/unit")]
+            return self._json(200, await self._service_unit(name))
+
+        if path.startswith("/api/services/") and path.endswith("/features"):
+            name = path[len("/api/services/") : -len("/features")]
+            return self._json(200, await self._service_features(name))
 
         if path.startswith("/api/services/") and path.endswith("/logs"):
             name = path[len("/api/services/") : -len("/logs")]
@@ -868,10 +900,12 @@ class Dashboard:
         return self._server_logs.tail(lv, limit)
 
     async def _service_logs(self, name: str, request: Request) -> list[dict[str, Any]]:
-        health_url = self._service_urls.get(name)
-        if not self._dcfg.logs or not health_url:
+        # _service_base, never _service_urls: the static URL stays http:// when
+        # mesh TLS made the service https-only (the 3.11 proxy regression class),
+        # and a purely auto-registered service isn't in the static map at all.
+        base = self._service_base(name)
+        if not self._dcfg.logs or not base:
             return []
-        base = health_url[: -len("/health")]
         import httpx
 
         try:
@@ -889,6 +923,108 @@ class Dashboard:
         targets = {**self._service_urls, **self._server.announced_health_urls()}
         url = targets.get(name)
         return url[: -len("/health")] if url else None
+
+    async def _service_features(self, name: str) -> dict[str, Any]:
+        """Proxy a service's GET /features (the 4.1 chips). Unreachable ⇒
+        reachable:false so the editor renders an honest empty state."""
+        base = self._service_base(name)
+        if not base:
+            return {"reachable": False, "features": []}
+        import httpx
+
+        try:
+            async with httpx.AsyncClient(timeout=5.0, verify=tlsutil.httpx_verify()) as client:
+                url = f"{base}/features"
+                r = await client.get(url, headers=self._server._service_headers("GET", url))
+                r.raise_for_status()
+            data = r.json()
+            feats = data.get("features", []) if isinstance(data, dict) else []
+            return {"reachable": True, "features": feats if isinstance(feats, list) else []}
+        except Exception:
+            return {"reachable": False, "features": []}
+
+    async def _service_unit(self, name: str) -> dict[str, Any]:
+        """A service's systemd --user unit state: ask the service itself when
+        reachable; fall back to querying LOCALLY (covers co-located STOPPED
+        services — the case the service can't answer for itself)."""
+        base = self._service_base(name)
+        if base:
+            import httpx
+
+            try:
+                async with httpx.AsyncClient(timeout=4.0, verify=tlsutil.httpx_verify()) as client:
+                    url = f"{base}/unit"
+                    r = await client.get(url, headers=self._server._service_headers("GET", url))
+                    r.raise_for_status()
+                    data = r.json()
+                    if isinstance(data, dict):
+                        return {**data, "via": "service"}
+            except Exception:
+                pass
+        from kenzy.unitctl import unit_state
+
+        state = await asyncio.to_thread(unit_state, f"kenzy-{name}.service")
+        return {"unit": f"kenzy-{name}.service", **state, "via": "local"}
+
+    async def _set_service_enabled(self, name: str, enabled: bool) -> tuple[bool, str | None]:
+        """Disable: the service self-disables via its /unit endpoint (works on
+        any host), local fallback. Enable: LOCAL only — a stopped remote
+        service has no endpoint; the operator runs
+        `systemctl --user enable --now kenzy-<svc>` on that host (documented)."""
+        from kenzy.unitctl import disable_unit, enable_unit, unit_state
+
+        unit = f"kenzy-{name}.service"
+        if enabled:
+            state = await asyncio.to_thread(unit_state, unit)
+            if not state.get("systemd") or not state.get("exists"):
+                return False, (
+                    "not manageable from here — if the service runs on another host, "
+                    f"run there: systemctl --user enable --now {unit}"
+                )
+            ok, out = await asyncio.to_thread(enable_unit, unit)
+            return ok, None if ok else out
+        base = self._service_base(name)
+        if base:
+            import httpx
+
+            try:
+                async with httpx.AsyncClient(timeout=6.0, verify=tlsutil.httpx_verify()) as client:
+                    url = f"{base}/unit"
+                    r = await client.post(
+                        url,
+                        json={"action": "disable"},
+                        headers=self._server._service_headers("POST", url),
+                    )
+                    r.raise_for_status()
+                    if r.json().get("ok"):
+                        return True, None
+            except Exception:
+                pass
+        state = await asyncio.to_thread(unit_state, unit)
+        if state.get("systemd") and state.get("exists"):
+            ok, out = await asyncio.to_thread(disable_unit, unit)
+            return ok, None if ok else out
+        return False, "service unreachable and no local unit — nothing to disable"
+
+    async def _install_feature_deps(self, name: str) -> tuple[bool, str | None]:
+        """POST /install_deps — the chips' Install action. The pip run can take
+        a couple of minutes; the service re-execs itself on success."""
+        base = self._service_base(name)
+        if not base:
+            return False, "service not reachable"
+        import httpx
+
+        try:
+            async with httpx.AsyncClient(timeout=600.0, verify=tlsutil.httpx_verify()) as client:
+                url = f"{base}/install_deps"
+                r = await client.post(url, headers=self._server._service_headers("POST", url))
+                r.raise_for_status()
+                body = r.json()
+            if body.get("ok"):
+                return True, None
+            return False, str(body.get("output", "install failed"))[-300:]
+        except Exception as exc:
+            return False, f"install failed: {exc}"
 
     async def _restart_service(self, name: str) -> bool:
         """POST /restart to a backend service so it re-execs and re-pulls config."""
@@ -1182,10 +1318,20 @@ class Dashboard:
             f = dict(f)
             f["owner_name"] = people.get(f.get("owner"), f.get("owner"))
             facts.append(f)
+        lb = await self._llm_memory_request("GET", "/lockbox")
+        secrets = []
+        for sec in (lb or {}).get("secrets", []):
+            sec = dict(sec)
+            sec["owner_name"] = people.get(sec.get("owner"), sec.get("owner"))
+            secrets.append(sec)
         return {
             "reachable": info is not None,
+            "local_model": bool((info or {}).get("local_model", True)),  # True ⇒ no banner
             "controls": self._dcfg.controls,
             "facts": facts,
+            # 4.1 lockbox: masked metadata only (label/owner/age) — the
+            # dashboard never receives secret text in a list payload.
+            "lockbox": {"available": bool((lb or {}).get("available")), "secrets": secrets},
         }
 
     async def _forget_memory(self, fact_id: str) -> tuple[bool, str | None]:
@@ -1436,7 +1582,9 @@ class Dashboard:
     # People (identity records): group enrolled voices into household members
     # ------------------------------------------------------------------
 
-    async def _person_export(self, person_id: str) -> dict[str, Any] | None:
+    async def _person_export(
+        self, person_id: str, *, include_secrets: bool = True
+    ) -> dict[str, Any] | None:
         """The F7.4 "what does Kenzy know about me" download: person record +
         voice profiles + every memory fact they own (all tiers)."""
         person = next(
@@ -1453,7 +1601,9 @@ class Dashboard:
                 for v in res[1].get("speakers", [])
                 if str(v.get("name", "")).lower() in wanted
             ]
-        mem = await self._llm_memory_request("GET", f"/export?person={quote(person_id)}")
+        mem = await self._llm_memory_request(
+            "GET", f"/export?person={quote(person_id)}&secrets={1 if include_secrets else 0}"
+        )
         import time as _t
 
         return {
@@ -1463,6 +1613,13 @@ class Dashboard:
             "memory": {
                 "available": mem is not None,
                 "facts": (mem or {}).get("facts", []),
+                # Lockbox entries ride the export by default (?secrets=0 excludes;
+                # the count is reported instead so the export stays a complete answer).
+                **(
+                    {"lockbox": (mem or {}).get("secrets", [])}
+                    if include_secrets
+                    else {"lockbox_excluded": (mem or {}).get("secrets_excluded", 0)}
+                ),
             },
         }
 
@@ -1784,6 +1941,22 @@ class Dashboard:
             await connection.send(
                 json.dumps({"type": "service_saved", "service": service, "restarted": restarted})
             )
+        elif mtype == "set_service_enabled":
+            if not self._dcfg.controls:
+                return await ack(False, "controls are disabled (set dashboard.controls: true)")
+            svc = str(msg.get("service", "")).strip()
+            if svc not in ("stt", "tts", "llm", "speaker"):
+                return await ack(False, "unknown service")
+            ok, err = await self._set_service_enabled(svc, bool(msg.get("enabled")))
+            await ack(ok, err)
+        elif mtype == "install_feature_deps":
+            if not self._dcfg.controls:
+                return await ack(False, "controls are disabled (set dashboard.controls: true)")
+            svc = str(msg.get("service", "")).strip()
+            if svc not in ("stt", "tts", "llm", "speaker"):
+                return await ack(False, "unknown service")
+            ok, err = await self._install_feature_deps(svc)
+            await ack(ok, err)
         elif mtype == "restart_service":
             if not self._dcfg.controls:
                 return await ack(False, "controls are disabled (set dashboard.controls: true)")
@@ -1919,6 +2092,23 @@ class Dashboard:
                 return await ack(False, "a fact id is required")
             ok, err = await self._forget_memory(fact_id)
             await ack(ok, err)
+        elif mtype == "review_memory":
+            if not self._dcfg.controls:
+                return await ack(False, "controls are disabled (set dashboard.controls: true)")
+            fid = str(msg.get("fact_id", "")).strip()
+            verdict = str(msg.get("action", "")).strip()
+            if not fid or verdict not in ("release", "vault"):
+                return await ack(False, "fact_id and action (release|vault) required")
+            res = await self._llm_memory_request("POST", "/review", {"id": fid, "action": verdict})
+            await ack(res is not None, None if res is not None else "memory not reachable")
+        elif mtype == "forget_secret":
+            if not self._dcfg.controls:
+                return await ack(False, "controls are disabled (set dashboard.controls: true)")
+            sid = str(msg.get("secret_id", "")).strip()
+            if not sid:
+                return await ack(False, "a secret id is required")
+            res = await self._llm_memory_request("POST", "/lockbox/erase", {"id": sid})
+            await ack(res is not None, None if res is not None else "lockbox not reachable")
         elif mtype == "save_person":
             if not self._dcfg.controls:
                 return await ack(False, "controls are disabled (set dashboard.controls: true)")
@@ -1934,6 +2124,8 @@ class Dashboard:
             kwargs: dict[str, Any] = {}
             if "memory_opt_out" in msg:  # absent ⇒ preserve
                 kwargs["memory_opt_out"] = bool(msg.get("memory_opt_out"))
+            if "memory_capture" in msg:  # absent/invalid ⇒ preserve (store validates)
+                kwargs["memory_capture"] = str(msg.get("memory_capture") or "")
             if "ha_user" in msg:  # absent ⇒ preserve (three-state, see PeopleStore)
                 ha = str(msg.get("ha_user") or "").strip().lower()
                 if ha and " " in ha:

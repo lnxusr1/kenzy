@@ -51,10 +51,35 @@ _MAX_MERGED_LEN = 300
 _MODEL: dict[str, Any] = {}
 
 
-def configure(model: str, base_url: str | None = None, *, private_to_cloud: bool = False) -> None:
+def configure(
+    model: str,
+    base_url: str | None = None,
+    *,
+    private_to_cloud: bool = False,
+    classifier_model: str = "",
+    classifier_url: str | None = None,
+) -> None:
     _MODEL["model"] = model
     _MODEL["base_url"] = base_url
     _MODEL["private_to_cloud"] = private_to_cloud
+    _MODEL["classifier_model"] = classifier_model
+    _MODEL["classifier_url"] = classifier_url
+
+
+def _pass_model() -> tuple[str, str | None, bool]:
+    """(model, base_url, is_local) for this consolidation pass. A cloud brain
+    with a LOCAL ``memory.classifier_model`` configured runs the pass on the
+    classifier's model instead — so private-tier facts consolidate without a
+    local service model. Strictly more private, never less."""
+    from kenzy.llm.locality import model_is_local
+
+    model, url = str(_MODEL.get("model", "")), _MODEL.get("base_url")
+    if model_is_local(model, url):
+        return model, url, True
+    cmodel, curl = str(_MODEL.get("classifier_model", "")), _MODEL.get("classifier_url")
+    if cmodel and model_is_local(cmodel, curl):
+        return cmodel, curl, True
+    return model, url, False
 
 
 # ---------------------------------------------------------------------------
@@ -86,10 +111,23 @@ def _save_mark(store: MemoryStore, mark: float) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _stamp(f: Fact) -> float:
+    """A fact's position in the pending window. ``updated`` counts too:
+    release() stamps it, so a fact that sat QUARANTINED while the mark
+    advanced past its ``created`` re-enters the window the moment the
+    classifier clears it — otherwise it would be stranded behind the mark
+    and never coalesce."""
+    return max(f.created, f.updated or 0.0)
+
+
 def pending_facts(store: MemoryStore, mark: float) -> list[Fact]:
     now = time.time()
-    out = [f for f in store.all_facts() if f.created > mark and f.live(now)]
-    out.sort(key=lambda f: f.created)
+    out = [
+        f
+        for f in store.all_facts()
+        if _stamp(f) > mark and f.live(now) and f.state != "quarantined"
+    ]
+    out.sort(key=lambda f: _stamp(f))
     return out[:_MAX_BATCH]
 
 
@@ -255,7 +293,7 @@ async def run_pass(store: MemoryStore) -> dict[str, Any]:
         return {"pending": 0}
     # The mark target covers the FULL pending set — including any facts the
     # privacy gate below withholds — so nothing loops back every run.
-    mark_target = max(f.created for f in pending)
+    mark_target = max(_stamp(f) for f in pending)
 
     # 4.0.2 privacy slice: when the configured model is CLOUD, private-tier
     # facts never enter the consolidation prompt — they stay unconsolidated
@@ -263,10 +301,9 @@ async def run_pass(store: MemoryStore) -> dict[str, Any]:
     # exists. Neighbors are same-owner+tier, so filtering pending private
     # facts removes every private exposure path.
     skipped_private = 0
+    pass_model, pass_url, pass_local = _pass_model()
     if not _MODEL.get("private_to_cloud", False):
-        from kenzy.llm.locality import model_is_local
-
-        if not model_is_local(str(_MODEL.get("model", "")), _MODEL.get("base_url")):
+        if not pass_local:
             visible = [f for f in pending if f.tier != memory.TIER_PRIVATE]
             skipped_private = len(pending) - len(visible)
             if skipped_private:
@@ -291,11 +328,13 @@ async def run_pass(store: MemoryStore) -> dict[str, Any]:
     # the default (field finding — the job failed and retried exactly as
     # designed). Determinism duty lives in the constrained prompt + validation.
     kwargs: dict[str, Any] = {
-        "model": _MODEL.get("model", "gpt-4o"),
+        "model": pass_model or "gpt-4o",
         "messages": build_messages(batch),
     }
-    kwargs.update(skill_registry.endpoint_kwargs(_MODEL.get("base_url")))
-    response = await skill_registry.acompletion_with_fallback(kwargs)
+    kwargs.update(skill_registry.endpoint_kwargs(pass_url))
+    # local_only when this pass carries private-tier facts (pass_local): a
+    # cloud fallback must not see what the cloud primary was denied.
+    response = await skill_registry.acompletion_with_fallback(kwargs, local_only=pass_local)
     raw = response.choices[0].message.content or ""
 
     summary = apply_decisions(store, pending, parse_decisions(raw))

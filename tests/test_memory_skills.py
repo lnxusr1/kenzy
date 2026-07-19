@@ -13,6 +13,21 @@ from kenzy.llm.builtin_skills import memory_skill as ms
 @pytest.fixture
 def store(tmp_path):
     s = memory.init_store(tmp_path / "facts.jsonl")
+
+    # These tests exercise SETTLED semantics (what holds after the release
+    # job clears quarantine, seconds after each write in production) — so
+    # auto-release every write. Quarantine's own behavior is tested in
+    # test_memory.py / test_quarantine_pipeline.
+    orig_remember = s.remember
+
+    def _settled_remember(*a, **k):
+        f = orig_remember(*a, **k)
+        if f.state == "quarantined":
+            s.release(f.id)
+            f = s.get_fact(f.id)
+        return f
+
+    s.remember = _settled_remember  # type: ignore[method-assign]
     try:
         yield s
     finally:
@@ -143,3 +158,22 @@ async def test_fast_forget(store):
     # Bare colloquial "forget it" is a bail-out, not an erase.
     res = await ms.fast_memory("Forget it", "office", None)
     assert res.status == "miss"
+
+
+async def test_inspection_summaries(store):
+    # F2.6: "what do you know about me" / "about the house" give honest
+    # summaries instead of keyword misses.
+    from kenzy.llm import lockbox as lbmod
+
+    lbmod._store = None  # no lockbox in this test
+    _as("adam")
+    res = await ms.fast_memory("What do you know about me?", None, "Adam")
+    assert res.is_handled and "Nothing yet" in res.text
+    store.remember("adam", "adam prefers decaf")
+    res = await ms.fast_memory("What do you know about me?", None, "Adam")
+    assert res.is_handled and "1 memory" in res.text and "decaf" in res.text
+    res = await ms.fast_memory("What do you know about the house?", None, "Adam")
+    assert res.is_handled and "No household memories" in res.text
+    store.remember("adam", "everyone should know the bins go out Tuesday", tier=memory.TIER_SHARED)
+    res = await ms.fast_memory("What do you know about the house?", None, "Adam")
+    assert res.is_handled and "1 memory" in res.text and "bins" in res.text

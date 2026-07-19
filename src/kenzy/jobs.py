@@ -155,8 +155,11 @@ class JobRunner:
     def kick(self, name: str) -> None:
         """Event trigger: pull ``name``'s next run to now — rate-limited by its
         ``cooldown`` (a kick inside the window lands on the already-scheduled
-        run, so bursts coalesce), and never DELAYING an earlier schedule."""
-        state = self._jobs[name]
+        run, so bursts coalesce), and never DELAYING an earlier schedule.
+        Kicking a job that isn't registered (disabled by config) is a no-op."""
+        state = self._jobs.get(name)
+        if state is None:
+            return
         due = max(time.monotonic(), state.last_end + state.job.cooldown)
         if due < state.next_due:
             state.next_due = due

@@ -737,14 +737,57 @@ dd.hot { color: var(--led-down); font-weight: 600; }
 .mem-search { flex: 1 1 220px; min-width: 0; }
 .mem-list { display: flex; flex-direction: column; }
 .mem-row {
-  display: flex; align-items: center; justify-content: space-between; gap: var(--s3);
+  display: flex; align-items: center; gap: var(--s3);
   padding: var(--s3) var(--s4); border-bottom: 1px solid var(--border);
 }
 .mem-row:last-child { border-bottom: 0; }
-.mem-main { min-width: 0; }
+/* The text column takes the slack (NOT space-between: with the quarantine
+   rows' extra Release / To-lockbox buttons it spread them across the row
+   instead of clustering them beside Forget). */
+.mem-main { min-width: 0; flex: 1; }
 .mem-text { overflow-wrap: anywhere; }
 .mem-meta { display: flex; align-items: center; gap: var(--s2); margin-top: 2px; }
 /* .badge's base margin-left:auto is for floating right on cards — here it
    soaks up the row's slack and shoves the tier badge off the left edge. */
 .mem-meta .badge { margin-left: 0; }
 .mem-row .btn-ghost { flex: none; width: auto; padding-inline: var(--s4); }
+
+/* 4.1 feature chips (Services editor): honest optional-feature states. */
+.feat-chips { display: flex; flex-wrap: wrap; gap: 10px; margin: 0 0 16px; }
+.chip.feat { display: inline-flex; align-items: center; gap: 10px; padding: 8px 12px; }
+.chip.feat.active { border-color: var(--ok, #2e7d32); }
+.chip.feat.missing { border-color: var(--err, #c62828); }
+.chip.feat.inactive { border-color: var(--warn, #ffb500); }
+.chip.feat .btn-ghost { padding: 3px 10px; font-size: 12px; }
+
+/* In-page confirm dialog (dialog.js) — native confirm()/prompt() are blocked
+   by some mobile browsers */
+.dlg-wrap {
+  position: fixed; inset: 0; z-index: 200;
+  display: flex; align-items: center; justify-content: center;
+  padding: var(--s5);
+  background: color-mix(in srgb, var(--bg) 62%, transparent);
+  backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+}
+.dlg {
+  width: min(440px, 100%);
+  background: var(--panel); border: var(--border-w) solid var(--border);
+  border-radius: 12px; padding: var(--s5);
+  box-shadow: 0 24px 60px rgba(0,0,0,.45);
+}
+.dlg h3 { margin: 0 0 var(--s3); font-size: 15px; }
+.dlg .dlg-msg { margin: 0 0 var(--s4); font-size: 13.5px; line-height: 1.55; color: var(--text-dim); white-space: pre-line; }
+.dlg .dlg-typed { margin: 0 0 var(--s2); color: var(--text-faint); }
+.dlg .dlg-input {
+  width: 100%; margin: 0 0 var(--s4); padding: 8px 10px;
+  background: var(--panel-2); color: var(--text);
+  border: var(--border-w) solid var(--border); border-radius: 8px; font-size: 13px;
+}
+.dlg .dlg-input:focus { outline: none; border-color: var(--border-strong); }
+.dlg .dlg-row { display: flex; justify-content: flex-end; align-items: stretch; gap: var(--s3); }
+/* Normalize the mixed button classes (ghost has border+7px pad, danger/primary
+   10-12px pad + margin-top) so the pair sits at one height. */
+.dlg .dlg-row button {
+  min-width: 96px; flex: none; width: auto; height: 38px;
+  margin: 0; padding: 0 var(--s4); font-size: 12.5px; line-height: 1;
+}

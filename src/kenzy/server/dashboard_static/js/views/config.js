@@ -1,4 +1,5 @@
 import { html, useState, useEffect } from "../html.js";
+import { confirmDialog } from "../dialog.js";
 import { send, notify } from "../store.js";
 import { nodeEnum, nodeHelp, NODE_GROUPS } from "../schema.js";
 import { AudioWizard } from "./audio-wizard.js";
@@ -140,11 +141,12 @@ export function ConfigView({ node, onBack }) {
 
   async function upgradeNode() {
     if (
-      !window.confirm(
+      !(await confirmDialog(
         "Upgrade this node to the latest release and restart it? It installs in the " +
           "background; the node disconnects and reconnects on the new version (watch the " +
           "version on its fleet card). Your constraints.txt pins are honored.",
-      )
+        { title: "Upgrade node", confirmText: "Upgrade" },
+      ))
     )
       return;
     const res = await send("upgrade_node", { node });

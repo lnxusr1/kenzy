@@ -34,6 +34,29 @@ def pip_upgrade_command(extra: str, version: str | None) -> list[str]:
     return [sys.executable, "-m", "pip", "install", "-U", *pip_constraint_args(), spec]
 
 
+def pip_fill_command(extra: str) -> list[str]:
+    """``pip install kenzy[extra]`` WITHOUT ``-U``: pulls only missing
+    dependencies (a feature's new lib), moves no installed versions, honors
+    the operator's constraints. The feature-chip Install action (4.1)."""
+    return [sys.executable, "-m", "pip", "install", *pip_constraint_args(), f"kenzy[{extra}]"]
+
+
+async def run_pip_fill(extra: str) -> tuple[bool, str]:
+    """Run the dependency fill off the event loop. Returns ``(ok, tail)``."""
+    cmd = pip_fill_command(extra)
+    log.warning("Dependency fill: %s", " ".join(cmd))
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT
+        )
+        out, _ = await proc.communicate()
+    except Exception as exc:  # pragma: no cover - environment-dependent
+        return False, f"failed to launch pip: {exc}"
+    ok = proc.returncode == 0
+    log.info("Dependency fill %s (exit %s)", "ok" if ok else "FAILED", proc.returncode)
+    return ok, (out.decode("utf-8", "replace") if out else "")[-1500:].strip()
+
+
 async def run_pip_upgrade(extra: str, version: str | None = None) -> tuple[bool, str]:
     """Run the upgrade as a subprocess off the event loop. Returns ``(ok, output_tail)``.
 

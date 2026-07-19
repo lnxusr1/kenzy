@@ -1,4 +1,5 @@
 import { html, useState, useEffect } from "../html.js";
+import { confirmDialog } from "../dialog.js";
 import { useFleet, send, notify } from "../store.js";
 import { getSettings } from "../api.js";
 import { serviceEnum, serviceHelp, groupByParent, groupBySections, SERVICE_SECTIONS, fieldVisible } from "../schema.js";
@@ -77,6 +78,28 @@ function ServiceEditor({ name, onBack }) {
   const [vals, setVals] = useState({});
   const [defs, setDefs] = useState({});
   const [saving, setSaving] = useState(false);
+  const [feats, setFeats] = useState(null); // GET /api/services/<name>/features
+  const [installing, setInstalling] = useState(false);
+
+  const [unit, setUnit] = useState(null);
+
+  async function loadUnit() {
+    try {
+      const r = await fetch(`/api/services/${encodeURIComponent(name)}/unit`);
+      setUnit(r.ok ? await r.json() : null);
+    } catch (e) {
+      setUnit(null);
+    }
+  }
+
+  async function loadFeatures() {
+    try {
+      const r = await fetch(`/api/services/${encodeURIComponent(name)}/features`);
+      setFeats(r.ok ? await r.json() : null);
+    } catch (e) {
+      setFeats(null);
+    }
+  }
 
   async function load() {
     const r = await fetch(`/api/services/${encodeURIComponent(name)}/config`);
@@ -91,6 +114,8 @@ function ServiceEditor({ name, onBack }) {
   }
   useEffect(() => {
     load();
+    loadFeatures();
+    loadUnit();
   }, [name]);
 
   if (!info) return html`<div class="empty">Loading…</div>`;
@@ -142,11 +167,12 @@ function ServiceEditor({ name, onBack }) {
 
   async function upgrade() {
     if (
-      !window.confirm(
+      !(await confirmDialog(
         `Upgrade ${name} to the latest release and restart it? It installs in the ` +
           `background (a few minutes) and reports the result; your constraints.txt pins ` +
           `are honored.`,
-      )
+        { title: "Upgrade service", confirmText: "Upgrade" },
+      ))
     )
       return;
     const res = await send("upgrade_service", { service: name });
@@ -250,6 +276,47 @@ function ServiceEditor({ name, onBack }) {
         <p class="micro">Saved to <span class="mono">configs/services/${name}.yaml</span> on the server;
           the service restarts to apply. Secrets are read from the service host's environment and are never shown or stored here.
           ${info.reachable ? "" : " This service has no configured URL, so it can't be auto-restarted — restart it manually."}</p>
+        ${feats && feats.reachable && (feats.features || []).length
+          ? html`<div class="feat-chips">
+              ${feats.features.map((f) => {
+                const state = !f.available
+                  ? "missing"
+                  : f.active
+                    ? "active"
+                    : f.configured
+                      ? "inactive"
+                      : "off";
+                const label =
+                  state === "missing"
+                    ? f.configured
+                      ? "enabled in config — NOT INSTALLED"
+                      : "not installed"
+                    : state === "active"
+                      ? "active"
+                      : state === "inactive"
+                        ? "installed — needs restart or config"
+                        : "available, not enabled";
+                return html`<div key=${f.name} class=${"chip feat " + state} title=${f.note || ""}>
+                  <span class="mono">${f.name}</span>
+                  <span class="micro">${label}</span>
+                  ${state === "missing" && f.install === "pip" && info.controls
+                    ? html`<button class="btn-ghost" disabled=${installing}
+                        onClick=${async () => {
+                          setInstalling(true);
+                          notify(`Installing ${f.name} dependencies — the service restarts itself when done.`);
+                          const r = await send("install_feature_deps", { service: name }, 620000);
+                          setInstalling(false);
+                          notify(r.ok ? "Installed — service restarting." : r.error || "Install failed.", r.ok ? "ok" : "err");
+                          if (r.ok) setTimeout(loadFeatures, 6000);
+                        }}>${installing ? "Installing…" : "Install"}</button>`
+                    : null}
+                  ${state === "missing" && f.install === "apt"
+                    ? html`<span class="micro mono">${f.note}</span>`
+                    : null}
+                </div>`;
+              })}
+            </div>`
+          : null}
         <div class="cfg-grid">${groups.map(groupBlock)}</div>
         <div class="cfg-actions">
           <button class="btn-primary" disabled=${!info.controls || saving} onClick=${save}>
@@ -264,7 +331,27 @@ function ServiceEditor({ name, onBack }) {
             onClick=${upgrade}>Upgrade</button>
           <button class="btn-ghost danger" disabled=${!info.controls || !info.reachable}
             onClick=${restart}>Restart</button>
+          ${unit && unit.systemd && unit.exists
+            ? html`<button class="btn-ghost danger" disabled=${!info.controls}
+                onClick=${async () => {
+                  const on = !(unit.enabled && unit.active);
+                  const verb = on ? "Enable and start" : "Disable and stop";
+                  if (!(await confirmDialog(
+                    `${verb} ${name}? ${on ? "" : "It stays off until re-enabled (dashboard or systemctl)."}`,
+                    { title: on ? "Enable service" : "Disable service", confirmText: verb.split(" ")[0], danger: !on },
+                  )))
+                    return;
+                  const r = await send("set_service_enabled", { service: name, enabled: on }, 30000);
+                  notify(r.ok ? `${name} ${on ? "enabled" : "disabling"}.` : r.error || "Failed.", r.ok ? "ok" : "err");
+                  setTimeout(loadUnit, 4000);
+                }}>${unit.enabled && unit.active ? "Disable service" : "Enable service"}</button>`
+            : null}
         </div>
+        ${unit && unit.systemd && unit.exists && !unit.active
+          ? html`<p class="micro">This service's unit is ${unit.enabled ? "enabled but not running" : "disabled"} —
+              if it runs on another host, use
+              ${" "}<span class="mono">systemctl --user enable --now ${unit.unit}</span> there.</p>`
+          : null}
       </div>
     </div>`;
 }

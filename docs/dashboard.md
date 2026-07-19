@@ -166,6 +166,24 @@ latest release (honoring `constraints.txt`) and restarts it — the install runs
 background and reports the result. Secrets (API keys) are read from the service host's
 environment and are never shown or stored here. Requires `dashboard.controls: true`.
 
+**Feature chips.** Each service's editor shows its optional features with
+honest states — *active*, *available but not enabled*, or *enabled in config
+but NOT INSTALLED* (the dependency is missing from that host's venv). The
+**Install** button fills missing dependencies without moving any versions
+(constraints honored) and restarts the service; system packages that pip
+can't install (Kokoro's `espeak-ng`) show the copy-paste command instead.
+Current chips: Wyoming (tts/stt), Kokoro (tts), whisper-fallback (stt),
+lockbox and local-classifier (llm).
+
+**Enable / disable a service.** On per-user systemd installs, each service's
+editor also offers **Disable service** (stops it *and* prevents restart —
+`systemctl --user disable --now`) and **Enable service**. Disabling works
+wherever the service runs (it stops itself via its own unit); *enabling* a
+stopped service works for services on the server's host — a stopped service
+on another host has nothing listening, so the page shows the one-line
+`systemctl --user enable --now kenzy-<svc>` to run there. Environments
+without systemd (dev checkouts) simply don't show these controls.
+
 ## Skills
 
 The **Skills** tab shows everything loaded by `kenzy-llm`, grouped into
@@ -257,9 +275,21 @@ them).
   relinkable, their personal facts move to the "facts without a person"
   bucket, and anything they shared stays in Household memory (it's the
   house's now).
+- **Lockbox** — the person's vaulted secrets, shown as 🔒 label + date; the
+  text stays encrypted and off the page until you click **Reveal** (an
+  explicit, `controls`-gated fetch that auto-hides after 30 seconds), and
+  **Forget** erases. Facts wearing a **"held for review"** badge are awaiting the
+  memory classifier's verdict — with no local classifier model configured,
+  resolve them here: **Release** (ordinary memory) or **To lockbox**.
+- **Memory capture** — per-person: Explicit (only "remember that…" — the
+  default), Suggest (offers first; a later release), or Auto (remembers
+  durable facts proactively and says so; auto-captured rows carry an "auto"
+  source tag).
 - **Privacy & data** — the section that answers "what does Kenzy know about
   me" and "make her forget me". **Export their data** downloads one file:
-  person record, voice-profile info, and every remembered fact. **Don't
+  person record, voice-profile info, every remembered fact, and (by default)
+  their lockbox entries — untick "include lockbox secrets" for a shareable
+  file. **Don't
   remember…** is a per-person opt-out (turning it on offers to erase what's
   already stored for them) — no memory writes or reads while
   they stay a recognized voice for everything else. **Remove completely** is
@@ -339,9 +369,12 @@ configuration**.
 
 The **Backup** section downloads a `.tar.gz` of the deployment's state — node/service
 settings, voice profiles (fetched from the speaker host when remote), HA curation,
-custom skills — restorable with `kenzy-init --restore`. Two opt-in toggles widen the
-scope: **include secrets** (`.env` — the archive then carries live API keys) and
-**include everything** (`models/`). See [Backup & Restore](backup-restore.md).
+custom skills — restorable with `kenzy-init --restore`. Three toggles shape the
+scope: **include secrets** (`.env` — opt-in; the archive then carries live API keys),
+**include everything** (`models/` — opt-in), and **include the lockbox key** — **on by
+default**, so a backup can restore (and decrypt) stored secrets; untick it for a
+shareable archive that carries lockbox ciphertext only. See
+[Backup & Restore](backup-restore.md).
 
 The **API keys** section is a **write-only** secret editor: pick a key
 (`OPENAI_API_KEY`, `HA_API_KEY`, `HF_TOKEN`, or a custom name), paste a value, and it's

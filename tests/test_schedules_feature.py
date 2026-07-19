@@ -8,7 +8,6 @@ import asyncio
 
 from kenzy.llm import skills as sk
 from kenzy.llm.builtin_skills import schedule as sched
-from kenzy.server import server as server_mod
 from kenzy.server import tones
 from kenzy.server.server import NodeSession, TranscribingServer
 
@@ -362,7 +361,9 @@ async def test_dispatch_stores_speaker_and_command_replays_it(tmp_path, monkeypa
 
     async def fake_llm(text, room, sid, speaker=None, node_id=None):
         llm_calls.append((text, room, speaker, node_id))
-        return ("The lights are on.", "vp", [{"type": "set_volume", "level": 10}], True, False)
+        return (
+            "The lights are on.", "vp", [{"type": "set_volume", "level": 10}], True, False, False
+        )
 
     async def fake_tts(node_id, room, sid, text, vp):
         tts_calls.append(text)
@@ -564,10 +565,10 @@ def test_alarm_ring_config_overrides_defaults(tmp_path, monkeypatch):
 
 def test_alarm_ring_defaults_when_unset():
     from kenzy.server.server import (
-        TranscribingServer,
         _ALARM_RING_INTERVAL_S,
         _ALARM_RING_REPEATS,
         _MAX_FOLLOWUP_TURNS,
+        TranscribingServer,
     )
 
     s = TranscribingServer({})

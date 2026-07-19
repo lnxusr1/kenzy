@@ -162,7 +162,8 @@ export function Shell({ user, onLogout }) {
                 : view === "ha"
                   ? html`<${HaView} />`
                   : view === "people"
-                    ? html`<${PeopleView} selected=${personSel} onSelect=${setPersonSel} />`
+                    ? html`<${PeopleView} selected=${personSel} onSelect=${setPersonSel}
+                        onConfigureService=${configureService} />`
                   : view === "schedules"
                     ? html`<${SchedulesView} />`
                   : view === "activity"

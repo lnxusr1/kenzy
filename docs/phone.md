@@ -67,7 +67,10 @@ hand them your facts.
 ## What works from the phone — and what asks for a room
 
 Almost everything: questions, smart-home control, memory, announcements
-("tell the kitchen dinner's ready"), lists, weather, news.
+("tell the kitchen dinner's ready"), lists, weather, news. (One deliberate
+exception: [lockbox secrets](memory.md#secrets--the-lockbox) always deflect
+to the dashboard on this channel — the phone's reply path isn't Kenzy's own
+speech, so it never carries a secret value.)
 
 The difference from a room speaker is that the phone isn't *in* a room, so:
 

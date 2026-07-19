@@ -42,6 +42,13 @@ SLICE_INCLUDE = ("data", "skills")
 #: Manifest written into every archive (version/date provenance for support).
 MANIFEST_NAME = "kenzy-backup.json"
 
+#: The lockbox's encryption key. Unlike TLS material (regenerable) this key is
+#: DATA: without it a restored lockbox.enc is unreadable ciphertext. Founder
+#: call 2026-07-18: a backup's job is to restore everything, so the key rides
+#: by default (``include_lockbox_key=False`` builds a shareable archive; the
+#: manifest records which kind you hold).
+LOCKBOX_KEY = "data/memory/lockbox.key"
+
 
 class RestoreError(Exception):
     """A restore that must not proceed (bad archive, or collisions without force)."""
@@ -53,6 +60,8 @@ def _excluded(rel: Path) -> bool:
         return True  # certs/ holds a TLS private key — host security material, like .env
     if rel.name == ".env" or rel.name.endswith(".env"):
         return True  # secrets never enter an archive
+    if str(rel) == LOCKBOX_KEY:
+        return False  # the lockbox key is DATA (see LOCKBOX_KEY) — not host material
     if rel.name.endswith((".key", ".pem")):
         return True  # a private key never enters an archive, wherever it sits
     return rel.name.endswith(".pyc")
@@ -62,7 +71,9 @@ def safe_entry_name(name: str, *, roots: tuple[str, ...], allow_env: bool = Fals
     """Whether an archive entry name is acceptable in the given scope: relative,
     traversal-free, rooted in ``roots``, and not a secret/cache exclusion.
     ``allow_env`` admits exactly the top-level ``.env`` (secrets-included
-    backups) — never a nested one."""
+    backups) — never a nested one. The lockbox key (exactly ``LOCKBOX_KEY``)
+    is data (see ``LOCKBOX_KEY``), so it passes here like any other data
+    file — creation controls it via ``include_lockbox_key``."""
     if name == ".env":
         return allow_env
     rel = Path(name)
@@ -190,6 +201,7 @@ def create_backup(
     *,
     include_secrets: bool = False,
     include_models: bool = False,
+    include_lockbox_key: bool = True,
 ) -> bytes:
     """Build a gzipped tar of the config home's state; returns the bytes.
 
@@ -208,6 +220,10 @@ def create_backup(
     for name, data in (extra_entries or {}).items():
         if safe_entry_name(name, roots=SLICE_INCLUDE):
             entries.setdefault(name, data)
+    if not include_lockbox_key:
+        # Strip the key wherever it came from (local tree or a service slice):
+        # the archive then carries lockbox ciphertext only — shareable.
+        entries.pop(LOCKBOX_KEY, None)
     if include_secrets and (root / ".env").is_file():
         entries[".env"] = (root / ".env").read_bytes()
     if include_models and (root / "models").is_dir():
@@ -221,6 +237,7 @@ def create_backup(
         "root": root.name,
         "includes_secrets": include_secrets,
         "includes_models": include_models,
+        "includes_lockbox_key": include_lockbox_key and LOCKBOX_KEY in entries,
     }
     if notes:
         manifest.update(notes)

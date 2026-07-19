@@ -234,3 +234,27 @@ def test_audioserver_save_person_ha_user_passthrough(tmp_path, monkeypatch):
     # Explicit empty ⇒ cleared.
     s.save_person(pid, "John", [], ha_user="")
     assert s._people.get(pid).ha_user is None
+
+
+def test_memory_capture_setting_roundtrip(tmp_path, monkeypatch):
+    # 4.1 capture modes: default explicit, validated set, preserved on omit.
+    monkeypatch.setenv("KENZY_HOME", str(tmp_path))
+    from kenzy.server.server import AudioServer
+
+    s = AudioServer({})
+    pid = s.save_person("", "John", [])
+    assert s._people.get(pid).memory_capture == "explicit"
+    s.save_person(pid, "John", [], memory_capture="auto")
+    assert s._people.get(pid).memory_capture == "auto"
+    s.save_person(pid, "John", [])  # omitted ⇒ preserved
+    assert s._people.get(pid).memory_capture == "auto"
+    s.save_person(pid, "John", [], memory_capture="bogus")  # invalid ⇒ preserved
+    assert s._people.get(pid).memory_capture == "auto"
+    # Survives reload + threads into the /process payload helper.
+    s2 = AudioServer({})
+    assert s2._people.get(pid).memory_capture == "auto"
+    from kenzy.server.people import Identity
+
+    ident = Identity(display="John", tier="recognized", confidence=1.0, person_id=pid)
+    assert s2._person_memory_capture(ident) == "auto"
+    assert s2._person_memory_capture(None) == "explicit"

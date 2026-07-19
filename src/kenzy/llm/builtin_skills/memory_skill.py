@@ -22,8 +22,9 @@ right tool.
 from __future__ import annotations
 
 import re
+import time
 
-from kenzy.llm import memory
+from kenzy.llm import lockbox, memory
 from kenzy.llm.skills import FastResult, fast_intent, get_request, skill  # type: ignore[import]
 
 _VOICE_PROMPT = "Speak naturally at a conversational pace."
@@ -85,7 +86,11 @@ async def remember(fact: str, shared: bool = False) -> str:
         memory.mark_private_touch()
         return _refusal_msg()
     tier = memory.TIER_SHARED if shared else memory.TIER_PRIVATE
-    f = store.remember(owner, fact, tier=tier)
+    # Provenance: in auto-capture mode, LLM-tier writes are the model's
+    # initiative (explicit phrasings land on the fast path) — label them so
+    # the dashboard shows which memories she chose vs. which were dictated.
+    src = "auto" if get_request("memory_capture") == "auto" else "voice"
+    f = store.remember(owner, fact, tier=tier, state="quarantined", source=src)
     memory.mark_if_sensitive([f])  # a private write's echo shouldn't replay to others
     return f"Remembered{' for everyone' if shared else ''}: {f.text}"
 
@@ -105,7 +110,7 @@ async def recall(topic: str) -> str:
     owner = _asker()
     if owner is None:
         return _refusal_msg()
-    facts = store.recall(owner, topic, limit=5)
+    facts = [f for f in store.recall(owner, topic, limit=5) if f.state != "quarantined"]
     if not facts:
         return f"Nothing remembered about {topic}."
     memory.mark_if_sensitive(facts)
@@ -126,7 +131,11 @@ async def forget(topic: str) -> str:
     owner = _asker()
     if owner is None:
         return _refusal_msg()
-    matches = [f for f in store.recall(owner, topic, limit=5) if f.erasable_by(owner)]
+    matches = [
+        f
+        for f in store.recall(owner, topic, limit=5)
+        if f.erasable_by(owner) and f.state != "quarantined"
+    ]
     if not matches:
         return f"Nothing remembered about {topic}."
     memory.mark_if_sensitive(matches)
@@ -166,7 +175,11 @@ async def _retier(topic: str, tier: str, verb: str) -> str:
     owner = _asker()
     if owner is None:
         return _refusal_msg()
-    matches = [f for f in store.recall(owner, topic, limit=5) if f.owner == owner]
+    matches = [
+        f
+        for f in store.recall(owner, topic, limit=5)
+        if f.owner == owner and f.state != "quarantined"
+    ]
     if not matches:
         return f"Nothing of yours remembered about {topic}."
     memory.mark_if_sensitive(matches)
@@ -185,13 +198,35 @@ async def _retier(topic: str, tier: str, verb: str) -> str:
 # "remember (that) X" / "don't forget (that) X"; a leading share signal makes it
 # household-shared. "remember to …" is deliberately excluded (that's usually a
 # reminder — let the LLM pick between set_reminder and remember).
+# Explicit secret signal → the lockbox, synchronously (no classifier, and on
+# the fast path no model ever sees the utterance), e.g. "remember this
+# secretly: the gate code is 4312". A bare "secret" must be followed by
+# punctuation ("remember this secret: …") so content that merely STARTS with
+# the word — "remember that secret santa is on friday" — stays ordinary
+# memory (field finding from review).
+_SECRET_RE = re.compile(
+    r"^(?:please\s+)?(?:remember|keep|store|lock)\s+(?:this\s+|that\s+)?"
+    r"(?:secretly|in the lockbox|(?:as a )?secret(?=\s*[:,]))\s*[:,]?\s*(?P<fact>.+?)[.!?]?$",
+    re.IGNORECASE,
+)
+_SECRET_SUFFIX_RE = re.compile(
+    # The separator tolerates sentence punctuation: STT often renders the
+    # trailing clause as its own sentence ("…is 5150. Keep it secret.").
+    r"^(?:please\s+)?remember\s+(?:that\s+)?(?P<fact>.+?)\s*[-—,.;]?\s*"
+    r"(?:but\s+)?(?:keep (?:it|that) (?:a\s+)?secret|secretly|between us)[.!?]?$",
+    re.IGNORECASE,
+)
 _REMEMBER_RE = re.compile(
     r"^(?:please\s+)?(?:(?P<share>everyone should know|remember for everyone)|remember|don'?t forget)"
     r"\s+(?:that\s+)?(?P<fact>.+?)[.!?]?$",
     re.IGNORECASE,
 )
+# "what do you know about X" and the natural shortenings people (and STT,
+# which loves to drop a leading "What") actually produce: "do you know about
+# X", "tell me what you know about X", "what do you remember about X".
 _RECALL_RE = re.compile(
-    r"^(?:please\s+)?what do you (?:know|remember) about\s+(?P<topic>.+?)[?.!]?$",
+    r"^(?:please\s+)?(?:tell me\s+)?(?:what\s+)?do you (?:know|remember) about\s+"
+    r"(?P<topic>.+?)[?.!]?$",
     re.IGNORECASE,
 )
 _FORGET_RE = re.compile(
@@ -208,6 +243,23 @@ async def fast_memory(utterance: str, room_id: str | None, speaker: str | None) 
     owner = _asker()
     text = utterance.strip()
 
+    m = _SECRET_RE.match(text) or _SECRET_SUFFIX_RE.match(text)
+    if m:
+        memory.mark_private_touch()  # the utterance IS the secret — never echo
+        memory.mark_lockbox_touch()  # ...and never stored into history/short-term
+        box = lockbox.store()
+        if box is None:
+            return FastResult.handled(
+                "The lockbox isn't available on this system, so I didn't store that.",
+                _VOICE_PROMPT,
+            )
+        if owner is None:
+            return FastResult.handled(_refusal_msg(), _VOICE_PROMPT)
+        box.add(owner, m.group("fact").strip(), source="voice")
+        return FastResult.handled(
+            "Locked away — only you can ask me for it.", _VOICE_PROMPT
+        )
+
     m = _REMEMBER_RE.match(text)
     if m:
         fact = m.group("fact").strip()
@@ -218,7 +270,10 @@ async def fast_memory(utterance: str, room_id: str | None, speaker: str | None) 
             return FastResult.handled(_refusal_msg(), _VOICE_PROMPT)
         shared = bool(m.group("share"))
         stored = store.remember(
-            owner, fact, tier=memory.TIER_SHARED if shared else memory.TIER_PRIVATE
+            owner,
+            fact,
+            tier=memory.TIER_SHARED if shared else memory.TIER_PRIVATE,
+            state="quarantined",
         )
         return FastResult.handled(
             f"Okay, I'll remember that{' — and everyone can ask me' if shared else ''}.",
@@ -229,6 +284,59 @@ async def fast_memory(utterance: str, room_id: str | None, speaker: str | None) 
     if m:
         if owner is None:
             return FastResult.handled(_refusal_msg(), _VOICE_PROMPT)
+        topic = m.group("topic").strip().lower()
+        # F2.6 inspection: "about me" / "about the house" get honest summaries
+        # instead of a keyword miss.
+        if topic in ("me", "about me", "myself"):
+            mine = [f for f in store.export(owner) if f.live(time.time())]
+            box0 = lockbox.store()
+            nsec = len(box0.list_for(owner)) if box0 else 0
+            if not mine and not nsec:
+                return FastResult.handled(
+                    "Nothing yet — say 'remember that…' and I'll keep it for you.",
+                    _VOICE_PROMPT,
+                )
+            memory.mark_if_sensitive(mine)
+            parts = [f"I hold {len(mine)} memor{'y' if len(mine) == 1 else 'ies'} for you"]
+            if nsec:
+                parts.append(f"and {nsec} lockbox secret{'s' if nsec != 1 else ''}")
+            recent = "; ".join(f.text for f in mine[-3:])
+            tail = f" Most recent: {recent}." if recent else ""
+            return FastResult.handled(" ".join(parts) + "." + tail, _VOICE_PROMPT)
+        if topic in ("the house", "the household", "everyone", "us"):
+            shared = [
+                f
+                for f in store.all_facts()
+                if f.tier == memory.TIER_SHARED
+                and f.state != "quarantined"
+                and f.live(time.time())
+            ]
+            if not shared:
+                return FastResult.handled(
+                    "No household memories yet — say 'everyone should know…' to add one.",
+                    _VOICE_PROMPT,
+                )
+            recent = "; ".join(f.text for f in shared[:3])
+            return FastResult.handled(
+                f"The house shares {len(shared)} memor{'y' if len(shared) == 1 else 'ies'}. "
+                f"Most recent: {recent}.",
+                _VOICE_PROMPT,
+            )
+        box = lockbox.store()
+        if box is not None:
+            # require_all: every content-token of the topic must appear in the
+            # secret — "gym hours" must not read back the gym locker code
+            # (review finding: any-overlap spoke secrets on a one-word graze).
+            secrets = box.find(owner, m.group("topic"), require_all=True)
+            if secrets:
+                # Verbatim, owner-only, and NEVER via the LLM: the whole point.
+                memory.mark_private_touch()
+                memory.mark_lockbox_touch()  # reply carries the value — keep it out of buffers
+                if not get_request("tts_local"):
+                    # Founder decision 2026-07-18: a secret is never spoken
+                    # through a cloud TTS provider — deflect to the dashboard.
+                    return FastResult.handled(lockbox.DEFLECT_TEXT, _VOICE_PROMPT)
+                return FastResult.handled(secrets[-1].text + ".", _VOICE_PROMPT)
         facts = store.recall(owner, m.group("topic"), limit=3)
         if not facts:
             return FastResult.miss()  # nothing remembered — the LLM may still know
@@ -243,7 +351,20 @@ async def fast_memory(utterance: str, room_id: str | None, speaker: str | None) 
             return FastResult.miss()
         if owner is None:
             return FastResult.handled(_refusal_msg(), _VOICE_PROMPT)
-        matches = [f for f in store.recall(owner, topic, limit=5) if f.erasable_by(owner)]
+        box = lockbox.store()
+        if box is not None:
+            # require_all here too: "forget the gym schedule" must never
+            # silently delete the gym locker secret on a one-word overlap.
+            hits = box.find(owner, topic, require_all=True)
+            if len(hits) == 1:
+                box.erase(owner, hits[0].id)
+                memory.mark_private_touch()
+                return FastResult.handled("Forgotten — it's out of the lockbox.", _VOICE_PROMPT)
+        matches = [
+        f
+        for f in store.recall(owner, topic, limit=5)
+        if f.erasable_by(owner) and f.state != "quarantined"
+    ]
         if len(matches) != 1:
             return FastResult.miss()  # none or ambiguous — the LLM tool can clarify
         memory.mark_if_sensitive(matches)

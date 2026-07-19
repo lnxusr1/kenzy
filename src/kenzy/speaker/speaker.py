@@ -36,6 +36,7 @@ from kenzy.fastapi_auth import (
     install_logs_endpoint,
     install_restart_endpoint,
     install_service_auth,
+    install_unit_endpoint,
     install_upgrade_endpoint,
 )
 from kenzy.logutil import quiet_health_access_log
@@ -289,6 +290,7 @@ def main() -> None:
     )
     install_restart_endpoint(app)
     install_upgrade_endpoint(app, "speaker")
+    install_unit_endpoint(app, "kenzy-speaker.service")
     # Backup slice: the enrolled voice embeddings — the one part of a Kenzy
     # deployment that cannot be regenerated. Served under the canonical archive
     # path so the server's merged backup is complete even when this service

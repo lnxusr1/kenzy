@@ -25,6 +25,7 @@ import json
 import logging
 import re
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -38,6 +39,7 @@ from kenzy.fastapi_auth import (
     install_logs_endpoint,
     install_restart_endpoint,
     install_service_auth,
+    install_unit_endpoint,
     install_upgrade_endpoint,
 )
 from kenzy.llm import memory
@@ -77,10 +79,17 @@ class ProcessRequest(BaseModel):
     # "assist" (HA Assist — no asking node exists). Node-bound skills refuse
     # gracefully on non-voice channels instead of silently targeting nothing.
     channel: str = "voice"
+    # Whether the server's TTS keeps audio on-box (kokoro). Gates SPEAKING lockbox
+    # values (founder decision 2026-07-18) — absent/False ⇒ deflect to the dashboard.
+    tts_local: bool = False
     # F7.4 "don't remember me": the resolved person opted out of memory —
     # no context injection, no writes, no reads (the server sets this from
     # the person record; skills read it via the request context).
     memory_opt_out: bool = False
+    # 4.1 capture mode (per person): explicit | suggest | auto. Only "auto"
+    # changes runtime behavior today (proactive capture instruction + source
+    # tagging); "suggest" becomes real on 4.2's ask().
+    memory_capture: str = "explicit"
 
 
 class ProcessResponse(BaseModel):
@@ -95,6 +104,9 @@ class ProcessResponse(BaseModel):
     # True when the deterministic fast path handled this (no LLM call) — surfaced for
     # the dashboard's fast-path hit-rate metric.
     fast: bool = False
+    # True when lockbox content shaped this exchange (secret stored/spoken/erased):
+    # the server must redact its logs and the Activity record for this turn.
+    secret: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -199,6 +211,9 @@ def _memory_context(utterance: str) -> str:
     store = memory.store()
     if store is not None:
         facts = store.recall(str(person_id), utterance, limit=5)
+        # 4.1 quarantine: an unclassified fact never enters ANY model context
+        # (even local) — the fast path still answers it for its owner.
+        facts = [f for f in facts if f.state != "quarantined"]
         if facts and not _private_to_cloud:
             from kenzy.llm.locality import model_is_local
 
@@ -219,6 +234,23 @@ def _memory_context(utterance: str) -> str:
     if recent:
         lines = "\n".join(f"- they said: {u!r} — you replied: {a!r}" for u, a in recent)
         parts.append(f"Earlier exchanges with this speaker (may be from other rooms):\n{lines}")
+    # 4.1 lockbox identification block: the KEYS are the non-sensitive index
+    # the model may see; the VALUES are substituted deterministically after
+    # the model has answered and never enter its context.
+    from kenzy.llm import lockbox
+
+    box = lockbox.store()
+    if box is not None:
+        keys = list(box.keymap(str(person_id)))
+        if keys:
+            parts.append(
+                "This speaker's lockbox holds encrypted secrets under these keys "
+                "(you can never see the values): " + ", ".join(keys) + ". "
+                "When they ask for one, reply naturally and write the placeholder "
+                "[[lockbox:<key>]] exactly where the value belongs — it is filled in "
+                "after your reply, for their ears only. Never use a placeholder for "
+                "anyone other than this speaker, and never invent keys."
+            )
     return "\n".join(parts)
 
 
@@ -411,7 +443,16 @@ def _memory_or_503() -> Any:
 async def memory_list() -> dict[str, Any]:
     """The whole ledger (dashboard manager view / F7.2)."""
     store = _memory_or_503()
-    return {"facts": [_fact_dict(f) for f in store.all_facts()], "count": len(store)}
+    from kenzy.llm import memory_classifier
+
+    # local_model: a LOCAL model is available to judge memory (classifier_model
+    # or a local service model) — drives both auto-review of held facts and
+    # private-fact consolidation. The dashboard banners on False.
+    return {
+        "facts": [_fact_dict(f) for f in store.all_facts()],
+        "count": len(store),
+        "local_model": memory_classifier._local_model() is not None,
+    }
 
 
 @app.post("/memory/remember")
@@ -447,20 +488,116 @@ class ErasePersonBody(BaseModel):
 
 @app.post("/memory/erase_person")
 async def memory_erase_person(body: ErasePersonBody) -> dict[str, Any]:
-    """Revoke-all (F7.4): hard-delete every fact the person owns. Shared facts
-    stay with the house unless ``include_shared``. Credentialed surface only."""
+    """Revoke-all (F7.4): hard-delete every fact the person owns — and their
+    lockbox secrets (4.1). Shared facts stay with the house unless
+    ``include_shared``. Credentialed surface only."""
+    from kenzy.llm import lockbox
+
     store = _memory_or_503()
     if not body.person.strip():
         raise HTTPException(status_code=400, detail="a person id is required")
-    return {"erased": store.erase_person(body.person.strip(), include_shared=body.include_shared)}
+    pid = body.person.strip()
+    erased = store.erase_person(pid, include_shared=body.include_shared)
+    box = lockbox.store()
+    secrets = box.erase_person(pid) if box is not None else 0
+    return {"erased": erased, "secrets_erased": secrets}
+
+
+@app.get("/memory/lockbox")
+async def memory_lockbox(person: str = "") -> dict[str, Any]:
+    """Masked lockbox metadata (label/owner/age — never the text) for the
+    dashboard. ``person`` filters to one owner."""
+    from kenzy.llm import lockbox
+
+    _memory_or_503()
+    box = lockbox.store()
+    if box is None:
+        return {"available": lockbox.available(), "secrets": []}
+    return {"available": True, "secrets": box.masked(person.strip() or None)}
+
+
+class ReviewBody(BaseModel):
+    id: str
+    action: str  # release | vault
+
+
+@app.post("/memory/review")
+async def memory_review(body: ReviewBody) -> dict[str, Any]:
+    """Resolve a held-for-review (quarantined) fact from the credentialed
+    dashboard: release it to normal tiering, or vault it into the lockbox."""
+    from kenzy.llm import lockbox as _lb
+    from kenzy.llm import memory_classifier as _mcls
+
+    store = _memory_or_503()
+    fact = store.get_fact(body.id.strip())
+    if fact is None or fact.state != "quarantined":
+        raise HTTPException(status_code=404, detail="no such held fact")
+    if body.action == "release":
+        store.release(fact.id)
+        return {"status": "released"}
+    if body.action == "vault":
+        box = _lb.store()
+        if box is None:
+            raise HTTPException(status_code=503, detail="lockbox unavailable")
+        box.add(fact.owner, fact.text, label=_mcls.derive_label(fact.text), source="review")
+        store.erase(fact.id)
+        return {"status": "vaulted"}
+    raise HTTPException(status_code=400, detail="action must be release or vault")
+
+
+@app.get("/memory/lockbox/reveal")
+async def memory_lockbox_reveal(id: str) -> dict[str, Any]:
+    """Credentialed click-to-reveal: the one path that returns secret text.
+    Token-gated like every route; the dashboard additionally gates it on
+    `controls` and never stores what it shows."""
+    from kenzy.llm import lockbox
+
+    _memory_or_503()
+    box = lockbox.store()
+    sec = box.reveal(id.strip()) if box is not None else None
+    if sec is None:
+        raise HTTPException(status_code=404, detail="no such secret")
+    return {"id": sec.id, "label": sec.label, "text": sec.text, "value": sec.payload}
+
+
+class LockboxEraseBody(BaseModel):
+    id: str
+
+
+@app.post("/memory/lockbox/erase")
+async def memory_lockbox_erase(body: LockboxEraseBody) -> dict[str, Any]:
+    """Admin delete of one secret (the dashboard's Forget)."""
+    from kenzy.llm import lockbox
+
+    _memory_or_503()
+    box = lockbox.store()
+    if box is None or not box.erase_admin(body.id.strip()):
+        raise HTTPException(status_code=404, detail="no such secret")
+    return {"status": "ok"}
 
 
 @app.get("/memory/export")
-async def memory_export(person: str) -> dict[str, Any]:
+async def memory_export(person: str, secrets: int = 1) -> dict[str, Any]:
     """Everything OWNED by a person — the "what does Kenzy know about me"
-    surface (F7.4 groundwork)."""
+    surface (F7.4). Includes their lockbox entries by default (founder call:
+    the export answers "what does Kenzy know about me" COMPLETELY, and the
+    requesting surface is already credentialed to Reveal); ``secrets=0``
+    yields a shareable export without them."""
     store = _memory_or_503()
-    return {"facts": [_fact_dict(f) for f in store.export(person)]}
+    out: dict[str, Any] = {"facts": [_fact_dict(f) for f in store.export(person)]}
+    from kenzy.llm import lockbox
+
+    box = lockbox.store()
+    if box is not None:
+        if secrets:
+            out["secrets"] = [
+                {"label": x.label, "value": x.payload, "text": x.text,
+                 "created": x.created, "source": x.source}  # fmt: skip
+                for x in box.list_for(person)
+            ]
+        else:
+            out["secrets_excluded"] = len(box.list_for(person))
+    return out
 
 
 class CurationUpdate(BaseModel):
@@ -547,7 +684,12 @@ async def process(req: ProcessRequest) -> ProcessResponse:
     # Preserve raw speaker for history; derive display name for logging.
     raw_speaker = req.speaker or "unknown"
     display_speaker = raw_speaker if raw_speaker.lower() != "unknown" else None
-    log.info("[%s/%s] %s", req.room_id or "?", display_speaker or "?", req.text)
+    from kenzy import redact
+    from kenzy.llm import lockbox
+
+    # A secret-store utterance carries the value — keep it out of this INFO
+    # line (and therefore the ring buffer / Logs tab).
+    log.info("[%s/%s] %s", req.room_id or "?", display_speaker or "?", redact.loggable(req.text))
 
     # Request-scoped accumulator for any server-side actions a skill queues, and
     # the server-injected context (rooms, active schedules) skills may read.
@@ -564,6 +706,8 @@ async def process(req: ProcessRequest) -> ProcessResponse:
             "confidence": req.confidence,
             "channel": req.channel or "voice",
             "memory_opt_out": bool(req.memory_opt_out),
+            "memory_capture": req.memory_capture or "explicit",
+            "tts_local": bool(req.tts_local),
         }
     )
 
@@ -575,28 +719,46 @@ async def process(req: ProcessRequest) -> ProcessResponse:
     fast = await skill_registry.dispatch_fast(req.text, req.room_id, raw_speaker)
     if fast is not None:
         vp = fast.voice_prompt or _voice_prompt
-        _history.add(req.room_id or "", raw_speaker, req.text, fast.text, private_to=_history_tag())
-        if not req.memory_opt_out:
-            _short_term.add(req.person_id or "", req.text, fast.text)
+        if memory.lockbox_touched():
+            # The utterance or the reply carries a secret in the clear. History
+            # and short-term feed future MODEL context (including cloud) — a
+            # lockbox exchange never enters either (review finding H1).
+            pass
+        else:
+            _history.add(
+                req.room_id or "", raw_speaker, req.text, fast.text, private_to=_history_tag()
+            )
+            if not req.memory_opt_out:
+                _short_term.add(req.person_id or "", req.text, fast.text)
         return ProcessResponse(
             text=fast.text,
             voice_prompt=vp,
             expect_response=fast.expect_response,
             actions=skill_registry.take_actions(),
             fast=True,
+            secret=memory.lockbox_touched(),
         )
 
     text, voice_prompt, expect_response = await _run_llm(
         req.text, raw_speaker, req.room_id, available_rooms=req.rooms, schedules=req.schedules
     )
     if not req.memory_opt_out:
+        # Deliberately BEFORE substitution: short-term context (a future model
+        # input) keeps the placeholder, never the secret value.
         _short_term.add(req.person_id or "", req.text, text)
+    # 4.1 lockbox: deterministic value substitution, owner-scoped. Room
+    # history (added inside _run_llm) and short-term above both pre-date this
+    # — only the spoken reply carries the value.
+    text, secret_hits = lockbox.substitute(
+        text, req.person_id, speak_values=bool(req.tts_local)
+    )
     return ProcessResponse(
         text=text,
         voice_prompt=voice_prompt,
         expect_response=expect_response,
         actions=skill_registry.take_actions(),
         fast=False,
+        secret=bool(secret_hits) or memory.lockbox_touched(),
     )
 
 
@@ -724,6 +886,17 @@ async def _run_llm(
     mem = _memory_context(text)
     if mem:
         system_content += "\n" + mem
+    if (
+        skill_registry.get_request("memory_capture") == "auto"
+        and not skill_registry.get_request("memory_opt_out")
+        and skill_registry.get_request("person_id")
+    ):
+        system_content += (
+            "\nThis speaker enabled AUTO memory capture: when they state a durable "
+            "personal fact (a preference, a name, a date, a code) even without "
+            "saying 'remember', store it with the remember tool and briefly say "
+            "you did. Never store small talk or transient states."
+        )
     system_content += f"\n{_JSON_INSTRUCTION}"
 
     messages: list[dict[str, Any]] = [
@@ -849,6 +1022,42 @@ def main() -> None:
     )
     install_restart_endpoint(app)
     install_upgrade_endpoint(app, "llm")
+    install_unit_endpoint(app, "kenzy-llm.service")
+
+    from kenzy.fastapi_auth import install_features_endpoint, install_fill_endpoint
+    from kenzy.features import feature
+    from kenzy.llm import lockbox as _lb
+    from kenzy.llm.locality import model_is_local as _mil
+
+    def _features() -> list[dict[str, Any]]:
+        mcfg = cfg.get("memory", {}) if isinstance(cfg.get("memory"), dict) else {}
+        cls_model = str(mcfg.get("classifier_model") or "") or _model
+        cls_url = str(mcfg.get("classifier_url") or "") or _base_url
+        return [
+            feature(
+                "lockbox",
+                configured=bool(mcfg.get("enabled", True)),
+                available=_lb.available(),
+                active=_lb.store() is not None,
+                note="Encrypted secret storage — needs the 'cryptography' package.",
+            ),
+            feature(
+                "local-classifier",
+                configured=bool(mcfg.get("enabled", True)),
+                available=bool(cls_model and _mil(cls_model, cls_url)),
+                active=bool(cls_model and _mil(cls_model, cls_url)),
+                install="",
+                note=(
+                    "Ambiguous memory writes are auto-resolved by a local model."
+                    if cls_model and _mil(cls_model, cls_url)
+                    else "No local model — ambiguous writes are held for dashboard "
+                    "review (set memory.classifier_model to a local model)."
+                ),
+            ),
+        ]
+
+    install_features_endpoint(app, _features)
+    install_fill_endpoint(app, "llm")
     # Backup slice: this host's user skills overlay + HA curation (they live with
     # the LLM service, not the server), merged into the server's backup archive.
     install_backup_endpoint(app, _backup_items)
@@ -886,6 +1095,11 @@ def main() -> None:
 
         rel = str(mem_cfg.get("file", "data/memory/facts.jsonl"))
         memory.init_store(_kdr() / rel)
+        # The lockbox (4.1): encrypted secret store beside the ledger. Degrades
+        # honestly (disabled + one log line) when `cryptography` is absent.
+        from kenzy.llm import lockbox as _lockbox
+
+        _lockbox.init_store(_kdr() / "data" / "memory" / "lockbox.enc")
 
     # Background jobs (F5.5 thin): the one runner for this service's periodic
     # work. GET /jobs shows every run; interval 0 disables a job (the runner
@@ -902,7 +1116,11 @@ def main() -> None:
             store = memory.store()
             return store.consolidate(superseded_keep_days=keep_days) if store else None
 
-        runner.register(Job("memory-consolidation", interval, _consolidate, scope="memory"))
+        # Kicked after each release (below) with a 30s cooldown, so exact
+        # repeats coalesce in seconds — the hourly interval is the backstop.
+        runner.register(
+            Job("memory-consolidation", interval, _consolidate, scope="memory", cooldown=30)
+        )
 
     # Semantic consolidation (model-assisted): same-thought merging/updating.
     # Kicked by every remember (write hook), 30s cooldown coalesces bursts,
@@ -913,7 +1131,15 @@ def main() -> None:
     if store_now is not None and sem_interval > 0:
         from kenzy.llm import memory_semantic
 
-        memory_semantic.configure(_model, _base_url, private_to_cloud=_private_to_cloud)
+        memory_semantic.configure(
+            _model,
+            _base_url,
+            private_to_cloud=_private_to_cloud,
+            classifier_model=str(mem_cfg.get("classifier_model", "")),
+            classifier_url=(
+                str(mem_cfg.get("classifier_url")) if mem_cfg.get("classifier_url") else None
+            ),
+        )
 
         async def _semantic() -> dict[str, Any] | None:
             store = memory.store()
@@ -930,6 +1156,45 @@ def main() -> None:
             )
         )
         store_now.on_write = lambda: runner.kick("memory-consolidation-semantic")
+
+    # The release job (4.1 quarantine pipeline): fresh writes are born
+    # quarantined — owner-only, invisible to every model — and the CLASSIFIER
+    # judges each one: release / vault (→ lockbox) / split / hold-for-review.
+    # Kicked by every write, ahead of consolidation (which skips quarantined
+    # facts, so ordering is safe even when kicks race).
+    if store_now is not None:
+        from kenzy.llm import memory_classifier
+
+        memory_classifier.configure(
+            _model,
+            _base_url,
+            classifier_model=str(mem_cfg.get("classifier_model", "")),
+            classifier_url=(
+                str(mem_cfg.get("classifier_url")) if mem_cfg.get("classifier_url") else None
+            ),
+        )
+
+        async def _release() -> dict[str, Any] | None:
+            store = memory.store()
+            if store is None:
+                return None
+            summary = await memory_classifier.classify_pending(store)
+            if summary.get("released") or summary.get("split"):
+                runner.kick("memory-consolidation")  # exact dedupe, no model
+                runner.kick("memory-consolidation-semantic")
+            return summary
+
+        runner.register(
+            Job("memory-release", 60, _release, scope="memory", cooldown=2)
+        )
+        prev_kick = store_now.on_write
+
+        def _on_write(prev: Callable[[], None] | None = prev_kick) -> None:
+            runner.kick("memory-release")
+            if prev is not None:
+                prev()
+
+        store_now.on_write = _on_write
     install_jobs_endpoint(app, runner)
 
     # Built-in skills ship inside the package; the configured directory is a
@@ -956,9 +1221,11 @@ def main() -> None:
         _params = {
             k: v for k, v in raw_params.items() if k not in _PARAMS_BLOCKED and v not in ("", None)
         }
-        dropped = set(raw_params) - set(_params)
-        if dropped:
-            log.warning("llm params: ignoring reserved keys %s", sorted(dropped))
+        # Only genuinely reserved keys deserve a warning; an empty value is the
+        # documented "don't send it" state (the packaged default), not a problem.
+        blocked = sorted(k for k in raw_params if k in _PARAMS_BLOCKED)
+        if blocked:
+            log.warning("llm params: ignoring reserved keys %s", blocked)
         if _params:
             log.info("LLM params: %s", _params)
 

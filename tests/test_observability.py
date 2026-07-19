@@ -34,9 +34,9 @@ def _mock_pipeline(srv, monkeypatch, *, fast: bool) -> None:
         return "alice", 0.9  # (name, confidence) — identity core (F1)
 
     async def llm(text, room, sid, speaker, node_id=None, identity=None):  # noqa: ANN001, ANN202
-        return ("Done.", "vp", [], fast, False)
+        return ("Done.", "vp", [], fast, False, False)
 
-    async def tts(*a):  # noqa: ANN002, ANN202
+    async def tts(*a, **k):  # noqa: ANN002, ANN003, ANN202
         return True
 
     monkeypatch.setattr(srv, "_call_stt", stt)
@@ -106,3 +106,38 @@ async def test_sessions_endpoint(tmp_path, monkeypatch):
     finally:
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
+
+
+async def test_secret_exchange_withheld_from_activity(monkeypatch):
+    # Review finding H2: a lockbox exchange (ProcessResponse.secret) must not
+    # land its transcript or response in the Activity record — timing stays.
+    srv = _pipeline_server()
+    srv._nodes["k"] = NodeSession(ws=_StubWS(), node_id="k", room_id="kitchen")  # type: ignore[arg-type]
+
+    async def stt(pcm, room, sid):  # noqa: ANN001, ANN202
+        return "remember this secretly: the code is 8181"
+
+    async def spk(pcm, room):  # noqa: ANN001, ANN202
+        return "john", 0.9
+
+    async def llm(text, room, sid, speaker, node_id=None, identity=None):  # noqa: ANN001, ANN202
+        return ("Locked away — only you can ask me for it.", "vp", [], True, False, True)
+
+    async def tts(*a, **k):  # noqa: ANN002, ANN003, ANN202
+        return True
+
+    monkeypatch.setattr(srv, "_call_stt", stt)
+    monkeypatch.setattr(srv, "_call_speaker", spk)
+    monkeypatch.setattr(srv, "_call_llm", llm)
+    monkeypatch.setattr(srv, "_run_tts", tts)
+    records: list[dict] = []
+    srv.add_session_listener(records.append)
+
+    await srv._transcribe("k", "kitchen", "sid", b"1234")
+
+    assert len(records) == 1
+    r = records[0]
+    assert "8181" not in str(r) and "Locked away" not in str(r)
+    assert r["transcript"] == "[lockbox exchange]"
+    assert r["response"] == "[content withheld]"
+    assert r["total_ms"] >= 0  # the timing row survives

@@ -26,6 +26,13 @@ from typing import Any
 
 log = logging.getLogger(__name__)
 
+#: Feature-chip signal: did the listener actually start this boot?
+_ACTIVE: dict[str, bool] = {"running": False}
+
+
+def is_active() -> bool:
+    return _ACTIVE["running"]
+
 #: The transcription pipeline's expected format (kenzy.protocol).
 _RATE = 16000
 
@@ -67,6 +74,7 @@ def install_wyoming_stt(
         return
 
     state: dict[str, Any] = {}
+    _ACTIVE["running"] = False
 
     async def _startup() -> None:
         from wyoming.server import AsyncServer
@@ -76,6 +84,7 @@ def install_wyoming_stt(
         state["task"] = asyncio.create_task(
             server.run(_handler_factory(transcribe, model_name)), name="wyoming-stt"
         )
+        _ACTIVE["running"] = True
         log.info("Wyoming STT listening on tcp://%s:%d (model %r)", bind, port, model_name)
 
     async def _shutdown() -> None:

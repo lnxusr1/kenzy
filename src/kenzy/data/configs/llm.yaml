@@ -157,3 +157,9 @@ memory:
   # consolidate once a local model is configured). Set true to opt out of
   # the protection and let private facts ride to your cloud provider.
   private_to_cloud: false
+  # Write-path classifier (the quarantine judge): which model decides
+  # release/vault/split for ambiguous writes. Blank = the service model —
+  # but a CLOUD model is never consulted (heuristics + hold-for-review
+  # instead); point this at a local model to resolve ambiguity automatically.
+  classifier_model: ""
+  classifier_url: ""

@@ -121,7 +121,7 @@ async def test_consolidation_withholds_private_from_cloud(tmp_path, monkeypatch)
 
     seen_prompts: list[str] = []
 
-    async def fake_completion(kwargs):
+    async def fake_completion(kwargs, **_kw):
         seen_prompts.append(str(kwargs.get("messages")))
 
         class R:
@@ -158,7 +158,7 @@ async def test_consolidation_local_model_sees_private(tmp_path, monkeypatch):
 
     seen: list[str] = []
 
-    async def fake_completion(kwargs):
+    async def fake_completion(kwargs, **_kw):
         seen.append(str(kwargs.get("messages")))
 
         class R:

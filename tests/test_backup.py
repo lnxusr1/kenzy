@@ -386,3 +386,44 @@ def test_restore_relocates_absolute_cert_to_new_home(tmp_path):
     text = (new_home / "configs" / "server.yaml").read_text()
     assert str(new_home / "certs" / "kenzy.crt") in text
     assert old not in text
+
+
+def test_lockbox_key_rides_backup_by_default(tmp_path):
+    # Founder call 2026-07-18: a backup's job is to restore EVERYTHING — the
+    # lockbox key rides by default; include_lockbox_key=False builds the
+    # shareable (ciphertext-only) archive.
+    import io
+    import tarfile
+
+    from kenzy import backup
+
+    (tmp_path / "data" / "memory").mkdir(parents=True)
+    (tmp_path / "data" / "memory" / "lockbox.enc").write_bytes(b"cipher")
+    (tmp_path / "data" / "memory" / "lockbox.key").write_bytes(b"KEY")
+    (tmp_path / "configs").mkdir()
+    (tmp_path / "configs" / "server.yaml").write_text("x: 1\n")
+
+    def names(blob):
+        with tarfile.open(fileobj=io.BytesIO(blob)) as t:
+            return set(t.getnames())
+
+    full = names(backup.create_backup(tmp_path))
+    assert "data/memory/lockbox.key" in full and "data/memory/lockbox.enc" in full
+
+    shareable = names(backup.create_backup(tmp_path, include_lockbox_key=False))
+    assert "data/memory/lockbox.key" not in shareable
+    assert "data/memory/lockbox.enc" in shareable  # ciphertext still rides
+
+    # TLS-style key material stays out of BOTH.
+    (tmp_path / "configs" / "certs").mkdir()
+    (tmp_path / "configs" / "certs" / "server.key").write_bytes(b"TLS")
+    assert not any(n.endswith("server.key") for n in names(backup.create_backup(tmp_path)))
+
+    # And a restore applies the key (round-trip: the whole point).
+    blob = backup.create_backup(tmp_path)
+    arc = tmp_path / "b.tar.gz"
+    arc.write_bytes(blob)
+    target = tmp_path / "restored"
+    target.mkdir()
+    backup.restore_backup(arc, target, force=True)
+    assert (target / "data" / "memory" / "lockbox.key").read_bytes() == b"KEY"
