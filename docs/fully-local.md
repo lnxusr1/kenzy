@@ -80,7 +80,10 @@ kenzy-setup                     # pre-download the voice weights
 
 Then in the dashboard, **Services → tts**: set `provider: kokoro` (voice/speed
 under the `kokoro:` block). Output format is identical to the cloud provider,
-so nothing else changes. See [TTS Configuration](configuration/tts.md#kokoro-provider).
+so nothing else changes — except one payoff: local speech is what unlocks
+**spoken [lockbox secrets](memory.md#secrets--the-lockbox)** (a cloud voice
+gets a deflection to the dashboard instead).
+See [TTS Configuration](configuration/tts.md#kokoro-provider).
 
 ### Speech-to-text — verify, don't change
 
@@ -122,6 +125,12 @@ only a double failure reaches the error cue:
 - **LLM:** set [`fallback.model` / `fallback.base_url`](configuration/llm.md)
   to a local Ollama model — an internet outage degrades to a dumber-but-present
   assistant instead of an apology.
+- **Memory:** set [`memory.classifier_model`](configuration/llm.md) to a local
+  Ollama model — the third local-model lever. With a cloud brain it's what
+  classifies secret-shaped memories automatically (a cloud model is never
+  consulted about secrecy) *and* runs the duplicate-merging pass over
+  private-tier facts, which are otherwise withheld from cloud consolidation
+  entirely.
 - **TTS:** `openai.fallback: true` (the default) uses local Kokoro when the
   cloud fails — if you've installed the `kokoro` extra.
 - **STT:** `openai.fallback: true` (the default) retries with local whisper —

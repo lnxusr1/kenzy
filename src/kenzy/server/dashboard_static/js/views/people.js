@@ -1,4 +1,5 @@
 import { html, useState, useEffect } from "../html.js";
+import { confirmDialog } from "../dialog.js";
 import { getMemory, getPeople } from "../api.js";
 import { send, notify } from "../store.js";
 
@@ -67,7 +68,7 @@ function ago(ts) {
 // The drill-down selection is OWNED BY THE SHELL (passed as selected/onSelect,
 // like ServicesView) so clicking "People" in the sidebar always returns to the
 // list — held locally, the nav click would be a no-op re-render of the detail.
-export function PeopleView({ selected, onSelect }) {
+export function PeopleView({ selected, onSelect, onConfigureService }) {
   const [people, setPeople] = useState(null); // /api/people payload
   const [mem, setMem] = useState(null); // /api/memory payload
   const [err, setErr] = useState("");
@@ -82,6 +83,10 @@ export function PeopleView({ selected, onSelect }) {
 
   useEffect(() => {
     load();
+    // Memory settles asynchronously (the classifier releases/vaults a fresh
+    // write within seconds) — poll gently so the page catches up on its own.
+    const t = setInterval(load, 15000);
+    return () => clearInterval(t);
   }, []);
 
   if (err) return html`<div class="empty">Could not load people: ${err}</div>`;
@@ -91,16 +96,17 @@ export function PeopleView({ selected, onSelect }) {
   const person = selected && (people.people || []).find((p) => p.id === selected);
   if (person)
     return html`<${PersonDetail} person=${person} data=${people} facts=${facts}
+      secrets=${(mem.lockbox && mem.lockbox.secrets) || []}
       memReachable=${mem.reachable} onBack=${() => onSelect(null)} reload=${load} />`;
   return html`<${PeopleList} data=${people} mem=${mem} facts=${facts}
-    onOpen=${onSelect} reload=${load} />`;
+    onOpen=${onSelect} reload=${load} onConfigureService=${onConfigureService} />`;
 }
 
 // ---------------------------------------------------------------------------
 // List page
 // ---------------------------------------------------------------------------
 
-function PeopleList({ data, mem, facts, onOpen, reload }) {
+function PeopleList({ data, mem, facts, onOpen, reload, onConfigureService }) {
   const [adding, setAdding] = useState(false);
   const [newName, setNewName] = useState("");
   const [newVoices, setNewVoices] = useState([]);
@@ -154,7 +160,7 @@ function PeopleList({ data, mem, facts, onOpen, reload }) {
   }
 
   async function delVoice(v) {
-    if (!window.confirm(`Delete the voice profile “${v.name}”? This can't be undone.`)) return;
+    if (!(await confirmDialog(`Delete the voice profile “${v.name}”? This can't be undone.`, { title: "Delete voice", confirmText: "Delete", danger: true }))) return;
     setBusy("vp:" + v.name);
     const res = await send("delete_speaker", { name: v.name });
     setBusy("");
@@ -175,6 +181,18 @@ function PeopleList({ data, mem, facts, onOpen, reload }) {
         <div class="k">${mem.reachable ? facts.length : "—"}</div></div>
     </div>
 
+    ${mem.reachable && mem.local_model === false
+      ? html`<div class="banner warn">⚠ No local model is set for memory upkeep — ambiguous
+          memories stay <b>held for review</b> below, and restated private memories aren't
+          merged, so spoken answers can pick up duplicates. Set
+          <span class="mono">memory.classifier_model</span> +
+          <span class="mono">classifier_url</span> to a local model (e.g. Ollama) to fix both.
+          ${onConfigureService
+            ? html`<button class="btn-ghost" style="margin-left:10px"
+                onClick=${() => onConfigureService("llm")}>Open LLM settings</button>`
+            : null}
+        </div>`
+      : null}
     ${!data.speaker_reachable
       ? html`<div class="banner warn">⚠ The speaker service isn't reachable, so enrolled voices
           can't be listed or managed. Check <span class="mono">speaker.url</span> and that
@@ -182,7 +200,9 @@ function PeopleList({ data, mem, facts, onOpen, reload }) {
       : null}
 
     <section class="section">
-      <header><h2>People</h2><span class="rule"></span></header>
+      <header><h2>People</h2><span class="rule"></span>
+        <button class="btn-ghost" onClick=${reload} title="Re-fetch memories and lockbox">⟳ Refresh</button>
+      </header>
       <p class="micro">A person is a household member Kenzy knows by name. Open one to manage
         their identity, voice, and what she remembers for them.</p>
 
@@ -331,11 +351,12 @@ function PeopleList({ data, mem, facts, onOpen, reload }) {
 // Person detail (drill-down)
 // ---------------------------------------------------------------------------
 
-function PersonDetail({ person, data, facts, memReachable, onBack, reload }) {
+function PersonDetail({ person, data, facts, secrets, memReachable, onBack, reload }) {
   const [name, setName] = useState(person.name);
   const [voices, setVoices] = useState([...person.voiceprints]);
   const [haUser, setHaUser] = useState(person.ha_user || "");
   const [memOptOut, setMemOptOut] = useState(!!person.memory_opt_out);
+  const [memCapture, setMemCapture] = useState(person.memory_capture || "explicit");
   const [busy, setBusy] = useState("");
   const [enrolling, setEnrolling] = useState(false);
   const [enrollRoom, setEnrollRoom] = useState("");
@@ -355,6 +376,7 @@ function PersonDetail({ person, data, facts, memReachable, onBack, reload }) {
     name.trim() !== person.name ||
     haUser.trim() !== (person.ha_user || "") ||
     memOptOut !== !!person.memory_opt_out ||
+    memCapture !== (person.memory_capture || "explicit") ||
     JSON.stringify([...voices].sort()) !== JSON.stringify([...person.voiceprints].sort());
 
   async function save() {
@@ -370,6 +392,7 @@ function PersonDetail({ person, data, facts, memReachable, onBack, reload }) {
       voiceprints: voices,
       ha_user: ha,
       memory_opt_out: memOptOut,
+      memory_capture: memCapture,
     });
     setBusy("");
     if (res.ok) {
@@ -380,9 +403,10 @@ function PersonDetail({ person, data, facts, memReachable, onBack, reload }) {
       if (memOptOut && !person.memory_opt_out && owned.length) {
         const n = owned.length;
         if (
-          window.confirm(
+          await confirmDialog(
             `Also erase the ${n} fact${n === 1 ? "" : "s"} Kenzy already holds for ${name.trim()}? ` +
               `Facts they shared with the house stay. This can't be undone.`,
+            { title: "Erase their memories?", confirmText: "Erase", cancelText: "Keep them", danger: true },
           )
         ) {
           const r = await send("erase_person_memory", { person_id: person.id });
@@ -399,7 +423,7 @@ function PersonDetail({ person, data, facts, memReachable, onBack, reload }) {
     const also = owned.length
       ? ` Their ${owned.length} remembered fact${owned.length === 1 ? "" : "s"} will show under "Facts without a person" until forgotten.`
       : "";
-    if (!window.confirm(`Delete “${person.name}”? Their enrolled voice stays and can be relinked.${also}`))
+    if (!(await confirmDialog(`Delete “${person.name}”? Their enrolled voice stays and can be relinked.${also}`, { title: "Delete person", confirmText: "Delete", danger: true })))
       return;
     setBusy("del");
     const res = await send("delete_person", { person_id: person.id });
@@ -433,7 +457,7 @@ function PersonDetail({ person, data, facts, memReachable, onBack, reload }) {
       const known = persons.some((p) => p.entity_id === haUser.trim());
       return html`<label class="field">
         ${label}
-        <select value=${haUser} disabled=${!controls}
+        <select class="audio-select" value=${haUser} disabled=${!controls}
           onChange=${(e) => setHaUser(e.target.value)}>
           <option value="">— not linked —</option>
           ${!known && haUser.trim()
@@ -453,9 +477,10 @@ function PersonDetail({ person, data, facts, memReachable, onBack, reload }) {
     </label>`;
   }
 
+  const [expSecrets, setExpSecrets] = useState(true);
   function exportPerson() {
     const a = document.createElement("a");
-    a.href = `/api/people/${encodeURIComponent(person.id)}/export`;
+    a.href = `/api/people/${encodeURIComponent(person.id)}/export?secrets=${expSecrets ? 1 : 0}`;
     a.download = `kenzy-${person.id}-export.json`;
     document.body.appendChild(a);
     a.click();
@@ -465,13 +490,13 @@ function PersonDetail({ person, data, facts, memReachable, onBack, reload }) {
   async function revokePerson() {
     const facts = owned.length;
     const vp = person.voiceprints.length;
-    const typed = window.prompt(
+    const okd = await confirmDialog(
       `Remove ${person.name} completely: erase their ${facts} remembered fact${facts === 1 ? "" : "s"}, ` +
         `delete ${vp} enrolled voice${vp === 1 ? "" : "s"}, and remove their person record. ` +
-        `Household-shared facts they contributed stay with the house. This cannot be undone.\n\n` +
-        `Type REMOVE to confirm:`,
+        `Household-shared facts they contributed stay with the house. This cannot be undone.`,
+      { title: "Remove completely", confirmText: "Remove", danger: true, typed: "REMOVE" },
     );
-    if (typed !== "REMOVE") return;
+    if (!okd) return;
     setBusy("revoke");
     const res = await send("revoke_person", { person_id: person.id });
     setBusy("");
@@ -495,7 +520,9 @@ function PersonDetail({ person, data, facts, memReachable, onBack, reload }) {
       <button class="btn-ghost back" onClick=${onBack}>← People</button>
 
       <section class="section">
-        <header><h2>${person.name}</h2><span class="rule"></span></header>
+        <header><h2>${person.name}</h2><span class="rule"></span>
+          <button class="btn-ghost" onClick=${reload} title="Re-fetch memories and lockbox">⟳ Refresh</button>
+        </header>
         <div class="card pad">
           <label class="field">
             <span class="micro">Name</span>
@@ -541,7 +568,7 @@ function PersonDetail({ person, data, facts, memReachable, onBack, reload }) {
           ${enrolling
             ? html`<div class="ppl-enroll-row">
                 <span class="micro">Enroll from</span>
-                <select value=${enrollRoom} onChange=${(e) => setEnrollRoom(e.target.value)}>
+                <select class="audio-select" value=${enrollRoom} onChange=${(e) => setEnrollRoom(e.target.value)}>
                   ${rooms.map(
                     (r) => html`<option value=${r.node_id}>${r.room || r.node_id}</option>`,
                   )}
@@ -580,9 +607,37 @@ function PersonDetail({ person, data, facts, memReachable, onBack, reload }) {
               `}
       </section>
 
+      ${(secrets || []).filter((x) => x.owner === person.id).length
+        ? html`<section class="section">
+            <header><h2>Lockbox</h2><span class="rule"></span></header>
+            <p class="micro">Secrets ${person.name} asked Kenzy to lock away —
+              encrypted on disk, never sent to any model, and only ever spoken
+              back to them. Shown here only when you click <b>Reveal</b>. Say
+              ${" "}<span class="mono">"remember this secretly…"</span> to add one.</p>
+            <div class="card mem-list">
+              ${secrets.filter((x) => x.owner === person.id).map(
+                (x) => html`<${SecretRow} s=${x} key=${x.id} controls=${data.controls} reload=${reload} />`,
+              )}
+            </div>
+          </section>`
+        : null}
+
       <section class="section">
         <header><h2>Privacy & data</h2><span class="rule"></span></header>
         <div class="card pad">
+          <label class="field">
+            <span class="micro">Memory capture — when Kenzy remembers things for
+              ${person.name}. <b>Explicit</b>: only when asked ("remember that…").
+              <b>Suggest</b>: she offers to remember useful facts (arrives with a
+              later release). <b>Auto</b>: she remembers on her own and always says
+              so — her picks show a "auto" tag below, each a Forget away.</span>
+            <select class="audio-select" value=${memCapture} disabled=${!controls || memOptOut}
+              onChange=${(e) => setMemCapture(e.target.value)}>
+              <option value="explicit">Explicit — only when asked (default)</option>
+              <option value="suggest">Suggest — ask before remembering</option>
+              <option value="auto">Auto — remember proactively, say so</option>
+            </select>
+          </label>
           <label class="ha-chk">
             <input type="checkbox" disabled=${!controls} checked=${memOptOut}
               onChange=${(e) => setMemOptOut(e.target.checked)} />
@@ -590,9 +645,15 @@ function PersonDetail({ person, data, facts, memReachable, onBack, reload }) {
               about them (they stay a recognized voice for device control and
               questions).${memOptOut !== !!person.memory_opt_out ? " Save to apply." : ""}</span>
           </label>
+          <label class="ha-chk micro">
+            <input type="checkbox" checked=${expSecrets}
+              onChange=${(e) => setExpSecrets(e.target.checked)} />
+            ${" "}Include lockbox secrets in the export (same access as Reveal; untick for a
+            shareable file)
+          </label>
           <div class="ppl-form-actions">
             <button class="btn-ghost" onClick=${exportPerson}
-              title="Download their person record, voice-profile info, and every remembered fact as a file">
+              title="Download their person record, voice-profile info, every remembered fact, and (by default) their lockbox entries as a file">
               Export their data</button>
             ${controls
               ? html`<button class="btn-ghost danger" disabled=${busy === "revoke"}
@@ -613,11 +674,77 @@ function PersonDetail({ person, data, facts, memReachable, onBack, reload }) {
 // One remembered fact (shared by the detail page and the page-level buckets)
 // ---------------------------------------------------------------------------
 
+// One lockbox secret: masked by default; Reveal fetches the text over the
+// controls-gated endpoint, shows it inline, and auto-hides after 30s. The
+// list payload never contains secret text — only this explicit click does.
+function SecretRow({ s, controls, reload }) {
+  const [busy, setBusy] = useState(false);
+  const [shown, setShown] = useState(null); // revealed text or null
+
+  async function reveal() {
+    if (shown !== null) {
+      setShown(null);
+      return;
+    }
+    setBusy(true);
+    try {
+      const r = await fetch(`/api/secrets/${encodeURIComponent(s.id)}/reveal`);
+      if (!r.ok) throw new Error();
+      const body = await r.json();
+      setShown({ value: body.value || body.text || "", text: body.text || "" });
+      setTimeout(() => setShown(null), 30000); // auto-hide
+    } catch (e) {
+      notify("Could not reveal (lockbox unreachable?).", "err");
+    }
+    setBusy(false);
+  }
+
+  async function del() {
+    if (!(await confirmDialog(`Erase this lockbox secret (${s.label})? This can't be undone.`, { title: "Erase secret", confirmText: "Erase", danger: true }))) return;
+    setBusy(true);
+    const r = await send("forget_secret", { secret_id: s.id });
+    setBusy(false);
+    if (r.ok) { notify("Secret erased."); await reload(); }
+    else notify(r.error || "Could not erase.", "err");
+  }
+
+  return html`<div class="mem-row">
+    <div class="mem-main">
+      <div class="mem-text">
+        <span class="mono">🔒 ${s.label}</span>
+      </div>
+      ${shown !== null
+        ? html`<div class="mono" style="margin-top:4px">${shown.value}</div>
+          ${shown.text && shown.text !== shown.value
+            ? html`<div style="font-size:12px;opacity:.7">“${shown.text}”</div>`
+            : null}`
+        : null}
+      <div class="mem-meta micro">${new Date(s.created * 1000).toLocaleDateString()}
+        ${s.source && s.source !== "voice" ? ` · via ${s.source}` : ""}</div>
+    </div>
+    ${controls
+      ? html`<button class="btn-ghost" disabled=${busy} onClick=${reveal}>
+            ${shown !== null ? "Hide" : "Reveal"}</button>
+          <button class="btn-ghost danger" disabled=${busy} onClick=${del}>Forget</button>`
+      : null}
+  </div>`;
+}
+
 function FactRow({ f, controls, reload, showOwner }) {
   const [busy, setBusy] = useState(false);
 
+  async function review(action) {
+    setBusy(true);
+    const r = await send("review_memory", { fact_id: f.id, action });
+    setBusy(false);
+    if (r.ok) {
+      notify(action === "vault" ? "Moved to the lockbox." : "Released.");
+      await reload();
+    } else notify(r.error || "Review failed.", "err");
+  }
+
   async function del() {
-    if (!window.confirm(`Forget this? “${f.text}” — this can't be undone.`)) return;
+    if (!(await confirmDialog(`Forget this? “${f.text}” — this can't be undone.`, { title: "Forget memory", confirmText: "Forget", danger: true }))) return;
     setBusy(true);
     const res = await send("forget_memory", { fact_id: f.id });
     setBusy(false);
@@ -633,10 +760,17 @@ function FactRow({ f, controls, reload, showOwner }) {
         <div class="mem-text">${f.text}</div>
         <div class="mem-meta micro">
           <span class=${TIER_BADGE[f.tier] || "badge"}>${TIER_LABEL[f.tier] || f.tier}</span>
+          ${f.state === "quarantined"
+            ? html`<span class="badge warn" title="Awaiting classification — owner-only and invisible to models until resolved. Set memory.classifier_model to a local model to resolve these automatically.">held for review</span>`
+            : null}
           ${showOwner ? `${f.owner_name || f.owner} · ` : ""}${ago(f.created)}
           ${f.source && f.source !== "voice" ? ` · via ${f.source}` : ""}
         </div>
       </div>
+      ${controls && f.state === "quarantined"
+        ? html`<button class="btn-ghost" disabled=${busy} onClick=${() => review("release")}>Release</button>
+            <button class="btn-ghost" disabled=${busy} onClick=${() => review("vault")}>To lockbox</button>`
+        : null}
       ${controls
         ? html`<button class="btn-ghost danger" disabled=${busy}
             onClick=${del}>${busy ? "…" : "Forget"}</button>`

@@ -66,7 +66,7 @@ def test_erase_person_endpoint(tmp_path, monkeypatch):
     monkeypatch.setattr(memory, "_store", s)
     client = TestClient(llm_app.app)
     r = client.post("/memory/erase_person", json={"person": "guest"})
-    assert r.status_code == 200 and r.json() == {"erased": 1}
+    assert r.status_code == 200 and r.json() == {"erased": 1, "secrets_erased": 0}
     r = client.post("/memory/erase_person", json={"person": "   "})
     assert r.status_code == 400
 

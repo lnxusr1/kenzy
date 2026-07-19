@@ -179,18 +179,20 @@ kenzy-node` on the device.
 
 Symptom: you upgraded Kenzy, enabled a newer feature (say, the
 [Wyoming listeners](phone.md#kenzys-voice-and-ears-optional-recommended)),
-the config is right — and nothing happens. The service log says a package
-is "not installed" (dashboard → **Logs** → pick the service).
+the config is right — and nothing happens.
 
 Cause: a plain package upgrade brings new *code* but doesn't always bring the
-new *dependencies* a feature needs — the feature then logs the missing
-package and politely skips itself rather than crashing the service.
+new *dependencies* a feature needs — the feature then skips itself rather
+than crashing the service.
 
-Fix: use the service's **Upgrade** button (dashboard → **Services** → the
-service → Upgrade), not just Restart. Upgrade re-resolves the service's full
-dependency set — installing anything new — and restarts it. If the service
-is already on the latest version it's still safe: missing dependencies get
-installed, everything else is left alone.
+Fix: open the service's editor (dashboard → **Services** → the service). Its
+**feature chips** show the state directly — a chip reading *enabled in config
+but NOT INSTALLED* is your culprit, and its **Install** button fills exactly
+the missing dependency (your version pins untouched) and restarts the
+service. System packages pip can't install (like `espeak-ng`) show the
+copy-paste `apt` command instead. If the chips look right and it still
+misbehaves, the service's **Upgrade** button re-resolves the full dependency
+set as the bigger hammer.
 
 ## Starting over
 

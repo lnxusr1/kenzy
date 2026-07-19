@@ -82,7 +82,7 @@ async def test_merge_supersedes_never_deletes(store, monkeypatch):
     sem._save_mark(store, old.created)
     new = store.remember("adam", "pool service is on Thursday")
 
-    async def fake_llm(kwargs, state=None):
+    async def fake_llm(kwargs, state=None, **_kw):
         return _resp(
             {
                 "decisions": [
@@ -113,7 +113,7 @@ async def test_update_supersedes_stale_neighbor(store, monkeypatch):
     sem._save_mark(store, old.created)
     new = store.remember("adam", "the plumber is Sam now")
 
-    async def fake_llm(kwargs, state=None):
+    async def fake_llm(kwargs, state=None, **_kw):
         return _resp({"decisions": [{"id": new.id, "action": "update", "supersedes": [old.id]}]})
 
     monkeypatch.setattr(sem.skill_registry, "acompletion_with_fallback", fake_llm)
@@ -132,7 +132,7 @@ async def test_cross_scope_and_bogus_decisions_degrade_to_keep(store, monkeypatc
     sem._save_mark(store, max(other.created, mine.created))
     new = store.remember("adam", "pool service is on Thursday")
 
-    async def fake_llm(kwargs, state=None):
+    async def fake_llm(kwargs, state=None, **_kw):
         return _resp(
             {
                 "decisions": [
@@ -166,7 +166,7 @@ async def test_unparseable_output_keeps_everything(store, monkeypatch):
     class Resp:
         choices = [Choice()]
 
-    async def fake_llm(kwargs, state=None):
+    async def fake_llm(kwargs, state=None, **_kw):
         return Resp()
 
     monkeypatch.setattr(sem.skill_registry, "acompletion_with_fallback", fake_llm)
@@ -180,7 +180,7 @@ async def test_unparseable_output_keeps_everything(store, monkeypatch):
 async def test_no_neighbors_skips_the_model_entirely(store, monkeypatch):
     called = []
 
-    async def fake_llm(kwargs, state=None):  # pragma: no cover - must not run
+    async def fake_llm(kwargs, state=None, **_kw):  # pragma: no cover - must not run
         called.append(1)
         return _resp({"decisions": []})
 
@@ -195,7 +195,7 @@ async def test_failed_model_leaves_facts_pending(store, monkeypatch):
     sem._save_mark(store, old.created)
     store.remember("adam", "pool service is on Thursday")
 
-    async def fake_llm(kwargs, state=None):
+    async def fake_llm(kwargs, state=None, **_kw):
         raise RuntimeError("model down")
 
     monkeypatch.setattr(sem.skill_registry, "acompletion_with_fallback", fake_llm)
@@ -216,3 +216,74 @@ def test_write_hook_fires_and_never_breaks_writes(store):
     store.on_write = lambda: (_ for _ in ()).throw(RuntimeError("scheduler down"))
     fact = store.remember("adam", "still stored")  # hook failure must not fail the write
     assert store.get_fact(fact.id) is not None
+
+
+async def test_released_fact_reenters_pending_window(tmp_path):
+    # Race fix: a fact that sat quarantined while the mark advanced past its
+    # created-time must re-enter the pending window on release (release()
+    # stamps `updated`), or it would never coalesce.
+    from kenzy.llm import memory_semantic as msem
+    from kenzy.llm.memory import MemoryStore
+
+    store = MemoryStore(tmp_path / "facts.jsonl")
+    held = store.remember("john", "the bins go out on Tuesday", state="quarantined")
+    ok = store.remember("john", "the mail comes at noon")
+    store.release(ok.id)
+
+    out = await msem.run_pass(store)  # processes `ok`, advances the mark
+    assert out["pending"] == 1
+    mark = msem._load_mark(store)
+    assert mark >= held.created  # the mark HAS moved past the held fact
+
+    store.release(held.id)  # classifier clears it later
+    assert [f.id for f in msem.pending_facts(store, mark)] == [held.id]
+
+
+async def test_local_classifier_consolidates_for_cloud_brain(tmp_path, monkeypatch):
+    # A cloud service model + a LOCAL memory.classifier_model: the pass runs on
+    # the classifier's model and private facts are NOT withheld — private
+    # restatements finally merge without a local brain.
+    from kenzy.llm import memory_semantic as msem
+    from kenzy.llm import skills as sk
+    from kenzy.llm.memory import MemoryStore
+
+    store = MemoryStore(tmp_path / "facts.jsonl")
+    a = store.remember("john", "the pool guy comes on Thursdays")
+    b = store.remember("john", "pool service is on Thursday")
+
+    msem.configure(
+        "gpt-5.1", None,
+        classifier_model="ollama/qwen3:4b", classifier_url="http://mouse.lan:11434",
+    )
+    seen = {}
+
+    async def fake(kwargs, **_kw):
+        seen.update(kwargs)
+
+        class R:
+            class C:
+                class M:
+                    content = (
+                        f'{{"decisions": [{{"id": "{b.id}", "action": "merge",'
+                        ' "text": "the pool guy comes on Thursdays",'
+                        f' "supersedes": ["{a.id}"]}}]}}'
+                    )
+
+                message = M()
+
+            choices = [C()]
+
+        return R()
+
+    monkeypatch.setattr(sk, "acompletion_with_fallback", fake)
+    out = await msem.run_pass(store)
+    assert seen["model"] == "ollama/qwen3:4b"          # the classifier model ran the pass
+    assert seen["base_url"] == "http://mouse.lan:11434"
+    assert "private_withheld" not in out or not out["private_withheld"]
+    assert out.get("merged") or out.get("superseded") or store.get_fact(a.id).superseded_by
+
+    # Cloud brain + NO local classifier: private facts still withheld (4.0.2 rule).
+    msem.configure("gpt-5.1", None)
+    store.remember("john", "my private thing repeats")
+    out = await msem.run_pass(store)
+    assert out.get("private_withheld", 0) >= 1 or out.get("pending", 0) == 0

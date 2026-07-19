@@ -24,6 +24,13 @@ from typing import Any
 
 log = logging.getLogger(__name__)
 
+#: Feature-chip signal: did the listener actually start this boot?
+_ACTIVE: dict[str, bool] = {"running": False}
+
+
+def is_active() -> bool:
+    return _ACTIVE["running"]
+
 #: Audio format of every synthesis path in this service (see /speak).
 _RATE, _WIDTH, _CHANNELS = 24000, 2, 1
 #: Bytes per audio-chunk event (~42 ms at 24 kHz mono int16).
@@ -62,6 +69,7 @@ def install_wyoming_tts(
         return
 
     state: dict[str, Any] = {}
+    _ACTIVE["running"] = False
 
     async def _startup() -> None:
         from wyoming.server import AsyncServer
@@ -71,6 +79,7 @@ def install_wyoming_tts(
         state["task"] = asyncio.create_task(
             server.run(_handler_factory(synthesise, voice_name)), name="wyoming-tts"
         )
+        _ACTIVE["running"] = True
         log.info("Wyoming TTS listening on tcp://%s:%d (voice %r)", bind, port, voice_name)
 
     async def _shutdown() -> None:

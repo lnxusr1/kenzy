@@ -1,7 +1,9 @@
 # Memory
 
-Kenzy can remember things — per person. "Hey Kenzy, remember that the gate
-code is 4312" stores a fact; "what's the gate code?" gets it back. Facts
+Kenzy can remember things — per person. "Hey Kenzy, remember that the spare
+key is under the blue pot" stores a fact; "where's the spare key?" gets it
+back. (A *gate code* would take a different path — secret-shaped facts are
+auto-vaulted into the [lockbox](#secrets--the-lockbox) below.) Facts
 belong to the **person** who said them (see
 [Speaker Enrollment](speaker-enrollment.md) — memory is one of the things
 enrolling your voice unlocks), and who can hear a fact back is a deliberate,
@@ -60,10 +62,73 @@ never used to answer anyone else's question, and never *echoed* — if Kenzy
 just told you a private fact, someone else asking seconds later in the same
 room doesn't get it replayed from conversation history.
 
+## Secrets — the lockbox
+
+Some things aren't just private, they're *secrets* — codes, passwords,
+combinations. Those get different mechanics, not just a stricter rule:
+
+```text
+You:    Hey Kenzy, remember this secretly: the safe combo is 33-22-11
+Kenzy:  Locked away — only you can ask me for it.
+
+You:    Hey Kenzy, what's the combo for the safe?
+Kenzy:  Your safe combo is 33-22-11.
+```
+
+A lockbox secret is **encrypted on disk**, **never enters any language
+model**, and is **owner-only forever**: no sharing tier exists for secrets.
+The dashboard shows a 🔒 label and date; the text appears only on an
+explicit **Reveal** click (and hides itself again).
+
+Two honest boundaries, stated plainly:
+
+- **Secrets are never spoken through cloud TTS.** If your speech provider is
+  a cloud service (the default OpenAI voice), asking for a secret gets an
+  honest deflection to the dashboard instead; the value is spoken
+  only when speech is generated on-box (the `kokoro` provider). The
+  dashboard's Reveal always works.
+- **A backup restores your secrets.** The archive carries the lockbox *and*
+  its encryption key by default — a backup's job is to bring everything
+  back. Treat it like a password file, or untick "Include the lockbox key"
+  in Settings for a shareable archive that carries only unreadable
+  ciphertext. (TLS keys always stay out; `.env` API keys stay out
+  unless opted in.)
+
+Under the hood each secret is a **key/value pair** — a non-sensitive key
+("`shed_key_code`") and an encrypted value ("`8642`"). When you ask, in any
+phrasing, the model sees only your keys and answers with a placeholder
+(`[[lockbox:shed_key_code]]`); Kenzy fills in the value *after* the model
+has finished, deterministically and only for the secret's owner. So the
+value never enters a model in either direction — not even the reply that
+speaks it — and someone else asking for your key gets nothing.
+
+Secrets **update in place**: tell Kenzy the door code changed and the old
+value is replaced under the same key — you'll never get two competing door
+codes read back.
+
+You don't have to say "secretly," either: **every new memory is briefly
+quarantined** (owner-only, invisible to models) while a classifier judges it.
+With a **local model** configured (`memory.classifier_model`) the model
+judges **every** write — however a secret is phrased — and pattern matching
+is just a fast lane for the obvious cases; a cloud model is never consulted
+about secrecy. Without a local model you're down to the patterns alone
+(credential words like "password"/"…code" plus a code-shaped value):
+obvious secrets still vault and ambiguous ones are held for review on the
+People page ("held for review" badge, one-click Release / To-lockbox) — but
+a secret phrased outside the patterns will pass as an ordinary private
+memory. That's the honest limit of the degraded mode, and it's the main
+reason the People page nudges you toward a local classifier model.
+
 ## What she remembers on her own
 
-Nothing, in this release. Kenzy only stores what you explicitly ask her to
-remember — there's no ambient transcript-mining. What she *does* keep is
+By default, nothing — Kenzy only stores what you explicitly ask her to
+remember; there's no ambient transcript-mining. That's a per-person choice
+now: each person's page has a **Memory capture** setting — **Explicit** (the
+default just described), **Suggest** (she offers to remember useful facts —
+arrives with a later release), or **Auto** (she remembers durable personal
+facts on her own and always says so; her picks carry an "auto" tag on the
+People page, each one a Forget away, and they pass through the same
+quarantine-and-classify pipeline as everything else). What she *always* keeps is
 short-term conversational context: the last few minutes of back-and-forth in
 a room, plus your own recent exchanges across rooms (so a conversation you
 started in the kitchen still makes sense from the office). Both expire on
@@ -80,15 +145,18 @@ Saying roughly the same thing twice doesn't leave two facts lying around:
 - **Private facts don't ride to a cloud model.** If your language model is a
   cloud provider, private-tier facts are withheld from the model's context
   and from consolidation — they still answer by voice (the instant fast
-  path needs no model), and they consolidate once a local model is
-  configured. Shared and about-them facts, being household-visible by
-  design, still inject. (`memory.private_to_cloud: true` opts out of the
-  protection.)
+  path needs no model). Configure a local `memory.classifier_model` and the
+  merge pass runs on it instead, private facts included — so duplicates
+  coalesce without anything leaving the house. Shared and about-them facts,
+  being household-visible by design, still inject. (`memory.private_to_cloud:
+  true` opts out of the protection.) The People page shows a banner when
+  memory is on with no local model configured.
 - Superseded facts leave recall instantly but stay on disk for 30 days
   (`memory.superseded_keep_days`) before a maintenance sweep removes them —
   so a wrong merge is recoverable.
-- An hourly no-model sweep handles the mechanical rest: exact duplicates,
-  expired facts, old tombstones. Every removal is logged.
+- A no-model sweep handles the mechanical rest — exact duplicates, expired
+  facts, old tombstones — kicked moments after each new fact settles (the
+  hourly run is just a backstop). Every removal is logged.
 
 ## Seeing and managing it — the dashboard
 
@@ -98,8 +166,10 @@ page carries **Household memory** and a search across every fact, and each
 person's **Privacy & data** section covers the bigger hammers:
 
 - **Export their data** — one downloadable file: their person record, voice
-  profile info, and every remembered fact. The "what does Kenzy know about
-  me" answer, in writing.
+  profile info, every remembered fact, and (by default) their lockbox
+  entries — the same access the Reveal button already grants this page.
+  Untick "include lockbox secrets" for a shareable file. The "what does
+  Kenzy know about me" answer, complete and in writing.
 - **Don't remember…** — the per-person opt-out toggle. Kenzy keeps and reads *no*
   facts about them while they stay a fully recognized voice for device
   control and questions. Asking her to remember something gets an honest
@@ -117,7 +187,9 @@ See [Dashboard → People](dashboard.md#people) for the full tour.
 
 The ledger is a plain, human-readable text file —
 `data/memory/facts.jsonl` in the config home on the LLM service's host, one
-fact per line. No database, nothing leaves your machines, and it rides
+fact per line; lockbox secrets live beside it (`lockbox.enc`, encrypted, with
+its key in `lockbox.key` — the key is what makes a default backup sensitive).
+No database, nothing leaves your machines, and it all rides
 [backups](backup-restore.md) automatically. If you're curious, open it in a
 text editor; if a fact ever needs surgery, you can fix it there (the format
 is tolerant of hand edits — restart `kenzy-llm` afterwards).

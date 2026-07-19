@@ -82,6 +82,8 @@ export const SERVICE_HELP = {
     "memory.semantic_interval": "Daily backstop for model-driven consolidation (the real trigger is each write). 0 disables it entirely.",
     "memory.semantic_cooldown": "Min seconds between consolidation model runs — bursts of writes coalesce into one call.",
     "memory.private_to_cloud": "Off (default): private facts never enter a CLOUD model's context or consolidation — they still answer by voice. On: allow them through.",
+    "memory.classifier_model": "Judges new memories for secrets (release / vault / split). Blank = the service model; a CLOUD model is never consulted — set a local one to resolve ambiguity automatically.",
+    "memory.classifier_url": "The classifier model's endpoint (Ollama etc.), when set.",
     "skills.web_search.provider": "duckduckgo (keyless) or searxng (self-hosted, private).",
     "skills.web_search.max_results": "Results returned per search.",
     "skills.web_search.timeout": "Search request timeout (seconds).",

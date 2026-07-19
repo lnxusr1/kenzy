@@ -40,9 +40,9 @@ def _mock_pipeline(srv, monkeypatch, *, response: str, expect: bool) -> None:
         return "alice", 0.9  # (name, confidence) — identity core (F1)
 
     async def llm(text, room, sid, speaker, node_id=None, identity=None):  # noqa: ANN001, ANN202
-        return (response, "vp", [], False, expect)
+        return (response, "vp", [], False, expect, False, [])
 
-    async def tts(*a):  # noqa: ANN002, ANN202
+    async def tts(*a, **k):  # noqa: ANN002, ANN003, ANN202
         return True
 
     monkeypatch.setattr(srv, "_call_stt", stt)

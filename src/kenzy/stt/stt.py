@@ -33,6 +33,7 @@ from kenzy.fastapi_auth import (
     install_logs_endpoint,
     install_restart_endpoint,
     install_service_auth,
+    install_unit_endpoint,
     install_upgrade_endpoint,
 )
 from kenzy.logutil import quiet_health_access_log
@@ -92,7 +93,11 @@ async def health() -> dict[str, object]:
 async def transcribe(req: TranscribeRequest) -> TranscribeResponse:
     pcm = base64.b64decode(req.audio_b64)
     text = await transcribe_pcm(pcm)
-    log.info("[%s] %s", req.room_id or "?", text or "(no speech detected)")
+    from kenzy import redact
+
+    log.info(
+        "[%s] %s", req.room_id or "?", redact.loggable(text) if text else "(no speech detected)"
+    )
     return TranscribeResponse(text=text)
 
 
@@ -207,6 +212,33 @@ def main() -> None:
     )
     install_restart_endpoint(app)
     install_upgrade_endpoint(app, "stt")
+    install_unit_endpoint(app, "kenzy-stt.service")
+
+    from kenzy.fastapi_auth import install_features_endpoint, install_fill_endpoint
+    from kenzy.features import feature, probe_import
+    from kenzy.stt import wyoming_server as _wy
+
+    def _features() -> list[dict[str, Any]]:
+        wcfg = cfg.get("wyoming") or {}
+        return [
+            feature(
+                "wyoming",
+                configured=bool(wcfg.get("enabled", False)),
+                available=probe_import("wyoming"),
+                active=_wy.is_active(),
+                note="Home Assistant voice pipelines transcribe through Kenzy's STT.",
+            ),
+            feature(
+                "whisper-fallback",
+                configured=_provider == "openai" and _openai_fallback,
+                available=probe_import("faster_whisper"),
+                active=_whisper is not None,
+                note="Local transcription when the cloud provider fails.",
+            ),
+        ]
+
+    install_features_endpoint(app, _features)
+    install_fill_endpoint(app, "stt")
 
     _provider = str(cfg.get("provider", "whisper")).lower()
     _wcfg = dict(cfg.get("whisper", {}) or {})

@@ -53,7 +53,7 @@ export function subscribeSchedules(fn) {
 }
 
 // Send a mutation over the WS and resolve with the server's {ok,error} ack.
-export function send(type, payload = {}) {
+export function send(type, payload = {}, timeoutMs = 6000) {
   return new Promise((resolve) => {
     if (!_ws || _ws.readyState !== WebSocket.OPEN) {
       resolve({ ok: false, error: "not connected — is the live channel up?" });
@@ -67,7 +67,7 @@ export function send(type, payload = {}) {
         _pending.delete(id);
         resolve({ ok: false, error: "timed out" });
       }
-    }, 6000);
+    }, timeoutMs);
   });
 }
 

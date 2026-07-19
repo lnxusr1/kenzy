@@ -451,3 +451,44 @@ async def test_consolidation_job_summary(tmp_path):
         assert len(s) == 1
     finally:
         memory._store = None
+
+
+def test_quarantine_lifecycle(tmp_path):
+    # 4.1: a write born quarantined is owner-only regardless of tier, invisible
+    # to consolidation, and release() clears it (optionally retiering).
+    s = MemoryStore(tmp_path / "facts.jsonl")
+    f = s.remember("john", "everyone should know the gate code", tier=memory.TIER_SHARED,
+                   state="quarantined")  # fmt: skip
+    assert f.state == "quarantined"
+    assert f.visible_to("john") and not f.visible_to("nicki")  # shared-but-quarantined
+    assert s.quarantined() and s.quarantined()[0].id == f.id
+    # Rides the file tolerantly.
+    again = MemoryStore(tmp_path / "facts.jsonl")
+    assert again.quarantined()[0].state == "quarantined"
+    # Release (with retier) restores normal tier semantics.
+    rel = again.release(f.id, tier=memory.TIER_SHARED)
+    assert rel is not None and rel.state == "released"
+    assert again.get_fact(f.id).visible_to("nicki")
+    # Pre-4.1 records (no state field) read as released.
+    import json
+    rec = json.loads((tmp_path / "facts.jsonl").read_text().splitlines()[0])
+    rec.pop("state", None)
+    rec["id"] = "legacy1"
+    with open(tmp_path / "facts.jsonl", "a") as fh:
+        fh.write(json.dumps(rec) + "\n")
+    assert MemoryStore(tmp_path / "facts.jsonl").get_fact("legacy1").state == "released"
+
+
+def test_dedupe_never_competes_with_quarantined(tmp_path):
+    # An identical quarantined twin must not win dedupe over the RELEASED
+    # fact — the survivor would be invisible to everyone but its owner.
+    from kenzy.llm.memory import MemoryStore
+
+    store = MemoryStore(tmp_path / "facts.jsonl")
+    released = store.remember("john", "the pool guy comes on Thursdays")
+    store.release(released.id)
+    twin = store.remember("john", "The pool guy comes on Thursdays!", state="quarantined")
+    out = store.consolidate()
+    assert out["deduped"] == 0
+    assert store.get_fact(released.id) is not None
+    assert store.get_fact(twin.id).state == "quarantined"

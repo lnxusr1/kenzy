@@ -95,9 +95,10 @@ her volume, then yield the floor to you mid-sentence.
   that show up on everyone's phone
 - *"Set a timer for 10 minutes"* · *"Wake me at 7"* · *"Remind me to call Mom
   at 8"*
-- *"Remember that the gate code is 4312"* · *"What do you know about the gate
-  code?"* — per-person [memory](memory.md) with real privacy: your private
-  facts are only ever spoken back to *you*
+- *"Remember that the spare key is under the blue pot"* · *"What do you know
+  about the spare key?"* — per-person [memory](memory.md) with real privacy:
+  your private facts are only ever spoken back to *you* (and a spoken *code*
+  or *password* is auto-vaulted into the encrypted lockbox)
 - *"Tell everyone dinner's ready"* — spoken in every room at once
 - *"Call the living room"* — a live two-way [intercom](skills/builtin.md#intercom)
   (the other side has to say "yes")

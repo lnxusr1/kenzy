@@ -42,7 +42,7 @@ from websockets.asyncio.server import ServerConnection
 from websockets.datastructures import Headers
 from websockets.http11 import Request, Response
 
-from kenzy import calibration, kenzy_version, protocol, serviceauth, tlsutil
+from kenzy import calibration, kenzy_version, protocol, redact, serviceauth, tlsutil
 from kenzy.config import SERVICES
 from kenzy.server.people import (
     UNSET,
@@ -328,6 +328,8 @@ class NodeSession:
 # ---------------------------------------------------------------------------
 # Server
 # ---------------------------------------------------------------------------
+
+
 
 
 class AudioServer:
@@ -691,6 +693,12 @@ class AudioServer:
         person = self._people.get(identity.person_id)
         return bool(person and person.memory_opt_out)
 
+    def _person_memory_capture(self, identity: Identity | None) -> str:
+        if identity is None or not identity.person_id:
+            return "explicit"
+        person = self._people.get(identity.person_id)
+        return person.memory_capture if person else "explicit"
+
     def assist_seen(self) -> bool:
         """True once any /assist request has ever reached this server (F3)."""
         return self._assist_seen
@@ -716,6 +724,7 @@ class AudioServer:
                 "ha_user": p.ha_user,
                 "phone": p.phone,
                 "memory_opt_out": p.memory_opt_out,
+                "memory_capture": p.memory_capture,
             }
             for p in self._people.all()
         ]
@@ -727,6 +736,7 @@ class AudioServer:
         voiceprints: list[str],
         ha_user: str | None = UNSET,
         memory_opt_out: bool | None = None,
+        memory_capture: str | None = None,
     ) -> str:
         """Create/update a person and persist ``data/people.yaml``. Returns the id
         (generated from the name for a new record). ``ha_user`` (the HA person
@@ -739,6 +749,7 @@ class AudioServer:
             voiceprints=voiceprints,
             ha_user=ha_user,
             memory_opt_out=memory_opt_out,
+            memory_capture=memory_capture,
         )
         log.info("Saved person %r (%d voiceprint(s))", person.id, len(person.voiceprints))
         return person.id
@@ -1680,7 +1691,11 @@ class AudioServer:
         """Observe schedule-set changes (add/cancel/fire). Base server: no-op."""
 
     async def create_backup_archive(
-        self, *, include_secrets: bool = False, include_models: bool = False
+        self,
+        *,
+        include_secrets: bool = False,
+        include_models: bool = False,
+        include_lockbox_key: bool = True,
     ) -> bytes:
         """Config-home backup archive (the dashboard download). The base server
         packs the local tree; ``TranscribingServer`` also merges the backend
@@ -1689,7 +1704,10 @@ class AudioServer:
         from kenzy.config import kenzy_data_root
 
         return create_backup(
-            kenzy_data_root(), include_secrets=include_secrets, include_models=include_models
+            kenzy_data_root(),
+            include_secrets=include_secrets,
+            include_models=include_models,
+            include_lockbox_key=include_lockbox_key,
         )
 
     def set_env_secret(self, name: str, value: str) -> None:
@@ -2100,7 +2118,7 @@ class TranscribingServer(AudioServer):
             log.info(
                 "[%s] STT: %s | speaker: %s (%s, %.2f)",
                 node_id,
-                text or "(none)",
+                redact.loggable(text) if text else "(none)",
                 speaker,
                 identity.tier,
                 identity.confidence,
@@ -2130,11 +2148,18 @@ class TranscribingServer(AudioServer):
 
             if self._llm_url:
                 _t = time.monotonic()
-                response_text, voice_prompt, actions, fast, expect_response = await self._call_llm(
-                    text, room_name, session_id, speaker, node_id=node_id, identity=identity
+                response_text, voice_prompt, actions, fast, expect_response, secret, spans = (
+                    await self._call_llm(
+                        text, room_name, session_id, speaker, node_id=node_id, identity=identity
+                    )
                 )
                 llm_ms = (time.monotonic() - _t) * 1000.0
-                log.info("[%s] LLM%s: %s", node_id, " (fast)" if fast else "", response_text)
+                log.info(
+                    "[%s] LLM%s: %s",
+                    node_id,
+                    " (fast)" if fast else "",
+                    "[lockbox exchange — response withheld]" if secret else response_text,
+                )
                 log.debug("[%s] voice_prompt: %s", node_id, voice_prompt)
 
                 # Multi-turn: if the reply deliberately holds the floor, arm the node to
@@ -2148,7 +2173,8 @@ class TranscribingServer(AudioServer):
 
                 _t = time.monotonic()
                 spoke_ok = await self._run_tts(
-                    node_id, room_name, session_id, response_text, voice_prompt
+                    node_id, room_name, session_id, response_text, voice_prompt,
+                    sensitive=secret,
                 )
                 tts_ms = (time.monotonic() - _t) * 1000.0
                 if not spoke_ok:
@@ -2172,9 +2198,14 @@ class TranscribingServer(AudioServer):
                             "node_id": node_id,
                             "room": room_name,
                             "speaker": speaker,
-                            "transcript": text,
-                            "response": response_text,
+                            # A lockbox exchange never lands in the Activity ring:
+                            # the transcript may carry the secret (store) and the
+                            # response may speak it (recall). The timing row stays.
+                            "transcript": "[lockbox exchange]" if secret else text,
+                            "response": "[content withheld]" if secret else response_text,
                             "fast": fast,
+                            # Names + durations only — safe even on secret exchanges.
+                            "spans": spans,
                             "stt_ms": round(stt_ms),
                             "speaker_ms": round(spk_ms),
                             "llm_ms": round(llm_ms),
@@ -2288,7 +2319,7 @@ class TranscribingServer(AudioServer):
         # guests chatting concurrently never see each other's context.
         lane = f"assist:{identity.person_id or 'guest:' + (ha_user or 'anon')}"
         try:
-            reply, _vp, actions, fast, _expect = await self._call_llm(
+            reply, _vp, actions, fast, _expect, _secret, _spans = await self._call_llm(
                 text, lane, None, speaker=identity.display, identity=identity, channel="assist"
             )
         except Exception as exc:
@@ -2353,6 +2384,32 @@ class TranscribingServer(AudioServer):
             resp.raise_for_status()
         return str(resp.json()["text"])
 
+    async def _tts_is_local(self) -> bool:
+        """Whether kenzy-tts reports a local provider (``/health`` → ``local``).
+        Cached ~15s (short: a stale True would speak a secret through a just-
+        switched cloud provider); anything short of an explicit true is False."""
+        import time as _time
+
+        now = _time.monotonic()
+        cached = getattr(self, "_tts_local_cache", None)
+        if cached and now - cached[0] < 15:
+            return bool(cached[1])
+        local = False
+        if self._tts_url:
+            import httpx  # type: ignore[import-untyped]
+
+            try:
+                base = self._tts_url.rsplit("/", 1)[0]
+                async with httpx.AsyncClient(
+                    timeout=3.0, verify=tlsutil.httpx_verify()
+                ) as client:
+                    r = await client.get(f"{base}/health")
+                    local = bool(r.json().get("local", False))
+            except Exception:
+                local = False
+        self._tts_local_cache = (now, local)
+        return local
+
     async def _call_llm(
         self,
         text: str,
@@ -2362,7 +2419,7 @@ class TranscribingServer(AudioServer):
         node_id: str | None = None,
         identity: Identity | None = None,
         channel: str = "voice",
-    ) -> tuple[str, str, list[dict[str, Any]], bool, bool]:
+    ) -> tuple[str, str, list[dict[str, Any]], bool, bool, bool, list[dict[str, Any]]]:
         import httpx  # type: ignore[import-untyped]
 
         payload = {
@@ -2378,6 +2435,7 @@ class TranscribingServer(AudioServer):
             # F7.4 "don't remember me": the person's opt-out rides every request
             # so the LLM service keeps no ledger (context, writes, reads) on them.
             "memory_opt_out": self._person_memory_opt_out(identity),
+            "memory_capture": self._person_memory_capture(identity),
             # Connected room names so the model can target real rooms (announce/intercom).
             "rooms": sorted({s.room_id for s in self._nodes.values()}),
             # The asking node's active timers/alarms/reminders, so the schedule
@@ -2390,6 +2448,10 @@ class TranscribingServer(AudioServer):
             "no_aec_rooms": self._no_aec_rooms(),
             # Which front door (F3): node-bound skills refuse on nodeless channels.
             "channel": channel,
+            # Lockbox spoken-recall gate (founder decision 2026-07-18): a secret
+            # is only SPOKEN when the TTS provider keeps audio on-box. Fail-closed:
+            # unknown/unreachable/nodeless-channel all read as not-local.
+            "tts_local": (channel == "voice") and await self._tts_is_local(),
         }
         async with httpx.AsyncClient(verify=tlsutil.httpx_verify()) as client:
             resp = await client.post(
@@ -2407,6 +2469,10 @@ class TranscribingServer(AudioServer):
             actions,
             bool(data.get("fast", False)),
             bool(data.get("expect_response", False)),
+            # Lockbox content shaped this exchange: redact logs + the Activity record.
+            bool(data.get("secret", False)),
+            # LLM-internal timing breakdown (model/tool/fast spans) for Activity.
+            list(data.get("spans") or []),
         )
 
     async def _dispatch_actions(
@@ -2556,7 +2622,11 @@ class TranscribingServer(AudioServer):
         self._scheduler.add_listener(cb)
 
     async def create_backup_archive(
-        self, *, include_secrets: bool = False, include_models: bool = False
+        self,
+        *,
+        include_secrets: bool = False,
+        include_models: bool = False,
+        include_lockbox_key: bool = True,
     ) -> bytes:
         """One complete archive even on a multi-host deployment: the local tree
         plus the stateful services' slices (speaker embeddings; the LLM host's
@@ -2592,6 +2662,7 @@ class TranscribingServer(AudioServer):
             notes={"service_slices": notes},
             include_secrets=include_secrets,
             include_models=include_models,
+            include_lockbox_key=include_lockbox_key,
         )
 
     async def _fetch_backup_slice(self, base_url: str) -> dict[str, bytes]:
@@ -2714,8 +2785,10 @@ class TranscribingServer(AudioServer):
             log.warning("[%s] scheduled command %r fired but no LLM is configured", room, command)
             return
         try:
-            response_text, voice_prompt, actions, _fast, _expect = await self._call_llm(
-                command, room, str(uuid.uuid4()), speaker or None, node_id=node_id
+            response_text, voice_prompt, actions, _fast, _expect, _secret, _spans = (
+                await self._call_llm(
+                    command, room, str(uuid.uuid4()), speaker or None, node_id=node_id
+                )
             )
             if response_text:
                 await self._run_tts(node_id, room, str(uuid.uuid4()), response_text, voice_prompt)
@@ -3571,7 +3644,14 @@ class TranscribingServer(AudioServer):
         self._notify_state()
 
     async def _run_tts(
-        self, node_id: str, room_name: str, session_id: str | None, text: str, voice_prompt: str
+        self,
+        node_id: str,
+        room_name: str,
+        session_id: str | None,
+        text: str,
+        voice_prompt: str,
+        *,
+        sensitive: bool = False,
     ) -> bool:
         """Synthesize + stream a reply. Returns False when synthesis/streaming
         *failed* (so the caller can play the error cue); a deliberately TTS-less
@@ -3587,7 +3667,13 @@ class TranscribingServer(AudioServer):
             async with httpx.AsyncClient(verify=tlsutil.httpx_verify()) as client:
                 resp = await client.post(
                     self._tts_url,
-                    json={"text": text, "voice_prompt": voice_prompt, "room_id": room_name},
+                    json={
+                        "text": text,
+                        "voice_prompt": voice_prompt,
+                        "room_id": room_name,
+                        # Lockbox replies: the TTS service withholds its speak log.
+                        "sensitive": sensitive,
+                    },
                     timeout=self._tts_timeout,
                     headers=self._service_headers("POST", self._tts_url),
                 )

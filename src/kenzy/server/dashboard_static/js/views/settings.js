@@ -1,4 +1,5 @@
 import { html, useState, useEffect } from "../html.js";
+import { confirmDialog } from "../dialog.js";
 import { groupBySections, SERVER_SECTIONS } from "../schema.js";
 import { getSettings } from "../api.js";
 import { send, notify, subscribeUpgrades, useFleet } from "../store.js";
@@ -109,7 +110,7 @@ function ServerSettings() {
       notify("No changes to save.");
       return;
     }
-    if (!window.confirm("Save and restart the server now? The dashboard will briefly disconnect."))
+    if (!(await confirmDialog("Save and restart the server now? The dashboard will briefly disconnect.", { title: "Save & restart", confirmText: "Save & restart" })))
       return;
     setBusy(true);
     const res = await send("set_server_config", { config: patch });
@@ -121,7 +122,7 @@ function ServerSettings() {
   }
 
   async function restartOnly() {
-    if (!window.confirm("Restart the server now? The dashboard will briefly disconnect."))
+    if (!(await confirmDialog("Restart the server now? The dashboard will briefly disconnect.", { title: "Restart server", confirmText: "Restart" })))
       return;
     const res = await send("restart_server", {});
     notify(
@@ -220,11 +221,12 @@ function UpdateCheck() {
 
   async function upgrade() {
     if (
-      !window.confirm(
+      !(await confirmDialog(
         `Upgrade the server to ${u.latest} and restart it? The dashboard will disconnect ` +
           `while it installs (a few minutes) and reconnect when it's back. Your dependency ` +
           `pins (constraints.txt) are honored.`,
-      )
+        { title: "Upgrade server", confirmText: "Upgrade" },
+      ))
     )
       return;
     setBusy(true);
@@ -240,12 +242,13 @@ function UpdateCheck() {
 
   async function upgradeAll() {
     if (
-      !window.confirm(
+      !(await confirmDialog(
         `Upgrade every backend service and node${u.latest ? ` to ${u.latest}` : ""}? They run ` +
           `one at a time (services first, then nodes) with a running log below. Anything ` +
           `already holding the new version is simply restarted. Run this AFTER upgrading ` +
           `the server.`,
-      )
+        { title: "Upgrade everything", confirmText: "Upgrade all" },
+      ))
     )
       return;
     setLog([]);
@@ -384,7 +387,9 @@ function ChangePassword({ username, onChanged }) {
 function BackupPanel() {
   const [secrets, setSecrets] = useState(false);
   const [full, setFull] = useState(false);
-  const qs = [secrets ? "secrets=1" : "", full ? "full=1" : ""].filter(Boolean).join("&");
+  const [lbKey, setLbKey] = useState(true);
+  const qs = [secrets ? "secrets=1" : "", full ? "full=1" : "", lbKey ? "" : "lockbox_key=0"]
+    .filter(Boolean).join("&");
   return html`
     <p class="micro">
       Download the deployment's state — node/service settings, rooms, Home Assistant
@@ -402,6 +407,11 @@ function BackupPanel() {
       ${" "}Include everything (adds <span class="mono">models/</span> — larger file;
       normally re-downloaded by <span class="mono">kenzy-setup</span>, but captures any
       hand-placed custom model on the server)
+    </label>
+    <label class="micro" style="display:block">
+      <input type="checkbox" checked=${lbKey} onChange=${(e) => setLbKey(e.target.checked)} />
+      ${" "}Include the lockbox key — the archive can then <b>restore (and decrypt) stored
+      secrets</b>; untick for a shareable archive that carries lockbox ciphertext only
     </label>
     <p><a class="btn" href=${"/api/backup" + (qs ? "?" + qs : "")} download>Download backup</a></p>
     <${RestorePanel} />

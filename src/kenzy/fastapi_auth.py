@@ -12,6 +12,7 @@ import os
 import sys
 from collections.abc import Awaitable, Callable
 from pathlib import Path
+from typing import Any
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
@@ -129,6 +130,69 @@ def install_backup_endpoint(app: FastAPI, items_fn: Callable[[], list[tuple[Path
         )
 
     app.add_api_route("/backup", backup, methods=["GET"])
+
+
+def install_features_endpoint(app: FastAPI, report_fn: Callable[[], list[dict[str, Any]]]) -> None:
+    """``GET /features`` — the service's optional-feature states for the
+    dashboard's chips: [{name, configured, available, active, install, note}].
+    Token-protected by the service-auth middleware like every route."""
+
+    async def features() -> dict[str, object]:
+        return {"features": report_fn()}
+
+    app.add_api_route("/features", features, methods=["GET"])
+
+
+def install_fill_endpoint(app: FastAPI, extra: str) -> None:
+    """``POST /install_deps`` — the feature chips' Install action: fill missing
+    dependencies for this service's extra (never moves versions), then re-exec
+    so newly-available features start."""
+    from kenzy.upgrade import run_pip_fill
+
+    async def install_deps() -> dict[str, object]:
+        ok, output = await run_pip_fill(extra)
+        if ok:
+
+            async def _exec() -> None:
+                await asyncio.sleep(0.3)
+                log.warning("Dependencies filled — re-executing service")
+                os.execv(sys.executable, [sys.executable, *sys.argv])
+
+            asyncio.create_task(_exec())
+        return {"ok": ok, "output": output}
+
+    app.add_api_route("/install_deps", install_deps, methods=["POST"])
+
+
+def install_unit_endpoint(app: FastAPI, unit: str) -> None:
+    """``GET /unit`` (systemd --user state) and ``POST /unit`` with
+    ``{"action": "disable"}`` — a service may STOP ITSELF via systemd so
+    Restart= policies don't resurrect it. Enabling a stopped service can't
+    arrive here (nothing is listening) — the server handles co-located
+    enables; remote stopped units are the operator's (documented)."""
+    from kenzy.unitctl import disable_unit, unit_state
+
+    async def get_unit() -> dict[str, object]:
+        return {"unit": unit, **unit_state(unit)}
+
+    class UnitAction(BaseModel):
+        action: str
+
+    async def post_unit(body: UnitAction) -> dict[str, object]:
+        if body.action != "disable":
+            return {"ok": False, "error": "only 'disable' is supported here"}
+
+        async def _later() -> None:
+            await asyncio.sleep(0.5)  # let the response flush first
+            ok, out = await asyncio.to_thread(disable_unit, unit)
+            if not ok:
+                log.error("Self-disable failed: %s", out)
+
+        asyncio.create_task(_later())
+        return {"ok": True}
+
+    app.add_api_route("/unit", get_unit, methods=["GET"])
+    app.add_api_route("/unit", post_unit, methods=["POST"])
 
 
 def install_upgrade_endpoint(app: FastAPI, extra: str) -> None:

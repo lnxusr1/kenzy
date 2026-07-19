@@ -66,6 +66,10 @@ class Person:
     #: F7.4 "don't remember me": memory refuses writes AND reads for this
     #: person — still a recognized voice (device control, Q&A), no ledger.
     memory_opt_out: bool = False
+    #: 4.1 capture mode: explicit (default — only "remember…" signals) |
+    #: suggest (model asks first; real in 4.2 on ask()) | auto (model stores
+    #: proactively, always says so in the reply).
+    memory_capture: str = "explicit"
     settings: dict[str, Any] = field(default_factory=dict)
 
 
@@ -126,6 +130,11 @@ class PeopleStore:
                 ha_user=(str(rec["ha_user"]).strip() or None) if rec.get("ha_user") else None,
                 phone=(str(rec["phone"]).strip() or None) if rec.get("phone") else None,
                 memory_opt_out=bool(rec.get("memory_opt_out", False)),
+                memory_capture=(
+                    str(rec.get("memory_capture"))
+                    if rec.get("memory_capture") in ("explicit", "suggest", "auto")
+                    else "explicit"
+                ),
                 settings=rec["settings"] if isinstance(rec.get("settings"), dict) else {},
             )
             self._people[person.id] = person
@@ -204,6 +213,7 @@ class PeopleStore:
         voiceprints: list[str],
         ha_user: str | None = _UNSET,
         memory_opt_out: bool | None = None,
+        memory_capture: str | None = None,
     ) -> Person:
         """Create (blank/unknown ``id``) or update a person. A voiceprint assigned
         here is removed from any *other* person, so a voice belongs to exactly one
@@ -235,6 +245,8 @@ class PeopleStore:
             person.ha_user = str(ha_user).strip() or None if ha_user else None
         if memory_opt_out is not None:  # None ⇒ preserve
             person.memory_opt_out = bool(memory_opt_out)
+        if memory_capture in ("explicit", "suggest", "auto"):  # None/invalid ⇒ preserve
+            person.memory_capture = memory_capture
         self._reindex()
         self._write()
         return person
@@ -282,6 +294,8 @@ class PeopleStore:
                 rec["phone"] = p.phone
             if p.memory_opt_out:
                 rec["memory_opt_out"] = True
+            if p.memory_capture != "explicit":
+                rec["memory_capture"] = p.memory_capture
             if p.settings:
                 rec["settings"] = p.settings
             out[p.id] = rec

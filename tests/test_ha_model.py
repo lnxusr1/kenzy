@@ -334,7 +334,8 @@ def test_merge_unplaced_appends_only_name_first_domains():
 def test_kenzy_own_entities_are_never_voice_targets():
     raw = [
         {"entity_id": "switch.kenzy_office_mute", "name": "Kenzy Office Mute", "area": "Office"},
-        {"entity_id": "button.kenzy_office_trigger", "name": "Kenzy Office Trigger", "area": "Office"},
+        {"entity_id": "button.kenzy_office_trigger", "name": "Kenzy Office Trigger",
+         "area": "Office"},
         {"entity_id": "light.office_lamp", "name": "Office Lamp", "area": "Office"},
     ]
     model = ha_model.build_model(raw, {})

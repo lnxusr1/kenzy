@@ -52,8 +52,9 @@ _private_touch: contextvars.ContextVar[bool] = contextvars.ContextVar("kenzy_mem
 
 
 def begin_touch() -> None:
-    """Reset the marker for a new request (called next to begin_request)."""
+    """Reset the markers for a new request (called next to begin_request)."""
     _private_touch.set(False)
+    _lockbox_touch.set(False)
 
 
 def mark_private_touch() -> None:
@@ -67,6 +68,29 @@ def mark_private_touch() -> None:
 def private_touched() -> bool:
     try:
         return _private_touch.get()
+    except LookupError:
+        return False
+
+
+_lockbox_touch: contextvars.ContextVar[bool] = contextvars.ContextVar("kenzy_memory_lockbox")
+
+
+def mark_lockbox_touch() -> None:
+    """Record that LOCKBOX content shaped this request — the utterance or the
+    reply carries a secret in the clear. Unlike private-tier facts (which ride
+    history/short-term with a viewer tag), lockbox content must never be
+    STORED into any model-feeding buffer at all: /process skips history and
+    short-term for the whole exchange, and the server redacts its logs and
+    the Activity record."""
+    try:
+        _lockbox_touch.set(True)
+    except LookupError:
+        pass
+
+
+def lockbox_touched() -> bool:
+    try:
+        return _lockbox_touch.get()
     except LookupError:
         return False
 
@@ -129,13 +153,19 @@ class Fact:
     confidence: float = 1.0
     expires: float | None = None  # decay policy lives in the schema now, logic in F2.7
     superseded_by: str | None = None
+    #: 4.1 quarantine: a fresh write is born "quarantined" — owner-only and
+    #: invisible to every model — until the release job clears it. Absent in
+    #: pre-4.1 ledgers ⇒ "released" (tolerant read).
+    state: str = "released"
     v: int = _RECORD_V
 
     def visible_to(self, asker: str) -> bool:
-        """The tier ACL. Empty asker ⇒ nothing (fail closed)."""
+        """The tier ACL. Empty asker ⇒ nothing (fail closed). A quarantined
+        fact is owner-only REGARDLESS of tier — the race window between write
+        and classification over-protects, never leaks."""
         if not asker:
             return False
-        if self.tier == TIER_PRIVATE:
+        if self.state == "quarantined" or self.tier == TIER_PRIVATE:
             return self.owner == asker
         return self.tier in (TIER_PERSONAL, TIER_SHARED)
 
@@ -219,6 +249,7 @@ class MemoryStore:
             confidence=float(rec.get("confidence", 1.0)),
             expires=float(expires) if expires is not None else None,
             superseded_by=str(superseded) if superseded else None,
+            state="quarantined" if rec.get("state") == "quarantined" else "released",
         )
 
     def _append(self, fact: Fact) -> None:
@@ -245,6 +276,7 @@ class MemoryStore:
         tier: str = TIER_PRIVATE,
         source: str = "voice",
         confidence: float = 1.0,
+        state: str = "released",
     ) -> Fact:
         owner = owner.strip()
         text = " ".join(text.split())
@@ -264,6 +296,7 @@ class MemoryStore:
             created=now,
             updated=now,
             confidence=confidence,
+            state="quarantined" if state == "quarantined" else "released",
         )
         self._facts[fact.id] = fact
         self._append(fact)
@@ -386,6 +419,12 @@ class MemoryStore:
                 # survivor would silently void the retention window (or worse,
                 # keep the tombstone and delete the live fact).
                 continue
+            if f.state == "quarantined":
+                # Unclassified facts don't compete either: an identical
+                # quarantined twin winning dedupe would delete the RELEASED
+                # fact and leave only an owner-locked survivor. The classifier
+                # resolves the twin; the next sweep dedupes cleanly.
+                continue
             key = (f.owner, f.tier, _squash(f.text))
             best = newest.get(key)
             if best is None:
@@ -430,6 +469,28 @@ class MemoryStore:
             self._rewrite()
         log.info("Memory: erased %d fact(s) for %s (revoke-all)", len(doomed), person_id)
         return len(doomed)
+
+    def release(self, fact_id: str, *, tier: str | None = None) -> Fact | None:
+        """Clear quarantine (the release job / classifier). Optionally retier
+        in the same step — the classifier's personal-public assignment."""
+        fact = self._facts.get(fact_id)
+        if fact is None or fact.state != "quarantined":
+            return None
+        fact.state = "released"
+        if tier in TIERS:
+            fact.tier = tier
+        fact.updated = time.time()
+        self._rewrite()
+        log.info("Memory: released %s (tier=%s)", fact_id, fact.tier)
+        return fact
+
+    def quarantined(self) -> list[Fact]:
+        """Facts awaiting release, oldest first (the release job's queue)."""
+        now = time.time()
+        return sorted(
+            (f for f in self._facts.values() if f.state == "quarantined" and f.live(now)),
+            key=lambda f: f.created,
+        )
 
     def export(self, person_id: str) -> list[Fact]:
         """Everything owned BY a person (any tier) — the F7.4 "what does Kenzy
