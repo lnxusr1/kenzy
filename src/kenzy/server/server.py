@@ -2148,7 +2148,7 @@ class TranscribingServer(AudioServer):
 
             if self._llm_url:
                 _t = time.monotonic()
-                response_text, voice_prompt, actions, fast, expect_response, secret = (
+                response_text, voice_prompt, actions, fast, expect_response, secret, spans = (
                     await self._call_llm(
                         text, room_name, session_id, speaker, node_id=node_id, identity=identity
                     )
@@ -2204,6 +2204,8 @@ class TranscribingServer(AudioServer):
                             "transcript": "[lockbox exchange]" if secret else text,
                             "response": "[content withheld]" if secret else response_text,
                             "fast": fast,
+                            # Names + durations only — safe even on secret exchanges.
+                            "spans": spans,
                             "stt_ms": round(stt_ms),
                             "speaker_ms": round(spk_ms),
                             "llm_ms": round(llm_ms),
@@ -2317,7 +2319,7 @@ class TranscribingServer(AudioServer):
         # guests chatting concurrently never see each other's context.
         lane = f"assist:{identity.person_id or 'guest:' + (ha_user or 'anon')}"
         try:
-            reply, _vp, actions, fast, _expect, _secret = await self._call_llm(
+            reply, _vp, actions, fast, _expect, _secret, _spans = await self._call_llm(
                 text, lane, None, speaker=identity.display, identity=identity, channel="assist"
             )
         except Exception as exc:
@@ -2417,7 +2419,7 @@ class TranscribingServer(AudioServer):
         node_id: str | None = None,
         identity: Identity | None = None,
         channel: str = "voice",
-    ) -> tuple[str, str, list[dict[str, Any]], bool, bool, bool]:
+    ) -> tuple[str, str, list[dict[str, Any]], bool, bool, bool, list[dict[str, Any]]]:
         import httpx  # type: ignore[import-untyped]
 
         payload = {
@@ -2469,6 +2471,8 @@ class TranscribingServer(AudioServer):
             bool(data.get("expect_response", False)),
             # Lockbox content shaped this exchange: redact logs + the Activity record.
             bool(data.get("secret", False)),
+            # LLM-internal timing breakdown (model/tool/fast spans) for Activity.
+            list(data.get("spans") or []),
         )
 
     async def _dispatch_actions(
@@ -2781,8 +2785,10 @@ class TranscribingServer(AudioServer):
             log.warning("[%s] scheduled command %r fired but no LLM is configured", room, command)
             return
         try:
-            response_text, voice_prompt, actions, _fast, _expect, _secret = await self._call_llm(
-                command, room, str(uuid.uuid4()), speaker or None, node_id=node_id
+            response_text, voice_prompt, actions, _fast, _expect, _secret, _spans = (
+                await self._call_llm(
+                    command, room, str(uuid.uuid4()), speaker or None, node_id=node_id
+                )
             )
             if response_text:
                 await self._run_tts(node_id, room, str(uuid.uuid4()), response_text, voice_prompt)

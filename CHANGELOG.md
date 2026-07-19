@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## [4.1.0] - 2026-07-19
 
 ### Added
 
@@ -15,6 +15,7 @@ All notable changes to this project will be documented in this file.
 - **Memory capture is now a per-person choice.** Each person's page gained a capture mode: **Explicit** (the default — Kenzy only remembers what you ask, the promise unchanged), **Suggest** (she'll offer to remember useful facts — arrives with a later release), or **Auto** (she remembers durable personal facts on her own and always says so; her picks carry an "auto" tag, each one a Forget away, and they pass through the same quarantine pipeline as everything else).
 - **Feature chips — the dashboard now tells you what's actually installed.** Each service's editor shows its optional features with honest states: active, available-but-not-enabled, or *enabled in config but NOT INSTALLED* — the state that used to be one log line (the Wyoming lesson). The **Install** button fills the missing dependency without moving any versions (your constraints honored) and restarts the service; system packages pip can't install show the copy-paste apt command instead of a fake button.
 - **Services can be disabled (and enabled) from the dashboard.** Per-user systemd installs get a Disable button that stops a service *and* keeps it stopped (`systemctl --user disable --now` — restart policies can't resurrect it), plus Enable for services on the server's host. A stopped service on another host has nothing listening, so the page shows the one-liner to run there instead of pretending.
+- **The Activity tab shows where the LLM's time actually went.** The latency waterfall's LLM segment is now subdivided into model calls vs tool calls vs service overhead, and clicking a row expands the ordered call list — each model call (named, so a fallback rescue is visible), each tool by name with its duration, and for fast-path rows, which intent handled it. Names and durations only; never call arguments or content, so secret exchanges keep their timings.
 - **"What do you know about me?" now answers properly** — a spoken summary of what Kenzy holds for you (memories and lockbox count, with the most recent), and "what does the house know?" summarizes household-shared memory. Honest empties included.
 
 ### Fixed

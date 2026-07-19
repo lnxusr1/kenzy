@@ -560,8 +560,13 @@ button { font: inherit; cursor: pointer; }
 .leg-scale { margin-left: auto; color: var(--text-faint); font-style: italic; }
 .tg { height: 100%; min-width: 1px; }
 .tg.cap { background: var(--text-faint); }
-.tg.llm { background: var(--accent); }
+.tg.llm { background: var(--accent); opacity: .45; }
+.tg.llm-model { background: var(--accent); }
+.tg.llm-tool { background: color-mix(in srgb, var(--accent) 55%, var(--led-up)); }
 .tg.tts { background: var(--led-up); }
+.sess.has-spans { cursor: pointer; }
+.sess-spans { display: flex; flex-wrap: wrap; gap: var(--s2) var(--s4); margin-top: var(--s2); color: var(--text-dim); text-transform: none; letter-spacing: normal; }
+.sess-spans b { color: var(--text); font-weight: 600; }
 
 /* ---- Skill registry ---- */
 .badge.off { color: var(--text-faint); border-color: var(--border); }

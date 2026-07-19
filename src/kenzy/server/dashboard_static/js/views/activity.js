@@ -16,8 +16,41 @@ function timeline(s, scaleMs) {
       ? html`<span class=${"tg " + cls} style=${`width:${Math.min(100, (v / scaleMs) * 100).toFixed(1)}%`}
           title=${`${label}: ${Math.round(v)}ms`}></span>`
       : null;
+  // With per-span detail from the LLM service, the LLM segment is subdivided:
+  // model calls vs tool calls (in order), the remainder rendered as the plain
+  // LLM shade (service overhead). Same shared scale, so sub-widths are real.
+  const spans = Array.isArray(s.spans) ? s.spans.filter((x) => x && x.ms > 0) : [];
+  const spanSum = spans.reduce((a, x) => a + x.ms, 0);
+  const llmSegs = spans.length
+    ? html`${spans.map((x) =>
+        seg(
+          x.ms,
+          x.kind === "model" ? "llm-model" : x.kind === "tool" ? "llm-tool" : "llm",
+          `${x.kind}${x.name ? " " + x.name : ""}`,
+        ),
+      )}${seg(Math.max(0, (s.llm_ms || 0) - spanSum), "llm", "LLM overhead")}`
+    : seg(s.llm_ms, "llm", "LLM");
   return html`<div class="timeline">
-    ${seg(cap, "cap", "capture (STT + speaker)")}${seg(s.llm_ms, "llm", "LLM")}${seg(s.tts_ms, "tts", "TTS")}
+    ${seg(cap, "cap", "capture (STT + speaker)")}${llmSegs}${seg(s.tts_ms, "tts", "TTS")}
+  </div>`;
+}
+
+// The expanded per-row breakdown: ordered spans with names, plus overhead.
+function spanDetail(s) {
+  const spans = Array.isArray(s.spans) ? s.spans : [];
+  if (!spans.length) return null;
+  const spanSum = spans.reduce((a, x) => a + (x.ms || 0), 0);
+  const over = Math.max(0, (s.llm_ms || 0) - spanSum);
+  const icon = { fast: "⚡", model: "◆", tool: "⚒" };
+  return html`<div class="sess-spans micro">
+    ${spans.map(
+      (x, i) => html`<span class="sess-span" key=${i}>
+        ${icon[x.kind] || "·"} ${x.name || x.kind} <b>${ms(x.ms)}</b>
+      </span>`,
+    )}
+    ${over > 0 && spans[0] && spans[0].kind !== "fast"
+      ? html`<span class="sess-span">· overhead <b>${ms(over)}</b></span>`
+      : null}
   </div>`;
 }
 
@@ -31,6 +64,7 @@ function niceCeil(v) {
 
 export function ActivityView() {
   const [sessions, setSessions] = useState(null);
+  const [open, setOpen] = useState(null); // expanded row index (span breakdown)
 
   useEffect(() => {
     fetch("/api/sessions")
@@ -64,14 +98,17 @@ export function ActivityView() {
       <header><h2>Recent activity</h2><span class="rule"></span></header>
       <div class="leg">
         <span><span class="tg cap"></span> capture</span>
-        <span><span class="tg llm"></span> LLM</span>
+        <span><span class="tg llm-model"></span> model</span>
+        <span><span class="tg llm-tool"></span> tools</span>
+        <span><span class="tg llm"></span> LLM other</span>
         <span><span class="tg tts"></span> TTS</span>
         <span class="leg-scale">to scale · full width = ${ms(scaleMs)}</span>
       </div>
       <div class="sessions">
         ${sessions.map(
           (s, i) => html`
-            <div class="sess" key=${i}>
+            <div class=${"sess" + (s.spans && s.spans.length ? " has-spans" : "")} key=${i}
+              onClick=${() => setOpen(open === i ? null : i)}>
               <div class="sess-head">
                 <span class=${"badge" + (s.fast ? " fast" : "")}>${s.fast ? "fast" : "LLM"}</span>
                 <span class="sess-room mono">${s.room}</span>
@@ -85,6 +122,7 @@ export function ActivityView() {
               <div class="sess-line you">“${s.transcript}”</div>
               <div class="sess-line reply">${s.response}</div>
               ${timeline(s, scaleMs)}
+              ${open === i ? spanDetail(s) : null}
             </div>
           `,
         )}

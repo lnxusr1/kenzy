@@ -73,7 +73,7 @@ async def test_tts_failure_plays_cue(srv, monkeypatch):
         return "unknown", 0.0
 
     async def llm(text, room, sid, speaker=None, node_id=None, identity=None):
-        return ("Hi there.", "vp", [], False, False, False)
+        return ("Hi there.", "vp", [], False, False, False, [])
 
     async def tts_fail(*a, **k):
         return False  # synthesis/streaming failed
@@ -94,7 +94,7 @@ async def test_success_plays_no_cue(srv, monkeypatch):
         return "unknown", 0.0
 
     async def llm(text, room, sid, speaker=None, node_id=None, identity=None):
-        return ("Hi there.", "vp", [], False, False, False)
+        return ("Hi there.", "vp", [], False, False, False, [])
 
     async def tts_ok(*a, **k):
         return True

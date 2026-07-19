@@ -213,6 +213,11 @@ def set_fallback(model: str | None, base_url: str | None) -> None:
         _FALLBACK["base_url"] = str(base_url) if base_url else None
 
 
+def fallback_model() -> str:
+    """The configured fallback model string (Activity span naming)."""
+    return str(_FALLBACK.get("model") or "")
+
+
 async def acompletion_with_fallback(
     kwargs: dict[str, Any], state: dict[str, Any] | None = None, *, local_only: bool = False
 ) -> Any:
@@ -400,6 +405,9 @@ class FastResult:
     text: str = ""
     voice_prompt: str | None = None  # None → caller substitutes its default
     expect_response: bool = False
+    # Which matcher handled it — set by dispatch_fast for the Activity
+    # breakdown (never set by the matcher itself).
+    name: str = ""
 
     @classmethod
     def handled(
@@ -479,6 +487,7 @@ async def dispatch_fast(
         if result.is_handled:
             log.info("Fast intent %r handled: %s", name, result.text[:80])
             _COUNTS[name] = _COUNTS.get(name, 0) + 1
+            result.name = name
             return result
     return None
 

@@ -107,6 +107,10 @@ class ProcessResponse(BaseModel):
     # True when lockbox content shaped this exchange (secret stored/spoken/erased):
     # the server must redact its logs and the Activity record for this turn.
     secret: bool = False
+    # Timing breakdown inside this service for the Activity tab: ordered
+    # [{kind: "fast"|"model"|"tool", name, ms}] — names and durations ONLY,
+    # never arguments or content (safe even on secret exchanges).
+    spans: list[dict[str, Any]] = []
 
 
 # ---------------------------------------------------------------------------
@@ -716,8 +720,12 @@ async def process(req: ProcessRequest) -> ProcessResponse:
         return req.person_id if (req.person_id and memory.private_touched()) else None
 
     # Deterministic fast path: try local/instant matchers before the LLM.
+    _t0 = time.monotonic()
     fast = await skill_registry.dispatch_fast(req.text, req.room_id, raw_speaker)
     if fast is not None:
+        fast_span = [
+            {"kind": "fast", "name": fast.name, "ms": round((time.monotonic() - _t0) * 1000)}
+        ]
         vp = fast.voice_prompt or _voice_prompt
         if memory.lockbox_touched():
             # The utterance or the reply carries a secret in the clear. History
@@ -737,10 +745,17 @@ async def process(req: ProcessRequest) -> ProcessResponse:
             actions=skill_registry.take_actions(),
             fast=True,
             secret=memory.lockbox_touched(),
+            spans=fast_span,
         )
 
+    spans: list[dict[str, Any]] = []
     text, voice_prompt, expect_response = await _run_llm(
-        req.text, raw_speaker, req.room_id, available_rooms=req.rooms, schedules=req.schedules
+        req.text,
+        raw_speaker,
+        req.room_id,
+        available_rooms=req.rooms,
+        schedules=req.schedules,
+        spans=spans,
     )
     if not req.memory_opt_out:
         # Deliberately BEFORE substitution: short-term context (a future model
@@ -759,6 +774,7 @@ async def process(req: ProcessRequest) -> ProcessResponse:
         actions=skill_registry.take_actions(),
         fast=False,
         secret=bool(secret_hits) or memory.lockbox_touched(),
+        spans=spans,
     )
 
 
@@ -860,6 +876,7 @@ async def _run_llm(
     room_id: str | None,
     available_rooms: list[str] | None = None,
     schedules: list[dict[str, Any]] | None = None,
+    spans: list[dict[str, Any]] | None = None,
 ) -> tuple[str, str, bool]:
     # Per-request fallback state: once the primary model fails, the whole tool
     # loop stays on the configured local fallback (see skills.set_fallback).
@@ -927,7 +944,20 @@ async def _run_llm(
         kwargs["tool_choice"] = "auto"
 
     for iteration in range(_max_tool_iterations):
+        _t = time.monotonic()
         response = await skill_registry.acompletion_with_fallback(kwargs, fb_state)
+        if spans is not None:
+            # The name records which model ACTUALLY answered — once the primary
+            # fails, fb_state pins the loop to the fallback and the spans show it.
+            spans.append(
+                {
+                    "kind": "model",
+                    "name": str(
+                        skill_registry.fallback_model() if fb_state.get("fallback") else _model
+                    ),
+                    "ms": round((time.monotonic() - _t) * 1000),
+                }
+            )
         message = response.choices[0].message
 
         # Serialise the assistant turn back into the message list.
@@ -966,7 +996,16 @@ async def _run_llm(
                 args = json.loads(tc.function.arguments or "{}")
             except json.JSONDecodeError:
                 args = {}
+            _t = time.monotonic()
             result = await skill_registry.execute(tc.function.name, args)
+            if spans is not None:
+                spans.append(
+                    {
+                        "kind": "tool",
+                        "name": tc.function.name,
+                        "ms": round((time.monotonic() - _t) * 1000),
+                    }
+                )
             log.debug("  %s(%s) → %s", tc.function.name, args, result[:120])
             messages.append(
                 {

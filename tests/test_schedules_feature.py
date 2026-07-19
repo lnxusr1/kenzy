@@ -362,7 +362,8 @@ async def test_dispatch_stores_speaker_and_command_replays_it(tmp_path, monkeypa
     async def fake_llm(text, room, sid, speaker=None, node_id=None):
         llm_calls.append((text, room, speaker, node_id))
         return (
-            "The lights are on.", "vp", [{"type": "set_volume", "level": 10}], True, False, False
+            "The lights are on.", "vp", [{"type": "set_volume", "level": 10}], True, False,
+            False, []
         )
 
     async def fake_tts(node_id, room, sid, text, vp):

@@ -331,7 +331,12 @@ time went. Each entry shows:
 - a **fast / LLM** tag — whether the deterministic fast path handled it or it went to the
   language model;
 - a **latency breakdown** (capture = STT + speaker ID in parallel, then LLM, then TTS)
-  and the total response time.
+  and the total response time. The LLM segment is subdivided — **model calls vs tool
+  calls** vs service overhead — and clicking a row expands the ordered call list with
+  per-call timings and names ("model gpt-5.1 1.8s · ⚒ home_assistant 0.4s · model
+  0.9s"), which model actually answered (you can see a fallback rescue), and for
+  fast-path rows, which intent handled it. Names and durations only — never call
+  arguments or content.
 
 The header summarises the **fast-path hit rate** and **average response time** across the
 recent window. It's a bounded in-memory ring (no disk, ~200 entries) that updates live;
