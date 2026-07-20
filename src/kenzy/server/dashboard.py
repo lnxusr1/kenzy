@@ -732,6 +732,9 @@ class Dashboard:
                     # Audio devices the node reported (for the device picker); empty
                     # when offline or not yet probed.
                     "devices": (session.capabilities.get("devices") or []) if session else [],
+                    # The node's systemd --user unit state (None = unknown/offline
+                    # or pre-4.2.1 node) — gates the Disable control.
+                    "unit": session.capabilities.get("unit") if session else None,
                 },
             )
 
@@ -746,6 +749,15 @@ class Dashboard:
 
         if path == "/api/server/config":
             return self._json(200, self._server_config_state())
+
+        if path == "/api/server/features":
+            return self._json(200, {"features": self._server_features()})
+
+        if path == "/api/server/unit":
+            from kenzy.unitctl import unit_state
+
+            state = await asyncio.to_thread(unit_state, "kenzy-server.service")
+            return self._json(200, {"unit": "kenzy-server.service", **state})
 
         if path == "/api/skills":
             return self._json(200, await self._skills_state())
@@ -927,6 +939,42 @@ class Dashboard:
         targets = {**self._service_urls, **self._server.announced_health_urls()}
         url = targets.get(name)
         return url[: -len("/health")] if url else None
+
+    def _server_features(self) -> list[dict[str, Any]]:
+        """The SERVER process's optional extras, chip-shaped like the backend
+        services' GET /features (4.1) — computed locally, no HTTP hop. Each
+        carries its pip ``extra`` so one Install button per chip works."""
+        from kenzy.features import feature, probe_import
+
+        mqtt_cfg = (self._cfg.get("integrations") or {}).get("mqtt") or {}
+        mqtt_on = bool(mqtt_cfg.get("enabled", False))
+        has_aiomqtt = probe_import("aiomqtt")
+        has_av = probe_import("av")
+        return [
+            {
+                **feature(
+                    "mqtt",
+                    configured=mqtt_on,
+                    available=has_aiomqtt,
+                    active=mqtt_on and has_aiomqtt,
+                    note="Home Assistant MQTT bridge (entities, commands, chimes) — aiomqtt",
+                ),
+                "extra": "mqtt",
+            },
+            {
+                **feature(
+                    "sound",
+                    configured=has_av,
+                    available=has_av,
+                    active=has_av,
+                    note=(
+                        "MP3/OGG/FLAC decode for chimes, alerts and lead-in tones — "
+                        "PyAV; WAV always works"
+                    ),
+                ),
+                "extra": "sound",
+            },
+        ]
 
     async def _service_features(self, name: str) -> dict[str, Any]:
         """Proxy a service's GET /features (the 4.1 chips). Unreachable ⇒
@@ -2003,6 +2051,51 @@ class Dashboard:
             # the WS drops and the SPA reconnects to the restored server.
             log.warning("Restore applied (%d files) — restarting server", len(restored))
             asyncio.get_running_loop().call_later(0.8, self._server.restart_server)
+        elif mtype == "install_server_deps":
+            if not self._dcfg.controls:
+                return await ack(False, "controls are disabled (set dashboard.controls: true)")
+            extra = str(msg.get("extra", "")).strip()
+            if extra not in ("mqtt", "sound"):
+                return await ack(False, "unknown server extra")
+            from kenzy.upgrade import run_pip_fill
+
+            ok, output = await run_pip_fill(extra)
+            if not ok:
+                return await ack(False, (output or "pip failed").splitlines()[-1][:200])
+            await ack(True)
+            # Restart so the newly-available import is actually loaded (mirrors
+            # the services' post-fill self-re-exec).
+            log.warning("Server extra '%s' installed — restarting server", extra)
+            asyncio.get_running_loop().call_later(0.8, self._server.restart_server)
+        elif mtype == "disable_server":
+            # Stop the WHOLE server (dashboard included) and keep it stopped —
+            # systemd --user installs only. There is deliberately no enable
+            # twin: a disabled server has no dashboard, so coming back is the
+            # operator's one-liner on the host (shown in the UI beforehand).
+            if not self._dcfg.controls:
+                return await ack(False, "controls are disabled (set dashboard.controls: true)")
+            from kenzy.unitctl import disable_unit, unit_state
+
+            state = await asyncio.to_thread(unit_state, "kenzy-server.service")
+            if not (state.get("systemd") and state.get("exists")):
+                return await ack(
+                    False,
+                    "not a systemd --user install — stop the server process directly instead",
+                )
+            await ack(True)
+            log.warning(
+                "Dashboard requested server DISABLE — stopping; re-enable with "
+                "`systemctl --user enable --now kenzy-server.service` on this host"
+            )
+
+            def _disable() -> None:
+                ok, out = disable_unit("kenzy-server.service")
+                if not ok:  # still alive to say so
+                    log.error("Self-disable failed: %s", out)
+
+            asyncio.get_running_loop().call_later(
+                0.8, lambda: asyncio.get_running_loop().run_in_executor(None, _disable)
+            )
         elif mtype == "restart_server":
             # Standalone restart — previously only reachable as a side effect of
             # saving a config change (founder-reported UX gap).
@@ -2038,6 +2131,11 @@ class Dashboard:
             version = (str(msg.get("version") or "")).strip() or None
             await ack(True)
             asyncio.create_task(self._do_upgrade_all(connection, version))
+        elif mtype == "disable_node":
+            if not self._dcfg.controls:
+                return await ack(False, "controls are disabled (set dashboard.controls: true)")
+            ok = await self._server.disable_node(str(msg.get("node", "")))
+            await ack(ok, None if ok else "node not connected")
         elif mtype == "upgrade_node":
             if not self._dcfg.controls:
                 return await ack(False, "controls are disabled (set dashboard.controls: true)")

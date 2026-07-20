@@ -124,3 +124,72 @@ def test_health_reports_provider_and_model(monkeypatch):
     assert body["provider"] == "whisper"
     assert body["model"] == "tiny"
     assert body["language"] == "en"
+
+
+async def test_gpu_inference_failure_rescues_to_cpu(monkeypatch):
+    """CUDA models build fine and then die on the FIRST transcribe when cuDNN
+    is missing — the field failure mode (mouse, 4.2.0: every request 500'd).
+    One loud rescue onto the CPU, latched, and health reports the fallback."""
+    import asyncio
+
+    from kenzy.stt import stt
+
+    monkeypatch.setattr(stt, "_wcfg", {"model": "small", "device": "cuda", "compute_type": "int8"})
+    monkeypatch.setattr(stt, "_sem", asyncio.Semaphore(1))
+    monkeypatch.setattr(stt, "_gpu_failed", False)
+
+    class _GpuModel:
+        def transcribe(self, audio, **kw):
+            raise RuntimeError("Library libcudnn_ops not found")
+
+    class _CpuModel:
+        def transcribe(self, audio, **kw):
+            class _Seg:
+                text = "hello"
+
+            return [_Seg()], None
+
+    loads = []
+
+    def fake_load(device=None):
+        loads.append(device)
+        return _CpuModel()
+
+    monkeypatch.setattr(stt, "_whisper", _GpuModel())
+    monkeypatch.setattr(stt, "_load_whisper", fake_load)
+
+    loop = asyncio.get_running_loop()
+    text = await stt._local_transcribe(b"\x00\x00" * 1600, loop)
+    assert text == "hello"
+    assert loads == ["cpu"]  # rebuilt explicitly on CPU
+    assert stt._gpu_failed is True
+
+    # Latched: a later failure on the CPU model raises instead of looping.
+    monkeypatch.setattr(stt, "_whisper", _GpuModel())
+    import pytest as _pytest
+
+    with _pytest.raises(RuntimeError):
+        await stt._local_transcribe(b"\x00\x00" * 1600, loop)
+
+
+async def test_cpu_failure_logs_and_raises(monkeypatch, caplog):
+    import asyncio
+    import logging
+
+    from kenzy.stt import stt
+
+    monkeypatch.setattr(stt, "_wcfg", {"device": "cpu"})
+    monkeypatch.setattr(stt, "_sem", asyncio.Semaphore(1))
+    monkeypatch.setattr(stt, "_gpu_failed", False)
+
+    class _Bad:
+        def transcribe(self, audio, **kw):
+            raise RuntimeError("boom")
+
+    monkeypatch.setattr(stt, "_whisper", _Bad())
+    with caplog.at_level(logging.ERROR, logger="kenzy.stt.stt"):
+        import pytest as _pytest
+
+        with _pytest.raises(RuntimeError):
+            await stt._local_transcribe(b"\x00\x00" * 1600, asyncio.get_running_loop())
+    assert any("Transcription failed" in r.message for r in caplog.records)

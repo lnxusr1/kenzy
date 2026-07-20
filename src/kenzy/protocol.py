@@ -25,6 +25,7 @@ MSG_ACK = "ack"
 MSG_TTS_START = "tts_start"
 MSG_TTS_END = "tts_end"
 MSG_RESTART = "restart"
+MSG_DISABLE = "disable"
 MSG_UPGRADE = "upgrade"
 MSG_SET_ROOM = "set_room"
 MSG_REQUEST_LOGS = "request_logs"
@@ -129,6 +130,12 @@ def stop() -> str:
 
 def restart() -> str:
     return json.dumps({"type": MSG_RESTART})
+
+
+def disable() -> str:
+    """Server → node: self-disable the node's systemd --user unit (stop AND
+    stay stopped). Ignored with a log on non-systemd nodes."""
+    return json.dumps({"type": MSG_DISABLE})
 
 
 def upgrade(version: str | None = None) -> str:

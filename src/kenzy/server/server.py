@@ -1668,6 +1668,23 @@ class AudioServer:
             log.warning("restart_node: %s send failed: %s", node_id, exc)
             return False
 
+    async def disable_node(self, node_id: str) -> bool:
+        """Tell a connected node to self-disable its systemd unit (stop and
+        stay stopped). Re-enable is the operator's one-liner on the node host —
+        a disabled node has no connection to command."""
+        async with self._lock:
+            session = self._nodes.get(node_id)
+        if session is None:
+            log.warning("disable_node: %s is not connected", node_id)
+            return False
+        try:
+            await session.ws.send(protocol.disable())
+            log.warning("[%s] disable sent — node will stop until re-enabled on its host", node_id)
+            return True
+        except websockets.exceptions.ConnectionClosed as exc:
+            log.warning("disable_node: %s send failed: %s", node_id, exc)
+            return False
+
     async def upgrade_node(self, node_id: str, version: str | None = None) -> bool:
         """Ask a connected node to pip-upgrade kenzy[node] and re-exec. Fire-and-watch:
         the node reconnects with its new version on success (visible in the fleet view)."""

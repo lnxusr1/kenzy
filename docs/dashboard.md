@@ -92,9 +92,13 @@ Open a node's **Configure** page to:
   Restart button. Options with a fixed set of values (log levels, on/off, etc.) are
   dropdown choosers; numeric fields are number inputs.
 - **Control the node** — **Trigger** (start a session), **Stop**, **Restart** (the
-  node re-execs itself, with or without systemd), or **Upgrade** (the node pip-upgrades
+  node re-execs itself, with or without systemd), **Upgrade** (the node pip-upgrades
   `kenzy[node]`, honoring `constraints.txt`, and reconnects on the new version — watch the
-  version on its fleet card to confirm).
+  version on its fleet card to confirm), or **Disable node** (systemd installs only —
+  the node shuts its own unit off and *stays* off; the room goes quiet until you run
+  `systemctl --user enable --now kenzy-node.service` on the node's host, which the
+  confirmation shows first). Nodes report their unit state on connect, so Disable only
+  appears where it actually works.
 
 Secrets (API keys) are never served to a node and never editable here.
 
@@ -371,6 +375,23 @@ The **Settings** page shows system info (Kenzy version, server and dashboard bin
 discovery), an **update check**, a **backup download**, the **node join token**, and lets
 you **change the dashboard password** and edit a **scoped subset of the server's own
 configuration**.
+
+The **System** card also shows the server's own **optional extras** as feature
+chips — `mqtt` (the [MQTT bridge](integrations/home-assistant.md)) and `sound`
+(MP3/OGG/FLAC decode for chimes and alerts) — with the same states as the
+service editors' chips, including the honest *enabled in config — NOT
+INSTALLED*. **Install** fills the dependency into the server's venv (your
+`constraints.txt` honored, nothing upgraded) and restarts the server to load
+it. Needs `dashboard.controls`.
+
+The **Controls** section mirrors the one on each service page: **Restart server**
+(re-execs in place; the dashboard reconnects in a few seconds) and, on systemd
+installs, **Disable server** — stops the whole stack and *keeps* it stopped
+(restart policies can't resurrect it). Disabling takes the dashboard down with it,
+so the confirmation shows the recovery command first:
+`systemctl --user enable --now kenzy-server.service` on the server host. A dev
+checkout (no systemd unit) says so instead of showing a dead button. Both need
+`dashboard.controls`.
 
 The **Backup** section downloads a `.tar.gz` of the deployment's state — node/service
 settings, voice profiles (fetched from the speaker host when remote), HA curation,

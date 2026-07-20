@@ -619,6 +619,9 @@ class NodeClient:
 
         # Asyncio queue for inbound control messages from the server.
         self._cmd_q: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+        # systemd --user unit state, probed once at startup (run()) and reported
+        # in hello capabilities so the dashboard knows whether Disable applies.
+        self._unit_info: dict[str, Any] | None = None
 
         # Queue for inbound TTS binary frames from the server.
         # No maxsize — dropping frames causes truncated playback for long responses.
@@ -1512,6 +1515,20 @@ class NodeClient:
                 log.warning("Server requested restart — re-executing node")
                 os.execv(sys.executable, [sys.executable, *sys.argv])
 
+            elif mtype == protocol.MSG_DISABLE:
+                # Self-disable via systemd (disable --now) so Restart= can't
+                # resurrect us — the same mechanic services use. systemd then
+                # stops this process; the normal signal path shuts us down.
+                from kenzy.unitctl import disable_unit
+
+                log.warning(
+                    "Server requested DISABLE — stopping; re-enable with "
+                    "`systemctl --user enable --now kenzy-node.service` on this host"
+                )
+                ok, out = await asyncio.to_thread(disable_unit, "kenzy-node.service")
+                if not ok:
+                    log.error("Self-disable failed (not a systemd install?): %s", out)
+
             elif mtype == protocol.MSG_UPGRADE:
                 # pip-upgrade kenzy[node] (honoring constraints + the version pin), then
                 # re-exec to load the new code. On failure we stay on the old version.
@@ -2046,6 +2063,7 @@ class NodeClient:
             "capture_sample_rate": self._capture_rate,
             "playback_sample_rate": self._playback_rate,
             "devices": self._device_capabilities(),
+            "unit": self._unit_info,
         }
         # 3.12: prove possession of the join token by signature — the raw token
         # no longer rides the hello. (Requires a >=3.12 server; managed upgrades
@@ -2144,6 +2162,11 @@ class NodeClient:
         # delay shutdown by the full discovery timeout).
         loop = asyncio.get_running_loop()
         main_task = asyncio.current_task()
+
+        if self._unit_info is None:
+            from kenzy.unitctl import unit_state
+
+            self._unit_info = await asyncio.to_thread(unit_state, "kenzy-node.service")
 
         def _request_stop() -> None:
             log.info("Shutdown signal received — stopping node")

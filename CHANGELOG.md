@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [4.2.1]
+
+### Added
+
+- **The Settings page grew a Controls section — and the server itself can now be disabled from the dashboard.** Restart moved out of the config editor into a Controls card matching every service page, joined by **Disable server** on systemd installs: `disable --now` for the whole stack — every room goes quiet and the dashboard goes with it, which is exactly why the typed confirmation shows you the recovery one-liner (`systemctl --user enable --now kenzy-server.service` on the server host) before you pull the plug. Dev checkouts say honestly that enable/disable doesn't apply instead of showing a dead button.
+- **The server's own optional extras got feature chips — the last extras without an Install button.** The Settings → System card now shows `mqtt` (the HA MQTT bridge) and `sound` (MP3/OGG/FLAC decode) with the same honest states as the service chips — including *enabled in config but NOT INSTALLED* — and a one-click Install that fills the dependency (constraints honored, no version moves) and restarts the server. With these two, every optional pip extra in the stack is installable from the dashboard.
+- **Nodes can be disabled from the dashboard too.** Each node's Controls row gains **Disable node** (next to Restart) when the node runs as a systemd unit: the server sends a new `disable` protocol message and the node shuts its own unit off (`disable --now` — restart policies can't resurrect it), going quiet until you run `systemctl --user enable --now kenzy-node.service` on its host — which the confirmation tells you before you click. Nodes report their unit state in `hello`, so the button only appears where it actually works; services already had Disable/Enable since 4.1, so with the server added, every part of the stack can now be switched off from one place.
+
+### Fixed
+
+- **Settings page: the "Restart server" button no longer stretches to full width.** The ghost-button base style flexes to fill its row (it was designed for the sidebar), and the Settings actions row only pinned the primary button's width — the restart button now sizes to its label and wears the same red danger styling as every other Restart button.
+
 ## [4.2.0]
 
 ### Added
@@ -28,6 +40,7 @@ All notable changes to this project will be documented in this file.
 
 - **A pre-release adversarial review of the ask() plumbing closed four gaps** (none shipped in a release): a server-side action queued *before* a skill's first question could be dispatched twice (once with the question, again with the final answer); an action queued *between* questions — enrollment's link-voice-to-person step — was only delivered at the very end, so walking away mid-enrollment could leave a voiceprint with no person record (actions now ship with the very next spoken turn, so the link lands the moment the first sample is stored); the ten-minute backstop that clears forgotten questions now fully unwinds the paused skill instead of leaving it adrift; and the internal enrollment trigger is no longer reachable as typed text through the HA Assist channel.
 - **A long enrollment can't be cut off by the dialog turn limit anymore.** Ask-driven conversations (enrollment's five prompts plus retries) now have their own generous ceiling instead of sharing `dialog.max_turns` with ordinary back-and-forth chat, which capped the flow at six exchanges — "floor not held" mid-enrollment.
+- **A GPU-broken STT no longer fails every request forever — and it tells you.** Field find (4.2.0): setting `whisper.device: cuda` without the CUDA/cuDNN libraries starts cleanly (the model builds without touching the GPU kernels) and then 500s on *every* transcription — with nothing in the dashboard log viewer, because the exception died inside the web layer. Now a local transcription failure is logged where you can see it, and a GPU inference failure **rescues once onto the CPU** and keeps serving (loudly — the log says what to fix, `/health` reports `device_fallback: true`, and the GPU is never silently retried). The root cause was an upgrade hazard: `ctranslate2` (under `faster-whisper`) moved its requirement from cuDNN 8 to cuDNN 9 at 4.5, so upgrading Kenzy could silently break a working GPU setup. The easy repair is now built in too: Kenzy **preloads pip-installed NVIDIA runtimes** — `pip install nvidia-cublas-cu12 nvidia-cudnn-cu12` into the venv is the whole fix, no `LD_LIBRARY_PATH`, no unit edits (see the new GPU section in the STT docs).
 - **A flood of memory-change pokes can't stampede the dashboard.** The People page's live-update push is coalesced server-side (1s) as well as at the source, so the token-optional `/notify` hook can't be used to fan out per-request broadcasts to every open browser.
 
 ## [4.1.0]
