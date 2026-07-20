@@ -227,3 +227,12 @@ async def test_model_outage_holds_instead_of_releasing(tmp_path, monkeypatch):
     out = await mc.classify_pending(store)
     assert out["held"] == 1
     assert store.get_fact(f.id).state == "quarantined"
+
+
+def test_keep_alive_only_rides_ollama():
+    mc.configure("gpt-5.1", None, classifier_model="ollama/qwen3:4b",
+                 classifier_url="http://mouse:11434", keep_alive="-1")  # fmt: skip
+    assert mc.ollama_keep_alive_kwargs("ollama/qwen3:4b") == {"keep_alive": "-1"}
+    assert mc.ollama_keep_alive_kwargs("gpt-5.1") == {}
+    mc.configure("gpt-5.1", None)  # unset ⇒ never sent
+    assert mc.ollama_keep_alive_kwargs("ollama/qwen3:4b") == {}

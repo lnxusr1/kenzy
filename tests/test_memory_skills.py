@@ -177,3 +177,55 @@ async def test_inspection_summaries(store):
     store.remember("adam", "everyone should know the bins go out Tuesday", tier=memory.TIER_SHARED)
     res = await ms.fast_memory("What do you know about the house?", None, "Adam")
     assert res.is_handled and "1 memory" in res.text and "bins" in res.text
+
+
+async def test_offer_to_remember_suggest_flow(tmp_path):
+    # Suggest capture (4.2): the model offers, the USER decides by voice.
+    # (No `store` fixture: its settle-wrapper would release the quarantine we
+    # assert on — init the raw store directly.)
+    from kenzy.llm import asking
+
+    memory.init_store(tmp_path / "facts.jsonl")
+    try:
+
+        async def run(answers):
+            reg.begin_actions()
+            reg.begin_request({"person_id": "john", "speaker_tier": "recognized",
+                               "channel": "voice"})  # fmt: skip
+            outcome = await asking.run_askable(
+                ms.offer_to_remember("your dentist is Dr. Marsh"), kind="llm"
+            )
+            prompts = []
+            while not outcome.finished:
+                prompts.append(outcome.parked.channel.prompt)
+                if answers is None:
+                    await asking.cancel(outcome.parked.id)
+                    return None, prompts
+                outcome = await asking.resume(outcome.parked.id, answers.pop(0))
+            return outcome.value, prompts
+
+        out, prompts = await run(["yes please"])
+        assert out == "Remembered."
+        assert "Want me to remember that your dentist is Dr. Marsh?" in prompts[0]
+        facts = memory.store().quarantined()
+        assert facts and facts[0].source == "suggested"  # provenance + quarantine
+
+        out, _ = await run(["no"])
+        assert out == "Okay, I won't remember it."
+        out, _ = await run(None)  # wake cancel
+        assert out is None
+        assert len(memory.store().quarantined()) == 1  # still just the one
+    finally:
+        memory._store = None
+
+
+async def test_offer_to_remember_refuses_off_voice(tmp_path):
+    memory.init_store(tmp_path / "facts.jsonl")
+    try:
+        reg.begin_actions()
+        reg.begin_request({"person_id": "john", "speaker_tier": "recognized",
+                           "channel": "assist"})  # fmt: skip
+        out = await ms.offer_to_remember("something")
+        assert out == ""  # silent on channels with no held mic
+    finally:
+        memory._store = None

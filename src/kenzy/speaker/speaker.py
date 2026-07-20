@@ -98,6 +98,10 @@ _identify_threshold: float = 0.25
 _unknown_speaker: str = "unknown"
 _sem: asyncio.Semaphore | None = None
 _model_name: str = ""  # surfaced on /health for the dashboard
+# The enrollment conversation config (4.2: the LLM-side enrollment skill reads
+# these via GET /enroll/info — single source of truth with kenzy-enroll).
+_enroll_prompts: list[str] = []
+_allow_voice_enroll: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -191,6 +195,20 @@ async def identify(req: IdentifyRequest) -> IdentifyResponse:
 
     log.info("[%s] speaker=%s confidence=%.3f", req.room_id or "?", best_name, best_score)
     return IdentifyResponse(speaker=best_name, confidence=round(best_score, 4))
+
+
+@app.get("/enroll/info")
+async def enroll_info() -> dict[str, Any]:
+    """The enrollment conversation's config: the prompt sentences to read and
+    whether spoken-request enrollment is allowed (``allow_voice_enroll`` — the
+    earshot gate; dashboard-initiated enrollment bypasses it). Consumed by the
+    kenzy-llm enrollment skill; token-gated like every route."""
+    from kenzy.speaker import DEFAULT_ENROLL_PROMPTS
+
+    return {
+        "prompts": _enroll_prompts or list(DEFAULT_ENROLL_PROMPTS),
+        "allow_voice_enroll": _allow_voice_enroll,
+    }
 
 
 @app.post("/enroll", response_model=EnrollResponse)
@@ -296,6 +314,15 @@ def main() -> None:
     # path so the server's merged backup is complete even when this service
     # runs on its own host.
     install_backup_endpoint(app, lambda: [(_embeddings_dir, "data/speakers")])
+
+    global _enroll_prompts, _allow_voice_enroll
+    raw_prompts = cfg.get("enroll_prompts")
+    _enroll_prompts = (
+        [str(x).strip() for x in raw_prompts if str(x).strip()]
+        if isinstance(raw_prompts, list)
+        else []
+    )
+    _allow_voice_enroll = bool(cfg.get("allow_voice_enroll", False))
 
     _embeddings_dir = Path(cfg.get("embeddings_dir", "data/speakers"))
     _embeddings_dir.mkdir(parents=True, exist_ok=True)

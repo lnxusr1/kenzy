@@ -6,7 +6,7 @@ Also covers the LLM service's expect_response parsing + closer suppression."""
 from __future__ import annotations
 
 from kenzy import protocol
-from kenzy.server.server import _MAX_FOLLOWUP_TURNS, NodeSession, TranscribingServer
+from kenzy.server.server import _MAX_FOLLOWUP_TURNS, LlmReply, NodeSession, TranscribingServer
 
 
 class _RecordingWS:
@@ -40,7 +40,7 @@ def _mock_pipeline(srv, monkeypatch, *, response: str, expect: bool) -> None:
         return "alice", 0.9  # (name, confidence) — identity core (F1)
 
     async def llm(text, room, sid, speaker, node_id=None, identity=None):  # noqa: ANN001, ANN202
-        return (response, "vp", [], False, expect, False, [])
+        return LlmReply(response, "vp", expect_response=expect)
 
     async def tts(*a, **k):  # noqa: ANN002, ANN003, ANN202
         return True

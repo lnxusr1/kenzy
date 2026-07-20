@@ -81,7 +81,7 @@ kenzy-setup                     # pre-download the voice weights
 Then in the dashboard, **Services → tts**: set `provider: kokoro` (voice/speed
 under the `kokoro:` block). Output format is identical to the cloud provider,
 so nothing else changes — except one payoff: local speech is what unlocks
-**spoken [lockbox secrets](memory.md#secrets--the-lockbox)** (a cloud voice
+**spoken [lockbox secrets](memory.md#secrets-the-lockbox)** (a cloud voice
 gets a deflection to the dashboard instead).
 See [TTS Configuration](configuration/tts.md#kokoro-provider).
 

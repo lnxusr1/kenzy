@@ -53,13 +53,13 @@ async def test_intercom_refused_when_either_end_lacks_aec(tmp_path, monkeypatch)
 
     monkeypatch.setattr(s, "_say", fake_say)
 
-    await s.start_intercom("quiet", "office", "garage")  # AEC caller → non-AEC target
+    await s._action_connect_call("quiet", "office", "garage")  # AEC caller → non-AEC target
     assert "echo-cancelling" in said[-1][1] and "garage" in said[-1][1]
-    assert "deaf" not in s._pending_calls
+    assert s._nodes["quiet"].intercom_peer is None
 
-    await s.start_intercom("deaf", "garage", "office")  # non-AEC caller
+    await s._action_connect_call("deaf", "garage", "office")  # non-AEC caller
     assert "echo-cancelling" in said[-1][1]
-    assert not s._pending_calls
+    assert s._nodes["deaf"].intercom_peer is None
 
 
 async def test_alarm_fire_degrades_to_single_delivery(tmp_path, monkeypatch):
@@ -130,11 +130,21 @@ def req_ctx():
 
 
 async def test_connect_room_refuses_non_aec_target(req_ctx):
+    from kenzy.llm import asking
+
     out = await ic.connect_room("garage")
     assert "echo-cancelling" in out
     assert sk.take_actions() == []  # no action queued
-    out = await ic.connect_room("office")
-    assert out == "Calling office."
+    # An AEC-clean target proceeds to the consent ask (parks on the question).
+    sk.begin_request(
+        {"channel": "voice", "room_id": "office", "rooms": ["office", "garage", "den"],
+         "no_aec_rooms": ["garage"]}  # fmt: skip
+    )
+    outcome = await asking.run_askable(ic.connect_room("den"), kind="llm")
+    assert not outcome.finished
+    assert outcome.parked.channel.room == "den"
+    assert outcome.parked.channel.announce == "Calling the den."
+    await asking.cancel(outcome.parked.id)
 
 
 async def test_connect_room_refuses_from_non_aec_source():

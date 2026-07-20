@@ -33,7 +33,7 @@ The speaker identification service uses a SpeechBrain ECAPA-TDNN model to compar
 | `embeddings_dir` | `"data/speakers"` | Directory containing per-speaker `.npy` embedding files. Each file is named `<speaker_name>.npy`. |
 | `identify_threshold` | `0.25` | Cosine similarity threshold [0.0–1.0]. Utterances below this score are attributed to `unknown_speaker`. |
 | `unknown_speaker` | `"unknown"` | Name returned when no enrolled speaker exceeds the threshold. |
-| `allow_voice_enroll` | `false` | Allow [voice enrollment](../speaker-enrollment.md#enrolling-by-voice-from-a-node) ("enroll me as Alice") from a node. The **server** reads this live (editable from the dashboard's Services → speaker). Off by default; when on, anyone in earshot can enroll — see the security warning in the enrollment guide. |
+| `allow_voice_enroll` | `false` | Allow [voice enrollment](../speaker-enrollment.md#enrolling-by-voice-from-a-node) ("enroll me as Alice") from a node. The speaker service owns it (editable from the dashboard's Services → speaker; the save restarts the service to apply), and the enrollment skill checks it before every spoken enrollment. Off by default; when on, anyone in earshot can enroll — see the security warning in the enrollment guide. |
 
 ### Enrollment (`kenzy-enroll`)
 
@@ -43,7 +43,7 @@ The speaker identification service uses a SpeechBrain ECAPA-TDNN model to compar
 | `enroll_silence_rms` | `300` | RMS threshold above which a frame is considered speech |
 | `enroll_silence_ms` | `800` | Consecutive silence (ms) that ends a recording |
 | `enroll_min_speech_ms` | `1500` | Minimum speech (ms) required for a valid sample |
-| `enroll_prompts` | *(built-in list)* | Sentences read aloud by the user during enrollment. Phonetically diverse sentences produce better embeddings. |
+| `enroll_prompts` | *(built-in list)* | Sentences the user reads during enrollment — the single source for BOTH the `kenzy-enroll` CLI and spoken/dashboard enrollment (served to the enrollment skill via `GET /enroll/info`). Phonetically diverse sentences produce better embeddings. |
 | `tts.url` | *(from server)* | TTS service used to read enrollment prompts aloud. **Auto-wired from the server by default** (it injects its own `tts.url`), so you normally leave this unset; set it only to override per host (e.g. a multi-host setup where this machine reaches TTS at a different address). |
 | `tts.timeout` | `30.0` | TTS HTTP timeout |
 
@@ -79,16 +79,16 @@ resolves every request to `(person, confidence, tier)` instead of a bare name.
 ```yaml
 # data/people.yaml — server-owned; rides your backup
 people:
-  john:                        # a stable id
-    name: John                 # spoken/display name
-    voiceprints: [john, johnmark]   # speaker-service names that are this person
-    ha_user: person.john       # optional — links the HA Assist channel identity
+  alex:                        # a stable id
+    name: Alex                 # spoken/display name
+    voiceprints: [alex, alex-kitchen]   # speaker-service names that are this person
+    ha_user: person.alex       # optional — links their HA account (Assist identity + presence answers)
     phone: null                # optional
     memory_opt_out: false      # optional — "don't remember me" (People page toggle)
     memory_capture: explicit   # optional — explicit (default) | suggest | auto
-  nicki:
-    name: Nicki
-    voiceprints: [nicki]
+  alice:
+    name: Alice
+    voiceprints: [alice]
 ```
 
 - **No file? No change.** Without `people.yaml` the raw voiceprint name passes
@@ -97,7 +97,9 @@ people:
   `unknown`. Per-person [memory](../memory.md) (and everything privacy-gated)
   gates on the tier — an unknown voice gets no memory at all.
 - **Standalone.** `ha_user`/`phone` are optional — a voiceprint-only household
-  is fully supported.
+  is fully supported. Linking `ha_user` is what lets the same person be
+  recognized when they type through the [HA Assist channel](../phone.md) and
+  what answers ["is Alice home?"](../skills/builtin.md#presence).
 
 ### Editing people from the dashboard
 
@@ -121,8 +123,8 @@ is simply *add the person, then enroll their voice*.
   stays; deleting a voice profile follows through to its person record
   automatically, so the links in `people.yaml` never silently break.
 
-The tab edits only the name and voices; `ha_user`/`phone` stay as you set them
-in the file (reserved for later channels) and are preserved across saves. Edits
+The expanded card also edits the **HA person** link (`ha_user`); `phone` is
+reserved for a later channel and preserved across saves. Edits
 need `dashboard.controls: true` (otherwise the tab is read-only) and take effect
 immediately — the running pipeline resolves the new mapping on the next request,
 no restart.

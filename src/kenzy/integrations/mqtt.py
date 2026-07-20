@@ -103,7 +103,7 @@ def parse_command(
         return Command("announce", None, text) if text else None
 
     if toks == ["chime"]:
-        # Payload: JSON {"sound": name, "seconds": n, "rooms": [...]} — or a bare
+        # Payload: JSON {"sound": name, "seconds": n, "repeats": n, "rooms": [...]} — or a bare
         # string naming the sound, or empty for the default chime, once. The
         # server validates the sound name (configured/bundled only) and caps the
         # loop; this stays a pure parse.
@@ -118,6 +118,7 @@ def parse_command(
                 value = {
                     "sound": data.get("sound"),
                     "seconds": data.get("seconds"),
+                    "repeats": data.get("repeats"),
                     "rooms": data.get("rooms"),
                 }
             else:

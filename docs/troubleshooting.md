@@ -3,7 +3,7 @@
 Find your symptom below. Most problems show up in one of three places, so when in
 doubt, look there first:
 
-- **The dashboard's fleet view** (`http://<server>:8770`) — is every service green?
+- **The dashboard's fleet view** (`https://<server>:8770`) — is every service green?
   Does the node's card show any warning badge?
 - **The dashboard's Logs tab** — pick the server, a service, or a node as the
   source and read the most recent lines.
@@ -24,8 +24,8 @@ doubt, look there first:
 - **Is the server running?** On the server machine: `systemctl --user status
   kenzy-server`. If it's stopped or crash-looping, `journalctl --user -u
   kenzy-server -n 50` shows why.
-- **Right address?** The dashboard is on port **8770** — `http://localhost:8770` on
-  the server itself, or `http://<server-ip>:8770` from another machine.
+- **Right address?** The dashboard is on port **8770** — `https://localhost:8770` on
+  the server itself, or `https://<server-ip>:8770` from another machine.
 - **Reachable from another machine?** The default bind (`0.0.0.0`) allows LAN
   access, but if `dashboard.bind` in `server.yaml` was set to `127.0.0.1`, the
   dashboard is only visible on the server itself. A host firewall (e.g. `ufw`) can

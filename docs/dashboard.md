@@ -4,7 +4,7 @@ The dashboard is the web page where you run your Kenzy home: see every room and
 service at a glance, name rooms, pick and tune microphones, enroll voices, send
 announcements, read logs, and install updates — all from a browser, no terminal
 needed after install. It's served by `kenzy-server` and is **on by default**,
-reachable from any machine on your network at `http://<server>:8770`. (Set
+reachable from any machine on your network at `https://<server>:8770`. (Set
 `dashboard.enabled: false` to turn it off entirely — when disabled, nothing is
 mounted and it adds zero overhead.)
 
@@ -27,8 +27,8 @@ dashboard:
   logs: true            # enable the log viewer + Activity tab
 ```
 
-Open `http://<server>:8770` in a browser (the same machine can use
-`http://localhost:8770`). After changing this block, restart `kenzy-server`. See the
+Open `https://<server>:8770` in a browser (the same machine can use
+`https://localhost:8770`). After changing this block, restart `kenzy-server`. See the
 full key reference in [Server Configuration](configuration/server.md#dashboard).
 
 ## Logging in
@@ -266,7 +266,7 @@ them).
   only for households where HA is actually in the picture — a no-HA install
   shows no HA surfaces at all.
 - **Memories** — what Kenzy holds *for this person* ("Hey Kenzy, remember
-  that…"), with tier, age, and a **Forget** button per fact. Facts they've
+  that…"), with tier, age, and per-fact **Edit** (wording/tier/retention) and **Forget** buttons. Facts they've
   **shared** with the house are deliberately *not* listed here — they live
   only under **Household memory** on the People page, so tidying up one
   person's memories can never accidentally delete a fact the whole household
@@ -282,7 +282,7 @@ them).
   memory classifier's verdict — with no local classifier model configured,
   resolve them here: **Release** (ordinary memory) or **To lockbox**.
 - **Memory capture** — per-person: Explicit (only "remember that…" — the
-  default), Suggest (offers first; a later release), or Auto (remembers
+  default), Suggest (she asks aloud first — stores only on your spoken yes), or Auto (remembers
   durable facts proactively and says so; auto-captured rows carry an "auto"
   source tag).
 - **Privacy & data** — the section that answers "what does Kenzy know about
@@ -307,8 +307,8 @@ Person records live in `data/people.yaml` and the memory ledger in
 `data/memory/` on the server — both plain text, both riding
 [backups](backup-restore.md) automatically (see
 [Speaker configuration](configuration/speaker.md) for the people schema).
-Editing and re-tiering facts from this screen, retention windows, and the
-consolidation log arrive with the memory hardening phase.
+The consolidation log (which merges happened and why) arrives with the
+memory hardening phase.
 
 ## Scheduled
 

@@ -492,3 +492,79 @@ def test_dedupe_never_competes_with_quarantined(tmp_path):
     assert out["deduped"] == 0
     assert store.get_fact(released.id) is not None
     assert store.get_fact(twin.id).state == "quarantined"
+
+
+def test_update_edit_retier_retention(tmp_path):
+    # F7.2-full: the dashboard's Edit — wording, tier, and retention windows.
+    import time as _t
+
+    from kenzy.llm.memory import MemoryStore
+
+    store = MemoryStore(tmp_path / "facts.jsonl")
+    f = store.remember("john", "the plumber is Joe")
+    store.release(f.id)
+
+    got = store.update(f.id, text="the plumber is Sam", tier="shared", expires_days=30)
+    assert got is not None and got.text == "the plumber is Sam" and got.tier == "shared"
+    assert got.expires is not None and got.expires > _t.time() + 29 * 86400
+    assert got.updated >= got.created  # re-enters the semantic pending window
+
+    got = store.update(f.id, clear_expiry=True)
+    assert got is not None and got.expires is None
+
+    # Bad tier is ignored; unknown/tombstoned ids return None.
+    got = store.update(f.id, tier="nonsense")
+    assert got is not None and got.tier == "shared"
+    assert store.update("ghost", text="x") is None
+
+    # Persistence: a reload sees the edit.
+    again = MemoryStore(tmp_path / "facts.jsonl")
+    assert again.get_fact(f.id).text == "the plumber is Sam"
+
+
+def test_update_endpoint(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from kenzy.llm import llm as llm_app
+    from kenzy.llm import memory as mem
+
+    store = mem.MemoryStore(tmp_path / "facts.jsonl")
+    monkeypatch.setattr(mem, "_store", store)
+    client = TestClient(llm_app.app)
+    f = store.remember("john", "the gate is squeaky")
+    store.release(f.id)
+
+    r = client.post("/memory/update", json={"id": f.id, "tier": "personal-public"})
+    assert r.status_code == 200 and r.json()["fact"]["tier"] == "personal-public"
+    r = client.post("/memory/update", json={"id": f.id, "tier": "bogus"})
+    assert r.status_code == 400
+    r = client.post("/memory/update", json={"id": "ghost", "text": "x"})
+    assert r.status_code == 404
+
+
+def test_change_hook_fires_on_mutations(tmp_path):
+    # The 4.2 live-refresh poke: every persisted mutation fires the hook
+    # (rewrite choke point) — and an observer failure never breaks a write.
+    from kenzy.llm import lockbox as lb
+    from kenzy.llm import memory as mem
+    from kenzy.llm.memory import MemoryStore
+
+    fired = []
+    mem.set_change_hook(lambda: fired.append(1))
+    try:
+        store = MemoryStore(tmp_path / "facts.jsonl")
+        f = store.remember("john", "the pool guy comes Thursdays", state="quarantined")
+        store.release(f.id)
+        store.update(f.id, tier="shared")
+        store.erase(f.id)
+        assert len(fired) == 4  # append, release, update, erase
+
+        box = lb.init_store(tmp_path / "lockbox.enc")
+        box.add("john", "the gate code is 4312")
+        assert len(fired) == 5  # lockbox mutations poke too
+
+        mem.set_change_hook(lambda: 1 / 0)  # a broken observer
+        store.remember("john", "still works")  # must not raise
+    finally:
+        mem.set_change_hook(None)
+        lb._store = None

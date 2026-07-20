@@ -207,12 +207,63 @@ The server injects per-request context that skills and fast intents can read wit
 | `memory_opt_out` | This person asked not to be remembered — skills must not store facts about them |
 | `memory_capture` | Their capture mode: `explicit`, `suggest`, or `auto` |
 | `tts_local` | Whether the reply's speech stays on-box — secret values must not be spoken when false |
+| `people` | Person records (`id`/`name`/`voiceprints`/`ha_user`) for resolving spoken names |
+| `speaker_url` | The speaker service's base URL (enrollment's sample uploads) |
 
 ```python
 from kenzy.llm.skills import get_request
 
 rooms = get_request("rooms") or []
 ```
+
+## Asking the user a question (`ask()`)
+
+When a skill needs an answer mid-flow — a confirmation, a choice, a missing
+detail — don't return a question and hope the next utterance finds its way
+back. Ask directly:
+
+```python
+from kenzy.llm.skills import FastResult, ask, fast_intent
+
+@fast_intent(priority=80)
+async def plant_reminder(utterance, room_id, speaker):
+    if "water the plants" not in utterance.lower():
+        return FastResult.miss()
+    answer = await ask("Every day, or just weekdays?")
+    if answer is None:  # wake word / window expired / restart — never assume
+        return FastResult.handled("Okay, never mind.")
+    ...
+```
+
+Kenzy speaks the prompt, re-opens the mic in that room (no wake word), and
+your coroutine resumes with the spoken reply. Rules worth knowing:
+
+- **`None` means the question was abandoned** — the wake word always cancels
+  (not disableable), the reply window can expire, and a service restart
+  forgets pending questions. Handle it; your return value is discarded in
+  those cases, so keep it side-effect-free after a `None`.
+- **Re-check identity for anything gated.** The reply carries the *answerer's*
+  identity — `get_request("person_id")` / `speaker_tier` reflect whoever
+  spoke the answer, which may not be who asked.
+- Questions chain (`await ask(...)` again) — an ask conversation gets its own
+  generous turn ceiling (16), separate from the plain-dialog `dialog.max_turns`
+  cap, so a long flow like enrollment is never cut off mid-conversation. It
+  works identically inside `@skill` tools — the model's tool call simply takes
+  as long as the conversation does.
+- **`ask_audio(prompt)`** returns the user's RAW spoken reply as 16 kHz PCM
+  bytes instead of a transcript (record-after-the-tone; STT never runs) —
+  voice enrollment is the canonical consumer. An expired window arrives as
+  an EMPTY `b""` (retry material); `None` still means abandoned.
+- The reply window is the node's `dialog_no_speech_timeout_ms` (tune it per
+  room). `ask(prompt, timeout=seconds)` currently bounds only the service-side
+  backstop (how long a question may stay parked if the server is lost) — it
+  does not yet shorten or lengthen the node's own window.
+- **`ask(prompt, room="kitchen", announce="Calling the kitchen.")`** targets
+  the question at *another* room: the asker hears the announcement (plus
+  ringback), the target room hears and answers the question, and your
+  coroutine resumes with their reply — an empty string means nobody answered
+  (silence, their wake word, or the room going away). Intercom consent is
+  built exactly this way.
 
 ## Gating a skill by identity (`min_tier`)
 

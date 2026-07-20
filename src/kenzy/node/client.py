@@ -605,7 +605,7 @@ class NodeClient:
         self._dialog_onset_vad: float = float(cfg.get("dialog_onset_vad_threshold", 0.5))
         self._silence_frames: int = max(int(cfg.get("silence_ms", 400)) // protocol.FRAME_MS, 1)
         self._speech_min_frames: int = max(
-            int(cfg.get("speech_min_ms", 500)) // protocol.FRAME_MS, 1
+            int(cfg.get("speech_min_ms", 400)) // protocol.FRAME_MS, 1
         )
         self._no_speech_timeout_frames: int = max(
             int(cfg.get("no_speech_timeout_ms", 15_000)) // protocol.FRAME_MS, 1

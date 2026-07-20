@@ -110,15 +110,32 @@ it's the id itself):
 | `kenzy/chime` | see below | play a chime — instant, no TTS involved |
 
 `kenzy/chime` payloads: empty = the bundled doorbell, once. A bare string names the
-sound (`doorbell.wav`, `chime.wav`, or a name from `integrations.mqtt.chimes` — a
-map of name → WAV path on the server host). JSON unlocks the rest:
+sound — a bundled file (`doorbell.wav`, `chime.wav`), a name from
+`integrations.mqtt.chimes` (name → path aliases), or **any file in your sound
+library** (`data/sounds/` in the config home, plus the folders you list under
+`sounds.dirs` in server.yaml — subfolders fine: `alerts/dog-bark.mp3`). MP3 and
+friends decode server-side with `pip install 'kenzy[sound]'`; nodes just receive
+audio. JSON unlocks the rest:
 
 ```json
-{"sound": "doorbell.wav", "seconds": 8, "rooms": ["kitchen", "office"]}
+{"sound": "alerts/dog-bark.mp3", "repeats": 3, "rooms": ["kitchen", "office"]}
 ```
 
-`seconds` loops the cue (whole repeats, capped at 30 s); `rooms` limits which nodes
-play it (omit for house-wide). Chimes are **alert audio**: a muted node still plays
+`repeats` plays the cue N whole times; `seconds` loops it by duration instead
+(both capped); `rooms` limits which nodes play it (omit for house-wide).
+
+No MQTT broker? The same alert rides plain HTTP — the `/chime` twin of
+`/announce` on the server's main port, for a `rest_command`:
+
+```yaml
+rest_command:
+  kenzy_dog_alert:
+    url: "http://kenzy-server:8765/chime?sound=alerts/dog-bark.mp3&repeats=3&rooms=kitchen"
+    headers:
+      Authorization: "Bearer !secret kenzy_service_token"
+```
+
+Chimes are **alert audio**: a muted node still plays
 them at a low, audible floor — same as the wake-word chime — because "someone is at
 your door" is exactly the class of thing mute shouldn't hide. (Nodes on older
 releases simply honor mute instead.)

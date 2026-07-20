@@ -62,7 +62,7 @@ host: "127.0.0.1"
 port: 8766
 
 model: "gpt-4o"
-max_tool_iterations: 5
+max_tool_iterations: 10
 
 system_prompt: |
   You are Kenzy, a helpful home assistant. Be concise and conversational.
@@ -122,7 +122,7 @@ Everything below is the full reference — useful when you're tuning; skippable 
 | `params.reasoning_effort` | `""` | How long the model may "think" before speaking. Empty = **don't send the parameter** (models with adaptive defaults, like gpt-5.1, gain nothing from an explicit value). Set `none`…`high` to force a level on models whose default reasoning is heavier. Ignored harmlessly by providers that don't support it. |
 | `params.service_tier` | `""` | OpenAI service tier — `"priority"` is the paid low-latency tier if your account has it. Empty = don't send. |
 | `params.*` | — | Anything else LiteLLM accepts (`service_tier: "priority"` for OpenAI's paid low-latency tier, `temperature`, `max_tokens`, …), merged into every model call. Unsupported parameters are dropped per-provider. Credential/routing keys (`api_key`, `base_url`, …) are ignored here by design. |
-| `max_tool_iterations` | `5` | Maximum skill call iterations per request before returning whatever the model has |
+| `max_tool_iterations` | `10` | Maximum skill call iterations per request before returning whatever the model has |
 
 ### Prompts
 
@@ -162,10 +162,11 @@ history is visible on the service's token-gated `GET /jobs`).
 |---|---|---|
 | `memory.enabled` | `true` | The whole memory feature. `false` ⇒ no ledger, no memory skills, the `/memory` endpoints answer 503, and the dashboard's memory surfaces say so. |
 | `memory.file` | `"data/memory/facts.jsonl"` | The ledger file, config-home-relative — plain JSONL, human-readable, rides backups. |
-| `memory.maintenance_interval` | `3600` | Seconds between mechanical sweeps (expired facts, exact duplicates, superseded tombstones past their keep window). No model involved. `0` disables. |
+| `memory.maintenance_interval` | `60` | Seconds between mechanical sweeps (expired facts, exact duplicates, superseded tombstones past their keep window). No model involved. `0` disables. |
 | `memory.superseded_keep_days` | `30` | How long a superseded fact stays on disk (recoverable) before the sweep removes it. |
 | `memory.semantic_interval` | `86400` | The daily backstop for **semantic consolidation** (merging restatements with your configured model). The real trigger is each "remember…" — this catches anything a failed run left behind. `0` disables the semantic layer entirely. |
 | `memory.semantic_cooldown` | `30` | Rate limit between model-driven consolidation runs — dictating five facts in a row costs one model call, not five. |
 | `memory.private_to_cloud` | `false` | By default, **private**-tier facts are withheld from a *cloud* model's context and consolidation (they still answer by voice, and consolidate on a local model). `true` opts out of the protection. |
 | `memory.classifier_model` | *(blank)* | The write-path classifier's model — it judges whether a new memory contains a secret (release / vault to the lockbox / split). Blank = the service model, **but a cloud model is never consulted for this**: without a local model, ambiguous writes are held for dashboard review instead. Point this at a local model (e.g. `ollama/qwen3:8b`) to resolve ambiguity automatically. |
 | `memory.classifier_url` | *(blank)* | The classifier model's endpoint (when `classifier_model` is set). |
+| `memory.classifier_keep_alive` | *(blank)* | Ollama `keep_alive` sent with classifier/consolidation calls — `"-1"` pins the model resident, `"30m"` for half an hour. Blank = the Ollama server's own default (typically 5 minutes, meaning cold-start latency on sparse memory writes). Only sent to `ollama/*` models. |

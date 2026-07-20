@@ -1,7 +1,7 @@
 import { html, useState, useEffect } from "../html.js";
 import { confirmDialog } from "../dialog.js";
 import { getMemory, getPeople } from "../api.js";
-import { send, notify } from "../store.js";
+import { send, notify, subscribeMemory } from "../store.js";
 
 // People: the one surface for who Kenzy knows and what she knows about them.
 // The LIST page shows each household member (voice status + memory count) with
@@ -83,10 +83,11 @@ export function PeopleView({ selected, onSelect, onConfigureService }) {
 
   useEffect(() => {
     load();
-    // Memory settles asynchronously (the classifier releases/vaults a fresh
-    // write within seconds) — poll gently so the page catches up on its own.
-    const t = setInterval(load, 15000);
-    return () => clearInterval(t);
+    // Live: the server pokes on any memory/lockbox change (4.2) — the poll
+    // drops to a slow WS-down fallback, like the Scheduled tab.
+    const unsub = subscribeMemory(load);
+    const t = setInterval(load, 60000);
+    return () => { clearInterval(t); unsub(); };
   }, []);
 
   if (err) return html`<div class="empty">Could not load people: ${err}</div>`;
@@ -628,8 +629,8 @@ function PersonDetail({ person, data, facts, secrets, memReachable, onBack, relo
           <label class="field">
             <span class="micro">Memory capture — when Kenzy remembers things for
               ${person.name}. <b>Explicit</b>: only when asked ("remember that…").
-              <b>Suggest</b>: she offers to remember useful facts (arrives with a
-              later release). <b>Auto</b>: she remembers on her own and always says
+              <b>Suggest</b>: she asks aloud before remembering — nothing
+              stored without your spoken yes. <b>Auto</b>: she remembers on her own and always says
               so — her picks show a "auto" tag below, each a Forget away.</span>
             <select class="audio-select" value=${memCapture} disabled=${!controls || memOptOut}
               onChange=${(e) => setMemCapture(e.target.value)}>
@@ -730,8 +731,33 @@ function SecretRow({ s, controls, reload }) {
   </div>`;
 }
 
+function daysLeft(expires) {
+  if (!expires) return null;
+  const d = (expires - Date.now() / 1000) / 86400;
+  if (d <= 0) return "expiring";
+  return d < 1.5 ? "expires in 1d" : `expires in ${Math.round(d)}d`;
+}
+
 function FactRow({ f, controls, reload, showOwner }) {
   const [busy, setBusy] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [text, setText] = useState(f.text);
+  const [tier, setTier] = useState(f.tier);
+  const [keep, setKeep] = useState("keep");  // keep | 30 | 90 | 365 | clear
+
+  async function saveEdit() {
+    const patch = { fact_id: f.id };
+    if (text.trim() && text.trim() !== f.text) patch.text = text.trim();
+    if (tier !== f.tier) patch.tier = tier;
+    if (keep === "clear") patch.clear_expiry = true;
+    else if (keep !== "keep") patch.expires_days = Number(keep);
+    if (Object.keys(patch).length === 1) { setEditing(false); return; }
+    setBusy(true);
+    const r = await send("update_memory", patch);
+    setBusy(false);
+    if (r.ok) { setEditing(false); notify("Memory updated."); await reload(); }
+    else notify(r.error || "Update failed.", "err");
+  }
 
   async function review(action) {
     setBusy(true);
@@ -754,6 +780,33 @@ function FactRow({ f, controls, reload, showOwner }) {
     } else notify(res.error || "Delete failed.", "err");
   }
 
+  if (editing) {
+    return html`
+      <div class="mem-row mem-edit">
+        <div class="mem-main">
+          <input class="mem-edit-text" value=${text}
+            onInput=${(e) => setText(e.target.value)} />
+          <div class="mem-edit-opts">
+            <select class="audio-select" value=${tier} onChange=${(e) => setTier(e.target.value)}>
+              <option value="private">Private — only they hear it</option>
+              <option value="personal-public">About them — anyone recognized</option>
+              <option value="shared">Shared — the whole household</option>
+            </select>
+            <select class="audio-select" value=${keep} onChange=${(e) => setKeep(e.target.value)}>
+              <option value="keep">Retention: unchanged</option>
+              <option value="clear">Keep forever</option>
+              <option value="30">Forget after 30 days</option>
+              <option value="90">Forget after 90 days</option>
+              <option value="365">Forget after a year</option>
+            </select>
+          </div>
+        </div>
+        <button class="btn-ghost" disabled=${busy} onClick=${saveEdit}>${busy ? "…" : "Save"}</button>
+        <button class="btn-ghost" disabled=${busy}
+          onClick=${() => { setEditing(false); setText(f.text); setTier(f.tier); setKeep("keep"); }}>
+          Cancel</button>
+      </div>`;
+  }
   return html`
     <div class="mem-row">
       <div class="mem-main">
@@ -765,6 +818,7 @@ function FactRow({ f, controls, reload, showOwner }) {
             : null}
           ${showOwner ? `${f.owner_name || f.owner} · ` : ""}${ago(f.created)}
           ${f.source && f.source !== "voice" ? ` · via ${f.source}` : ""}
+          ${daysLeft(f.expires) ? html` · <span class="badge warn">${daysLeft(f.expires)}</span>` : ""}
         </div>
       </div>
       ${controls && f.state === "quarantined"
@@ -772,7 +826,8 @@ function FactRow({ f, controls, reload, showOwner }) {
             <button class="btn-ghost" disabled=${busy} onClick=${() => review("vault")}>To lockbox</button>`
         : null}
       ${controls
-        ? html`<button class="btn-ghost danger" disabled=${busy}
+        ? html`<button class="btn-ghost" disabled=${busy} onClick=${() => setEditing(true)}>Edit</button>
+          <button class="btn-ghost danger" disabled=${busy}
             onClick=${del}>${busy ? "…" : "Forget"}</button>`
         : null}
     </div>`;

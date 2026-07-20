@@ -3,7 +3,7 @@
 Kenzy can remember things — per person. "Hey Kenzy, remember that the spare
 key is under the blue pot" stores a fact; "where's the spare key?" gets it
 back. (A *gate code* would take a different path — secret-shaped facts are
-auto-vaulted into the [lockbox](#secrets--the-lockbox) below.) Facts
+auto-vaulted into the [lockbox](#secrets-the-lockbox) below.) Facts
 belong to the **person** who said them (see
 [Speaker Enrollment](speaker-enrollment.md) — memory is one of the things
 enrolling your voice unlocks), and who can hear a fact back is a deliberate,
@@ -47,7 +47,7 @@ Every fact has a tier, and the tiers are enforced at answer time:
 | Tier | Who hears it back | How a fact gets it |
 |---|---|---|
 | **Private** | Only the person who stored it | The default — every "remember that…" starts private |
-| **About them** | Anyone Kenzy recognizes | The middle tier for facts *about* a person that others may ask ("Nicki's birthday is in May") — settable via the memory API today; dashboard re-tiering arrives with the hardening phase |
+| **About them** | Anyone Kenzy recognizes | The middle tier for facts *about* a person that others may ask ("Alice's birthday is in May") — set it by voice signal or from the People page's per-fact **Edit** |
 | **Shared** | The whole household | An explicit signal — *"everyone should know…"*, *"remember for everyone…"* — or *"share that with the house"* afterwards |
 
 ```text
@@ -124,8 +124,9 @@ reason the People page nudges you toward a local classifier model.
 By default, nothing — Kenzy only stores what you explicitly ask her to
 remember; there's no ambient transcript-mining. That's a per-person choice
 now: each person's page has a **Memory capture** setting — **Explicit** (the
-default just described), **Suggest** (she offers to remember useful facts —
-arrives with a later release), or **Auto** (she remembers durable personal
+default just described), **Suggest** (she notices a durable fact and asks
+aloud — "want me to remember that?" — storing only on your spoken yes), or
+**Auto** (she remembers durable personal
 facts on her own and always says so; her picks carry an "auto" tag on the
 People page, each one a Forget away, and they pass through the same
 quarantine-and-classify pipeline as everything else). What she *always* keeps is
@@ -161,7 +162,9 @@ Saying roughly the same thing twice doesn't leave two facts lying around:
 ## Seeing and managing it — the dashboard
 
 The **People** tab is memory's admin surface: each person's page lists what
-Kenzy holds for them (with tier, age, and per-fact **Forget**), the People
+Kenzy holds for them (with tier, age, and per-fact **Edit** and **Forget** —
+Edit changes the wording, the tier, and a retention window: keep forever, or
+forget after 30/90/365 days, shown as an "expires in…" badge), the People
 page carries **Household memory** and a search across every fact, and each
 person's **Privacy & data** section covers the bigger hammers:
 

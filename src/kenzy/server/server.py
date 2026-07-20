@@ -48,13 +48,10 @@ from kenzy.server.people import (
     UNSET,
     Identity,
     PeopleStore,
-    Person,
     resolve_assist_identity,
     resolve_voice_identity,
-    slugify,
 )
 from kenzy.serviceauth import check_bearer
-from kenzy.speaker import DEFAULT_ENROLL_PROMPTS
 
 log = logging.getLogger(__name__)
 
@@ -120,19 +117,14 @@ _CALIB_RECONNECT_S = 35.0  # post-restart reconnect wait
 _CALIB_CLOSE_MARGIN_S = 2.5  # her verify-exchange reply plays out after streaming ends
 _CHIME_MAX_S = 30.0  # loop cap: a buggy automation must not ring the house forever
 _CHIME_DEFAULT = "doorbell.wav"
-# How long to wait for the receiver's spoken consent before declining (no answer).
-_CALL_TIMEOUT_SEC = 25.0
 # Voice enrollment: one sample per configured prompt (see _enroll_prompts), min bytes
 # for a usable sample, extra retries allowed beyond the prompt count for unclear audio,
 # and how long the session lives with NO capture arriving before it's abandoned. The
 # timeout is per-stage (re-armed on every capture), not a total budget — five prompts
 # through a slow local TTS legitimately take longer than any reasonable fixed cap
 # (field finding: a real 5-prompt run blew a 120s total cap and died mid-enrollment).
-_ENROLL_MIN_PCM_BYTES = 16000  # ~0.5 s of 16 kHz int16 — shorter captures are retried
-_ENROLL_MAX_RETRIES = 4
 # Per stage the window covers one prompt's TTS synth+playback plus the reply, so
 # 60s is generous headroom for a slow local TTS — while a walked-away session dies fast.
-_ENROLL_TIMEOUT_SEC = 60.0  # inactivity, re-armed on every capture
 
 # Resource caps (F-10): bound a single capture buffer and inbound WS frame size, and
 # rate-limit new connections per source IP, so a hostile/buggy LAN peer can't exhaust
@@ -144,7 +136,7 @@ _CONN_RATE_WINDOW = 60.0  # … within this many seconds
 # Peer service URLs the server injects into a dependent service's served config so they
 # aren't duplicated in two places (an override in the service's own config still wins).
 # Only speaker (its kenzy-enroll CLI) needs TTS today.
-_SERVICE_PEERS: dict[str, tuple[str, ...]] = {"speaker": ("tts",)}
+_SERVICE_PEERS: dict[str, tuple[str, ...]] = {"speaker": ("tts",), "llm": ("speaker",)}
 
 #: The environment secrets each backend service needs to do its job. The server
 #: serves the ones it holds to that service over the authenticated TLS config
@@ -332,6 +324,46 @@ class NodeSession:
 
 
 
+def _llm_reply_from(data: dict[str, Any]) -> LlmReply:
+    return LlmReply(
+        text=str(data["text"]),
+        voice_prompt=str(data["voice_prompt"]),
+        actions=list(data.get("actions") or []),
+        fast=bool(data.get("fast", False)),
+        expect_response=bool(data.get("expect_response", False)),
+        secret=bool(data.get("secret", False)),
+        spans=list(data.get("spans") or []),
+        continuation=data.get("continuation") or None,
+        ask_timeout_s=data.get("ask_timeout_s"),
+        ask_capture=str(data.get("ask_capture") or "text"),
+        ask_cue=bool(data.get("ask_cue", False)),
+        ask_room=data.get("ask_room") or None,
+        ask_prompt=str(data.get("ask_prompt") or ""),
+    )
+
+
+@dataclass
+class LlmReply:
+    """What the LLM service said back for one exchange — one object instead of
+    an ever-growing tuple. ``continuation`` set means the reply IS a question
+    from a parked skill (the 4.2 ask() primitive): speak it, hold the floor,
+    route the answer to /process/continue (wake/timeout → /process/cancel)."""
+
+    text: str
+    voice_prompt: str
+    actions: list[dict[str, Any]] = field(default_factory=list)
+    fast: bool = False
+    expect_response: bool = False
+    secret: bool = False
+    spans: list[dict[str, Any]] = field(default_factory=list)
+    continuation: str | None = None
+    ask_timeout_s: float | None = None
+    ask_capture: str = "text"
+    ask_cue: bool = False
+    ask_room: str | None = None
+    ask_prompt: str = ""
+
+
 class AudioServer:
     """
     WebSocket server that multiplexes audio from many room nodes.
@@ -396,6 +428,7 @@ class AudioServer:
             except Exception as exc:
                 log.error("TLS config invalid (%s) — continuing WITHOUT TLS", exc)
         self._state_listeners: list[Callable[[], None]] = []
+        self._memory_listeners: list[Callable[[], None]] = []
         self._calib_listeners: list[Callable[[str, dict[str, Any]], None]] = []
         self._metrics_listeners: list[Callable[[], None]] = []
         # node_id → (override mtime, parsed override) — see _effective_node_config.
@@ -714,8 +747,9 @@ class AudioServer:
             log.debug("could not persist assist-seen marker: %s", exc)
 
     def list_people(self) -> list[dict[str, Any]]:
-        """Serialize the person records for the dashboard (name + voiceprints;
-        the reserved ha_user/phone links ride along but aren't UI-editable)."""
+        """Serialize the person records for the dashboard (name, voiceprints,
+        the ha_user presence link — editable in the drill-down — and the
+        reserved phone link)."""
         return [
             {
                 "id": p.id,
@@ -1004,10 +1038,24 @@ class AudioServer:
         path = request.path.split("?", 1)[0]
         if path == "/announce":
             return await self._http_announce(request)
+        if path == "/chime":
+            return await self._http_chime(request)
         if path == "/assist":
             return await self._http_assist(request)
         if path == "/register":
             return self._http_register(request, connection)
+        if path.startswith("/notify"):
+            ok, _ts = self._authorize_service(request, "GET", "/notify")
+            if not ok:
+                return self._http_json(401, {"error": "invalid service token"})
+            from urllib.parse import parse_qs, urlsplit
+
+            what = (parse_qs(urlsplit(request.path).query).get("what") or [""])[0]
+            if what == "memory":
+                # kenzy-llm pokes on memory/lockbox changes (debounced its side):
+                # the dashboard pushes a data-less {"type":"memory"} to browsers.
+                self._notify_memory()
+            return self._http_json(200, {"ok": True})
         if path.startswith("/data/"):
             ok, ts = self._authorize_service(request, "GET", path)
             if not ok:
@@ -1061,6 +1109,38 @@ class AudioServer:
             targets = list(self._nodes)
         count = await self.announce(text, targets or None)
         return self._http_json(200, {"announced": count, "text": text})
+
+    async def _http_chime(self, request: Request) -> Response:
+        """Handle ``/chime?sound=…&seconds=…&repeats=…&rooms=…`` — the sound-alert
+        twin of ``/announce`` for broker-less HA (``rest_command``). Token-gated;
+        sound names resolve only within the configured library roots/aliases/
+        bundled sounds."""
+        from urllib.parse import parse_qs, urlsplit
+
+        if not self._check_service_token(request):
+            return self._http_json(401, {"error": "invalid service token"})
+        qs = parse_qs(urlsplit(request.path).query)
+
+        def _one(key: str) -> str:
+            return (qs.get(key) or [""])[0].strip()
+
+        sound = _one("sound") or None
+        try:
+            seconds = float(_one("seconds") or 0)
+            repeats = int(_one("repeats") or 0)
+        except ValueError:
+            return self._http_json(400, {"error": "seconds/repeats must be numbers"})
+        rooms_raw = _one("rooms")
+        rooms = [r.strip() for r in rooms_raw.split(",") if r.strip()] if rooms_raw else None
+        # Resolve + load first so a typo'd sound is a 404, distinct from
+        # "played nowhere" (no matching rooms), which is an honest 200/0.
+        from kenzy.server import tones
+
+        spec = self._chime_spec(sound or _CHIME_DEFAULT)
+        if spec is None or tones.load_tone(spec) is None:
+            return self._http_json(404, {"error": f"unknown sound {sound or _CHIME_DEFAULT!r}"})
+        count = await self.play_chime(sound, seconds, rooms, repeats=repeats)
+        return self._http_json(200, {"played": count, "sound": sound or _CHIME_DEFAULT})
 
     def _http_register(self, request: Request, connection: ServerConnection) -> Response:
         """Handle ``/register?service=&host=&port=&version=`` — a backend service
@@ -1667,6 +1747,21 @@ class AudioServer:
         self._notify_state()
         return True
 
+    async def play_chime(
+        self,
+        sound: str | None = None,
+        seconds: float = 0.0,
+        rooms: list[str] | None = None,
+        repeats: int = 0,
+    ) -> int:
+        """Play a named sound on target rooms. Base server stub (no pipeline);
+        ``TranscribingServer`` provides the real implementation."""
+        return 0
+
+    def _chime_spec(self, name: str) -> str | None:
+        """Sound-name resolution — base stub (see TranscribingServer)."""
+        return None
+
     async def announce(self, text: str, rooms: list[str] | None = None) -> int:
         """Speak ``text`` aloud on target rooms (all connected if None).
 
@@ -1689,6 +1784,18 @@ class AudioServer:
 
     def add_schedule_listener(self, cb: Callable[[], None]) -> None:
         """Observe schedule-set changes (add/cancel/fire). Base server: no-op."""
+
+    def add_memory_listener(self, cb: Callable[[], None]) -> None:
+        """Observe memory-change pokes from kenzy-llm (the People page's live
+        refresh). Empty list ⇒ zero overhead."""
+        self._memory_listeners.append(cb)
+
+    def _notify_memory(self) -> None:
+        for cb in self._memory_listeners:
+            try:
+                cb()
+            except Exception as exc:
+                log.warning("memory listener failed: %s", exc)
 
     async def create_backup_archive(
         self,
@@ -1830,6 +1937,11 @@ _STOP_PHRASES: frozenset[str] = frozenset(
 # Safety cap on consecutive assistant-held follow-up turns (multi-turn dialog), so a
 # model that keeps asking for a response can't hold the mic open indefinitely.
 _MAX_FOLLOWUP_TURNS = 6
+# ask() chains (a parked skill re-asking) get a higher ceiling than plain
+# dialog holds: enrollment alone is 5 prompts + a 4-retry budget, and the
+# skill's own conversation shape is the real bound — this cap only stops a
+# runaway loop. Plain LLM expect_response holds stay at dialog.max_turns.
+_MAX_ASK_TURNS = 16
 
 # Alarm ring loop: re-announce every interval until acknowledged (wake word),
 # capped so an empty house doesn't get lectured all morning (~10 × 25 s ≈ 4 min).
@@ -1868,11 +1980,17 @@ class TranscribingServer(AudioServer):
         # Pending intercom calls awaiting the receiver's spoken consent, keyed by the
         # *receiver* node_id → (caller_node_id, caller_room, timeout_task). No audio is
         # bridged while a call is pending.
-        self._pending_calls: dict[str, tuple[str, str, asyncio.Task[None]]] = {}
         # Count of consecutive assistant-held follow-up turns per node (multi-turn
         # dialog). Bumped each time we re-arm the mic without a wake word; cleared when
         # the exchange ends (no re-arm, silence, stop phrase, disconnect).
         self._followup_turns: dict[str, int] = {}
+        # ask() (4.2): asked-node_id → {"id", "capture", "origin_node",
+        # "origin_room"} of the parked continuation awaiting the answer.
+        # "audio" capture routes the raw PCM (no STT); origin != node is a
+        # CROSS-ROOM ask (intercom consent) — the final reply speaks at the
+        # origin, and the asked room's wake/timeout resolves as an empty
+        # answer instead of a discard (the asker deserves the outcome).
+        self._pending_ask: dict[str, dict[str, str]] = {}
 
         # Timers / alarms / reminders: persisted store + firing loop (started in
         # serve(), which needs the running event loop). Ring tasks per node for
@@ -1945,10 +2063,9 @@ class TranscribingServer(AudioServer):
             if url
         }
         # Voice enrollment ("enroll me as Alice") is gated by `allow_voice_enroll` in the
-        # speaker *service* config (read live via _voice_enroll_allowed, so it's editable
+        # speaker *service* config (the enrollment SKILL reads it via /enroll/info, editable
         # from the dashboard's Services tab). Active sessions keyed by node_id
         # (prompt → capture → POST /enroll loop).
-        self._enroll_sessions: dict[str, dict[str, Any]] = {}
         # Voice-guided calibration ("Hey Kenzy, calibrate") — active sessions keyed
         # by node_id; tune samples are routed to them via the always-registered
         # listener below (a dict miss when idle — negligible overhead).
@@ -1962,6 +2079,20 @@ class TranscribingServer(AudioServer):
         self._chimes: dict[str, str] = (
             {str(k): str(v) for k, v in chimes.items()} if isinstance(chimes, dict) else {}
         )
+        # Sound library roots (4.2): payloads name files; names resolve ONLY
+        # within these roots (kenzy/tones resolve_sound — traversal and
+        # absolute paths rejected). data/sounds rides backups; extra roots are
+        # deliberately file-managed (server.yaml, not dashboard-editable) —
+        # the roots list IS the security boundary.
+        from kenzy.config import kenzy_data_root
+
+        sounds_cfg = cfg.get("sounds") if isinstance(cfg.get("sounds"), dict) else {}
+        raw_dirs = sounds_cfg.get("dirs") if isinstance(sounds_cfg, dict) else None
+        data_root = kenzy_data_root()
+        self._sound_roots: list[Path] = [data_root / "data" / "sounds"]
+        for d in raw_dirs if isinstance(raw_dirs, list) else []:
+            p = Path(str(d)).expanduser()
+            self._sound_roots.append(p if p.is_absolute() else data_root / p)
         if self._speaker_url:
             log.info(
                 "Speaker service: %s (timeout=%.0fs)", self._speaker_url, self._speaker_timeout
@@ -2004,6 +2135,9 @@ class TranscribingServer(AudioServer):
     async def on_wakeword(self, session: NodeSession, model: str, score: float) -> None:
         self._cancel_stt(session.node_id)
         self._calib_saw_wake(session.node_id)  # mid-stream/TTS wake counts too
+        # The wake word ALWAYS cancels a parked ask() (locked decision) — the
+        # household's universal escape hatch.
+        self._abandon_pending_ask(session.node_id, "wakeword")
         # The wake word acknowledges a ringing alarm (mirrors the intercom hang-up).
         self._stop_ringing(session.node_id)
         # If the node is not currently streaming audio to us it may be playing
@@ -2079,10 +2213,16 @@ class TranscribingServer(AudioServer):
         # node_id addresses the node (state + control); room_name is the semantic
         # label the backends see (STT/speaker/LLM/TTS `room_id`).
         try:
-            # Voice enrollment: this capture is an enrollment sample, not a command —
-            # route it to /enroll instead of the STT→LLM pipeline.
-            if node_id in self._enroll_sessions:
-                await self._handle_enroll_capture(node_id, room_name, pcm)
+            # ask(capture="audio") (4.2): this capture IS the answer — an
+            # enrollment sample, not a command. The raw PCM routes straight to
+            # the parked skill; STT and speaker-id never run on it.
+            pa = self._pending_ask.get(node_id)
+            if pa is not None and pa.get("capture") == "audio":
+                self._pending_ask.pop(node_id, None)
+                reply = await self._call_llm_continue_audio(pa["id"], pcm)
+                await self._deliver_reply(
+                    node_id, room_name, session_id, reply, transcript="[voice sample]"
+                )
                 return
 
             if not self._stt_url:
@@ -2124,15 +2264,10 @@ class TranscribingServer(AudioServer):
                 identity.confidence,
             )
 
-            # Intercom consent: if this node has a pending incoming call, the captured
-            # utterance is the accept/decline answer — not a command for the LLM.
-            if node_id in self._pending_calls:
-                await self._resolve_call(node_id, _is_affirmative(text))
-                return
-
             if not text:
                 # Silence — including a held follow-up window the user let lapse: end
-                # any multi-turn dialog and return to idle.
+                # any multi-turn dialog (and any parked ask) and return to idle.
+                self._abandon_pending_ask(node_id, "silence")
                 self._end_followup_dialog(node_id)
                 await self.stop_node(node_id)
                 self._tts_active.discard(node_id)
@@ -2141,6 +2276,7 @@ class TranscribingServer(AudioServer):
             normalized = re.sub(r"[^\w\s]", "", text).strip().lower()
             if normalized in _STOP_PHRASES:
                 log.info("[%s] stop phrase detected (%r) — ending session", node_id, text)
+                self._abandon_pending_ask(node_id, "stop phrase")
                 self._end_followup_dialog(node_id)
                 await self.stop_node(node_id)
                 self._tts_active.discard(node_id)
@@ -2148,11 +2284,30 @@ class TranscribingServer(AudioServer):
 
             if self._llm_url:
                 _t = time.monotonic()
-                response_text, voice_prompt, actions, fast, expect_response, secret, spans = (
-                    await self._call_llm(
+                pending_ask = self._pending_ask.pop(node_id, None)
+                if pending_ask is not None:
+                    # This utterance ANSWERS a parked ask(): resume the skill
+                    # instead of a fresh dispatch — the whole point of ask().
+                    reply = await self._call_llm_continue(pending_ask["id"], text, identity)
+                    if pending_ask.get("origin_node") not in (None, node_id):
+                        # Cross-room ask (intercom consent): the outcome belongs
+                        # to the ASKER's room; this room just answered.
+                        self._end_followup_dialog(node_id)
+                        await self._deliver_reply(
+                            str(pending_ask["origin_node"]),
+                            str(pending_ask.get("origin_room") or ""),
+                            None,
+                            reply,
+                            transcript=text,
+                        )
+                        return
+                else:
+                    reply = await self._call_llm(
                         text, room_name, session_id, speaker, node_id=node_id, identity=identity
                     )
-                )
+                response_text, voice_prompt = reply.text, reply.voice_prompt
+                actions, fast = reply.actions, reply.fast
+                expect_response, secret, spans = reply.expect_response, reply.secret, reply.spans
                 llm_ms = (time.monotonic() - _t) * 1000.0
                 log.info(
                     "[%s] LLM%s: %s",
@@ -2162,14 +2317,34 @@ class TranscribingServer(AudioServer):
                 )
                 log.debug("[%s] voice_prompt: %s", node_id, voice_prompt)
 
+                # ask() (4.2): the reply IS a question from a parked skill — the
+                # next captured utterance routes back to it. Stored before the
+                # floor-hold arms so a fast answer can't race the bookkeeping.
+                # A cross-room ask (ask_room) delivers the question at THAT
+                # room instead; this node just hears the announcement.
+                if reply.continuation and reply.ask_room:
+                    await self._deliver_cross_ask(node_id, room_name, reply)
+                elif reply.continuation:
+                    self._pending_ask[node_id] = {
+                        "id": reply.continuation,
+                        "capture": reply.ask_capture,
+                        "origin_node": node_id,
+                        "origin_room": room_name,
+                    }
+
                 # Multi-turn: if the reply deliberately holds the floor, arm the node to
                 # capture the user's answer after the prompt plays (no wake word), bounded
                 # by _MAX_FOLLOWUP_TURNS. Arm BEFORE _run_tts so _capture_after_prompt is
                 # set before playback finishes (mirrors the enrollment prompt flow).
                 was_holding = node_id in self._followup_turns
+                hold_here = expect_response and bool(response_text) and not reply.ask_room
                 rearmed = await self._maybe_hold_floor(
-                    node_id, expect_response and bool(response_text)
+                    node_id, hold_here, cue=reply.ask_cue, for_ask=bool(reply.continuation)
                 )
+                if reply.continuation and not reply.ask_room and not rearmed:
+                    # Turn cap / arm failure: the question can never be answered —
+                    # unpark it now rather than letting the backstop sweep it.
+                    self._cancel_pending_ask(node_id, "floor not held")
 
                 _t = time.monotonic()
                 spoke_ok = await self._run_tts(
@@ -2241,20 +2416,27 @@ class TranscribingServer(AudioServer):
         if pcm:
             await self._stream_pcm(node_id, pcm)
 
-    async def _maybe_hold_floor(self, node_id: str, hold: bool) -> bool:
+    async def _maybe_hold_floor(
+        self, node_id: str, hold: bool, *, cue: bool = False, for_ask: bool = False
+    ) -> bool:
         """Arm/continue a multi-turn dialog, or end it. Returns whether we re-armed.
 
         When ``hold`` (the reply deliberately expects an answer) and we're under the
         per-node turn cap, send ``expect_utterance`` so the node re-opens the mic after
         the prompt plays — no wake word. Otherwise the exchange is over: end it.
+        ``for_ask`` (a parked skill's question) raises the cap to _MAX_ASK_TURNS —
+        the skill's conversation shape is the real bound there.
         """
         turns = self._followup_turns.get(node_id, 0)
-        if hold and turns < self._max_followup_turns:
+        cap = max(self._max_followup_turns, _MAX_ASK_TURNS) if for_ask else self._max_followup_turns
+        if hold and turns < cap:
             node = self._nodes.get(node_id)
             if node is not None:
                 try:
-                    # cue=False: her question is the cue — dialog turns open silently.
-                    await node.ws.send(protocol.expect_utterance(cue=False))
+                    # Dialog turns open silently (her question is the cue);
+                    # record-after-the-tone flows (audio asks: enrollment) get
+                    # the chime — the tone does real work there.
+                    await node.ws.send(protocol.expect_utterance(cue=cue))
                     self._followup_turns[node_id] = turns + 1
                     log.info("[%s] holding floor for follow-up (turn %d)", node_id, turns + 1)
                     return True
@@ -2264,17 +2446,24 @@ class TranscribingServer(AudioServer):
         return False
 
     def _followup_timed_out(self, node_id: str) -> None:
-        # An expired capture window during ENROLLMENT is a missed sample, not a
-        # dialog event: route it to the retry path (attempts++, "I didn't catch
-        # that" + a fresh window) instead of leaving the session to die silently
-        # on the inactivity timeout. Field finding (voice rig): a person who
-        # hesitates past the 8s window otherwise gets no retry and no feedback.
-        session = self._enroll_sessions.get(node_id)
-        if session is not None:
-            asyncio.create_task(
-                self._handle_enroll_capture(node_id, str(session.get("room", "")), b"")
-            )
+        pa = self._pending_ask.get(node_id)
+        if pa is not None and pa.get("capture") == "audio":
+            # An audio ask (enrollment) treats an expired window as an EMPTY
+            # sample — the skill retries the same prompt ("I didn't catch
+            # that"), mirroring the old enrollment retry path. Its attempt cap
+            # bounds the loop.
+            self._pending_ask.pop(node_id, None)
+            node = self._nodes.get(node_id)
+            room = node.room_id if node is not None else ""
+
+            async def _empty() -> None:
+                reply = await self._call_llm_continue_audio(pa["id"], b"")
+                await self._deliver_reply(node_id, room, None, reply, transcript="[no sample]")
+
+            asyncio.create_task(_empty())
             return
+        # A parked ask() whose reply window expired: the skill gets None.
+        self._abandon_pending_ask(node_id, "reply window expired")
         self._end_followup_dialog(node_id)
 
     def _end_followup_dialog(self, node_id: str) -> None:
@@ -2319,9 +2508,15 @@ class TranscribingServer(AudioServer):
         # guests chatting concurrently never see each other's context.
         lane = f"assist:{identity.person_id or 'guest:' + (ha_user or 'anon')}"
         try:
-            reply, _vp, actions, fast, _expect, _secret, _spans = await self._call_llm(
+            r = await self._call_llm(
                 text, lane, None, speaker=identity.display, identity=identity, channel="assist"
             )
+            if r.continuation:
+                # Assist can't hold a voice floor yet (HA continue_conversation
+                # arrives with the ask() Assist phase) — unpark immediately; the
+                # spoken prompt still goes back as the reply text.
+                await self._cancel_continuation_now(r.continuation, "assist channel")
+            reply, actions, fast = r.text, r.actions, r.fast
         except Exception as exc:
             log.warning("Assist pipeline failed: %s", exc)
             return self._http_json(502, {"error": "assist pipeline failed"})
@@ -2384,6 +2579,17 @@ class TranscribingServer(AudioServer):
             resp.raise_for_status()
         return str(resp.json()["text"])
 
+    def _speaker_service_base(self) -> str | None:
+        """The speaker service's base URL — static config first, else the
+        auto-registered heartbeat (mirrors the dashboard's _service_base rule:
+        never trust the static map alone)."""
+        if self._speaker_url:
+            return self._speaker_url.rsplit("/", 1)[0]
+        announced = self._announced_services.get("speaker")
+        if announced:
+            return str(announced.get("base") or "") or None
+        return None
+
     async def _tts_is_local(self) -> bool:
         """Whether kenzy-tts reports a local provider (``/health`` → ``local``).
         Cached ~15s (short: a stale True would speak a secret through a just-
@@ -2410,6 +2616,254 @@ class TranscribingServer(AudioServer):
         self._tts_local_cache = (now, local)
         return local
 
+    async def _deliver_reply(
+        self,
+        node_id: str,
+        room_name: str,
+        session_id: str | None,
+        reply: LlmReply,
+        *,
+        transcript: str = "",
+    ) -> None:
+        """Speak an LlmReply at a node with full ask() semantics — pending-ask
+        bookkeeping, cue-aware floor hold, Activity record, actions. The
+        pipeline's main path inlines its own richer version (per-stage
+        timings); this serves the paths with no STT stage: audio-ask resumes
+        and dashboard-initiated enrollment."""
+        log.info(
+            "[%s] LLM%s: %s",
+            node_id,
+            " (fast)" if reply.fast else "",
+            "[lockbox exchange — response withheld]" if reply.secret else reply.text,
+        )
+        if reply.continuation and reply.ask_room:
+            await self._deliver_cross_ask(node_id, room_name, reply)
+        elif reply.continuation:
+            self._pending_ask[node_id] = {
+                "id": reply.continuation,
+                "capture": reply.ask_capture,
+                "origin_node": node_id,
+                "origin_room": room_name,
+            }
+        hold_here = reply.expect_response and bool(reply.text) and not reply.ask_room
+        rearmed = await self._maybe_hold_floor(
+            node_id, hold_here, cue=reply.ask_cue, for_ask=bool(reply.continuation)
+        )
+        if reply.continuation and not reply.ask_room and not rearmed:
+            self._cancel_pending_ask(node_id, "floor not held")
+        spoke_ok = await self._run_tts(
+            node_id, room_name, session_id or str(uuid.uuid4()), reply.text,
+            reply.voice_prompt, sensitive=reply.secret,
+        )  # fmt: skip
+        if not spoke_ok:
+            await self._play_error_cue(node_id)
+        if self._session_listeners and transcript:
+            self._notify_session(
+                {
+                    "ts": time.time(),
+                    "node_id": node_id,
+                    "room": room_name,
+                    "speaker": "",
+                    "transcript": transcript,
+                    "response": "[content withheld]" if reply.secret else reply.text,
+                    "fast": reply.fast,
+                    "spans": reply.spans,
+                    "stt_ms": 0,
+                    "speaker_ms": 0,
+                    "llm_ms": 0,
+                    "tts_ms": 0,
+                    "total_ms": 0,
+                }
+            )
+        if reply.actions:
+            await self._dispatch_actions(reply.actions, node_id, room_name, None)
+
+    async def _deliver_cross_ask(self, origin_node: str, origin_room: str, reply: LlmReply) -> None:
+        """Deliver a cross-room ask: speak the question at the TARGET room and
+        arm its window; the origin has already heard the announcement. Any
+        failure resolves the continuation as an empty answer so the parked
+        skill can tell the asker what happened."""
+        assert reply.continuation is not None
+        target_id = self._resolve_room_node(str(reply.ask_room), exclude=origin_node)
+        target = self._nodes.get(target_id) if target_id else None
+        busy = target_id is not None and (
+            target_id in self._pending_ask
+            or (target is not None and target.intercom_peer is not None)
+        )
+        if target is None or busy:
+            reason = "busy" if busy else "unreachable"
+            log.info(
+                "[%s] cross-room ask to %r failed (%s)", origin_node, reply.ask_room, reason
+            )
+            asyncio.create_task(
+                self._resume_ask_empty(reply.continuation, origin_node, origin_room)
+            )
+            return
+        assert target_id is not None
+        self._pending_ask[target_id] = {
+            "id": reply.continuation,
+            "capture": reply.ask_capture,
+            "origin_node": origin_node,
+            "origin_room": origin_room,
+        }
+        # Ringback at the origin while the question travels (node stops it on
+        # the next TTS / connect / wake). Best-effort.
+        origin = self._nodes.get(origin_node)
+        if origin is not None:
+            try:
+                await origin.ws.send(protocol.call_ringing())
+            except Exception:
+                pass
+        rearmed = await self._maybe_hold_floor(target_id, True, cue=reply.ask_cue, for_ask=True)
+        if not rearmed:
+            self._pending_ask.pop(target_id, None)
+            asyncio.create_task(
+                self._resume_ask_empty(reply.continuation, origin_node, origin_room)
+            )
+            return
+        await self._run_tts(
+            target_id, target.room_id, str(uuid.uuid4()), reply.ask_prompt, reply.voice_prompt
+        )
+
+    async def _resume_ask_empty(self, cont_id: str, origin_node: str, origin_room: str) -> None:
+        """Resolve a cross-room ask with an EMPTY answer (no answer / wake /
+        target lost) and deliver the skill's outcome to the ASKER's room —
+        unlike a cancel, the asker hears what happened ("No answer from…")."""
+        try:
+            reply = await self._call_llm_continue(cont_id, "", None)
+        except Exception as exc:
+            log.warning("cross-room ask %s could not resolve: %s", cont_id, exc)
+            return
+        await self._deliver_reply(origin_node, origin_room, None, reply)
+
+    async def _call_llm_continue_audio(self, cont_id: str, pcm: bytes) -> LlmReply:
+        """Deliver a RAW captured sample to an audio-mode ask() (enrollment).
+        No STT, no speaker-id — the audio is the answer."""
+        import base64
+
+        import httpx  # type: ignore[import-untyped]
+
+        url = self._llm_url_sibling("continue")
+        payload = {
+            "continuation": cont_id,
+            "audio_b64": base64.b64encode(pcm).decode(),
+            "tts_local": await self._tts_is_local(),
+        }
+        async with httpx.AsyncClient(verify=tlsutil.httpx_verify()) as client:
+            resp = await client.post(
+                url,
+                json=payload,
+                timeout=self._llm_timeout,
+                headers=self._service_headers("POST", url),
+            )
+            if resp.status_code == 404:
+                return LlmReply(
+                    text="Sorry — I lost track of that. Let's start over.",
+                    voice_prompt="apologetic, brief",
+                )
+            resp.raise_for_status()
+        return _llm_reply_from(resp.json())
+
+    async def _call_llm_continue(self, cont_id: str, text: str, identity: Any) -> LlmReply:
+        """Deliver the user's answer to a parked ask() continuation. A 404
+        (llm restarted — continuations are mortal by design) degrades to an
+        honest 'lost track' reply instead of an error cue."""
+        import httpx  # type: ignore[import-untyped]
+
+        url = self._llm_url_sibling("continue")
+        payload = {
+            "continuation": cont_id,
+            "text": text,
+            "speaker": identity.display if identity else None,
+            "person_id": identity.person_id if identity else None,
+            "speaker_tier": identity.tier if identity else None,
+            "confidence": round(identity.confidence, 4) if identity else None,
+            "memory_opt_out": self._person_memory_opt_out(identity),
+            "tts_local": await self._tts_is_local(),
+        }
+        async with httpx.AsyncClient(verify=tlsutil.httpx_verify()) as client:
+            resp = await client.post(
+                url,
+                json=payload,
+                timeout=self._llm_timeout,
+                headers=self._service_headers("POST", url),
+            )
+            if resp.status_code == 404:
+                return LlmReply(
+                    text="Sorry — I lost track of that. Let's start over.",
+                    voice_prompt="apologetic, brief",
+                )
+            resp.raise_for_status()
+        return _llm_reply_from(resp.json())
+
+    async def _cancel_continuation_now(self, cont_id: str, reason: str) -> None:
+        """Awaited cancel for paths with no node bookkeeping (assist, scheduled)."""
+        import httpx  # type: ignore[import-untyped]
+
+        url = self._llm_url_sibling("cancel")
+        try:
+            async with httpx.AsyncClient(verify=tlsutil.httpx_verify()) as client:
+                await client.post(
+                    url,
+                    json={"continuation": cont_id, "reason": reason},
+                    timeout=5.0,
+                    headers=self._service_headers("POST", url),
+                )
+        except Exception as exc:
+            log.debug("ask cancel (%s) failed: %s — llm backstop will sweep", reason, exc)
+
+    def _abandon_pending_ask(self, node_id: str, reason: str) -> None:
+        """The asked node moved on (wake / silence / stop / window expiry).
+        Same-room asks cancel (the asker IS the abandoner); a cross-room ask
+        resolves as an EMPTY answer so the asker hears the outcome."""
+        entry = self._pending_ask.get(node_id)
+        if entry is None:
+            return
+        if entry.get("origin_node") not in (None, node_id):
+            self._pending_ask.pop(node_id, None)
+            log.info("[%s] cross-room ask abandoned (%s) — resolving empty", node_id, reason)
+            asyncio.create_task(
+                self._resume_ask_empty(
+                    entry["id"], str(entry["origin_node"]), str(entry.get("origin_room") or "")
+                )
+            )
+            return
+        self._cancel_pending_ask(node_id, reason)
+
+    def _cancel_pending_ask(self, node_id: str, reason: str) -> None:
+        """Wake word / window expiry / stop phrase / disconnect: tell the LLM
+        service to unpark the continuation with None. Fire-and-forget — the
+        conversation has already moved on."""
+        entry = self._pending_ask.pop(node_id, None)
+        if entry is None:
+            return
+        self._cancel_by_id(entry["id"], reason)
+        log.info("[%s] pending ask canceled (%s)", node_id, reason)
+
+    def _cancel_by_id(self, cont_id: str, reason: str) -> None:
+        """Fire-and-forget POST /process/cancel for a known continuation id."""
+
+        async def _post() -> None:
+            import httpx  # type: ignore[import-untyped]
+
+            url = self._llm_url_sibling("cancel")
+            try:
+                async with httpx.AsyncClient(verify=tlsutil.httpx_verify()) as client:
+                    await client.post(
+                        url,
+                        json={"continuation": cont_id, "reason": reason},
+                        timeout=5.0,
+                        headers=self._service_headers("POST", url),
+                    )
+            except Exception as exc:
+                log.debug("ask cancel for %s failed (%s) — llm backstop will sweep", cont_id, exc)
+
+        asyncio.create_task(_post())
+
+    def _llm_url_sibling(self, leaf: str) -> str:
+        """/process → /process/<leaf> on the same base."""
+        return f"{self._llm_url}/{leaf}"
+
     async def _call_llm(
         self,
         text: str,
@@ -2419,7 +2873,7 @@ class TranscribingServer(AudioServer):
         node_id: str | None = None,
         identity: Identity | None = None,
         channel: str = "voice",
-    ) -> tuple[str, str, list[dict[str, Any]], bool, bool, bool, list[dict[str, Any]]]:
+    ) -> LlmReply:
         import httpx  # type: ignore[import-untyped]
 
         payload = {
@@ -2438,6 +2892,21 @@ class TranscribingServer(AudioServer):
             "memory_capture": self._person_memory_capture(identity),
             # Connected room names so the model can target real rooms (announce/intercom).
             "rooms": sorted({s.room_id for s in self._nodes.values()}),
+            # The speaker service base (static config ← auto-registered heartbeat,
+            # resolved per-request) — the enrollment skill POSTs samples to it.
+            "speaker_url": self._speaker_service_base(),
+            # Person records (light form) so skills can resolve spoken names —
+            # enrollment's person-first profile keying lives in the skill now.
+            "people": [
+                {
+                    "id": p["id"],
+                    "name": p["name"],
+                    "voiceprints": p["voiceprints"],
+                    # ha_user link (F1): what makes presence-on-demand zero-config.
+                    "ha_user": p.get("ha_user"),
+                }
+                for p in self.list_people()
+            ],
             # The asking node's active timers/alarms/reminders, so the schedule
             # skill / fast intents can answer status and cancel by id locally.
             # A nodeless channel (assist, F3) gets the whole house's entries —
@@ -2462,18 +2931,7 @@ class TranscribingServer(AudioServer):
             )
             resp.raise_for_status()
             data = resp.json()
-        actions = data.get("actions") or []
-        return (
-            str(data["text"]),
-            str(data["voice_prompt"]),
-            actions,
-            bool(data.get("fast", False)),
-            bool(data.get("expect_response", False)),
-            # Lockbox content shaped this exchange: redact logs + the Activity record.
-            bool(data.get("secret", False)),
-            # LLM-internal timing breakdown (model/tool/fast spans) for Activity.
-            list(data.get("spans") or []),
-        )
+        return _llm_reply_from(data)
 
     async def _dispatch_actions(
         self,
@@ -2497,8 +2955,7 @@ class TranscribingServer(AudioServer):
             # the assist channel already — this is the server-side backstop so
             # a custom skill queueing one can't crash dispatch.
             if not source_node_id and atype in (
-                "start_intercom",
-                "start_enrollment",
+                "connect_call",
                 "start_calibration",
                 "set_volume",
             ):
@@ -2525,11 +2982,20 @@ class TranscribingServer(AudioServer):
                     continue
                 count = await self.announce(msg, targets)
                 log.info("[%s] announced to %d node(s): %s", source_node_id, count, msg)
-            elif atype == "start_intercom":
-                await self.start_intercom(source_node_id, source_room, str(action.get("room", "")))
-            elif atype == "start_enrollment":
-                await self.start_enrollment(
-                    source_node_id, source_room, str(action.get("name", ""))
+            elif atype == "connect_call":
+                # Intercom bridge, AFTER the skill's cross-room consent ask got
+                # its spoken yes. Server-side re-checks are the backstop (the
+                # skill already refused no-AEC/unknown rooms in-reply).
+                await self._action_connect_call(
+                    source_node_id, source_room, str(action.get("room", ""))
+                )
+            elif atype == "adopt_voice":
+                # Person-first invariant, actuated from the enrollment skill on
+                # its FIRST stored sample: link the voiceprint to its person.
+                self.adopt_enrolled_voice(
+                    str(action.get("voiceprint", "")),
+                    str(action.get("display", "")) or str(action.get("voiceprint", "")),
+                    str(action.get("person_id") or "") or None,
                 )
             elif atype == "start_calibration":
                 # Voice-guided audio calibration on the asking node (spawns its own
@@ -2785,11 +3251,13 @@ class TranscribingServer(AudioServer):
             log.warning("[%s] scheduled command %r fired but no LLM is configured", room, command)
             return
         try:
-            response_text, voice_prompt, actions, _fast, _expect, _secret, _spans = (
-                await self._call_llm(
-                    command, room, str(uuid.uuid4()), speaker or None, node_id=node_id
-                )
+            r = await self._call_llm(
+                command, room, str(uuid.uuid4()), speaker or None, node_id=node_id
             )
+            if r.continuation:
+                # A scheduled replay has nobody standing by to answer.
+                await self._cancel_continuation_now(r.continuation, "scheduled command")
+            response_text, voice_prompt, actions = r.text, r.voice_prompt, r.actions
             if response_text:
                 await self._run_tts(node_id, room, str(uuid.uuid4()), response_text, voice_prompt)
             if actions:
@@ -2855,14 +3323,6 @@ class TranscribingServer(AudioServer):
     # Voice speaker enrollment (prompt → capture one utterance → POST /enroll)
     # ------------------------------------------------------------------
 
-    def _voice_enroll_allowed(self) -> bool:
-        """Whether voice enrollment is enabled — read live from the speaker service
-        config so a dashboard toggle takes effect without a server restart."""
-        try:
-            return bool(self._effective_service_config("speaker").get("allow_voice_enroll", False))
-        except Exception:
-            return False
-
     async def start_enrollment(
         self,
         node_id: str,
@@ -2872,217 +3332,42 @@ class TranscribingServer(AudioServer):
         operator: bool = False,
         person_id: str | None = None,
     ) -> None:
-        """Begin a voice-enrollment session on a node — **person-first**: every
-        enrolled voice belongs to a person. ``person_id`` (dashboard flow) picks
-        the person directly; a bare ``name`` (the "enroll me as Alice" voice
-        command, legacy callers) resolves to the person it names — or a new
-        person record is created when the first sample lands. The voice profile
-        is keyed by the person's existing voiceprint (more samples) or their
-        stable id (fresh profile), never a free-form name.
+        """Dashboard-initiated voice enrollment (4.2: the conversation itself
+        lives in the enrollment SKILL, driven by ask_audio). This entry sends a
+        deterministic internal directive through the normal pipeline; the
+        skill's fast intent matches it and runs the prompt/sample loop, with
+        person adoption riding back as an ``adopt_voice`` action.
 
-        ``operator=True`` is for dashboard-initiated enrollment: it bypasses the
-        ``allow_voice_enroll`` earshot gate (the request is already authenticated and
-        ``controls``-gated, a stronger check than "anyone in the room").
+        ``operator=True`` (the dashboard) bypasses the ``allow_voice_enroll``
+        earshot gate — the request is already authenticated + controls-gated.
         """
-        if not operator and not self._voice_enroll_allowed():
-            await self._say(node_id, room, "Voice enrollment is turned off.")
-            return
-        name = name.strip()
-        if not name:
-            await self._say(node_id, room, "I didn't catch the name to enroll.")
-            return
-        if not self._speaker_url:
+        if not self._speaker_url and not self._announced_services.get("speaker"):
             await self._say(
                 node_id, room, "Speaker identification isn't set up, so I can't enroll."
             )
             return
-        if node_id in self._enroll_sessions:
-            return  # already enrolling on this node
-
-        person: Person | None
-        if person_id:
-            person = self._people.get(person_id)
-            if person is None:
-                await self._say(node_id, room, "I couldn't find that person to enroll.")
-                return
-        else:
-            person = self._people.by_voiceprint(name) or self._people.by_name(name)
-        if person is not None:
-            display = person.name
-            person_id = person.id
-            # Append to the profile they already have (the record's exact
-            # spelling); a voiceless person gets a fresh profile keyed by their
-            # stable id, so renaming the person never touches the file.
-            existing = next((v for v in person.voiceprints if v.lower() == name.lower()), None)
-            voiceprint = existing or (person.voiceprints[0] if person.voiceprints else person.id)
-        else:
-            display = name
-            # New person: key the profile by the slug their record will get on
-            # the first sample, so profile name == person id.
-            voiceprint = slugify(name)
-
-        prompts = self._enroll_prompts()
-        timeout = asyncio.create_task(
-            self._enroll_timeout(node_id), name=f"enroll-timeout-{node_id}"
+        directive = (
+            f"[[enroll]] operator={1 if operator else 0} "
+            f"person={person_id or ''} name={name.strip()}"
         )
-        self._enroll_sessions[node_id] = {
-            "name": voiceprint,
-            "display": display,
-            "person_id": person_id,
-            "room": room,
-            "collected": 0,
-            "attempts": 0,
-            "prompts": prompts,
-            "timeout": timeout,
-        }
-        log.info(
-            "[%s] voice enrollment started for '%s' (voiceprint '%s', %d prompt(s))",
-            node_id,
-            display,
-            voiceprint,
-            len(prompts),
+        reply = await self._call_llm(
+            directive, room, str(uuid.uuid4()), None, node_id=node_id, identity=None
         )
-        await self._enroll_prompt(
-            node_id, room, f"Okay, enrolling {display}. After the tone, please say: {prompts[0]}"
-        )
-
-    def _enroll_prompts(self) -> list[str]:
-        """The enrollment sentences to read — the dashboard-editable speaker-service
-        ``enroll_prompts`` (single source of truth, shared with ``kenzy-enroll``),
-        falling back to the bundled defaults when unset."""
-        try:
-            configured = self._effective_service_config("speaker").get("enroll_prompts")
-        except Exception:
-            configured = None
-        prompts = (
-            [str(p).strip() for p in configured if str(p).strip()]
-            if isinstance(configured, list)
-            else []
-        )
-        return prompts or list(DEFAULT_ENROLL_PROMPTS)
-
-    async def _enroll_prompt(self, node_id: str, room: str, text: str) -> None:
-        """Arm one-shot capture on the node, then speak the prompt."""
-        node = self._nodes.get(node_id)
-        if node is None:
-            self._end_enroll_session(node_id)
-            return
-        try:
-            # cue=True: enrollment is a record-after-the-tone flow — the chime
-            # does real work here (stage 1 keeps it on purpose).
-            await node.ws.send(protocol.expect_utterance(cue=True))
-        except Exception:
-            self._end_enroll_session(node_id)
-            return
-        await self._run_tts(node_id, room, str(uuid.uuid4()), text, _INTERCOM_VOICE_PROMPT)
-
-    async def _handle_enroll_capture(self, node_id: str, room: str, pcm: bytes) -> None:
-        """Route one captured utterance to /enroll, then prompt for the next or finish."""
-        session = self._enroll_sessions.get(node_id)
-        if session is None:
-            return
-        session["attempts"] += 1
-        # A capture arrived — the session is making progress, so re-arm the
-        # timeout (it's an INACTIVITY timeout, not a total budget: five prompts
-        # through a slow local TTS legitimately exceed any fixed session cap).
-        old = session.get("timeout")
-        if old is not None:
-            old.cancel()
-        session["timeout"] = asyncio.create_task(
-            self._enroll_timeout(node_id), name=f"enroll-timeout-{node_id}"
-        )
-        ok = len(pcm) >= _ENROLL_MIN_PCM_BYTES and await self._call_enroll(pcm, session["name"])
-        if ok:
-            session["collected"] += 1
-            if session["collected"] == 1:
-                # First sample stored — enforce the person-first invariant NOW,
-                # so even an interrupted enrollment never orphans a voice.
-                self.adopt_enrolled_voice(
-                    session["name"],
-                    session.get("display") or session["name"],
-                    session.get("person_id"),
-                )
-
-        # One sample per configured prompt; `collected` doubles as the index of the
-        # next sentence to read, so a failed capture re-reads the same prompt.
-        prompts = session.get("prompts") or list(DEFAULT_ENROLL_PROMPTS)
-        if session["collected"] >= len(prompts):
-            name = session.get("display") or session["name"]
-            self._end_enroll_session(node_id)
-            await self._say(node_id, room, f"All done — I've enrolled {name}.")
-            return
-        if session["attempts"] >= len(prompts) + _ENROLL_MAX_RETRIES:
-            self._end_enroll_session(node_id)
-            await self._say(
-                node_id, room, "I couldn't get enough clear audio. Enrollment cancelled."
-            )
-            return
-        sentence = prompts[session["collected"]]
-        prompt = (
-            f"I didn't catch that. Please say: {sentence}"
-            if not ok
-            else f"Got it. Next, please say: {sentence}"
-        )
-        await self._enroll_prompt(node_id, room, prompt)
-
-    def _end_enroll_session(self, node_id: str) -> None:
-        session = self._enroll_sessions.pop(node_id, None)
-        if session is not None:
-            t = session.get("timeout")
-            if t is not None:
-                t.cancel()
+        await self._deliver_reply(node_id, room, None, reply)
 
     def _cleanup_on_disconnect(self, node_id: str) -> None:
-        self._end_enroll_session(node_id)
         self._end_calib_session(node_id)
+        self._abandon_pending_ask(node_id, "node disconnected")
+        # An ORIGIN that vanished mid-cross-ask: nobody is left to hear the
+        # outcome — cancel the continuation outright.
+        for asked, entry in list(self._pending_ask.items()):
+            if entry.get("origin_node") == node_id and asked != node_id:
+                self._pending_ask.pop(asked, None)
+                self._cancel_by_id(entry["id"], "asker disconnected")
         self._followup_turns.pop(node_id, None)
         task = self._ring_tasks.pop(node_id, None)
         if task is not None:
             task.cancel()
-
-    async def _enroll_timeout(self, node_id: str) -> None:
-        try:
-            await asyncio.sleep(_ENROLL_TIMEOUT_SEC)
-        except asyncio.CancelledError:
-            return
-        session = self._enroll_sessions.pop(node_id, None)
-        if session is not None:
-            log.info("[%s] enrollment timed out", node_id)
-            await self._say(node_id, session["room"], "Enrollment timed out.")
-
-    async def _call_enroll(self, pcm: bytes, name: str) -> bool:
-        """POST one PCM sample to the speaker service's /enroll. Returns success."""
-        if not self._speaker_url:
-            return False
-        import base64
-
-        import httpx  # type: ignore[import-untyped]
-
-        enroll_url = self._speaker_url.rsplit("/", 1)[0] + "/enroll"
-        payload = {"audio_b64": base64.b64encode(pcm).decode(), "name": name}
-        try:
-            async with httpx.AsyncClient(verify=tlsutil.httpx_verify()) as client:
-                resp = await client.post(
-                    enroll_url,
-                    json=payload,
-                    timeout=self._speaker_timeout,
-                    headers=self._service_headers("POST", enroll_url),
-                )
-                resp.raise_for_status()
-            return True
-        except Exception as exc:
-            log.warning("enroll call failed: %s", exc)
-            return False
-
-    # ------------------------------------------------------------------
-    # Guided calibration — ONE server-driven session behind two entry points:
-    # "Hey Kenzy, calibrate" (mode="spoken": prompts via TTS, and the intro
-    # sentence doubles as the AEC probe) and the dashboard wizard
-    # (mode="silent": the browser renders the prompts from calibration events;
-    # a beep is the probe — no TTS involved). Same phases, gates, and math
-    # (kenzy.calibration) either way. Device selection stays dashboard-only by
-    # design: a wrong device can't hear voice commands anyway.
-    # ------------------------------------------------------------------
 
     def _calib_saw_wake(self, node_id: str) -> None:
         """Resolve a pending calibration Verify: a real wake word was heard."""
@@ -3140,7 +3425,8 @@ class TranscribingServer(AudioServer):
             return "node not connected"
         if node_id in self._calib_sessions:
             return "calibration already running"
-        if node_id in self._enroll_sessions:
+        pa = self._pending_ask.get(node_id)
+        if pa is not None and pa.get("capture") == "audio":
             return "enrollment in progress on this node"
         sess: dict[str, Any] = {
             "quiet": [],
@@ -3532,19 +3818,14 @@ class TranscribingServer(AudioServer):
             sess["expect_restart"] = False
             self._calib_sessions.pop(node_id, None)
 
-    async def start_intercom(self, caller_id: str, caller_room: str, target_room: str) -> None:
-        """Ring a target room for an intercom call (consent required before bridging)."""
-        target_room = (target_room or "").strip()
-        if not target_room:
+    async def _action_connect_call(self, caller_id: str, caller_room: str, room: str) -> None:
+        """Resolve + re-check the target, then bridge (consent already given
+        via the skill's cross-room ask)."""
+        receiver_id = self._resolve_room_node(room, exclude=caller_id)
+        receiver = self._nodes.get(receiver_id) if receiver_id else None
+        if receiver_id is None or receiver is None:
+            await self._say(caller_id, caller_room, f"I couldn't reach the {room}.")
             return
-        receiver_id = self._resolve_room_node(target_room, exclude=caller_id)
-        if receiver_id is None:
-            await self._say(caller_id, caller_room, f"I couldn't reach the {target_room}.")
-            return
-        receiver = self._nodes[receiver_id]
-        # Two-way live audio is impossible without echo cancellation (feedback
-        # loop) — refuse cleanly when either endpoint lacks it. Backstop: the
-        # connect_room skill already refuses in-reply via no_aec_rooms.
         if not self._node_aec(caller_id) or not self._node_aec(receiver_id):
             which = caller_room if not self._node_aec(caller_id) else receiver.room_id
             await self._say(
@@ -3554,70 +3835,10 @@ class TranscribingServer(AudioServer):
             )
             return
         caller = self._nodes.get(caller_id)
-        busy = (
-            receiver_id in self._pending_calls
-            or receiver.intercom_peer is not None
-            or (caller is not None and caller.intercom_peer is not None)
-        )
-        if busy:
+        if receiver.intercom_peer is not None or (
+            caller is not None and caller.intercom_peer is not None
+        ):
             await self._say(caller_id, caller_room, f"The {receiver.room_id} is busy.")
-            return
-        try:
-            await receiver.ws.send(protocol.call_request(caller_room))
-        except Exception:
-            await self._say(caller_id, caller_room, f"I couldn't reach the {receiver.room_id}.")
-            return
-        timeout = asyncio.create_task(
-            self._call_timeout(receiver_id), name=f"call-timeout-{receiver_id}"
-        )
-        self._pending_calls[receiver_id] = (caller_id, caller_room, timeout)
-        log.info("Intercom ring: %s → %s", caller_room, receiver.room_id)
-        # Ringback on the caller's end so they hear it connecting (their node
-        # starts it after the "calling…" reply finishes; connect/decline/timeout
-        # all stop it). Best-effort — silence is the pre-3.6.1 behavior.
-        if caller is not None:
-            try:
-                await caller.ws.send(protocol.call_ringing())
-            except Exception as exc:
-                log.debug("[%s] could not start caller ringback: %s", caller_id, exc)
-        # Spoken consent prompt; the receiver auto-captures the answer once it finishes.
-        prompt = (
-            f"The {caller_room} would like to start a voice chat. "
-            "Say yes to accept, or no to decline."
-        )
-        await self._run_tts(
-            receiver_id, receiver.room_id, str(uuid.uuid4()), prompt, _INTERCOM_VOICE_PROMPT
-        )
-
-    async def _call_timeout(self, receiver_id: str) -> None:
-        try:
-            await asyncio.sleep(_CALL_TIMEOUT_SEC)
-        except asyncio.CancelledError:
-            return
-        pending = self._pending_calls.pop(receiver_id, None)
-        if pending is None:
-            return
-        caller_id, caller_room, _ = pending
-        receiver = self._nodes.get(receiver_id)
-        rname = receiver.room_id if receiver else "the other room"
-        if receiver is not None:
-            try:
-                await receiver.ws.send(protocol.call_cancel())
-            except Exception:
-                pass
-        await self._say(caller_id, caller_room, f"No answer from the {rname}.")
-
-    async def _resolve_call(self, receiver_id: str, accepted: bool) -> None:
-        """Apply the receiver's consent decision: connect on yes, notify caller on no."""
-        pending = self._pending_calls.pop(receiver_id, None)
-        if pending is None:
-            return
-        caller_id, caller_room, timeout = pending
-        timeout.cancel()
-        receiver = self._nodes.get(receiver_id)
-        rname = receiver.room_id if receiver else "the other room"
-        if not accepted:
-            await self._say(caller_id, caller_room, f"The {rname} declined.")
             return
         await self._connect_call(caller_id, receiver_id)
 
@@ -3729,14 +3950,21 @@ class TranscribingServer(AudioServer):
         await self.send_tts_end(node_id, sid)
 
     def _chime_spec(self, name: str) -> str | None:
-        """Resolve a chime NAME to a tone spec: a configured ``chimes:`` entry, or
-        a bare bundled filename. Anything path-like is refused — MQTT callers
-        never get to point at arbitrary files on the server host."""
+        """Resolve a sound NAME to a tone spec: a configured ``chimes:`` alias,
+        a file inside the operator's ``sounds.dirs`` library roots (relative
+        subpaths fine, traversal/absolute rejected — resolve_sound is the
+        boundary), or a bare bundled filename. Callers never get to point at
+        arbitrary files on the server host."""
+        from kenzy.server import tones
+
         name = name.strip()
         if not name:
             return None
         if name in self._chimes:
             return self._chimes[name]
+        library = tones.resolve_sound(name, self._sound_roots)
+        if library is not None:
+            return str(library)
         from pathlib import PurePath
 
         if PurePath(name).name == name and not name.startswith("."):
@@ -3744,17 +3972,22 @@ class TranscribingServer(AudioServer):
         return None
 
     async def play_chime(
-        self, sound: str | None = None, seconds: float = 0.0, rooms: list[str] | None = None
+        self,
+        sound: str | None = None,
+        seconds: float = 0.0,
+        rooms: list[str] | None = None,
+        repeats: int = 0,
     ) -> int:
-        """Play a named chime on every (or selected) node — the instant, TTS-free
-        sibling of :meth:`announce` (the house-wide doorbell). ``seconds`` loops
-        the cue in whole repeats up to a cap. Alert audio: a muted node still
-        plays it at the audible floor."""
+        """Play a named sound on every (or selected) node — the instant, TTS-free
+        sibling of :meth:`announce` (the house-wide doorbell, the dog-bark MP3 on
+        the NAS…). ``seconds`` loops the cue by duration; ``repeats`` by whole
+        count — both capped. Alert audio: a muted node still plays it at the
+        audible floor."""
         from kenzy.server import tones
 
         spec = self._chime_spec(str(sound or "") or _CHIME_DEFAULT)
         if spec is None:
-            log.warning("chime refused: %r is not a configured or bundled sound name", sound)
+            log.warning("chime refused: %r is not a configured, library, or bundled sound", sound)
             return 0
         pcm = tones.load_tone(spec)
         if not pcm:
@@ -3763,7 +3996,13 @@ class TranscribingServer(AudioServer):
             loop_s = min(float(seconds or 0), _CHIME_MAX_S)
         except (TypeError, ValueError):
             loop_s = 0.0
-        if loop_s > 0:
+        try:
+            reps = max(0, int(repeats or 0))
+        except (TypeError, ValueError):
+            reps = 0
+        if reps > 1:
+            pcm = tones.repeat_pcm(pcm, reps, max_seconds=_CHIME_MAX_S * 2)
+        elif loop_s > 0:
             pcm = tones.tile_pcm(pcm, loop_s)
         async with self._lock:
             if rooms:
@@ -3877,6 +4116,7 @@ def main() -> None:
                     v.get("sound"),
                     v.get("seconds") or 0,
                     [str(r) for r in rooms] if isinstance(rooms, list) else None,
+                    repeats=int(v.get("repeats") or 0),
                 )
 
         _hub = IntegrationHub()

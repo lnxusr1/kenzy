@@ -35,9 +35,9 @@ any time.
 In a browser on the same network, open:
 
 ```
-http://localhost:8770
+https://localhost:8770
 
-(or http://<the-computer's-IP>:8770 from another machine)
+(or https://<the-computer's-IP>:8770 from another machine)
 ```
 
 Log in with **`admin` / `password`**.

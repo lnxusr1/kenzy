@@ -65,6 +65,47 @@ def _fact_lines(facts: list[memory.Fact]) -> str:
 
 
 @skill(min_tier="recognized")
+async def offer_to_remember(fact: str) -> str:
+    """Offer to remember a durable personal fact the user just mentioned —
+    asks THEM aloud first and stores only on their spoken yes (the "suggest"
+    capture mode). Use only when the speaker's capture mode suggests it;
+    report the outcome briefly.
+
+    :param fact: The fact, phrased from the speaker's view ("your dentist is
+        Dr. Marsh").
+    """
+    from kenzy.llm.skills import ask, request_channel
+
+    owner = _asker()
+    if owner is None:
+        return _refusal_msg()
+    if get_request("memory_opt_out"):
+        return "Memory is turned off for this speaker at their request."
+    if request_channel() != "voice":
+        return ""  # the suggest flow needs a held mic; stay silent elsewhere
+    store = memory.store()
+    if store is None:
+        return "Memory isn't enabled on this system."
+    answer = await ask(f"Want me to remember that {fact.strip().rstrip('.')}?")
+    if answer is None:
+        return "Okay."  # canceled — discarded upstream
+    if _normalize(answer) in _YES_WORDS:
+        store.remember(owner, fact.strip(), source="suggested", state="quarantined")
+        return "Remembered."
+    return "Okay, I won't remember it."
+
+
+def _normalize(text: str) -> str:
+    return re.sub(r"[^\w\s]", "", text or "").strip().lower()
+
+
+_YES_WORDS = frozenset(
+    {"yes", "yeah", "yep", "yup", "sure", "okay", "ok", "please", "please do",
+     "go ahead", "do it", "yes please", "sounds good"}  # fmt: skip
+)
+
+
+@skill(min_tier="recognized")
 async def remember(fact: str, shared: bool = False) -> str:
     """Store a fact in long-term memory for the current speaker.
 

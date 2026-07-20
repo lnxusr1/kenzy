@@ -52,6 +52,13 @@ export function subscribeSchedules(fn) {
   return () => _scheduleSubs.delete(fn);
 }
 
+// Memory-change pokes (People page re-fetches /api/people + /api/memory).
+const _memorySubs = new Set();
+export function subscribeMemory(fn) {
+  _memorySubs.add(fn);
+  return () => _memorySubs.delete(fn);
+}
+
 // Send a mutation over the WS and resolve with the server's {ok,error} ack.
 export function send(type, payload = {}, timeoutMs = 6000) {
   return new Promise((resolve) => {
@@ -122,6 +129,8 @@ function connectWS() {
         _sessionSubs.forEach((fn) => fn(m.data));
       } else if (m.type === "schedules") {
         _scheduleSubs.forEach((fn) => fn());
+      } else if (m.type === "memory") {
+        _memorySubs.forEach((fn) => fn());
       } else if (m.type === "calibration") {
         _calibSubs.forEach((fn) => fn(m));
       } else if (

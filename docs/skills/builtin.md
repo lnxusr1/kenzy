@@ -64,9 +64,9 @@ Starts hands-free voice enrollment: *"hey Kenzie, enroll me as Alice"* — Kenzy
 
 | Function | Description |
 |---|---|
-| `enroll_speaker(name)` | Requests a server-side enrollment session for `name` at the asking node |
+| `enroll_speaker(name)` | Runs the whole enrollment conversation itself (prompts, samples, retries) at the asking node |
 
-**Off by default**: the server honors this skill only when `allow_voice_enroll` is enabled in the speaker service config — when it's on, *anyone within earshot can enroll*, including under an existing name. See the security discussion and the alternative enrollment paths (dashboard, CLI) in [Speaker Enrollment](../speaker-enrollment.md#enrolling-by-voice-from-a-node).
+**Off by default**: the skill runs only when `allow_voice_enroll` is enabled in the speaker service config (it checks before every enrollment) — when it's on, *anyone within earshot can enroll*, including under an existing name. See the security discussion and the alternative enrollment paths (dashboard, CLI) in [Speaker Enrollment](../speaker-enrollment.md#enrolling-by-voice-from-a-node).
 
 ---
 
@@ -113,7 +113,7 @@ Starts a live two-way voice call to another room. Say *"call the living room"* a
 |---|---|
 | `connect_room(room)` | Ring `room` for a live intercom call (the other room must verbally accept) |
 
-Like `announce`, this queues a server action. The server rings the target room, plays a spoken consent prompt, and bridges audio **only on a clear spoken "yes"** (default-deny on silence/ambiguity/timeout). During an active call a wake word at either end ends it immediately. Requires a speakerphone with hardware echo cancellation at **both** ends — a room whose node is marked [`hardware_aec: false`](../configuration/node.md#rooms-without-echo-cancellation-hardware_aec-false) can't join a call (two-way audio without AEC is a feedback loop), and Kenzy politely says so instead of connecting.
+The skill asks the target room for consent itself (a cross-room question — the caller hears "Calling the kitchen." plus ringback while it travels) and bridges audio **only on a clear spoken "yes"** (default-deny: silence or their wake word comes back as "No answer from the kitchen", anything else as a polite decline). During an active call a wake word at either end ends it immediately. Requires a speakerphone with hardware echo cancellation at **both** ends — a room whose node is marked [`hardware_aec: false`](../configuration/node.md#rooms-without-echo-cancellation-hardware_aec-false) can't join a call (two-way audio without AEC is a feedback loop), and Kenzy politely says so instead of connecting.
 
 ---
 
@@ -180,6 +180,27 @@ feeds:
 ```
 
 Add or replace any category by editing the `feeds` map. Any RSS 2.0 or Atom feed works.
+
+---
+
+## Presence
+
+**File:** `builtin_skills/presence.py`
+
+*"Is Mom home?"* — answered live from Home Assistant's person entities
+(phone-app location tracking). The only setup is the **HA person** link on a
+person's card in the dashboard's [People page](../dashboard.md#people); anyone
+without a link is answered honestly ("their record isn't linked yet").
+Presence is household information, so answers are gated to **recognized
+voices**, and it's read-on-demand — Kenzy never tracks anyone ambiently.
+
+| Function | Description |
+|---|---|
+| `person_presence(name)` | Where one person is ("home", "away", or a named zone like "Work"); empty name = who's-home summary |
+| `fast_presence` (fast intent) | "is X home?", "where is X", "who's home?", "is anyone home" — instant, and only for names Kenzy actually knows (so "where is my phone" still reaches the LLM) |
+
+Needs `HA_API_KEY` (the same [Home Assistant](home-assistant.md) credential);
+without it the skill stays silent and the LLM answers as best it can.
 
 ---
 
