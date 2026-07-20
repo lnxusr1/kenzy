@@ -96,6 +96,25 @@ def lockbox_touched() -> bool:
         return False
 
 
+#: Optional observer fired after ANY persisted mutation (the rewrite choke
+#: point) — the LLM service wires a debounced server poke so the dashboard's
+#: People page refreshes live instead of waiting for its poll.
+_change_hook: Callable[[], None] | None = None
+
+
+def set_change_hook(cb: Callable[[], None] | None) -> None:
+    global _change_hook
+    _change_hook = cb
+
+
+def _fire_change_hook() -> None:
+    if _change_hook is not None:
+        try:
+            _change_hook()
+        except Exception:  # pragma: no cover - observer must never break writes
+            log.debug("memory change hook failed", exc_info=True)
+
+
 def current_touch_dict() -> dict[str, bool] | None:
     """The live touch-marker dict (shared object) — captured by the ask()
     runner so a /process/continue handler can read marks a parked task set."""
@@ -266,6 +285,7 @@ class MemoryStore:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         with self._path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(asdict(fact), ensure_ascii=False) + "\n")
+        _fire_change_hook()
 
     def _rewrite(self) -> None:
         """Atomic full rewrite (the schedules.json pattern) after a mutation."""
@@ -275,6 +295,7 @@ class MemoryStore:
             for fact in self._facts.values():
                 f.write(json.dumps(asdict(fact), ensure_ascii=False) + "\n")
         os.replace(tmp, self._path)
+        _fire_change_hook()
 
     # -- the contract --------------------------------------------------------
 
@@ -479,6 +500,47 @@ class MemoryStore:
             self._rewrite()
         log.info("Memory: erased %d fact(s) for %s (revoke-all)", len(doomed), person_id)
         return len(doomed)
+
+    def update(
+        self,
+        fact_id: str,
+        *,
+        text: str | None = None,
+        tier: str | None = None,
+        expires_days: float | None = None,
+        clear_expiry: bool = False,
+    ) -> Fact | None:
+        """Admin edit (F7.2-full, the dashboard's Edit affordance): change the
+        wording, the tier (who hears it back), and/or the retention window.
+        ``expires_days`` sets decay from NOW; ``clear_expiry`` removes it.
+        Stamps ``updated`` — an edited fact re-enters the semantic pass's
+        pending window, so a reworded fact re-coalesces naturally."""
+        fact = self._facts.get(fact_id)
+        if fact is None or fact.superseded_by:
+            return None
+        changed = False
+        new_text = " ".join(str(text).split()) if text is not None else ""
+        if new_text and new_text != fact.text:
+            fact.text = new_text
+            changed = True
+        if tier in TIERS and tier != fact.tier:
+            fact.tier = tier
+            changed = True
+        if clear_expiry and fact.expires is not None:
+            fact.expires = None
+            changed = True
+        elif expires_days is not None and expires_days > 0:
+            fact.expires = time.time() + float(expires_days) * 86400
+            changed = True
+        if not changed:
+            return fact
+        fact.updated = time.time()
+        self._rewrite()
+        log.info(
+            "Memory: updated %s (tier=%s, expires=%s): %r",
+            fact_id, fact.tier, fact.expires, fact.text[:60],
+        )  # fmt: skip
+        return fact
 
     def release(self, fact_id: str, *, tier: str | None = None) -> Fact | None:
         """Clear quarantine (the release job / classifier). Optionally retier

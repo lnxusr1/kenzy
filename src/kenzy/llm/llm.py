@@ -129,6 +129,11 @@ class ProcessResponse(BaseModel):
     ask_capture: str = "text"
     # Whether the node should play its record-tone when the window opens.
     ask_cue: bool = False
+    # Cross-room ask: speak/answer the question in THIS room instead of the
+    # asker's; `text` is then the asker-side announcement and `ask_prompt`
+    # the question itself.
+    ask_room: str | None = None
+    ask_prompt: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -289,7 +294,7 @@ _base_url: str | None = None
 _private_to_cloud: bool = False
 _system_prompt: str = "You are Kenzy, a helpful home assistant. Be concise."
 _voice_prompt: str = "Respond in a friendly, conversational tone."
-_max_tool_iterations: int = 5
+_max_tool_iterations: int = 10
 # Extra LiteLLM parameters merged into every primary model call (llm.yaml
 # `params:`) — the latency knobs live here: reasoning_effort ("none"/"minimal"
 # stops a reasoning-capable model thinking before a two-sentence reply),
@@ -582,6 +587,33 @@ async def memory_lockbox_reveal(id: str) -> dict[str, Any]:
     return {"id": sec.id, "label": sec.label, "text": sec.text, "value": sec.payload}
 
 
+class MemoryUpdateBody(BaseModel):
+    """Admin edit (dashboard): any subset of wording / tier / retention."""
+
+    id: str
+    text: str | None = None
+    tier: str | None = None
+    expires_days: float | None = None
+    clear_expiry: bool = False
+
+
+@app.post("/memory/update")
+async def memory_update(body: MemoryUpdateBody) -> dict[str, Any]:
+    store = _memory_or_503()
+    if body.tier is not None and body.tier not in memory.TIERS:
+        raise HTTPException(status_code=400, detail=f"unknown tier {body.tier!r}")
+    fact = store.update(
+        body.id,
+        text=body.text,
+        tier=body.tier,
+        expires_days=body.expires_days,
+        clear_expiry=body.clear_expiry,
+    )
+    if fact is None:
+        raise HTTPException(status_code=404, detail="no such fact")
+    return {"fact": _fact_dict(fact)}
+
+
 class LockboxEraseBody(BaseModel):
     id: str
 
@@ -710,11 +742,20 @@ def _ask_prompt_response(outcome: Any, *, fast: bool) -> ProcessResponse:
     parked = outcome.parked
     assert isinstance(parked, asking.Parked)
     ch = parked.channel
+    # Actions ship from the CHANNEL's shared list and are DRAINED on every
+    # turn — one carrier, one lifecycle. (take_actions() here would double-
+    # dispatch pre-ask actions on the finished turn, and continue-turns have
+    # no request-context accumulator at all — review findings M1/M2.)
+    acts = list(ch.actions or [])
+    if ch.actions:
+        ch.actions.clear()
     return ProcessResponse(
-        text=ch.prompt,
+        # Same-room: the reply IS the question. Cross-room: the asker hears the
+        # announcement (may be empty) while the question travels to ask_room.
+        text=ch.prompt if ch.room is None else ch.announce,
         voice_prompt=_voice_prompt,
         expect_response=True,
-        actions=skill_registry.take_actions(),
+        actions=acts,
         fast=fast,
         secret=bool(ch.touch and ch.touch.get("lockbox")),
         spans=list(parked.meta.get("spans") or []),
@@ -722,6 +763,8 @@ def _ask_prompt_response(outcome: Any, *, fast: bool) -> ProcessResponse:
         ask_timeout_s=ch.timeout,
         ask_capture=ch.capture,
         ask_cue=ch.cue,
+        ask_room=ch.room,
+        ask_prompt=ch.prompt,
     )
 
 
@@ -1080,6 +1123,19 @@ async def _run_llm(
             "saying 'remember', store it with the remember tool and briefly say "
             "you did. Never store small talk or transient states."
         )
+    elif (
+        skill_registry.get_request("memory_capture") == "suggest"
+        and not skill_registry.get_request("memory_opt_out")
+        and skill_registry.get_request("person_id")
+        and skill_registry.get_request("channel") == "voice"
+    ):
+        system_content += (
+            "\nThis speaker enabled SUGGEST memory capture: when they state a "
+            "durable personal fact (a preference, a name, a date) even without "
+            "saying 'remember', call offer_to_remember(fact) — it asks them "
+            "aloud first and only stores on their yes. Never offer for small "
+            "talk or transient states, and never more than once per exchange."
+        )
     system_content += f"\n{_JSON_INSTRUCTION}"
 
     messages: list[dict[str, Any]] = [
@@ -1280,7 +1336,7 @@ def main() -> None:
     _base_url = cfg.get("base_url") or None
     _system_prompt = str(cfg.get("system_prompt", _system_prompt))
     _voice_prompt = str(cfg.get("voice_prompt", _voice_prompt))
-    _max_tool_iterations = int(cfg.get("max_tool_iterations", 5))
+    _max_tool_iterations = int(cfg.get("max_tool_iterations", 10))
 
     loc = cfg.get("location", {})
     _location = ", ".join(filter(None, [loc.get("city"), loc.get("state"), loc.get("country")]))
@@ -1306,13 +1362,58 @@ def main() -> None:
 
         _lockbox.init_store(_kdr() / "data" / "memory" / "lockbox.enc")
 
+        # Live People-page refresh: any memory/lockbox mutation pokes the
+        # server (debounced — classifier bursts coalesce), which pushes a
+        # data-less {"type":"memory"} to dashboard browsers. Best-effort:
+        # no server, no problem (the page's poll remains the fallback).
+        import asyncio
+
+        _poke_state: dict[str, Any] = {"pending": False}
+
+        async def _poke_server() -> None:
+            await asyncio.sleep(1.0)
+            _poke_state["pending"] = False
+            from kenzy import serviceboot, tlsutil
+            from kenzy.serviceauth import service_token_from_env, sign_service_request
+
+            base = serviceboot.server_base()
+            if not base:
+                log.debug("memory poke skipped (no server base yet)")
+                return
+            # Token-OPTIONAL, like every service-to-service call: a tokenless
+            # mesh sends no auth header and the server's no-op gate admits it.
+            token = service_token_from_env()
+            headers = (
+                {"X-Kenzy-Auth": sign_service_request(token, "GET", "/notify")} if token else {}
+            )
+            import httpx
+
+            url = f"{base}/notify?what=memory"
+            try:
+                async with httpx.AsyncClient(verify=tlsutil.httpx_verify()) as client:
+                    await client.get(url, timeout=5.0, headers=headers)
+            except Exception as exc:
+                log.debug("memory poke failed: %s", exc)
+
+        def _on_memory_change() -> None:
+            if _poke_state["pending"]:
+                return
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                return  # outside the service loop (CLI/tests) — nothing to poke
+            _poke_state["pending"] = True
+            loop.create_task(_poke_server())
+
+        memory.set_change_hook(_on_memory_change)
+
     # Background jobs (F5.5 thin): the one runner for this service's periodic
     # work. GET /jobs shows every run; interval 0 disables a job (the runner
     # still mounts).
     from kenzy.jobs import Job, JobRunner, install_jobs_endpoint
 
     runner = JobRunner()
-    interval = float(mem_cfg.get("maintenance_interval", 3600))
+    interval = float(mem_cfg.get("maintenance_interval", 60))
     keep_days = float(mem_cfg.get("superseded_keep_days", 30))
     if memory.store() is not None and interval > 0:
         # Mechanical consolidation (F2.7's no-model half): expiry, supersession
@@ -1377,6 +1478,7 @@ def main() -> None:
             classifier_url=(
                 str(mem_cfg.get("classifier_url")) if mem_cfg.get("classifier_url") else None
             ),
+            keep_alive=str(mem_cfg.get("classifier_keep_alive", "") or ""),
         )
 
         async def _release() -> dict[str, Any] | None:

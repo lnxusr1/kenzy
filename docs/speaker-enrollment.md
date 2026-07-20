@@ -49,7 +49,7 @@ toggle `allow_voice_enroll` on, Save) or by setting it in the speaker config:
 allow_voice_enroll: true
 ```
 
-The server reads this live, so a dashboard toggle takes effect without a restart.
+The speaker service owns it: the enrollment skill checks it at the start of every spoken enrollment (via the service's `/enroll/info`), and a dashboard Services save restarts the service to apply a change.
 
 How it flows once enabled:
 

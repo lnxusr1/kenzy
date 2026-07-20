@@ -44,11 +44,24 @@ def configure(
     *,
     classifier_model: str = "",
     classifier_url: str | None = None,
+    keep_alive: str = "",
 ) -> None:
     """The classifier's model = explicit ``classifier_model`` if set, else the
-    service model — but only ever USED when local."""
+    service model — but only ever USED when local. ``keep_alive`` rides each
+    Ollama call (e.g. "-1", "30m") so the model stays resident — the pin
+    travels with the deployment instead of the Ollama host's env."""
     _CFG["model"] = classifier_model or model
     _CFG["base_url"] = classifier_url if classifier_model else base_url
+    _CFG["keep_alive"] = keep_alive
+
+
+def ollama_keep_alive_kwargs(model: str) -> dict[str, Any]:
+    """The keep_alive kwarg for an Ollama call, empty otherwise (other
+    providers would reject the parameter)."""
+    ka = str(_CFG.get("keep_alive") or "")
+    if ka and str(model).startswith("ollama"):
+        return {"keep_alive": ka}
+    return {}
 
 
 def _local_model() -> tuple[str, str | None] | None:
@@ -116,6 +129,7 @@ async def _model_decide(fact: Fact) -> dict[str, Any]:
         "model": model,
         "messages": [{"role": "user", "content": _PROMPT + json.dumps(fact.text)}],
     }
+    kwargs.update(ollama_keep_alive_kwargs(model))
     kwargs.update(skill_registry.endpoint_kwargs(url))
     # local_only: the suspect text must never reach a cloud model, even on a
     # fallback retry (the service-wide fallback is not guaranteed local).

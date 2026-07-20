@@ -220,7 +220,8 @@ async def test_audio_ask_routes_pcm_not_stt(monkeypatch):
     await srv._transcribe("k", "office", "s1", GOOD)
     assert seen["cont"] == ("c1", len(GOOD))
     # The chained audio ask re-registered and the cue-bearing floor hold armed.
-    assert srv._pending_ask["k"] == {"id": "c2", "capture": "audio"}
+    assert srv._pending_ask["k"]["id"] == "c2"
+    assert srv._pending_ask["k"]["capture"] == "audio"
     ws = srv._nodes["k"].ws
     assert any('"cue": true' in m or '"cue":true' in m for m in ws.sent)  # type: ignore[attr-defined]
 
@@ -266,7 +267,8 @@ async def test_start_enrollment_sends_directive(monkeypatch):
     monkeypatch.setattr(srv, "_run_tts", tts)
     await srv.start_enrollment("k", "office", "", operator=True, person_id="bob")
     assert seen["text"] == "[[enroll]] operator=1 person=bob name="
-    assert srv._pending_ask["k"] == {"id": "c1", "capture": "audio"}
+    assert srv._pending_ask["k"]["id"] == "c1"
+    assert srv._pending_ask["k"]["capture"] == "audio"
 
 
 async def test_adopt_enrolled_voice_paths(tmp_path):

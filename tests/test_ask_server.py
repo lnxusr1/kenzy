@@ -78,7 +78,9 @@ async def test_ask_reply_holds_floor_and_routes_answer(monkeypatch):
         continues=continues,
     )
     await srv._transcribe("k", "kitchen", "s1", b"pcm")
-    assert srv._pending_ask.get("k") == {"id": "c1", "capture": "text"}
+    assert srv._pending_ask.get("k") == {
+        "id": "c1", "capture": "text", "origin_node": "k", "origin_room": "kitchen"
+    }  # fmt: skip
     assert any(protocol.MSG_EXPECT_UTTERANCE in m for m in ws.sent)  # floor held
 
     # The next captured utterance is the ANSWER — routed to continue, not dispatch.
@@ -168,3 +170,66 @@ async def test_cancel_pending_ask_posts_to_llm(monkeypatch):
     await asyncio.sleep(0.05)  # let the fire-and-forget task run
     assert posted and posted[0][0].endswith("/process/cancel")
     assert posted[0][1]["continuation"] == "c5"
+
+
+async def test_notify_route_pokes_memory_listeners(monkeypatch):
+    # /notify?what=memory (kenzy-llm's debounced poke) → dashboard listeners.
+    srv, _ = _server_with_node()
+    seen = []
+    srv.add_memory_listener(lambda: seen.append(1))
+    monkeypatch.setattr(srv, "_authorize_service", lambda req, m, p: (True, None))
+
+    class _Req:
+        path = "/notify?what=memory"
+
+    resp = await srv._process_config_request(None, _Req())
+    assert resp is not None and seen == [1]
+
+    class _Other:
+        path = "/notify?what=nothing"
+
+    await srv._process_config_request(None, _Other())
+    assert seen == [1]  # unknown kinds are a polite no-op
+
+
+async def test_notify_route_requires_token(monkeypatch):
+    srv, _ = _server_with_node()
+    monkeypatch.setattr(srv, "_authorize_service", lambda req, m, p: (False, None))
+
+    class _Req:
+        path = "/notify?what=memory"
+
+    resp = await srv._process_config_request(None, _Req())
+    assert resp is not None and getattr(resp, "status_code", None) == 401
+
+
+async def test_ask_chain_outlives_dialog_turn_cap(monkeypatch):
+    # Review follow-up: an ask() chain (enrollment = 5 prompts + retries) must
+    # not be cut off by dialog.max_turns; plain dialog holds still are.
+    srv, ws = _server_with_node()
+    replies = [
+        LlmReply(f"Prompt {i}?", "vp", expect_response=True, continuation="c1")
+        for i in range(12)
+    ]
+    continues: list = []
+    _wire(srv, monkeypatch, stt_text="answer", replies=replies, continues=continues)
+    await srv._transcribe("k", "kitchen", "s1", b"pcm")
+    for _ in range(11):
+        assert "k" in srv._pending_ask, "ask chain was cut off early"
+        await srv._transcribe("k", "kitchen", "s1", b"pcm")
+    assert srv._followup_turns["k"] == 12  # well past the dialog cap of 6
+    assert srv._test_cancels == []  # never "floor not held"
+
+
+async def test_plain_dialog_hold_still_capped(monkeypatch):
+    srv, ws = _server_with_node()
+    replies = [
+        LlmReply(f"Chatty {i}.", "vp", expect_response=True) for i in range(7)
+    ]
+    _wire(srv, monkeypatch, stt_text="go on", replies=replies, continues=[])
+    for _ in range(6):
+        await srv._transcribe("k", "kitchen", "s1", b"pcm")
+    assert srv._followup_turns["k"] == 6
+    # The 7th hold attempt hits the cap and ends the dialog (counter cleared).
+    await srv._transcribe("k", "kitchen", "s1", b"pcm")
+    assert "k" not in srv._followup_turns

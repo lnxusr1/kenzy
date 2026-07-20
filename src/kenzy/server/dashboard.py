@@ -263,6 +263,7 @@ class Dashboard:
         # Live-push: connected browser WS clients + a short health-check cache so a
         # burst of node state changes can't hammer the backends.
         self._clients: set[ServerConnection] = set()
+        self._memory_poke_task: asyncio.Task[None] | None = None
         self._svc_cache: tuple[float, list[dict[str, Any]]] | None = None
         # Cache of the latest kenzy version on PyPI (checked lazily; ~1 h TTL) so the
         # update check doesn't hit PyPI on every Settings load.
@@ -304,6 +305,9 @@ class Dashboard:
         # Live-push for the Scheduled view: any schedule change (set by voice,
         # fired, cancelled) pokes connected browsers to re-fetch /api/schedules.
         server.add_schedule_listener(self._on_schedules_change)
+        # Live People page: kenzy-llm pokes /notify?what=memory on any memory or
+        # lockbox change; browsers get a data-less {"type":"memory"} and re-fetch.
+        server.add_memory_listener(self._on_memory_change)
         server.add_metrics_listener(self._on_state_change)  # refresh cards on metrics ticks
 
     # ------------------------------------------------------------------
@@ -1780,6 +1784,20 @@ class Dashboard:
             payload = json.dumps({"type": "session", "data": record})
             asyncio.create_task(self._broadcast_raw(payload))
 
+    def _on_memory_change(self) -> None:
+        # Coalesced (1s): /notify is token-OPTIONAL on a tokenless mesh, so a
+        # poke flood must not fan out one broadcast (and one per-browser
+        # refetch) per request.
+        if self._clients and self._memory_poke_task is None:
+            self._memory_poke_task = asyncio.create_task(self._memory_poke())
+
+    async def _memory_poke(self) -> None:
+        try:
+            await asyncio.sleep(1.0)
+            await self._broadcast_raw(json.dumps({"type": "memory"}))
+        finally:
+            self._memory_poke_task = None
+
     def _on_schedules_change(self) -> None:
         """Poke connected browsers that the schedule set changed (they re-fetch
         the auth-gated /api/schedules — no entry data rides the push itself)."""
@@ -2092,6 +2110,27 @@ class Dashboard:
                 return await ack(False, "a fact id is required")
             ok, err = await self._forget_memory(fact_id)
             await ack(ok, err)
+        elif mtype == "update_memory":
+            # F7.2-full: edit wording / re-tier / retention from the People page.
+            if not self._dcfg.controls:
+                return await ack(False, "controls are disabled (set dashboard.controls: true)")
+            fact_id = str(msg.get("fact_id", "")).strip()
+            if not fact_id:
+                return await ack(False, "a fact id is required")
+            payload: dict[str, Any] = {"id": fact_id}
+            if msg.get("text") is not None:
+                payload["text"] = str(msg.get("text"))
+            if msg.get("tier") is not None:
+                payload["tier"] = str(msg.get("tier"))
+            if msg.get("expires_days") is not None:
+                try:
+                    payload["expires_days"] = float(msg["expires_days"])
+                except (TypeError, ValueError):
+                    return await ack(False, "expires_days must be a number")
+            if msg.get("clear_expiry"):
+                payload["clear_expiry"] = True
+            res = await self._llm_memory_request("POST", "/update", payload)
+            await ack(res is not None, None if res is not None else "memory service unreachable")
         elif mtype == "review_memory":
             if not self._dcfg.controls:
                 return await ack(False, "controls are disabled (set dashboard.controls: true)")

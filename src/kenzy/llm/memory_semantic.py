@@ -331,6 +331,9 @@ async def run_pass(store: MemoryStore) -> dict[str, Any]:
         "model": pass_model or "gpt-4o",
         "messages": build_messages(batch),
     }
+    from kenzy.llm.memory_classifier import ollama_keep_alive_kwargs
+
+    kwargs.update(ollama_keep_alive_kwargs(pass_model))
     kwargs.update(skill_registry.endpoint_kwargs(pass_url))
     # local_only when this pass carries private-tier facts (pass_local): a
     # cloud fallback must not see what the cloud primary was denied.

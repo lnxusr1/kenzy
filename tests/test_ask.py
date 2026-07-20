@@ -160,3 +160,38 @@ async def test_lockbox_touch_flows_out_of_parked_task(monkeypatch, c):
 async def test_ask_outside_context_raises():
     with pytest.raises(RuntimeError):
         await asking.ask("no context")
+
+async def test_pre_ask_actions_ship_once_on_the_prompt_turn(monkeypatch, c):
+    # Review finding M1: an action queued BEFORE the first ask() must ride the
+    # parked prompt response and NEVER re-ship on the finished turn.
+    async def script(utterance):
+        sk.add_action({"type": "set_volume", "level": 20})
+        await sk.ask("Quieter — OK?")
+        return sk.FastResult.handled("Done.")
+
+    monkeypatch.setattr(sk, "dispatch_fast", _fast_asker(script))
+    r = c.post("/process", json={"text": "go", "room_id": "office"}).json()
+    assert r["actions"] == [{"type": "set_volume", "level": 20}]
+    r2 = c.post("/process/continue", json={"continuation": r["continuation"], "text": "yes"}).json()
+    assert r2["actions"] == []  # not dispatched a second time
+
+
+async def test_mid_chain_actions_ship_on_the_next_prompt_turn(monkeypatch, c):
+    # Review finding M2 (the enrollment adopt_voice shape): an action queued on
+    # a RESUMED turn that parks again must ride that turn's prompt response —
+    # a later cancel must not lose it.
+    async def script(utterance):
+        await sk.ask("Sample one?")
+        sk.add_action({"type": "adopt_voice", "name": "alice"})
+        await sk.ask("Sample two?")
+        return sk.FastResult.handled("Enrolled.")
+
+    monkeypatch.setattr(sk, "dispatch_fast", _fast_asker(script))
+    r = c.post("/process", json={"text": "go", "room_id": "office"}).json()
+    assert r["actions"] == []
+    r = c.post("/process/continue", json={"continuation": r["continuation"], "text": "one"}).json()
+    assert r["text"] == "Sample two?"
+    assert r["actions"] == [{"type": "adopt_voice", "name": "alice"}]
+    # Abandoning here loses nothing — the adopt already shipped.
+    c.post("/process/cancel", json={"continuation": r["continuation"], "reason": "wakeword"})
+    assert asking.pending_count() == 0

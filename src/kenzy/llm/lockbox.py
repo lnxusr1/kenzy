@@ -240,6 +240,10 @@ class LockboxStore:
         tmp = self._path.with_suffix(".enc.tmp")
         tmp.write_bytes(payload)
         os.replace(tmp, self._path)
+        # Same live-refresh poke as the fact ledger (the push is data-less).
+        from kenzy.llm import memory as _memory
+
+        _memory._fire_change_hook()
 
     # -- API ---------------------------------------------------------------
 

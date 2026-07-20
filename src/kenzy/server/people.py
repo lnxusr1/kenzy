@@ -162,7 +162,7 @@ class PeopleStore:
 
     def by_ha_user(self, entity_id: str) -> Person | None:
         """Match on the HA person entity id (F3 Assist channel) — the stable
-        id the operator maps in people.yaml (e.g. ``person.john_mark``)."""
+        id the operator maps in people.yaml (e.g. ``person.alex``)."""
         want = entity_id.strip().lower()
         if not want:
             return None

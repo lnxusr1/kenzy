@@ -73,7 +73,7 @@ node_defaults:
   silence_rms_threshold: 50
   vad_enabled: true
   silence_ms: 400
-  speech_min_ms: 500
+  speech_min_ms: 400
   no_speech_timeout_ms: 15000
   hard_cap_ms: 30000
   # Lead-in tones for timer/alarm announcements. Played by the SERVER (prepended
@@ -135,6 +135,15 @@ stt:
   timeout: 60.0
 
 # Integrations — surface Kenzy into external systems. Opt-in; nothing is wired
+# Sound library roots (4.2): HA automations / the HTTP and MQTT chime surfaces
+# may name any file inside these folders (relative subpaths fine; traversal and
+# absolute paths always rejected — this list IS the security boundary, which is
+# why it is file-managed and not dashboard-editable). data/sounds under the
+# config home is always a root (and rides backups); add more (a NAS mount, a
+# shared library) here. MP3/OGG/FLAC need the sound extra: pip install kenzy[sound]
+sounds:
+  dirs: []
+
 # (zero overhead) unless enabled. Requires the mqtt extra: pip install kenzy[server,mqtt]
 integrations:
   # Home Assistant via MQTT Discovery: each node auto-appears in HA as a device with

@@ -67,8 +67,10 @@ hand them your facts.
 ## What works from the phone — and what asks for a room
 
 Almost everything: questions, smart-home control, memory, announcements
-("tell the kitchen dinner's ready"), lists, weather, news. (One deliberate
-exception: [lockbox secrets](memory.md#secrets--the-lockbox) always deflect
+("tell the kitchen dinner's ready"), lists, weather, news, and
+[presence](skills/builtin.md#presence) ("is Mom home?" — answered from HA's
+own person tracking). (One deliberate
+exception: [lockbox secrets](memory.md#secrets-the-lockbox) always deflect
 to the dashboard on this channel — the phone's reply path isn't Kenzy's own
 speech, so it never carries a secret value.)
 

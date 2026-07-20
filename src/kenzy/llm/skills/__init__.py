@@ -479,13 +479,21 @@ def fast_intent(
     return wrap(_func) if _func is not None else wrap
 
 
-async def ask(prompt: str, timeout: float | None = None) -> str | None:
+async def ask(
+    prompt: str,
+    timeout: float | None = None,
+    *,
+    room: str | None = None,
+    announce: str = "",
+) -> str | None:
     """Speak ``prompt`` and return the user's spoken answer (the 4.2 ask()
-    primitive) — or None on wake-word cancel / timeout. Import from here in
-    skill files: ``from kenzy.llm.skills import ask``. See kenzy.llm.asking."""
+    primitive) — or None on wake-word cancel / timeout. ``room`` targets the
+    question at ANOTHER room (intercom consent); ``announce`` is what the
+    asker hears meanwhile. Import from here in skill files:
+    ``from kenzy.llm.skills import ask``. See kenzy.llm.asking."""
     from kenzy.llm import asking
 
-    reply = await asking.ask(prompt, timeout)
+    reply = await asking.ask(prompt, timeout, room=room, announce=announce)
     return reply if isinstance(reply, str) else None
 
 

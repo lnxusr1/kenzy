@@ -796,3 +796,13 @@ dd.hot { color: var(--led-down); font-weight: 600; }
   min-width: 96px; flex: none; width: auto; height: 38px;
   margin: 0; padding: 0 var(--s4); font-size: 12.5px; line-height: 1;
 }
+
+/* Memory edit mode (F7.2-full) */
+.mem-edit .mem-edit-text {
+  width: 100%; padding: 7px 10px; margin-bottom: var(--s2);
+  background: var(--bg); color: var(--text); font: inherit; font-size: 13px;
+  border: 1px solid var(--border); border-radius: var(--radius);
+}
+.mem-edit .mem-edit-text:focus { outline: none; border-color: var(--accent); }
+.mem-edit .mem-edit-opts { display: flex; flex-wrap: wrap; gap: var(--s2); }
+.mem-edit .audio-select { font-size: 12px; padding: 6px 8px; }

@@ -336,7 +336,9 @@ def test_chime_parse_forms() -> None:
     c = parse_command(
         "kenzy/chime", '{"sound": "gong", "seconds": 8, "rooms": ["kitchen"]}', **kw
     )
-    assert c == Command("chime", None, {"sound": "gong", "seconds": 8, "rooms": ["kitchen"]})
+    assert c == Command(
+        "chime", None, {"sound": "gong", "seconds": 8, "repeats": None, "rooms": ["kitchen"]}
+    )
     # Bare string = the sound name, played once.
     c = parse_command("kenzy/chime", "doorbell", **kw)
     assert c == Command("chime", None, {"sound": "doorbell"})
@@ -349,3 +351,9 @@ def test_chime_parse_forms() -> None:
     # Partial dicts parse with None gaps (the server sanitizes).
     c = parse_command("kenzy/chime", '{"seconds": 5}', **kw)
     assert c is not None and c.value["sound"] is None and c.value["seconds"] == 5
+
+
+def test_chime_parse_repeats() -> None:
+    kw = {"base_topic": "kenzy", "slug_to_node": {}}
+    c = parse_command("kenzy/chime", '{"sound": "gong", "repeats": 3}', **kw)
+    assert c is not None and c.value["repeats"] == 3 and c.value["seconds"] is None

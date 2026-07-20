@@ -106,6 +106,9 @@ llm = [
 ]
 
 # Local TTS using Kokoro (PyTorch) — also requires: sudo apt-get install espeak-ng
+sound = [
+    "av>=10.0",  # MP3/OGG/FLAC decode for the sound system (server-side)
+]
 kokoro = [
     "kokoro>=0.9.0",
     "torch>=2.0.0",

@@ -60,10 +60,49 @@ def load_tone(spec: str | None) -> bytes | None:
         samples = _to_mono(frames, channels)
         out = _resample(samples, rate, TARGET_RATE).tobytes()
     except Exception as exc:
-        log.warning("Could not load tone %r (%s): %s", spec, path, exc)
-        out = None
+        # Not a WAV (or a broken one): the optional decode path handles MP3 &
+        # friends server-side (kenzy[sound]); nodes keep receiving plain PCM.
+        from kenzy import soundfile
+
+        out = soundfile.decode(path, rate=TARGET_RATE) if path.is_file() else None
+        if out is None:
+            log.warning("Could not load tone %r (%s): %s", spec, path, exc)
     _cache[spec] = out
     return out
+
+
+def repeat_pcm(pcm: bytes, count: int, *, max_seconds: float = 60.0) -> bytes:
+    """Repeat a cue ``count`` whole times (the count-shaped sibling of
+    :func:`tile_pcm`), bounded by a duration cap."""
+    if count <= 1 or not pcm:
+        return pcm
+    max_reps = max(1, int(max_seconds * TARGET_RATE * 2 // len(pcm)))
+    return pcm * min(int(count), max_reps)
+
+
+def resolve_sound(name: str, roots: list[Path]) -> Path | None:
+    """Resolve a payload-supplied sound NAME within the operator's library
+    roots — the security boundary of the sound system. Relative subpaths are
+    fine (``alerts/dog.mp3``); absolute paths and traversal are rejected
+    outright; the resolved file must live under one of the roots. First root
+    with the file wins."""
+    name = str(name or "").strip()
+    if not name:
+        return None
+    p = Path(name)
+    if p.is_absolute() or ".." in p.parts or name.startswith("."):
+        return None
+    for root in roots:
+        try:
+            candidate = (root / p).resolve()
+            root_resolved = root.resolve()
+        except OSError:
+            continue
+        if not candidate.is_relative_to(root_resolved):
+            continue  # symlink escape — the roots list is the boundary
+        if candidate.is_file():
+            return candidate
+    return None
 
 
 def tile_pcm(pcm: bytes, seconds: float) -> bytes:

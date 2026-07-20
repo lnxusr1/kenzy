@@ -95,6 +95,13 @@ def _signed_get(base: str, path: str, token: str | None, timeout: float) -> tupl
 _server_base: str | None = None
 
 
+def server_base() -> str | None:
+    """The server's HTTP base as resolved by config-pull/registration (None
+    until the first successful pull). Lets service code poke the server's
+    always-on endpoints without re-running discovery."""
+    return _server_base
+
+
 def _http_base(url: str) -> str:
     """Normalize a server URL (``ws://``/``http://``/bare ``host:port``) to an HTTP base."""
     parsed = urlparse(url if "://" in url else f"http://{url}")

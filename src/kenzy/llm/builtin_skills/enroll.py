@@ -245,6 +245,10 @@ async def fast_enroll_directive(
     m = _DIRECTIVE_RE.match(utterance.strip())
     if m is None:
         return FastResult.miss()
+    if request_channel() != "voice":
+        # Defense-in-depth: the Assist channel carries TYPED text, so the
+        # directive is forgeable there (and enrollment needs a room mic anyway).
+        return FastResult.miss()
     text = await _run_enrollment(
         m.group("name").strip(),
         operator=m.group("op") == "1",

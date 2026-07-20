@@ -46,7 +46,7 @@ params:
   service_tier: ""
 
 # Maximum tool-call iterations before returning whatever the LLM has.
-max_tool_iterations: 5
+max_tool_iterations: 10
 
 # ---------------------------------------------------------------------------
 # Prompts
@@ -145,7 +145,7 @@ memory:
   # file: data/memory/facts.jsonl   # config-home-relative (the default)
   # Mechanical upkeep (expired facts, superseded tombstones past their keep
   # window, exact duplicates) runs as a background job — see GET /jobs.
-  maintenance_interval: 3600      # seconds between runs; 0 disables
+  maintenance_interval: 60        # seconds between runs (sequential — a long pass just delays the next); 0 disables
   superseded_keep_days: 30        # tombstone retention before removal
   # Semantic consolidation: your configured model merges same-thought
   # restatements seconds after each "remember…" (never deletes — superseded
@@ -163,3 +163,7 @@ memory:
   # instead); point this at a local model to resolve ambiguity automatically.
   classifier_model: ""
   classifier_url: ""
+  # Ollama keep_alive for the classifier/consolidation calls ("-1" = keep the
+  # model resident forever, "30m" = half an hour). Empty = don't send it (the
+  # Ollama server's own default applies). Only ever sent to ollama/* models.
+  classifier_keep_alive: ""

@@ -96,15 +96,14 @@ async def test_dispatch_skips_node_bound_actions_without_source_node(tmp_path, m
     async def boom(*a, **k):
         called.append("x")
 
-    for name in ("set_node_volume", "set_node_muted", "start_intercom",
-                 "start_enrollment", "start_calibration"):
+    for name in ("set_node_volume", "set_node_muted", "_action_connect_call",
+                 "start_calibration"):
         monkeypatch.setattr(s, name, boom)
     await s._dispatch_actions(
         [
             {"type": "set_volume", "delta": 10},
             {"type": "set_volume", "muted": True},
-            {"type": "start_intercom", "room": "office"},
-            {"type": "start_enrollment", "name": "Bob"},
+            {"type": "connect_call", "room": "office"},
             {"type": "start_calibration"},
             {"type": "set_schedule", "kind": "timer", "seconds": 60, "label": ""},
         ],

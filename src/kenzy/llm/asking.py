@@ -70,6 +70,12 @@ class AskChannel:
         # window opens (record-after-the-tone flows) vs the silent dialog open.
         self.capture: str = "text"
         self.cue: bool = False
+        # Cross-room ask: the question is spoken (and answered) in ANOTHER
+        # room; the final reply comes back to the asker's room. ``announce``
+        # is what the asker hears while the question travels ("Calling the
+        # kitchen." — may be empty).
+        self.room: str | None = None
+        self.announce: str = ""
         self.asked = asyncio.Event()
         self.reply_fut: asyncio.Future[Any] | None = None
         # Shared mutable request state, captured at run() time so the handler
@@ -90,13 +96,16 @@ async def ask(
     *,
     capture: str = "text",
     cue: bool = False,
+    room: str | None = None,
+    announce: str = "",
 ) -> Any:
     """Speak ``prompt``, park until the user's answer arrives, return it.
 
     Returns ``None`` on cancel (wake word), node-window timeout, or service
     restart — the skill decides its fallback; there is never a silently hot
-    mic. ``timeout`` (seconds) overrides the node's reply window for this one
-    question, bounded by the runtime cap. ``capture="audio"`` returns the raw
+    mic. ``timeout`` (seconds) bounds this question's parked lifetime (the
+    lost-server backstop) — the node's reply window itself stays
+    ``dialog_no_speech_timeout_ms``. ``capture="audio"`` returns the raw
     captured PCM bytes instead of a transcript (see :func:`ask_audio`).
     """
     ch = _CHANNEL.get()
@@ -109,6 +118,8 @@ async def ask(
     ch.timeout = timeout
     ch.capture = capture
     ch.cue = cue
+    ch.room = (str(room).strip() or None) if room else None
+    ch.announce = str(announce)
     ch.reply_fut = loop.create_future()
     ch.asked.set()
     try:
@@ -250,11 +261,9 @@ def pending_count() -> int:
 
 def _sweep() -> None:
     """Drop continuations past their backstop deadline (lost-server case).
-    Lazy — called on park; the future is resolved None so the task unwinds."""
+    Lazy — called on park. Full cancel semantics (the task is DRIVEN to
+    completion and a pathological re-ask is collected) — resolving the future
+    alone could leak a task that re-asks after None."""
     now = time.monotonic()
     for cid in [c for c, p in _PENDING.items() if now > p.deadline]:
-        parked = _PENDING.pop(cid)
-        ch = parked.channel
-        if ch.reply_fut is not None and not ch.reply_fut.done():
-            ch.reply_fut.set_result(None)
-        log.info("ask(): continuation %s expired (backstop)", cid)
+        asyncio.get_running_loop().create_task(cancel(cid, "backstop expiry"))
