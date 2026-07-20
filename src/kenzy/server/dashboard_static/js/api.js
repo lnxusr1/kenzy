@@ -38,6 +38,18 @@ export async function getSettings() {
   return await r.json();
 }
 
+export async function getServerFeatures() {
+  const r = await fetch("/api/server/features");
+  if (!r.ok) throw new Error(`features ${r.status}`);
+  return await r.json();
+}
+
+export async function getServerUnit() {
+  const r = await fetch("/api/server/unit");
+  if (!r.ok) throw new Error(`unit ${r.status}`);
+  return await r.json();
+}
+
 export async function getSkills() {
   const r = await fetch("/api/skills");
   if (!r.ok) throw new Error(`skills ${r.status}`);

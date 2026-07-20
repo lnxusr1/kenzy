@@ -22,6 +22,7 @@ import base64
 import io
 import logging
 import wave
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -65,6 +66,7 @@ _provider: str = "whisper"
 
 # Whisper (local)
 _whisper: Any = None
+_gpu_failed = False  # one-time GPU→CPU rescue latch (never retries the GPU)
 _language: str | None = None
 _sem: asyncio.Semaphore | None = None
 _model_size: str = ""  # surfaced on /health for the dashboard
@@ -85,6 +87,7 @@ async def health() -> dict[str, object]:
         **version_info(),
         "provider": _provider,
         "model": _openai_model if _provider == "openai" else _model_size,
+        "device_fallback": _gpu_failed,
         "language": _language or "auto",
     }
 
@@ -117,29 +120,82 @@ async def transcribe_pcm(pcm: bytes) -> str:
             # the exception propagates and the user just gets the error cue.
             log.warning("OpenAI STT failed (%s) — falling back to local whisper", exc)
             return await _whisper_fallback(pcm, loop)
-    assert _sem is not None
-    async with _sem:
-        return await loop.run_in_executor(None, _run_whisper, pcm)
+    return await _local_transcribe(pcm, loop)
 
 
 async def _whisper_fallback(pcm: bytes, loop: asyncio.AbstractEventLoop) -> str:
     """Transcribe locally, lazily loading the whisper model on first use."""
-    global _whisper
+    return await _local_transcribe(pcm, loop)
+
+
+async def _local_transcribe(pcm: bytes, loop: asyncio.AbstractEventLoop) -> str:
+    """Local whisper under the semaphore (the model is not thread-safe), with
+    two hardening rules learned in the field: a per-request failure is logged
+    to KENZY's log (a bare 500 was invisible in the dashboard log viewer), and
+    a GPU inference failure rescues ONCE onto the CPU — faster-whisper builds
+    a CUDA model without touching the kernels, so a missing cuDNN surfaces on
+    the first transcribe, not at startup. The latch never retries the GPU."""
+    global _whisper, _gpu_failed
     assert _sem is not None
-    async with _sem:  # serialize the load AND the (non-thread-safe) transcription
+    async with _sem:
         if _whisper is None:
             _whisper = await loop.run_in_executor(None, _load_whisper)
-        return await loop.run_in_executor(None, _run_whisper, pcm)
+        try:
+            return await loop.run_in_executor(None, _run_whisper, pcm)
+        except Exception as exc:
+            device = str(_wcfg.get("device", "cpu")).lower()
+            if _gpu_failed or device in ("", "cpu"):
+                log.error("Transcription failed: %s", exc)
+                raise
+            log.error(
+                "Whisper inference failed on '%s' (%s) — rebuilding on CPU and continuing. "
+                "Fix the CUDA/cuDNN libraries or set whisper.device: cpu to silence this.",
+                device,
+                exc,
+            )
+            _gpu_failed = True
+            _whisper = await loop.run_in_executor(None, _load_whisper, "cpu")
+            return await loop.run_in_executor(None, _run_whisper, pcm)
 
 
-def _load_whisper() -> Any:
+def _preload_gpu_libs() -> None:
+    """Make pip-installed NVIDIA runtimes loadable without LD_LIBRARY_PATH.
+
+    ctranslate2 >= 4.5 needs cuDNN 9 / cuBLAS 12 and dlopens them from the
+    system loader path — but the pip wheels (nvidia-cudnn-cu12,
+    nvidia-cublas-cu12) install into site-packages, invisible to the loader.
+    Pre-opening them RTLD_GLOBAL here means `pip install nvidia-cudnn-cu12
+    nvidia-cublas-cu12` into the kenzy venv is the whole GPU fix — no unit
+    edits. Best-effort: does nothing when the packages aren't installed
+    (system-wide CUDA libraries keep working as before)."""
+    import ctypes
+    import glob
+
+    for mod in ("cublas", "cudnn"):  # order matters: cuDNN links against cuBLAS
+        try:
+            pkg = __import__(f"nvidia.{mod}", fromlist=["lib"])
+            libdir = Path(next(iter(pkg.__path__))) / "lib"
+        except Exception:
+            continue
+        for so in sorted(glob.glob(str(libdir / "*.so*"))):
+            try:
+                ctypes.CDLL(so, mode=ctypes.RTLD_GLOBAL)
+            except OSError:
+                pass
+
+
+def _load_whisper(device: str | None = None) -> Any:
     from faster_whisper import WhisperModel  # type: ignore[import-untyped]
 
     model_size = str(_wcfg.get("model", "base"))
-    device = str(_wcfg.get("device", "cpu"))
+    dev = device or str(_wcfg.get("device", "cpu"))
     compute_type = str(_wcfg.get("compute_type", "int8"))
-    log.warning("Loading whisper fallback model '%s' on %s (%s)…", model_size, device, compute_type)
-    return WhisperModel(model_size, device=device, compute_type=compute_type)
+    if dev == "cpu" and compute_type not in ("int8", "float32"):
+        compute_type = "int8"  # float16 is GPU-only; the CPU rescue must not re-crash
+    if dev != "cpu":
+        _preload_gpu_libs()
+    log.warning("Loading whisper model '%s' on %s (%s)…", model_size, dev, compute_type)
+    return WhisperModel(model_size, device=dev, compute_type=compute_type)
 
 
 # ---------------------------------------------------------------------------
@@ -282,6 +338,8 @@ def main() -> None:
         compute_type = str(_wcfg.get("compute_type", "int8"))
         _language = _wcfg.get("language") or None
 
+        if device != "cpu":
+            _preload_gpu_libs()
         log.info("Loading Whisper model '%s' on %s (%s)…", model_size, device, compute_type)
         _whisper = WhisperModel(model_size, device=device, compute_type=compute_type)
         log.info("Whisper model ready.")

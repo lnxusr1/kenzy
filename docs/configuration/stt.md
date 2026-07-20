@@ -55,6 +55,36 @@ Runs entirely on your hardware with no API key — the default, and the recommen
 | `whisper.compute_type` | `"int8"` | Quantisation: `int8` (fastest on CPU), `float16` (GPU), `float32` (highest quality) |
 | `whisper.language` | `"en"` | Language code (e.g. `"en"`, `"fr"`), or `null` for auto-detect |
 
+### GPU (CUDA)
+
+Set `whisper.device: cuda` to run inference on an NVIDIA GPU. Two things to know:
+
+- **Current builds need cuDNN 9.** The `ctranslate2` engine (pulled in by
+  `faster-whisper`) switched from cuDNN 8 to cuDNN 9 at version 4.5 — so a
+  Kenzy **upgrade** can move you onto a wheel that no longer matches your
+  installed CUDA libraries. The failure is sneaky: startup looks fine and
+  `/health` is green, but every transcription fails (the GPU is first touched
+  at inference time). Kenzy logs the error and **falls back to CPU
+  automatically** (one loud log line; `/health` shows `device_fallback: true`)
+  so your voice pipeline keeps working while you fix it.
+- **The easy fix is pip.** Install the NVIDIA runtimes straight into Kenzy's
+  venv — no `LD_LIBRARY_PATH`, no unit edits; Kenzy preloads them itself:
+
+  ```bash
+  ~/.local/share/kenzy/venv/bin/pip install nvidia-cublas-cu12 nvidia-cudnn-cu12
+  ```
+
+  Then restart the stt service (dashboard → Services → stt → Restart).
+
+  If the TTS service on the same host uses **kokoro** (PyTorch), torch has
+  usually already installed these wheels into the shared venv — in that case
+  GPU STT needs no extra installs at all, and both services run on the same
+  runtime libraries.
+
+Alternatively, pin the old engine in your config home's `constraints.txt`
+(`ctranslate2<4.5` and `faster-whisper<1.1`) — Kenzy honors it on every
+install and upgrade, so the pin sticks.
+
 ### Model size guide
 
 | Model | Size | Relative speed | Notes |

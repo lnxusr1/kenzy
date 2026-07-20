@@ -139,6 +139,20 @@ export function ConfigView({ node, onBack }) {
     notify(res.ok ? `${cap(type)} sent.` : res.error || `${type} failed`, res.ok ? "ok" : "err");
   }
 
+  async function disableNode() {
+    if (
+      !(await confirmDialog(
+        "Disable and stop this node? Its room goes quiet and it STAYS off — restart " +
+          "policies can't bring it back. To re-enable, run  systemctl --user enable " +
+          "--now kenzy-node.service  on the node's host.",
+        { title: "Disable node", confirmText: "Disable", danger: true },
+      ))
+    )
+      return;
+    const res = await send("disable_node", { node });
+    notify(res.ok ? "Disable sent — the node is stopping." : res.error || "Disable failed.", res.ok ? "ok" : "err");
+  }
+
   async function upgradeNode() {
     if (
       !(await confirmDialog(
@@ -321,6 +335,11 @@ export function ConfigView({ node, onBack }) {
                   title=${info.connected ? "" : "Node must be connected"}
                   onClick=${upgradeNode}>Upgrade</button>
           <button class="btn-ghost danger" disabled=${!info.controls} onClick=${() => ctl("restart")}>Restart</button>
+          ${info.unit && info.unit.systemd && info.unit.exists
+            ? html`<button class="btn-ghost danger" disabled=${!info.controls || !info.connected}
+                title=${info.connected ? "" : "Node must be connected"}
+                onClick=${disableNode}>Disable node</button>`
+            : null}
         </div>
         <p class="micro">Volume is in the settings above (0–100, applies live). Mute is temporary — a node comes back un-muted after a restart, and the wake-word chime stays audible while muted.</p>
       </div>

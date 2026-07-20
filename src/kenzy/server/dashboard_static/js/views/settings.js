@@ -1,7 +1,7 @@
 import { html, useState, useEffect } from "../html.js";
 import { confirmDialog } from "../dialog.js";
 import { groupBySections, SERVER_SECTIONS } from "../schema.js";
-import { getSettings } from "../api.js";
+import { getServerFeatures, getServerUnit, getSettings } from "../api.js";
 import { send, notify, subscribeUpgrades, useFleet } from "../store.js";
 
 // Code defaults the server applies when a key is set in neither server.yaml nor
@@ -121,16 +121,6 @@ function ServerSettings() {
     );
   }
 
-  async function restartOnly() {
-    if (!(await confirmDialog("Restart the server now? The dashboard will briefly disconnect.", { title: "Restart server", confirmText: "Restart" })))
-      return;
-    const res = await send("restart_server", {});
-    notify(
-      res.ok ? "Server restarting — the dashboard will reconnect." : res.error || "Restart failed.",
-      res.ok ? "ok" : "err",
-    );
-  }
-
   const row = (f) => {
     const v = vals[f.key];
     const isSet = v !== null && v !== undefined && v !== "";
@@ -162,9 +152,98 @@ function ServerSettings() {
     )}</div>
     <div class="cfg-actions">
       <button class="btn-primary" disabled=${busy} onClick=${save}>
-        ${busy ? "Saving…" : "Save & restart server"}</button>
-      <button class="btn-ghost" disabled=${busy} onClick=${restartOnly}>Restart server</button>
+        ${busy ? "Saving…" : "Save & restart"}</button>
     </div>`;
+}
+
+// Optional server-process extras (mqtt, sound) — the same chip language as
+// the service editors, with a per-chip Install (dependency fill, constraints
+// honored; the server restarts itself to load the new import).
+function ServerFeatures({ controls }) {
+  const [feats, setFeats] = useState(null);
+  const [installing, setInstalling] = useState(false);
+
+  const load = () => getServerFeatures().then((d) => setFeats(d.features || [])).catch(() => setFeats([]));
+  useEffect(() => { load(); }, []);
+
+  if (!feats || !feats.length) return null;
+  return html`<div class="feat-chips">
+    ${feats.map((f) => {
+      const state = !f.available ? "missing" : f.active ? "active" : f.configured ? "inactive" : "off";
+      const label =
+        state === "missing"
+          ? f.configured
+            ? "enabled in config — NOT INSTALLED"
+            : "not installed"
+          : state === "active"
+            ? "active"
+            : state === "inactive"
+              ? "installed — needs restart or config"
+              : "available, not enabled";
+      return html`<div key=${f.name} class=${"chip feat " + state} title=${f.note || ""}>
+        <span class="mono">${f.name}</span>
+        <span class="micro">${label}</span>
+        ${state === "missing" && f.install === "pip" && controls
+          ? html`<button class="btn-ghost" disabled=${installing}
+              onClick=${async () => {
+                setInstalling(true);
+                notify(`Installing the ${f.name} extra — the server restarts itself when done.`);
+                const r = await send("install_server_deps", { extra: f.extra }, 620000);
+                setInstalling(false);
+                notify(r.ok ? "Installed — server restarting." : r.error || "Install failed.", r.ok ? "ok" : "err");
+                if (r.ok) setTimeout(load, 6000);
+              }}>${installing ? "Installing…" : "Install"}</button>`
+          : null}
+      </div>`;
+    })}
+  </div>`;
+}
+
+// Server controls — mirrors each service page's Controls section. Restart
+// re-execs in place; Disable is the systemd-install "off until I say so"
+// (`disable --now`, so Restart= can't resurrect it). No Enable twin on
+// purpose: a disabled server has no dashboard — the recovery one-liner is
+// shown BEFORE you pull the plug.
+function ServerControls({ controls }) {
+  const [unit, setUnit] = useState(null);
+
+  useEffect(() => {
+    getServerUnit().then(setUnit).catch(() => setUnit(null));
+  }, []);
+
+  async function restart() {
+    if (!(await confirmDialog("Restart the server now? The dashboard will briefly disconnect.", { title: "Restart server", confirmText: "Restart" })))
+      return;
+    const res = await send("restart_server", {});
+    notify(
+      res.ok ? "Server restarting — the dashboard will reconnect." : res.error || "Restart failed.",
+      res.ok ? "ok" : "err",
+    );
+  }
+
+  async function disable() {
+    if (!(await confirmDialog(
+      `Disable and stop the whole server? Every room goes quiet and this dashboard goes away until you run  systemctl --user enable --now ${unit.unit}  on the server host.`,
+      { title: "Disable server", confirmText: "Disable", danger: true, typed: "DISABLE" },
+    )))
+      return;
+    const res = await send("disable_server", {});
+    notify(res.ok ? "Server disabling — goodbye." : res.error || "Disable failed.", res.ok ? "ok" : "err");
+  }
+
+  return html`
+    <div class="ctl-row">
+      <button class="btn-ghost danger" disabled=${!controls} onClick=${restart}>Restart</button>
+      ${unit && unit.systemd && unit.exists
+        ? html`<button class="btn-ghost danger" disabled=${!controls} onClick=${disable}>Disable server</button>`
+        : null}
+    </div>
+    ${unit && unit.systemd && unit.exists
+      ? html`<p class="micro">Unit <span class="mono">${unit.unit}</span> ·
+          ${unit.enabled ? "enabled" : "disabled"} · ${unit.active ? "running" : "stopped"}.
+          Disabling stops everything until re-enabled on the server host.</p>`
+      : html`<p class="micro">Not running as a <span class="mono">systemd --user</span> unit —
+          enable/disable doesn't apply here (dev checkout or manual start).</p>`}`;
 }
 
 // Update check — installed version vs. the latest on PyPI. Read-only visibility
@@ -575,6 +654,7 @@ export function SettingsView({ onLogout }) {
       <section class="section">
         <header><h2>System</h2><span class="rule"></span></header>
         <div class="card pad">
+          <${ServerFeatures} controls=${s.flags && s.flags.controls} />
           <dl class="kv">
             ${kv("kenzy version", html`<span class="mono">${s.version}</span>
               ${s.installed && s.installed !== s.version
@@ -635,6 +715,11 @@ export function SettingsView({ onLogout }) {
       <section class="section">
         <header><h2>Server configuration</h2><span class="rule"></span><a class="docs-link" href="https://docs.kenzy.ai/configuration/server/" target="_blank" rel="noopener">Docs ↗</a></header>
         <div class="card pad"><${ServerSettings} /></div>
+      </section>
+
+      <section class="section">
+        <header><h2>Controls</h2><span class="rule"></span></header>
+        <${ServerControls} controls=${s.flags && s.flags.controls} />
       </section>
     </div>`;
 }

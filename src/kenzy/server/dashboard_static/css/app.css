@@ -389,6 +389,7 @@ button { font: inherit; cursor: pointer; }
 .cfg .section + .section { margin-top: var(--s4); }
 .cfg-actions { margin-top: var(--s5); display: flex; flex-wrap: wrap; gap: var(--s3); }
 .cfg-actions .btn-primary { width: auto; margin-top: 0; padding-inline: var(--s5); }
+.cfg-actions .btn-ghost { flex: 0 0 auto; width: auto; padding-inline: var(--s5); }
 .cfg-msg { margin-top: var(--s4); font-size: 13px; }
 .cfg-msg.ok { color: var(--led-up); }
 .cfg-msg.err { color: var(--led-down); }

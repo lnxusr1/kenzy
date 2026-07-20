@@ -698,3 +698,118 @@ async def test_ws_live_channel_requires_auth_and_pushes():
     finally:
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
+
+
+async def test_disable_server_mutation(tmp_path, monkeypatch):
+    # Controls-gated; honest refusal off systemd; disables via unitctl when real.
+    monkeypatch.setenv("KENZY_HOME", str(tmp_path))
+    s = AudioServer({})
+    from kenzy import unitctl
+
+    off = Dashboard(s, {}, DashboardConfig(enabled=True, controls=False))
+    cap = _Cap()
+    await off._handle_ws_message(cap, json.dumps({"id": "1", "type": "disable_server"}))
+    assert cap.sent[0]["ok"] is False
+
+    on = Dashboard(s, {}, DashboardConfig(enabled=True, controls=True))
+    monkeypatch.setattr(
+        unitctl, "unit_state",
+        lambda unit: {"systemd": False, "exists": False, "enabled": False, "active": False},
+    )
+    cap = _Cap()
+    await on._handle_ws_message(cap, json.dumps({"id": "2", "type": "disable_server"}))
+    assert cap.sent[0]["ok"] is False and "systemd" in cap.sent[0]["error"]
+
+    monkeypatch.setattr(
+        unitctl, "unit_state",
+        lambda unit: {"systemd": True, "exists": True, "enabled": True, "active": True},
+    )
+    disabled = []
+
+    def fake_disable(unit):
+        disabled.append(unit)
+        return True, ""
+
+    monkeypatch.setattr(unitctl, "disable_unit", fake_disable)
+    cap = _Cap()
+    await on._handle_ws_message(cap, json.dumps({"id": "3", "type": "disable_server"}))
+    assert cap.sent[0]["ok"] is True
+    await asyncio.sleep(1.1)  # the 0.8s grace before the executor runs disable
+    assert disabled == ["kenzy-server.service"]
+
+
+async def test_disable_node_mutation(tmp_path, monkeypatch):
+    # Gated by controls; sends the disable frame to the connected node only.
+    monkeypatch.setenv("KENZY_HOME", str(tmp_path))
+    from kenzy import protocol
+
+    class _RecWS:
+        def __init__(self):
+            self.sent = []
+
+        async def send(self, m):
+            self.sent.append(m)
+
+    s = AudioServer({})
+    ws = _RecWS()
+    s._nodes["n1"] = NodeSession(ws=ws, node_id="n1", room_id="office")
+
+    off = Dashboard(s, {}, DashboardConfig(enabled=True, controls=False))
+    cap = _Cap()
+    await off._handle_ws_message(cap, json.dumps({"id": "1", "type": "disable_node", "node": "n1"}))
+    assert cap.sent[0]["ok"] is False and ws.sent == []
+
+    on = Dashboard(s, {}, DashboardConfig(enabled=True, controls=True))
+    cap = _Cap()
+    await on._handle_ws_message(cap, json.dumps({"id": "2", "type": "disable_node", "node": "n1"}))
+    assert cap.sent[0]["ok"] is True
+    assert json.loads(ws.sent[-1])["type"] == protocol.MSG_DISABLE
+
+    cap = _Cap()
+    await on._handle_ws_message(
+        cap, json.dumps({"id": "3", "type": "disable_node", "node": "ghost"})
+    )
+    assert cap.sent[0]["ok"] is False
+
+
+async def test_server_features_and_install_mutation(tmp_path, monkeypatch):
+    monkeypatch.setenv("KENZY_HOME", str(tmp_path))
+    s = AudioServer({})
+    dcfg = DashboardConfig(enabled=True, controls=True)
+    d = Dashboard(s, {"integrations": {"mqtt": {"enabled": True}}}, dcfg)
+    feats = {f["name"]: f for f in d._server_features()}
+    assert feats["mqtt"]["configured"] is True and feats["mqtt"]["extra"] == "mqtt"
+    assert "sound" in feats
+
+    # Unknown extra refused; known extra runs the fill and restarts on success.
+    cap = _Cap()
+    await d._handle_ws_message(
+        cap, json.dumps({"id": "1", "type": "install_server_deps", "extra": "evil"})
+    )
+    assert cap.sent[0]["ok"] is False
+
+    from kenzy import upgrade
+
+    fills = []
+
+    async def fake_fill(extra):
+        fills.append(extra)
+        return True, "ok"
+
+    monkeypatch.setattr(upgrade, "run_pip_fill", fake_fill)
+    restarts = []
+    monkeypatch.setattr(s, "restart_server", lambda: restarts.append(1))
+    cap = _Cap()
+    await d._handle_ws_message(
+        cap, json.dumps({"id": "2", "type": "install_server_deps", "extra": "mqtt"})
+    )
+    assert cap.sent[0]["ok"] is True and fills == ["mqtt"]
+    await asyncio.sleep(1.0)
+    assert restarts == [1]
+
+    off = Dashboard(s, {}, DashboardConfig(enabled=True, controls=False))
+    cap = _Cap()
+    await off._handle_ws_message(
+        cap, json.dumps({"id": "3", "type": "install_server_deps", "extra": "mqtt"})
+    )
+    assert cap.sent[0]["ok"] is False
