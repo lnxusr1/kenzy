@@ -2065,9 +2065,8 @@ class NodeClient:
             "devices": self._device_capabilities(),
             "unit": self._unit_info,
         }
-        # 3.12: prove possession of the join token by signature — the raw token
-        # no longer rides the hello. (Requires a >=3.12 server; managed upgrades
-        # do the server first. A server still accepts the legacy token field.)
+        # Prove possession of the join token by signature — the raw token never
+        # rides the hello. (Requires a >=3.12 server.)
         auth = None
         if self._join_token:
             from kenzy import serviceauth

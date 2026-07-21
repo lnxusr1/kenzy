@@ -94,9 +94,9 @@ async def test_response_binding_rejects_a_forged_cert(certpair, tmp_path, monkey
         await asyncio.gather(task, return_exceptions=True)
 
 
-async def test_legacy_bearer_accepted_and_unsigned(certpair, tmp_path, monkeypatch):
-    """A pre-3.11 client (bearer only) is accepted during the window; the reply
-    is unsigned. A wrong bearer with no signature is 401."""
+async def test_legacy_bearer_rejected(certpair, tmp_path, monkeypatch):
+    """The pre-3.11 bearer path is gone: a raw bearer (even the correct token)
+    is 401. Only token-proof (X-Kenzy-Auth) is accepted."""
     monkeypatch.setenv("KENZY_HOME", str(tmp_path))
     (tmp_path / "configs").mkdir()
     cert, key = certpair
@@ -113,8 +113,7 @@ async def test_legacy_bearer_accepted_and_unsigned(certpair, tmp_path, monkeypat
                 "https://127.0.0.1:8843/config/tts",
                 headers={"Authorization": "Bearer legacytok"},
             )
-            assert r.status_code == 200
-            assert "X-Kenzy-Sig" not in r.headers  # legacy path is unsigned
+            assert r.status_code == 401  # raw bearer no longer accepted
             bad = await c.get(
                 "https://127.0.0.1:8843/config/tts",
                 headers={"Authorization": "Bearer wrong"},

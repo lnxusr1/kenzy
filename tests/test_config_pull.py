@@ -10,7 +10,7 @@ import pytest
 import websockets
 import yaml
 
-from kenzy import protocol
+from kenzy import protocol, serviceauth
 from kenzy.node.client import NodeClient
 from kenzy.server.server import AudioServer
 
@@ -215,14 +215,16 @@ async def test_join_token_rejects_bad_hello(tmp_path, monkeypatch):
     )
     task = await _serve(server)
     try:
-        # Wrong token → server closes the connection.
+        # The raw token field is no longer accepted (even the correct value) —
+        # without a valid signature proof the server closes the connection.
         async with websockets.connect("ws://127.0.0.1:8798") as ws:
-            await ws.send(protocol.hello("den", token="wrong"))
+            await ws.send(protocol.hello("den", node_id="den", token="s3cret"))
             with pytest.raises(websockets.exceptions.ConnectionClosed):
                 await asyncio.wait_for(ws.recv(), timeout=2.0)
-        # Correct token → config frame is delivered.
+        # Valid signature proof → config frame is delivered.
         async with websockets.connect("ws://127.0.0.1:8798") as ws:
-            await ws.send(protocol.hello("den", token="s3cret"))
+            auth = serviceauth.sign_node_hello("s3cret", "den")
+            await ws.send(protocol.hello("den", node_id="den", auth=auth))
             msg = json.loads(await asyncio.wait_for(ws.recv(), timeout=2.0))
             assert msg["type"] == protocol.MSG_CONFIG
     finally:

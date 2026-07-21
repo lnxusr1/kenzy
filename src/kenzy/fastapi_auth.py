@@ -22,7 +22,6 @@ from starlette.responses import Response
 from kenzy.logutil import install_ring_handler
 from kenzy.serviceauth import (
     SIG_HEADER,
-    check_bearer,
     service_token_from_env,
     verify_service_request,
 )
@@ -31,17 +30,14 @@ log = logging.getLogger(__name__)
 
 
 def _service_authorized(request: Request, token: str) -> bool:
-    """True when a request carries valid token-proof auth (``X-Kenzy-Auth``) or,
-    during the deprecation window, the legacy bearer. Requests never carry the
-    token in a replayable form once the bearer is dropped (a later minor)."""
-    if (
+    """True when a request carries valid token-proof auth (``X-Kenzy-Auth``).
+    The token never rides the wire in a replayable form."""
+    return (
         verify_service_request(
             request.headers.get(SIG_HEADER), token, request.method, request.url.path
         )
         is not None
-    ):
-        return True
-    return check_bearer(request.headers.get("authorization"), token)
+    )
 
 
 class UpgradeRequest(BaseModel):
@@ -51,10 +47,11 @@ class UpgradeRequest(BaseModel):
 
 
 def install_service_auth(app: FastAPI) -> None:
-    """Require ``KENZY_SERVICE_TOKEN`` as a bearer on every route except /health.
+    """Require token-proof auth (``X-Kenzy-Auth``) on every route except /health.
 
-    No-op when the env var is unset, so service-to-service auth is opt-in and
-    backward compatible. ``/health`` stays open (the dashboard polls it).
+    No-op when the fleet token (``KENZY_SERVER_TOKEN``/``KENZY_SERVICE_TOKEN``) is
+    unset, so service-to-service auth is opt-in. ``/health`` stays open (the
+    dashboard polls it).
     """
     token = service_token_from_env()
     if not token:

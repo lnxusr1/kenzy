@@ -83,7 +83,12 @@ async def _serve(server: AudioServer):
 def _http_get(url: str, token: str | None = None):
     req = urllib.request.Request(url)
     if token:
-        req.add_header("Authorization", f"Bearer {token}")
+        from urllib.parse import urlsplit
+
+        from kenzy import serviceauth
+
+        path = urlsplit(url).path or "/"
+        req.add_header(serviceauth.SIG_HEADER, serviceauth.sign_service_request(token, "GET", path))
     try:
         with urllib.request.urlopen(req, timeout=2.0) as resp:
             return resp.status, json.loads(resp.read().decode())
@@ -135,7 +140,7 @@ async def test_config_endpoint_token_gated(tmp_path, monkeypatch):
     task = await _serve(server)
     try:
         status, _ = await asyncio.to_thread(_http_get, "http://127.0.0.1:8794/config/stt")
-        assert status == 401  # no bearer
+        assert status == 401  # no auth
         status, body = await asyncio.to_thread(
             _http_get, "http://127.0.0.1:8794/config/stt", "s3cret"
         )
@@ -194,7 +199,7 @@ async def test_announce_endpoint_token_gated(tmp_path, monkeypatch):
     task = await _serve(server)
     try:
         status, _ = await asyncio.to_thread(_http_get, "http://127.0.0.1:8792/announce?text=hi")
-        assert status == 401  # no bearer
+        assert status == 401  # no auth
         status, body = await asyncio.to_thread(
             _http_get, "http://127.0.0.1:8792/announce?text=hi", "s3cret"
         )

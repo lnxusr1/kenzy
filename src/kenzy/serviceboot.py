@@ -71,9 +71,7 @@ def _signed_get(base: str, path: str, token: str | None, timeout: float) -> tupl
             headers[serviceauth.SIG_HEADER] = serviceauth.sign_service_request(
                 token, "GET", sign_path, ts=ts
             )
-            # 3.12: token-proof only — the raw token no longer rides the wire
-            # (a 3.11 server still accepts this signature). Servers keep
-            # accepting the legacy bearer for stragglers; nothing sends it.
+            # Token-proof only — the raw token never rides the wire.
         conn.request("GET", path, headers=headers)
         resp = conn.getresponse()
         body = resp.read()

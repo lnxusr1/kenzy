@@ -21,7 +21,6 @@ in without changing this file.
 from __future__ import annotations
 
 import asyncio
-import hmac
 import json
 import logging
 import os
@@ -51,7 +50,6 @@ from kenzy.server.people import (
     resolve_assist_identity,
     resolve_voice_identity,
 )
-from kenzy.serviceauth import check_bearer
 
 log = logging.getLogger(__name__)
 
@@ -546,9 +544,8 @@ class AudioServer:
     def _service_headers(self, method: str, url: str | None) -> dict[str, str]:
         """Auth headers for an outbound call to a backend service.
 
-        Sends only the token-proof signature (``X-Kenzy-Auth``) — as of 3.12 the
-        raw token never rides the wire. Verifiers still accept the legacy bearer
-        for a straggler on an old release, but nothing sends it any more.
+        Sends only the token-proof signature (``X-Kenzy-Auth``) — the raw token
+        never rides the wire.
         """
         token = self._service_token
         if not token:
@@ -556,9 +553,6 @@ class AudioServer:
         from urllib.parse import urlparse
 
         path = urlparse(url or "").path or "/"
-        # 3.12: token-proof only — the raw bearer no longer rides the wire (a
-        # 3.11 service still accepts this signature). The verify side keeps
-        # honoring the legacy bearer for stragglers; nothing sends it.
         return {serviceauth.SIG_HEADER: serviceauth.sign_service_request(token, method, path)}
 
     # ------------------------------------------------------------------
@@ -956,27 +950,23 @@ class AudioServer:
         )
 
     def _join_authorized(self, msg: dict[str, Any]) -> bool:
-        """A node's hello is authorized when its 3.12 ``auth`` proof verifies for
-        the claimed node_id, or (legacy window) the raw ``token`` field matches.
+        """A node's hello is authorized when its ``auth`` proof verifies for the
+        claimed node_id. The raw ``token`` field (pre-3.12) is no longer accepted.
         No configured join token ⇒ open (unauthenticated joins allowed)."""
         if not self._join_token:
             return True
         token = str(self._join_token)
-        auth = msg.get("auth")
-        if auth is not None:
-            node_id = str(msg.get("node_id") or msg.get("room_id") or "")
-            return serviceauth.verify_node_hello(auth, token, node_id)
-        return hmac.compare_digest(str(msg.get("token") or ""), token)
+        node_id = str(msg.get("node_id") or msg.get("room_id") or "")
+        return serviceauth.verify_node_hello(msg.get("auth"), token, node_id)
 
     def _authorize_service(
         self, request: Request, method: str, path: str
     ) -> tuple[bool, int | None]:
         """Authorize an inbound service-to-service request.
 
-        Returns ``(authorized, ts)`` where ``ts`` is the request timestamp when
-        token-proof auth (``X-Kenzy-Auth``) was used — the caller signs the
-        response with it — and ``None`` for the legacy bearer path (no response
-        signature) or when auth is disabled.
+        Returns ``(authorized, ts)`` where ``ts`` is the request timestamp from the
+        token-proof (``X-Kenzy-Auth``) signature — the caller signs the response
+        with it — and ``None`` when auth is disabled.
         """
         token = self._service_token
         if not token:
@@ -986,9 +976,6 @@ class AudioServer:
         )
         if ts is not None:
             return True, ts
-        if check_bearer(request.headers.get("authorization"), token):
-            log.debug("service auth for %s: legacy bearer accepted (pre-3.11 client)", path)
-            return True, None
         return False, None
 
     def _check_service_token(self, request: Request) -> bool:
@@ -1075,8 +1062,8 @@ class AudioServer:
         if service not in SERVICES or service == "node":
             return self._http_json(404, {"error": "unknown service"})
         # Secrets ride only an authenticated (ts set = token-proof) TLS channel
-        # (channel_binding present) — never plaintext, never a legacy-bearer
-        # request. So a relay that can't produce a signature gets no keys.
+        # (channel_binding present) — never plaintext. So a relay that can't
+        # produce a signature gets no keys.
         with_secrets = ts is not None and bool(self._channel_binding)
         cfg = self._effective_service_config(service, include_secrets=with_secrets)
         return self._signed_json(200, cfg, ts)
