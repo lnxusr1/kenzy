@@ -905,8 +905,8 @@ def _resolver_text(model: ha_model.HAModel, curation: dict[str, Any]) -> str:
 async def _ensure_view() -> None:
     """Refresh the cached resolver index + text from live HA topology.
 
-    Falls back to the static device_ids files when HA is unreachable and nothing
-    is cached yet. A successful live pull always supersedes a static fallback.
+    HA unreachable ⇒ keep the existing cached view if there is one, else fail
+    honestly (the static device_ids fallback was retired in 3.5.1).
     """
     global _INDEX, _RESOLVER_TEXT, _VIEW_TS
     try:

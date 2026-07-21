@@ -21,13 +21,15 @@ Tool-calling loop
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
@@ -336,11 +338,12 @@ final reply.
 Final reply format: a single raw JSON object and nothing else — no markdown, \
 no code fences, no explanation, no trailing characters after the closing brace.
 
-The object must contain two required fields and one optional field:
-  "text": your spoken response (read aloud — plain prose, no markdown)
+The object must contain these fields, emitted in exactly this order:
   "voice_prompt": a short TTS instruction describing tone, pace, and style
-  "expect_response" (optional, default false): whether to keep the microphone open
+  "expect_response" (default false): whether to keep the microphone open
       for the user's reply without requiring the wake word again.
+  "text": your spoken response (read aloud — plain prose, no markdown) — LAST,
+      so speech can begin while you are still writing.
 
 Set "expect_response" to true when your reply cannot be complete without the user's
 immediate answer — in either of these cases:
@@ -357,11 +360,11 @@ anything"), for pleasantries or sign-offs, or to ask the user to clarify a reque
 could otherwise just carry out.
 
 Example (output this format exactly):
-{"text": "The lights are on.", "voice_prompt": "Speak naturally at a conversational pace."}
+{"voice_prompt": "Speak naturally.", "expect_response": false, "text": "The lights are on."}
 Example holding the floor (incomplete setup):
-{"text": "Knock knock.", "voice_prompt": "Playful tone.", "expect_response": true}
+{"voice_prompt": "Playful tone.", "expect_response": true, "text": "Knock knock."}
 Example holding the floor (a question you're waiting on):
-{"text": "What's your favorite color?", "voice_prompt": "Curious.", "expect_response": true}"""
+{"voice_prompt": "Curious.", "expect_response": true, "text": "What's your favorite color?"}"""
 
 
 # The same three-field contract as a JSON schema. Passed as `response_format` so
@@ -373,8 +376,10 @@ Example holding the floor (a question you're waiting on):
 # it (drop_params removes response_format for them; _parse_response still copes).
 _RESPONSE_SCHEMA: dict[str, Any] = {
     "type": "object",
+    # Property order is part of the contract (4.4): structured-output providers
+    # emit fields in schema order, and streaming needs the two header fields
+    # BEFORE the (long) spoken text so TTS can start on the first sentence.
     "properties": {
-        "text": {"type": "string", "description": "The spoken response, read aloud."},
         "voice_prompt": {
             "type": "string",
             "description": "A short TTS style instruction (tone, pace).",
@@ -388,8 +393,9 @@ _RESPONSE_SCHEMA: dict[str, Any] = {
                 "false otherwise, and when in doubt."
             ),
         },
+        "text": {"type": "string", "description": "The spoken response, read aloud."},
     },
-    "required": ["text", "voice_prompt", "expect_response"],
+    "required": ["voice_prompt", "expect_response", "text"],
     "additionalProperties": False,
 }
 
@@ -399,6 +405,32 @@ def _response_format() -> dict[str, Any]:
         "type": "json_schema",
         "json_schema": {"name": "kenzy_reply", "strict": True, "schema": _RESPONSE_SCHEMA},
     }
+
+
+def _wants_cache_breakpoint(model: str) -> bool:
+    """Anthropic-family models need an explicit cache_control marker; OpenAI-style
+    providers cache the prompt prefix automatically (the message layout alone does
+    the work there)."""
+    m = model.lower()
+    return m.startswith(("claude", "anthropic/")) or "/claude" in m
+
+
+def _system_message(static_head: str, dynamic_ctx: str) -> dict[str, Any]:
+    """The system message, laid out for provider prompt caching: the byte-stable
+    static head (system prompt + reply contract) first, the per-request context
+    (clock, rooms, schedules, memory) after it — so the cacheable prefix is never
+    invalidated by the minute-granularity clock. For Anthropic-family models the
+    head rides its own content block with a cache_control breakpoint; everyone
+    else gets a plain string (safest shape for Ollama-class templates)."""
+    if _wants_cache_breakpoint(_model):
+        return {
+            "role": "system",
+            "content": [
+                {"type": "text", "text": static_head, "cache_control": {"type": "ephemeral"}},
+                {"type": "text", "text": dynamic_ctx},
+            ],
+        }
+    return {"role": "system", "content": f"{static_head}\n\n{dynamic_ctx}"}
 
 
 # ---------------------------------------------------------------------------
@@ -874,6 +906,58 @@ async def process_cancel(req: CancelRequest) -> dict[str, Any]:
 
 @app.post("/process", response_model=ProcessResponse)
 async def process(req: ProcessRequest) -> ProcessResponse:
+    return await _process_impl(req, None)
+
+
+@app.post("/process/stream")
+async def process_stream(req: ProcessRequest) -> Any:
+    """Streaming twin of /process (4.4): newline-delimited JSON events.
+
+    ``{"event":"tool","name":…}`` as tools run, ``{"event":"head",…}`` the
+    moment the reply's header fields are known, ``{"event":"delta","text":…}``
+    spoken-text previews, then ``{"event":"end", …}`` carrying the COMPLETE
+    ProcessResponse — the authoritative record (identical semantics to
+    /process: history, actions, lockbox substitution all happen there).
+    Deltas are a prefix preview of end.text: the caller speaks deltas as they
+    arrive and finishes with end.text's unspoken remainder. Fast-path replies
+    and ask() questions arrive as a bare end event. A failure mid-stream is an
+    ``{"event":"error"}`` line, never a broken pipe."""
+    from fastapi.responses import StreamingResponse
+
+    q: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
+
+    async def sink(event: dict[str, Any]) -> None:
+        await q.put(event)
+
+    async def run() -> None:
+        try:
+            resp = await _process_impl(req, sink)
+            await q.put({"event": "end", **resp.model_dump()})
+        except Exception as exc:  # noqa: BLE001 — surfaced as an event line
+            log.error("process/stream failed: %s", exc, exc_info=True)
+            await q.put({"event": "error", "detail": str(exc)})
+        finally:
+            await q.put(None)
+
+    task = asyncio.create_task(run())
+
+    async def gen() -> Any:
+        try:
+            while True:
+                ev = await q.get()
+                if ev is None:
+                    break
+                yield (json.dumps(ev, ensure_ascii=False) + "\n").encode()
+        finally:
+            # Client hung up mid-reply (wake-word cancel): stop the pipeline.
+            task.cancel()
+
+    return StreamingResponse(gen(), media_type="application/x-ndjson")
+
+
+async def _process_impl(
+    req: ProcessRequest, sink: Callable[[dict[str, Any]], Awaitable[None]] | None
+) -> ProcessResponse:
     # Preserve raw speaker for history; derive display name for logging.
     raw_speaker = req.speaker or "unknown"
     display_speaker = raw_speaker if raw_speaker.lower() != "unknown" else None
@@ -959,6 +1043,7 @@ async def process(req: ProcessRequest) -> ProcessResponse:
             available_rooms=req.rooms,
             schedules=req.schedules,
             spans=spans,
+            sink=sink,
         ),
         kind="llm",
         meta={"room_id": req.room_id or "", "utterance": req.text, "spans": spans},
@@ -1079,6 +1164,106 @@ def _schedule_context(schedules: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+def _holdback(s: str) -> tuple[str, str]:
+    """Split streamable text into (safe-to-emit, held). Held starts at the
+    earliest possible lockbox placeholder opener — ``[[`` or a trailing ``[`` —
+    so a placeholder can never stream out before substitution. Once held,
+    everything after ships via the end event instead."""
+    i = s.find("[[")
+    if i >= 0:
+        return s[:i], s[i:]
+    if s.endswith("["):
+        return s[:-1], "["
+    return s, ""
+
+
+async def _stream_one_call(
+    kwargs: dict[str, Any],
+    fb_state: dict[str, Any],
+    sink: Callable[[dict[str, Any]], Awaitable[None]],
+) -> tuple[Any | None, tuple[str, str, bool] | None]:
+    """One model call with ``stream=True``.
+
+    A tool-call response is collected whole and rebuilt (the tool loop then
+    proceeds exactly as buffered) → ``(message, None)``. A content response
+    streams text previews through the sink as they arrive → ``(None, (text,
+    voice_prompt, expect_response))``. Deltas are suppressed for lockbox
+    exchanges and held back at a possible placeholder (see _holdback).
+
+    Mid-stream failure: with nothing emitted yet, re-call buffered with
+    ``tool_choice="none"`` (tools must not re-execute) and let the caller parse
+    that message; with previews already spoken, what streamed IS the reply —
+    return it as the result (honest: it's what the room heard)."""
+    from kenzy.llm import streamparse
+
+    chunks: list[Any] = []
+    extract = streamparse.StreamExtract()
+    is_tools = False
+    emitted = ""  # text already sent as deltas (post-holdback)
+    pending = ""  # extracted but held back
+    head_sent = False
+
+    async def _pump() -> None:
+        nonlocal is_tools, emitted, pending, head_sent
+        stream = await skill_registry.acompletion_with_fallback(
+            {**kwargs, "stream": True}, fb_state
+        )
+        async for chunk in stream:
+            chunks.append(chunk)
+            delta = chunk.choices[0].delta if getattr(chunk, "choices", None) else None
+            if delta is None:
+                continue
+            if getattr(delta, "tool_calls", None):
+                is_tools = True
+            content = getattr(delta, "content", None)
+            if not content or is_tools:
+                continue
+            piece = extract.feed(content)
+            if not head_sent and extract.head is not None:
+                head_sent = True
+                await sink({"event": "head", **extract.head})
+            if piece and not memory.lockbox_touched():
+                pending += piece
+                safe, pending = _holdback(pending)
+                if safe:
+                    emitted += safe
+                    await sink({"event": "delta", "text": safe})
+
+    try:
+        await _pump()
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:  # noqa: BLE001 — degrade, never break the reply
+        if emitted:
+            log.warning("Model stream broke mid-reply (%s) — keeping what was spoken", exc)
+            head = extract.head or {}
+            spoken = emitted + pending if "[[" not in pending else emitted
+            return None, (
+                spoken,
+                str(head.get("voice_prompt") or ""),
+                bool(head.get("expect_response", False)),
+            )
+        log.warning("Model stream failed before any output (%s) — re-calling buffered", exc)
+        response = await skill_registry.acompletion_with_fallback(
+            {**kwargs, "tool_choice": "none"}, fb_state
+        )
+        return response.choices[0].message, None
+
+    if is_tools:
+        import litellm  # type: ignore[import-untyped]
+
+        resp: Any = litellm.stream_chunk_builder(chunks)
+        if resp is None or not getattr(resp, "choices", None):
+            raise RuntimeError("tool-call stream produced no reconstructable response")
+        return resp.choices[0].message, None
+
+    parsed = extract.finalize()
+    if parsed is None:
+        # Not contract JSON — the lenient parser owns it (same as buffered).
+        return SimpleNamespace(content=extract.buf, tool_calls=None), None
+    return None, parsed
+
+
 async def _run_llm(
     text: str,
     speaker: str,
@@ -1086,6 +1271,7 @@ async def _run_llm(
     available_rooms: list[str] | None = None,
     schedules: list[dict[str, Any]] | None = None,
     spans: list[dict[str, Any]] | None = None,
+    sink: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
 ) -> tuple[str, str, bool]:
     # Per-request fallback state: once the primary model fails, the whole tool
     # loop stays on the configured local fallback (see skills.set_fallback).
@@ -1104,21 +1290,24 @@ async def _run_llm(
     viewer = skill_registry.get_request("person_id")
     history_messages = _history.get_messages(room_id or "", str(viewer) if viewer else None)
 
-    system_content = f"{_system_prompt}\n\n{_build_context()}"
+    # Static head + dynamic tail: everything per-request (the clock line first
+    # among them) stays OUT of the cacheable prefix — see _system_message.
+    static_head = f"{_system_prompt}\n{_JSON_INSTRUCTION}"
+    dynamic_parts = [_build_context()]
     if available_rooms:
-        system_content += "\nConnected rooms: " + ", ".join(available_rooms)
+        dynamic_parts.append("Connected rooms: " + ", ".join(available_rooms))
     if schedules:
-        system_content += "\n" + _schedule_context(schedules)
+        dynamic_parts.append(_schedule_context(schedules))
     mem = _memory_context(text)
     if mem:
-        system_content += "\n" + mem
+        dynamic_parts.append(mem)
     if (
         skill_registry.get_request("memory_capture") == "auto"
         and not skill_registry.get_request("memory_opt_out")
         and skill_registry.get_request("person_id")
     ):
-        system_content += (
-            "\nThis speaker enabled AUTO memory capture: when they state a durable "
+        dynamic_parts.append(
+            "This speaker enabled AUTO memory capture: when they state a durable "
             "personal fact (a preference, a name, a date, a code) even without "
             "saying 'remember', store it with the remember tool and briefly say "
             "you did. Never store small talk or transient states."
@@ -1129,17 +1318,16 @@ async def _run_llm(
         and skill_registry.get_request("person_id")
         and skill_registry.get_request("channel") == "voice"
     ):
-        system_content += (
-            "\nThis speaker enabled SUGGEST memory capture: when they state a "
+        dynamic_parts.append(
+            "This speaker enabled SUGGEST memory capture: when they state a "
             "durable personal fact (a preference, a name, a date) even without "
             "saying 'remember', call offer_to_remember(fact) — it asks them "
             "aloud first and only stores on their yes. Never offer for small "
             "talk or transient states, and never more than once per exchange."
         )
-    system_content += f"\n{_JSON_INSTRUCTION}"
 
     messages: list[dict[str, Any]] = [
-        {"role": "system", "content": system_content},
+        _system_message(static_head, "\n".join(dynamic_parts)),
         *history_messages,
         {"role": "user", "content": user_content},
     ]
@@ -1167,7 +1355,12 @@ async def _run_llm(
 
     for iteration in range(_max_tool_iterations):
         _t = time.monotonic()
-        response = await skill_registry.acompletion_with_fallback(kwargs, fb_state)
+        triplet: tuple[str, str, bool] | None = None
+        if sink is None:
+            response = await skill_registry.acompletion_with_fallback(kwargs, fb_state)
+            message = response.choices[0].message
+        else:
+            message, triplet = await _stream_one_call(kwargs, fb_state, sink)
         if spans is not None:
             # The name records which model ACTUALLY answered — once the primary
             # fails, fb_state pins the loop to the fallback and the spans show it.
@@ -1180,7 +1373,12 @@ async def _run_llm(
                     "ms": round((time.monotonic() - _t) * 1000),
                 }
             )
-        message = response.choices[0].message
+        if triplet is not None:
+            # Streamed content reply: the previews already went through the
+            # sink; this is the same result, authoritatively parsed.
+            spoken, vp, expect = triplet
+            _history.add(room_id or "", speaker, text, spoken, private_to=_llm_history_tag())
+            return spoken, vp, expect
 
         # Serialise the assistant turn back into the message list.
         assistant_msg: dict[str, Any] = {
@@ -1218,6 +1416,8 @@ async def _run_llm(
                 args = json.loads(tc.function.arguments or "{}")
             except json.JSONDecodeError:
                 args = {}
+            if sink is not None:
+                await sink({"event": "tool", "name": tc.function.name})
             _t = time.monotonic()
             result = await skill_registry.execute(tc.function.name, args)
             if spans is not None:

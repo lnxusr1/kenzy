@@ -1,0 +1,87 @@
+outside:
+  garage:
+    lights: [gr_ceiling_light]
+    covers: [gr_garage_door]
+  back_porch:
+    default: [bp_deck_string_lights, bp_porch_string_lights]
+    lights: [bp_deck_string_lights, bp_porch_string_lights, bp_ceiling_fan_light, bp_wall_sconce_door_light]
+    fans: [bp_ceiling_fan]
+  front_porch:
+    default: [fp_ceiling_light]
+    lights: [fp_ceiling_light, fp_christmas_lights]
+  back_yard:
+    lights: [by_flood_lights]
+  front_yard:
+    lights: [fy_flood_lights]
+  side_yard:
+    lights: [gr_flood_lights, gr_side_door_sconce_light]
+upstairs:
+  loft:
+    default: [lf_side_table_lamp]
+    lights: 
+      - lf_side_table_lamp
+      - lf_ceiling_fan_light
+      - lf_landing_light # Ceiling light on the landing at the top of the stairway
+      - lf_christmas_tree_light
+    fans: [lf_ceiling_fan]
+    climate: [lf_thermostat]
+  loft_bath:
+    default: [lb_mirror_sink_light]
+    lights: [lb_mirror_sink_light, lb_shower_ceiling_light, lb_exhaust_fan_light]
+    fans: [lb_exhaust_fan]
+  johnnie_bedroom:
+    lights: [jb_ceiling_fan_light]
+    fans: [jb_ceiling_fan]
+  guest_bedroom:
+    lights: [gb_ceiling_fan_light]
+    fans: [gb_ceiling_fan]
+  master_bedroom:
+    default: [mb_nicki_nightstand_lamp, mb_jm_nightstand_lamp]
+    lights: 
+      - mb_nicki_nightstand_lamp # May be referred to as "Nicki's nightstand", "Nicki's lamp", or simply "nightstand lamp"
+      - mb_jm_nightstand_lamp
+      - mb_ceiling_fan_light # Commonly referred to as simply "light"
+      - mb_hallway_light # rarely used; only accessed when called directly
+      - mb_chair_lamp # This device is commonly referred to as simply "lamp"
+    fans: [mb_ceiling_fan]
+  master_bath:
+    default: [mb_mirror_sink_light]
+    lights: [mb_mirror_sink_light, mb_ceiling_shower_light, mb_toilet_room_light]
+    fans: [mb_shower_exhaust_fan, mb_toilet_exhaust_fan]
+  laundry_room:
+    lights: [ld_light]
+downstairs:
+  office:
+    default: [of_floor_lamps]
+    lights: [of_ceiling_fan_light, of_floor_lamps]
+    fans: [of_celing_fan]
+  office_bath:
+    default: [ob_sink_mirror_light]
+    lights: [ob_sink_mirror_light, ob_tub_ceiling_light, ob_toilet_exhaust_fan_light]
+    fans: [ob_toilet_exhaust_fan]
+  hallway:
+    lights: [hl_ceiling_light]
+  foyer:
+    lights: [fo_light]
+    lock: [fy_front_door]
+  dining_room:
+    default: [dr_chandelier_table_light]
+    lights: [dr_chandelier_table_light, dr_recessed_ceiling_lights]
+  kitchen:
+    default: [kt_island_pendant_lights, kt_counter_peninsula_pendant_lights]
+    lights: 
+      - kt_under_cabinent_lights
+      - kt_island_pendant_lights
+      - kt_counter_peninsula_pendant_lights
+      - kt_sink_light # not normally used; only accessed when called directly
+      - kt_recessed_ceiling_lights
+  living_room:
+    default: [lr_floor_lamp, lr_decorative_table_lamp]
+    lights: [lr_recessed_ceiling_lights, lr_ceiling_fan_light, lr_floor_lamp, lr_decorative_table_lamp, lr_christmas_tree_light, lr_table_christmas_light]
+    fans: [lr_ceiling_fan]
+    climate: [lr_thermostat]
+  powder_room:
+    lights: [pr_ceiling_light]
+    fans: [pr_exhaust_fan]
+  stairway:
+    lights: [sw_light]

@@ -85,6 +85,10 @@ node_defaults:
   # Pre-recorded (not synthesized) so it still plays when TTS itself is down;
   # same server-side/live semantics as the tones above. Empty = stay silent.
   sound_error: "error.wav"
+  # Spoken acknowledgement ("On it.") when a reply is taking a while — played
+  # once if the answer hasn't started after a couple of seconds. Same
+  # server-side/live semantics. Empty = never speak it.
+  sound_thinking: "thinking.wav"
   # Whether this room's speaker does acoustic echo cancellation (the published
   # hardware guidance recommends AEC speakerphones). Calibration DETECTS and
   # sets this per node automatically (it plays a known sound and measures the

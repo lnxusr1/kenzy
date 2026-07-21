@@ -29,7 +29,7 @@ import sys
 import time
 import uuid
 from collections import deque
-from collections.abc import Callable
+from collections.abc import Callable, Coroutine
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -80,6 +80,7 @@ _ALLOWED_OVERRIDE_KEYS = frozenset(
         "sound_timer",
         "sound_alarm",
         "sound_error",
+        "sound_thinking",
         "log_level",
         "log_capture_level",
         "volume",
@@ -102,6 +103,9 @@ _INTERCOM_VOICE_PROMPT = "Read this aloud as a brief, friendly spoken notificati
 _CALIB_VOICE_PROMPT = "Calm, clear, unhurried — you are guiding someone through a setup step."
 _CALIB_SAY_MARGIN = 0.9  # playback outlasts streaming by roughly this much
 _CALIB_PEAK_REFRACTORY_S = 1.5  # min gap between counted wake attempts
+# LLM stage running longer than this ⇒ speak the backchannel cue ("On it.") so a
+# tool-loop or slow-model reply gets an immediate spoken acknowledgement.
+_BACKCHANNEL_MS = 2000
 _CALIB_WAKE_WINDOW_S = 20.0  # wake phase cap (ends early at WAKE_TARGET attempts)
 _CALIB_WAKE_EXTEND_S = 12.0  # one extension when the phase gate fails
 _CALIB_PROBE_LEAD_S = 0.4  # skip the probe's first moments (playback lags streaming)
@@ -192,6 +196,9 @@ _SERVER_EDITABLE: dict[str, str] = {
     "dialog.max_turns": "num",
     "alarm.ring_repeats": "num",
     "alarm.ring_interval": "num",
+    # 4.4 streaming pipeline: sentence-overlapped replies (off ⇒ the buffered
+    # serial pipeline, byte-for-byte pre-4.4 behavior).
+    "streaming.enabled": "bool",
     "discovery.enabled": "bool",
     "discovery.instance": "str",
     # Home Assistant / MQTT integration (no secrets — broker creds are env-only).
@@ -360,6 +367,124 @@ class LlmReply:
     ask_cue: bool = False
     ask_room: str | None = None
     ask_prompt: str = ""
+
+
+# Sentence boundary for the 4.4 streaming aggregator: terminator (+ closing
+# quotes/brackets) followed by whitespace. Decimals ("93.5") never match — no
+# whitespace after the dot.
+_SENT_END_RE = re.compile(r"[.!?…]+[\"'”’)\]]*\s+")
+
+
+def _split_sentences(buf: str) -> tuple[list[str], str]:
+    """Split complete raw sentence slices off the front of ``buf``.
+
+    Slices keep their trailing whitespace so ``"".join(slices) + remainder ==
+    buf`` EXACTLY — the spoken-prefix bookkeeping relies on byte equality with
+    the authoritative end-event text."""
+    out: list[str] = []
+    start = 0
+    for m in _SENT_END_RE.finditer(buf):
+        out.append(buf[start : m.end()])
+        start = m.end()
+    return out, buf[start:]
+
+
+class _StreamSpeech:
+    """Node-side speech state for ONE streamed reply (4.4).
+
+    Lazily opens the tts session on the first synthesized sentence, tracks the
+    exact raw prefix that went to TTS (byte-equal bookkeeping against the end
+    event's authoritative text), trails off honestly on a mid-reply synthesis
+    failure, and closes the session only after the caller has done its floor
+    arming — mirroring the buffered order (expect_utterance before tts_end).
+    """
+
+    def __init__(
+        self,
+        server: TranscribingServer,
+        node_id: str,
+        session_id: str | None,
+        on_first_audio: Callable[[], Coroutine[Any, Any, None]] | None = None,
+    ) -> None:
+        self.server = server
+        self.node_id = node_id
+        self.sid = session_id or str(uuid.uuid4())
+        self.voice_prompt = ""  # from the head event when the provider sends it
+        self.spoken = ""  # the exact raw prefix handed to TTS, in order
+        self.started = False  # tts_start sent
+        self.failed = False  # a synth/send failure — stop speaking early
+        self.closed = False
+        self._on_first_audio = on_first_audio
+
+    async def speak(
+        self, raw: str, *, voice_prompt: str | None = None, sensitive: bool = False
+    ) -> None:
+        """Synthesize + stream one raw sentence slice. Failure trails off: the
+        reply record stays authoritative, we just stop adding audio."""
+        if self.failed or self.closed or not raw.strip():
+            if raw and not self.failed and not self.closed:
+                self.spoken += raw  # pure whitespace still counts toward the prefix
+            return
+        vp = self.voice_prompt if voice_prompt is None else voice_prompt
+        pcm = await self.server._synthesize(raw.strip(), vp, sensitive=sensitive)
+        if not pcm:
+            self.failed = True
+            log.warning(
+                "[%s] sentence TTS failed — trailing off (%d chars spoken)",
+                self.node_id,
+                len(self.spoken),
+            )
+            return
+        if not self.started:
+            if self._on_first_audio is not None:
+                await self._on_first_audio()
+            self.started = True
+            await self.server.send_tts_start(
+                self.node_id, self.sid, sample_rate=24000, channels=1, stream=True
+            )
+        size = self.server._tts_chunk_size
+        for i in range(0, len(pcm), size):
+            if not await self.server.send_tts_frame(self.node_id, pcm[i : i + size]):
+                self.failed = True
+                return
+        self.spoken += raw
+
+    async def close(self, reply: LlmReply) -> bool:
+        """Speak the reply's unspoken remainder, end the session. Returns
+        spoke_ok — False only when nothing at all could be spoken."""
+        if self.closed:
+            return bool(self.spoken) and not self.failed
+        remainder = ""
+        if reply.text.startswith(self.spoken):
+            remainder = reply.text[len(self.spoken) :]
+        elif not self.spoken:
+            remainder = reply.text
+        else:
+            # The end text diverged from the streamed preview (shouldn't happen;
+            # deltas are a prefix). What was spoken stands — add nothing.
+            log.warning("[%s] streamed preview diverged from final text", self.node_id)
+        if remainder.strip() and not self.failed:
+            await self.speak(
+                remainder, voice_prompt=reply.voice_prompt, sensitive=reply.secret
+            )
+        self.closed = True
+        if self.started:
+            await self.server.send_tts_end(self.node_id, self.sid)
+            if self.node_id in self.server._tts_active:
+                await self.server.stop_node(self.node_id)
+                self.server._tts_active.discard(self.node_id)
+            log.info("[%s] TTS complete (streamed)", self.node_id)
+            return not self.failed or bool(self.spoken)
+        return not reply.text.strip()  # empty reply = silence by choice, not failure
+
+    async def abort(self) -> None:
+        """Best-effort session close on an error/cancel path."""
+        if self.started and not self.closed:
+            self.closed = True
+            try:
+                await self.server.send_tts_end(self.node_id, self.sid)
+            except Exception:  # noqa: BLE001
+                pass
 
 
 class AudioServer:
@@ -2053,6 +2178,11 @@ class TranscribingServer(AudioServer):
         acfg: dict[str, Any] = cfg.get("alarm", {}) or {}
         self._alarm_ring_repeats: int = int(acfg.get("ring_repeats", _ALARM_RING_REPEATS))
         self._alarm_ring_interval: float = float(acfg.get("ring_interval", _ALARM_RING_INTERVAL_S))
+        # 4.4 streaming pipeline (sentence-overlapped replies). Default OFF —
+        # flips on after rig soak; the buffered path stays the fallback forever
+        # (lockbox replies, non-streaming providers, and this flag).
+        scfg_stream: dict[str, Any] = cfg.get("streaming", {}) or {}
+        self._streaming_enabled: bool = bool(scfg_stream.get("enabled", False))
 
         # Remember which service URLs came from static config; auto-registration
         # (GET /register) fills the rest and must never overwrite a configured one.
@@ -2161,15 +2291,19 @@ class TranscribingServer(AudioServer):
         sample_rate: int = 22050,
         channels: int = 1,
         alert: bool = False,
+        stream: bool = False,
     ) -> bool:
         """Tell a node to enter TTS mode and begin accepting audio frames.
-        ``alert`` audio (doorbell chimes) plays at the muted floor on muted nodes."""
+        ``alert`` audio (doorbell chimes) plays at the muted floor on muted nodes;
+        ``stream`` marks a sentence-streamed reply (play frames as they arrive)."""
         async with self._lock:
             session = self._nodes.get(node_id)
         if session is None:
             return False
         try:
-            await session.ws.send(protocol.tts_start(session_id, sample_rate, channels, alert))
+            await session.ws.send(
+                protocol.tts_start(session_id, sample_rate, channels, alert, stream)
+            )
             self._tts_active.add(node_id)
             return True
         except websockets.exceptions.ConnectionClosed:
@@ -2288,11 +2422,14 @@ class TranscribingServer(AudioServer):
 
             if self._llm_url:
                 _t = time.monotonic()
+                sstate: _StreamSpeech | None = None  # set on the 4.4 streaming path
                 pending_ask = self._pending_ask.pop(node_id, None)
                 if pending_ask is not None:
                     # This utterance ANSWERS a parked ask(): resume the skill
                     # instead of a fresh dispatch — the whole point of ask().
-                    reply = await self._call_llm_continue(pending_ask["id"], text, identity)
+                    reply = await self._with_backchannel(
+                        node_id, self._call_llm_continue(pending_ask["id"], text, identity)
+                    )
                     if pending_ask.get("origin_node") not in (None, node_id):
                         # Cross-room ask (intercom consent): the outcome belongs
                         # to the ASKER's room; this room just answered.
@@ -2306,9 +2443,29 @@ class TranscribingServer(AudioServer):
                         )
                         return
                 else:
-                    reply = await self._call_llm(
-                        text, room_name, session_id, speaker, node_id=node_id, identity=identity
+                    # 4.4 streaming: speak sentences while the model writes.
+                    # None ⇒ endpoint unavailable ⇒ buffered path, unchanged.
+                    streamed = (
+                        await self._call_llm_stream(
+                            text, room_name, session_id, speaker, node_id, identity
+                        )
+                        if self._streaming_enabled
+                        else None
                     )
+                    if streamed is not None:
+                        reply, sstate = streamed
+                    else:
+                        reply = await self._with_backchannel(
+                            node_id,
+                            self._call_llm(
+                                text,
+                                room_name,
+                                session_id,
+                                speaker,
+                                node_id=node_id,
+                                identity=identity,
+                            ),
+                        )
                 response_text, voice_prompt = reply.text, reply.voice_prompt
                 actions, fast = reply.actions, reply.fast
                 expect_response, secret, spans = reply.expect_response, reply.secret, reply.spans
@@ -2351,10 +2508,17 @@ class TranscribingServer(AudioServer):
                     self._cancel_pending_ask(node_id, "floor not held")
 
                 _t = time.monotonic()
-                spoke_ok = await self._run_tts(
-                    node_id, room_name, session_id, response_text, voice_prompt,
-                    sensitive=secret,
-                )
+                if sstate is not None:
+                    # Streamed reply: sentences already played during the LLM
+                    # stage; speak the remainder and close the session (the
+                    # floor was armed above, so expect_utterance precedes
+                    # tts_end exactly like the buffered order).
+                    spoke_ok = await sstate.close(reply)
+                else:
+                    spoke_ok = await self._run_tts(
+                        node_id, room_name, session_id, response_text, voice_prompt,
+                        sensitive=secret,
+                    )
                 tts_ms = (time.monotonic() - _t) * 1000.0
                 if not spoke_ok:
                     # The reply exists but couldn't be spoken (TTS down/failed):
@@ -2419,6 +2583,44 @@ class TranscribingServer(AudioServer):
         pcm = tones.load_tone(spec)
         if pcm:
             await self._stream_pcm(node_id, pcm)
+
+    async def _play_thinking_cue(self, node_id: str) -> None:
+        """Stream the pre-recorded backchannel ("On it." — ``sound_thinking``,
+        read live like the timer/alarm tones; empty ⇒ silent opt-out)."""
+        try:
+            spec = self._effective_node_config(node_id).get("sound_thinking", "thinking.wav")
+        except Exception:
+            spec = "thinking.wav"
+        from . import tones
+
+        pcm = tones.load_tone(spec)
+        if pcm:
+            await self._stream_pcm(node_id, pcm)
+
+    async def _with_backchannel(self, node_id: str, coro: Coroutine[Any, Any, Any]) -> Any:
+        """Await the LLM stage, speaking the thinking cue once if it runs past
+        ``_BACKCHANNEL_MS`` (the tool-loop / slow-model acknowledgement). If the
+        cue is mid-play when the reply lands, the short clip finishes so its TTS
+        session closes cleanly before the reply's session starts."""
+        playing = False
+
+        async def _cue() -> None:
+            nonlocal playing
+            await asyncio.sleep(_BACKCHANNEL_MS / 1000.0)
+            playing = True
+            await self._play_thinking_cue(node_id)
+
+        cue_task = asyncio.create_task(_cue())
+        try:
+            return await coro
+        finally:
+            if playing:
+                try:
+                    await cue_task
+                except Exception:  # noqa: BLE001 — cue is best-effort
+                    pass
+            else:
+                cue_task.cancel()
 
     async def _maybe_hold_floor(
         self, node_id: str, hold: bool, *, cue: bool = False, for_ask: bool = False
@@ -2868,19 +3070,18 @@ class TranscribingServer(AudioServer):
         """/process → /process/<leaf> on the same base."""
         return f"{self._llm_url}/{leaf}"
 
-    async def _call_llm(
+    async def _llm_payload(
         self,
         text: str,
         room_id: str,
         session_id: str | None,
-        speaker: str | None = None,
-        node_id: str | None = None,
-        identity: Identity | None = None,
-        channel: str = "voice",
-    ) -> LlmReply:
-        import httpx  # type: ignore[import-untyped]
-
-        payload = {
+        speaker: str | None,
+        node_id: str | None,
+        identity: Identity | None,
+        channel: str,
+    ) -> dict[str, Any]:
+        """The /process request body — shared by the buffered and streaming calls."""
+        return {
             "text": text,
             "room_id": room_id,
             "session_id": session_id,
@@ -2926,6 +3127,22 @@ class TranscribingServer(AudioServer):
             # unknown/unreachable/nodeless-channel all read as not-local.
             "tts_local": (channel == "voice") and await self._tts_is_local(),
         }
+
+    async def _call_llm(
+        self,
+        text: str,
+        room_id: str,
+        session_id: str | None,
+        speaker: str | None = None,
+        node_id: str | None = None,
+        identity: Identity | None = None,
+        channel: str = "voice",
+    ) -> LlmReply:
+        import httpx  # type: ignore[import-untyped]
+
+        payload = await self._llm_payload(
+            text, room_id, session_id, speaker, node_id, identity, channel
+        )
         async with httpx.AsyncClient(verify=tlsutil.httpx_verify()) as client:
             resp = await client.post(
                 self._llm_url,  # type: ignore[arg-type]
@@ -2936,6 +3153,116 @@ class TranscribingServer(AudioServer):
             resp.raise_for_status()
             data = resp.json()
         return _llm_reply_from(data)
+
+    async def _call_llm_stream(
+        self,
+        text: str,
+        room_id: str,
+        session_id: str | None,
+        speaker: str | None = None,
+        node_id: str | None = None,
+        identity: Identity | None = None,
+    ) -> tuple[LlmReply, _StreamSpeech] | None:
+        """Streaming pipeline (4.4): POST /process/stream and SPEAK complete
+        sentences while the model is still writing — the whole point of the era.
+
+        Returns ``(reply, speech)`` with the tts session left OPEN: the caller
+        does its bookkeeping (continuation, floor arming) and then
+        ``speech.close(reply)`` speaks the unspoken remainder and ends the
+        session — preserving the buffered order (expect_utterance before
+        tts_end). Returns None when the endpoint isn't there (older llm) or is
+        unreachable before anything was spoken — the caller falls back to the
+        buffered path. Wake-word cancellation propagates naturally: closing the
+        HTTP stream cancels the llm-side pipeline task.
+
+        The backchannel timer here measures time-to-FIRST-AUDIO: a fast first
+        sentence suppresses the cue that a slow buffered reply would earn."""
+        import httpx  # type: ignore[import-untyped]
+
+        assert node_id is not None
+        payload = await self._llm_payload(
+            text, room_id, session_id, speaker, node_id, identity, "voice"
+        )
+
+        # Backchannel: cue if no audio has started by the threshold.
+        cue_playing = False
+
+        async def _cue() -> None:
+            nonlocal cue_playing
+            await asyncio.sleep(_BACKCHANNEL_MS / 1000.0)
+            cue_playing = True
+            await self._play_thinking_cue(node_id)
+
+        cue_task = asyncio.create_task(_cue())
+
+        async def _first_audio() -> None:
+            # Let a mid-play cue finish (its session must close before ours
+            # opens); a still-pending timer is simply disarmed.
+            if cue_playing:
+                try:
+                    await cue_task
+                except Exception:  # noqa: BLE001
+                    pass
+            else:
+                cue_task.cancel()
+
+        speech = _StreamSpeech(self, node_id, session_id, on_first_audio=_first_audio)
+        buf = ""  # delta text not yet spoken
+        reply: LlmReply | None = None
+        stream_url = self._llm_url.replace("/process", "/process/stream")  # type: ignore[union-attr]
+        timeout = httpx.Timeout(10.0, read=max(self._llm_timeout, 60.0))
+        try:
+            async with httpx.AsyncClient(verify=tlsutil.httpx_verify()) as client:
+                async with client.stream(
+                    "POST",
+                    stream_url,
+                    json=payload,
+                    timeout=timeout,
+                    headers=self._service_headers("POST", stream_url),
+                ) as resp:
+                    if resp.status_code in (404, 405):
+                        log.info("LLM service has no /process/stream — buffered fallback")
+                        return None
+                    resp.raise_for_status()
+                    async for line in resp.aiter_lines():
+                        if not line.strip():
+                            continue
+                        ev = json.loads(line)
+                        kind = ev.get("event")
+                        if kind == "head":
+                            speech.voice_prompt = str(ev.get("voice_prompt") or "")
+                        elif kind == "delta":
+                            buf += str(ev.get("text") or "")
+                            sentences, buf = _split_sentences(buf)
+                            for s in sentences:
+                                await speech.speak(s)
+                        elif kind == "end":
+                            ev.pop("event", None)
+                            reply = _llm_reply_from(ev)
+                            break
+                        elif kind == "error":
+                            raise RuntimeError(f"llm stream error: {ev.get('detail')}")
+        except (httpx.ConnectError, httpx.ConnectTimeout):
+            if not speech.started:
+                log.warning("LLM /process/stream unreachable — buffered fallback")
+                return None
+            await speech.abort()
+            raise
+        except BaseException:
+            await speech.abort()
+            raise
+        finally:
+            if not cue_task.done():
+                cue_task.cancel()
+        if reply is None:
+            if speech.spoken:
+                # The stream died after speech began: what the room heard IS
+                # the reply of record. No actions — they ride the end event.
+                log.warning("[%s] llm stream ended early — keeping spoken text", node_id)
+                reply = LlmReply(text=speech.spoken, voice_prompt=speech.voice_prompt)
+            else:
+                raise RuntimeError("llm stream ended without a reply")
+        return reply, speech
 
     async def _dispatch_actions(
         self,
@@ -3925,7 +4252,9 @@ class TranscribingServer(AudioServer):
     # Announcements: synth once, play on every (or selected) room
     # ------------------------------------------------------------------
 
-    async def _synthesize(self, text: str, voice_prompt: str) -> bytes | None:
+    async def _synthesize(
+        self, text: str, voice_prompt: str, *, sensitive: bool = False
+    ) -> bytes | None:
         if not self._tts_url:
             return None
         import httpx
@@ -3934,14 +4263,20 @@ class TranscribingServer(AudioServer):
             async with httpx.AsyncClient(verify=tlsutil.httpx_verify()) as client:
                 resp = await client.post(
                     self._tts_url,
-                    json={"text": text, "voice_prompt": voice_prompt, "room_id": "announce"},
+                    json={
+                        "text": text,
+                        "voice_prompt": voice_prompt,
+                        "room_id": "announce",
+                        # Lockbox replies: the TTS service withholds its speak log.
+                        "sensitive": sensitive,
+                    },
                     timeout=self._tts_timeout,
                     headers=self._service_headers("POST", self._tts_url),
                 )
                 resp.raise_for_status()
             return resp.content
         except Exception as exc:
-            log.error("announce TTS synth failed: %s", exc)
+            log.error("TTS synth failed: %s", exc)
             return None
 
     async def _stream_pcm(self, node_id: str, pcm: bytes, *, alert: bool = False) -> None:

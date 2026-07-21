@@ -327,6 +327,11 @@ class _StreamBuffer:
             n += take
         return out
 
+    @property
+    def pending(self) -> bool:
+        """True while unplayed samples remain (drain check for streamed TTS)."""
+        return bool(self._q) or (self._cur is not None and self._pos < self._cur.size)
+
     def clear(self) -> None:
         self._q.clear()
         self._cur = None
@@ -500,9 +505,20 @@ class _SoundPlayer:
         self._ring.feed(pcm)
 
     def stop_stream(self) -> None:
-        """Leave streaming mode and fall back to silence."""
+        """Leave streaming mode and fall back to silence.
+
+        Any one-shot audio that was mid-play when streaming began (the waiting
+        sound a streamed reply interrupted) is discarded FIRST — leaving stream
+        mode must fall to silence, never resume a stale clip. (The buffered path
+        never had this hazard: play_pcm(interrupt=True) replaces the clip.)"""
+        self._pos = len(self._audio)  # before the mode flip — no stale callback tick
         self._streaming = False
         self._ring.clear()
+
+    @property
+    def stream_pending(self) -> bool:
+        """Streaming mode with unplayed samples still queued (drain check)."""
+        return self._streaming and self._ring.pending
 
     @property
     def active(self) -> bool:
@@ -628,6 +644,8 @@ class NodeClient:
         self._tts_q: asyncio.Queue[bytes] = asyncio.Queue()
         self._tts_sample_rate: int = 24000
         self._tts_alert: bool = False  # current TTS session is alert audio (beats mute)
+        self._tts_stream: bool = False  # 4.4: play this session's frames as they arrive
+        self._tts_stream_started: bool = False  # first streamed frame fed (for the log)
         self._tts_task: asyncio.Task[None] | None = None
 
         self._state: str = _STATE_IDLE
@@ -1026,7 +1044,12 @@ class NodeClient:
     # ------------------------------------------------------------------
 
     async def _begin_tts(
-        self, session_id: str, sample_rate: int, channels: int, alert: bool = False
+        self,
+        session_id: str,
+        sample_rate: int,
+        channels: int,
+        alert: bool = False,
+        stream: bool = False,
     ) -> None:
         self._stop_ringback()  # a spoken reply (decline/timeout) supersedes ringing
         self._reset_barge()
@@ -1038,12 +1061,35 @@ class NodeClient:
         # consumes the queue, so it's always clean by the time a session starts.
         self._tts_sample_rate = sample_rate
         self._tts_alert = alert  # alert audio (doorbell chime) beats mute
+        # 4.4 streamed reply: play frames the moment they arrive (the intercom's
+        # live ring-buffer path) instead of collecting until tts_end.
+        self._tts_stream = stream
+        self._tts_stream_started = False
+        if stream and self._player is not None:
+            self._player.start_stream()  # cuts the waiting sound, like interrupt=True
         self._state = _STATE_TTS
         self._session_id = session_id
-        log.info("[%s] TTS started (rate=%d ch=%d)", session_id[:8], sample_rate, channels)
+        log.info(
+            "[%s] TTS started (rate=%d ch=%d%s)",
+            session_id[:8],
+            sample_rate,
+            channels,
+            " streamed" if stream else "",
+        )
 
     async def _end_tts(self, reason: str = "complete") -> None:
         if self._state != _STATE_TTS:
+            return
+
+        if self._tts_stream:
+            # Streamed session: audio has been playing since the first frame;
+            # tts_end just means "no more is coming" — drain the ring, then run
+            # the normal completion path (_tts_wait_done owns the transition).
+            if reason == "complete" and self._tts_stream_started:
+                self._tts_task = asyncio.create_task(self._tts_wait_done(), name="tts_wait")
+            else:
+                await self._stop_tts_playback()
+                log.info("TTS stopped (%s)", reason)
             return
 
         frames: list[bytes] = []
@@ -1077,15 +1123,29 @@ class NodeClient:
         interrupted once started.
         """
         completed = False
+        was_stream = self._tts_stream
         try:
-            while self._player is not None and self._player.active:
-                await asyncio.sleep(0.05)
+            if was_stream:
+                # Streamed session: wait for the ring to drain, allow the DAC
+                # tail, then leave streaming mode.
+                while self._player is not None and self._player.stream_pending:
+                    await asyncio.sleep(0.05)
+                await asyncio.sleep(0.1)
+                if self._player is not None:
+                    self._player.stop_stream()
+            else:
+                while self._player is not None and self._player.active:
+                    await asyncio.sleep(0.05)
             completed = True
         except asyncio.CancelledError:
             if self._player is not None:
+                if was_stream:
+                    self._player.stop_stream()
                 self._player.abort()
             raise
         finally:
+            self._tts_stream = False
+            self._tts_stream_started = False
             self._state = _STATE_IDLE
             self._session_id = None
             self._tts_task = None
@@ -1120,7 +1180,11 @@ class NodeClient:
                 pass
         elif self._player is not None:
             # No wait-done task running (interrupted before playback started).
+            if self._tts_stream:
+                self._player.stop_stream()
             self._player.abort()
+        self._tts_stream = False
+        self._tts_stream_started = False
         # Discard this aborted session's undelivered frames so they can't leak into
         # the next session (session start must never drain — see _begin_tts).
         while not self._tts_q.empty():
@@ -1439,10 +1503,21 @@ class NodeClient:
                 # In-order TTS audio (see _recv_loop). Only a live TTS session may
                 # buffer frames; anything else is stale leftovers from an abort.
                 if self._state == _STATE_TTS:
-                    try:
-                        self._tts_q.put_nowait(msg["raw"])
-                    except asyncio.QueueFull:
-                        pass
+                    if self._tts_stream and self._player is not None:
+                        # 4.4 streamed reply: straight into the live ring buffer —
+                        # playback begins with the first sentence, not at tts_end.
+                        audio = np.frombuffer(msg["raw"], dtype=np.int16)
+                        if self._tts_sample_rate != self._playback_rate:
+                            audio = _resample(audio, self._tts_sample_rate, self._playback_rate)
+                        self._player.feed(audio)
+                        if not self._tts_stream_started:
+                            self._tts_stream_started = True
+                            log.info("TTS playback started (streamed)")
+                    else:
+                        try:
+                            self._tts_q.put_nowait(msg["raw"])
+                        except asyncio.QueueFull:
+                            pass
                 continue
 
             if mtype == protocol.MSG_CONFIG:
@@ -1465,7 +1540,13 @@ class NodeClient:
                 sid = str(msg.get("session_id") or uuid.uuid4())
                 sample_rate = int(msg.get("sample_rate", 22050))
                 channels = int(msg.get("channels", 1))
-                await self._begin_tts(sid, sample_rate, channels, alert=bool(msg.get("alert")))
+                await self._begin_tts(
+                    sid,
+                    sample_rate,
+                    channels,
+                    alert=bool(msg.get("alert")),
+                    stream=bool(msg.get("stream")),
+                )
 
             elif mtype == protocol.MSG_TTS_END:
                 await self._end_tts(reason="complete")

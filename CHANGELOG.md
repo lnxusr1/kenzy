@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.4.0]
+
+### Added
+
+- **She starts talking before she's finished thinking — streaming replies (the 4.4 headliner).** With `streaming.enabled: true` in server.yaml (Settings-editable; off by default while it soaks), a non-fast reply no longer waits for the whole pipeline: the model's answer streams out sentence by sentence, each sentence is synthesized while the next is still being written, and the node starts playing the first one immediately — on a typical two-sentence answer, time-to-first-word after transcription dropped from ~11s to ~6s on the reference setup, with the tail of the reply synthesized entirely while the first sentence plays. Everything that made the buffered pipeline trustworthy carries over mechanically: lockbox replies never stream (secrets can't ride a preview), a provider that can't follow the streaming contract falls back to the classic path automatically, a mid-reply synthesis failure trails off honestly instead of erroring after speech began, the wake word still cancels everything instantly, and older nodes simply play the reply whole like before (the new protocol flag degrades gracefully). The reply contract's field order changed under the hood (spoken text last) so the header — tone, floor-holding — arrives before the text begins streaming.
+
+- **"On it." — Kenzy acknowledges before slow answers.** When a reply is taking a while (the model is looping through tools, or a local model is just slow), the room no longer sits in silence: after two seconds she speaks a short pre-recorded acknowledgement, once, and the full answer follows when it's ready. Pre-recorded in her own voice (so it costs nothing and works even mid-outage), configurable per node as `sound_thinking` (empty = never speak it), and voice-channel only — typed Assist requests and scheduled replays stay quiet. If the answer lands while the cue is still playing, the cue finishes cleanly first.
+
+### Changed
+
+- **The model's prompt is now laid out for provider caching.** The system message used to open with the current date and time — a minute-granularity cache-buster that invalidated the provider's prompt cache on essentially every request. The static parts (the system prompt and the reply contract) now form a byte-stable prefix, with all per-request context (clock, connected rooms, schedules, memory) after them — so OpenAI-style automatic prefix caching actually holds, and Anthropic-family models get an explicit cache breakpoint on the static block. Cheaper tokens and a faster first token on every non-fast reply, with tool-loop requests (which resend the prompt each iteration) benefiting most.
+
 ## [4.3.1]
 
 ### Security

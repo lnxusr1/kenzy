@@ -24,11 +24,12 @@ const TYPES = {
   sound_connect: "str",
   sound_disconnect: "str",
   sound_ringback: "str",
-  // Timer/alarm tones + the failure cue: streamed by the SERVER, so they apply
-  // live (deliberately not in RESTART_KEYS, unlike the node-played sounds).
+  // Timer/alarm tones + the failure/thinking cues: streamed by the SERVER, so
+  // they apply live (deliberately not in RESTART_KEYS, unlike node-played sounds).
   sound_timer: "str",
   sound_alarm: "str",
   sound_error: "str",
+  sound_thinking: "str",
   // Declared hardware capability (can't be detected): false ⇒ half-duplex room —
   // wake ignored during playback; intercom and alarm ring loops disabled.
   hardware_aec: "bool",
@@ -56,17 +57,20 @@ const RESTART_KEYS = new Set([
 // Bounds for "range" (slider) fields (default = the node's value when unset).
 const RANGES = { volume: { min: 0, max: 100, step: 1, default: 100 } };
 
-// Node-code defaults the SERVER can't see (they live in the node's Python, not
-// in node_defaults), so the editor can show the real default as the placeholder
-// instead of a bare "default". Keep in sync with the cfg.get() defaults in
-// node/client.py. (sound_dialog_end is intentionally absent — it has no default;
-// it's off unless set.)
+// Code defaults the inherited layer may not carry (node-side cfg.get()
+// fallbacks, or server-side cue fallbacks on an upgraded install whose
+// server.yaml predates the key), so the editor shows the real default as the
+// placeholder instead of a bare "default". Keep in sync with node/client.py
+// and the server's cue fallbacks. An explicit "" means "off unless set" — the
+// honest placeholder for those is empty, not the word "default".
 const DEFAULTS = {
   sound_ready: "ready.wav",
   sound_waiting: "waiting.wav",
   sound_connect: "connect.wav",
   sound_disconnect: "disconnect.wav",
   sound_ringback: "ringback.wav",
+  sound_dialog_end: "",
+  sound_thinking: "thinking.wav",
 };
 
 export function ConfigView({ node, onBack }) {
