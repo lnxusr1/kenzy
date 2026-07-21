@@ -94,7 +94,7 @@ Set under `skills.home_assistant` in `llm.yaml`:
 | `base_url` | — | Base URL for local model providers |
 | `curation_file` | `"data/home_assistant/curation.yaml"` | Aliases, notes, room defaults, and exclusions (optional) |
 | `cache_ttl` | `300` | Seconds to cache the live HA topology pull |
-| `domains` | `light, switch, fan, cover, lock, climate` | Entity domains exposed to voice control |
+| `domains` | `light, switch, fan, cover, lock, climate, scene, script, button, input_button, input_boolean, vacuum, media_player` | Entity domains exposed to voice control |
 | `default_room` | `""` | Room assumed when the user does not specify one |
 | `thermo_min` / `thermo_max` | `65` / `85` | Comfort clamp (°F) for relative "make it warmer/cooler" thermostat adjustments |
 
