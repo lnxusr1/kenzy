@@ -13,6 +13,9 @@ Assistant, and it can recognize **who** is talking.
   going to rain tomorrow?", "What's in the news?"
 - **Control your smart home by voice** — Kenzy connects to Home Assistant and
   understands your devices by the names you actually use ("the lamp by the chair").
+- **Play music by name** — "play some jazz", "put on The Beatles in the loft" —
+  through [Music Assistant](skills/home-assistant.md), if you run it; MA finds the
+  music, Kenzy picks the right room.
 - **Talk to the whole house** — "tell everyone dinner's ready" speaks it in every
   room; "call the living room" starts a live two-way intercom (the other room has to
   say "yes" first).

@@ -49,6 +49,7 @@ from kenzy.llm.skills import (  # type: ignore[import]
     endpoint_kwargs,
     fast_intent,
     get_config,
+    get_request,
     skill,
 )
 
@@ -204,6 +205,23 @@ async def _ha_service(entity_id: str, service: str, extra: dict[str, Any] | None
     async with httpx.AsyncClient(timeout=10) as client:
         resp = await client.post(
             f"{base}/api/services/{domain}/{service}",
+            headers=headers,
+            json=payload,
+        )
+        resp.raise_for_status()
+
+
+async def _ma_play(entity_id: str, query: str, *, radio: bool = False) -> None:
+    """``music_assistant.play_media`` — the play-by-name passthrough. MA does
+    ALL name resolution (artist/album/track/playlist); Kenzy only carries the
+    spoken phrase and the target player."""
+    base, headers = _conn()
+    payload: dict[str, Any] = {"entity_id": entity_id, "media_id": query}
+    if radio:
+        payload["radio_mode"] = True
+    async with httpx.AsyncClient(timeout=15) as client:
+        resp = await client.post(
+            f"{base}/api/services/music_assistant/play_media",
             headers=headers,
             json=payload,
         )
@@ -591,6 +609,11 @@ class _DeviceIndex:
     # to every room on that floor. Empty when the topology has no floors.
     floor_phrases: dict[str, str] = field(default_factory=dict)  # "downstairs" → "downstairs"
     floor_rooms: dict[str, list[str]] = field(default_factory=dict)  # floor → [rooms]
+    # Music Assistant players: music + transport targets ONLY. Control-verb
+    # resolution (on/off, name/type/group matching) must never see them — MA
+    # imports arrive named after the devices they wrap ("Office TV" twice), and
+    # "turn on the TV" hitting a queue frontend is the 4.3.0 field bug.
+    music_only: set[str] = field(default_factory=set)
 
 
 def _norm(text: str) -> str:
@@ -798,6 +821,7 @@ def _index_from_model(model: ha_model.HAModel, curation: dict[str, Any]) -> _Dev
     spoken: dict[str, str] = {}
     aliases: dict[tuple[str, str], list[str]] = {}
     exclude: set[str] = set()
+    music_only: set[str] = set()
     room_phrases: dict[str, str] = {}
     device_map: dict[str, str] = {}
     floor_phrases: dict[str, str] = {}
@@ -816,6 +840,11 @@ def _index_from_model(model: ha_model.HAModel, curation: dict[str, Any]) -> _Dev
         bucket = rooms.setdefault(room, {}).setdefault(type_key, [])
         if e.entity_id not in bucket:
             bucket.append(e.entity_id)
+        if getattr(e, "ma", False) and e.domain == "media_player":
+            music = rooms.setdefault(room, {}).setdefault("music", [])
+            if e.entity_id not in music:
+                music.append(e.entity_id)
+            music_only.add(e.entity_id)
         spoken[e.entity_id] = e.name
         device_map[e.entity_id] = e.entity_id
 
@@ -842,6 +871,7 @@ def _index_from_model(model: ha_model.HAModel, curation: dict[str, Any]) -> _Dev
         device_map,
         floor_phrases,
         floor_rooms,
+        music_only,
     )
 
 
@@ -969,6 +999,7 @@ def _fuzzy(idx: _DeviceIndex, room: str | None, phrase: str, strict: bool = Fals
         codes = [c for grp in idx.rooms.get(room, {}).values() for c in grp]
     else:
         codes = list(idx.device_map)
+    codes = [c for c in codes if c not in idx.music_only]
     if not codes:
         return None
     # Coverage gate first (see _TOKEN_COVERAGE): a candidate is only eligible
@@ -1011,7 +1042,7 @@ def _stem_group(idx: _DeviceIndex, room: str, phrase: str) -> list[str] | None:
         for c in grp
         if stem in idx.spoken.get(c, c).lower().split()
     ]
-    codes = [c for c in codes if c not in idx.exclude]
+    codes = [c for c in codes if c not in idx.exclude and c not in idx.music_only]
     return codes or None
 
 
@@ -1022,8 +1053,10 @@ def _group_codes(
     ``activate`` (unless "all"), every device of that type otherwise."""
     rt = idx.rooms.get(room, {})
     if direction == "activate" and not has_all:
-        return list(idx.defaults.get(room, {}).get(gtype) or rt.get(gtype, []))
-    return list(rt.get(gtype, []))
+        codes = list(idx.defaults.get(room, {}).get(gtype) or rt.get(gtype, []))
+    else:
+        codes = list(rt.get(gtype, []))
+    return [c for c in codes if c not in idx.music_only]
 
 
 def _resolve_target(
@@ -1169,6 +1202,8 @@ def _room_named_device(idx: _DeviceIndex, room: str | None, word: str) -> list[s
     out: list[str] = []
     for grp in idx.rooms.get(room or "", {}).values():
         for code in grp:
+            if code in idx.music_only:
+                continue
             toks = _norm(idx.spoken.get(code, code)).split()
             local = [w for w in toks if w not in room_words]
             if toks == [word] or local == [word]:
@@ -1185,7 +1220,9 @@ def _exact_named(idx: _DeviceIndex, room: str | None, text: str) -> list[str]:
     if room is None:
         return []
     codes = [c for grp in idx.rooms.get(room, {}).values() for c in grp]
-    return [c for c in codes if _norm(idx.spoken.get(c, c)) == text]
+    return [
+        c for c in codes if c not in idx.music_only and _norm(idx.spoken.get(c, c)) == text
+    ]
 
 
 def _resolve_vacuum(idx: _DeviceIndex, room: str | None) -> str | None:
@@ -1399,3 +1436,134 @@ async def fast_home_control(utterance: str, room_id: str | None, speaker: str | 
         return FastResult.handled(blocked, _FAST_VOICE)
     await _apply_devices(devices, idx.device_map)
     return FastResult.handled(_confirm(name, idx, codes, target), _FAST_VOICE)
+
+
+# ---------------------------------------------------------------------------
+# Music Assistant play-by-name passthrough (4.3)
+# ---------------------------------------------------------------------------
+#
+# Kenzy never resolves music names. MA's `play_media` takes the spoken phrase
+# (media_id) and does the artist/album/track/playlist search itself; Kenzy's
+# whole job is carrying the words and picking the right room's player. MA
+# players are identified by entity-REGISTRY ownership (`Entity.ma`, via
+# integration_entities) — never by name, so operator renames can't break it.
+
+_PLAY_RE = re.compile(
+    r"^\s*(?:please[,\s]+)?(?:play|put on|listen to)\s+(.+?)[.!?]*\s*$", re.IGNORECASE
+)
+# Queries that are really transport/ambient commands, not names to search for.
+_PLAY_NOISE = {"music", "some music", "songs", "something", "it", "that", "this", "the music"}
+_PLAY_TRANSPORT_HEADS = ("next", "previous", "the next", "the previous", "pause", "stop")
+
+
+def _music_rooms(idx: _DeviceIndex) -> dict[str, list[str]]:
+    return {room: t["music"] for room, t in idx.rooms.items() if t.get("music")}
+
+
+def _resolve_music(
+    idx: _DeviceIndex, spoken_room: str, origin: str | None
+) -> tuple[str | None, str | None]:
+    """Pick one MA player: the named room's, else the asking room's, else the
+    house's only one. Returns (entity_id, room_key) — (None, room_key) means
+    the NAMED room has no player (an honest reply beats a silent miss)."""
+    music = _music_rooms(idx)
+    if spoken_room:
+        room = idx.room_phrases.get(spoken_room)
+        if room is None:
+            return None, None  # not a room we know — treat as part of the title
+        codes = music.get(room, [])
+        return (codes[0] if len(codes) == 1 else None), room
+    origin_key = _room_key(origin) if origin else None
+    codes = music.get(origin_key or "", [])
+    if len(codes) == 1:
+        return codes[0], origin_key
+    house = [(r, c) for r, cs in music.items() for c in cs]
+    if len(house) == 1:
+        return house[0][1], house[0][0]
+    return None, None
+
+
+def _split_play_room(idx: _DeviceIndex, query: str) -> tuple[str, str]:
+    """Strip a trailing "in the <room>" ONLY when <room> is a room we know —
+    "Dancing in the Dark" must stay a title, not become a room lookup."""
+    m = re.search(r"\s+in\s+the\s+([\w\s]+?)[.!?]*\s*$", query, re.IGNORECASE)
+    if m and _norm(m.group(1)) in idx.room_phrases:
+        return query[: m.start()].strip(), _norm(m.group(1))
+    return query.strip(), ""
+
+
+@fast_intent(priority=55)
+async def fast_play(utterance: str, room_id: str | None, speaker: str | None) -> FastResult:
+    """"Play <anything>" → Music Assistant, instantly. Misses to the LLM when
+    no MA player fits or the phrase smells like transport, and stays entirely
+    out of the way in MA-less homes."""
+    m = _PLAY_RE.match(utterance)
+    if m is None:
+        return FastResult.miss()
+    try:
+        await _ensure_view()
+        idx = _get_index()
+    except Exception as exc:
+        log.warning("HA fast path unavailable: %s", exc)
+        return FastResult.miss()
+    if not _music_rooms(idx):
+        return FastResult.miss()  # no MA in this house — the LLM answers
+
+    query, spoken_room = _split_play_room(idx, m.group(1))
+    normed = _norm(query)
+    if normed.startswith("some "):
+        query, normed = query[5:].strip(), normed[5:]
+    if not normed or normed in _PLAY_NOISE or normed.startswith(_PLAY_TRANSPORT_HEADS):
+        return FastResult.miss()
+
+    code, room = _resolve_music(idx, spoken_room, room_id)
+    if code is None and spoken_room and room is not None:
+        return FastResult.handled(
+            f"There's no music player in the {spoken_room}.", _FAST_VOICE
+        )
+    if code is None:
+        return FastResult.miss()  # ambiguous — the LLM can ask which room
+    try:
+        await _ma_play(code, query)
+    except Exception as exc:
+        log.warning("MA play_media failed for %r: %s", query, exc)
+        return FastResult.miss()
+    where = (room or "").replace("_", " ")
+    return FastResult.handled(
+        f"Playing {query}{f' in the {where}' if where else ''}.", _FAST_VOICE
+    )
+
+
+@skill
+async def play_music(query: str, room: str = "") -> str:
+    """Play music by name — an artist, album, song, playlist, or genre.
+
+    Music Assistant resolves the name itself, so pass the user's words
+    through as `query` (e.g. "miles davis", "workout playlist"). `room` is
+    the room to play in; leave it empty for the room the user is speaking
+    from. Use this for any "play …" music request; transport actions
+    (pause, skip, volume) have their own handling.
+    """
+    try:
+        await _ensure_view()
+        idx = _get_index()
+    except Exception as exc:
+        return f"I couldn't reach Home Assistant: {exc}"
+    if not _music_rooms(idx):
+        return (
+            "There are no Music Assistant players here — install and connect "
+            "Music Assistant in Home Assistant to play music by name."
+        )
+    code, room_key = _resolve_music(idx, _norm(room) if room else "", get_request("room_id"))
+    if code is None and room:
+        return f"There's no music player in the {room}."
+    if code is None:
+        rooms = ", ".join(sorted(r.replace("_", " ") for r in _music_rooms(idx)))
+        return f"Which room should I play that in? There are music players in: {rooms}."
+    try:
+        await _ma_play(code, query)
+    except Exception as exc:
+        log.warning("MA play_media failed for %r: %s", query, exc)
+        return f"Music Assistant couldn't play {query!r} — it may not know that name."
+    where = (room_key or "").replace("_", " ")
+    return f"Playing {query}" + (f" in the {where}." if where else ".")

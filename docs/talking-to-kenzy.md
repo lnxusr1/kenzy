@@ -99,6 +99,8 @@ her volume, then yield the floor to you mid-sentence.
   about the spare key?"* — per-person [memory](memory.md) with real privacy:
   your private facts are only ever spoken back to *you* (and a spoken *code*
   or *password* is auto-vaulted into the encrypted lockbox)
+- *"Play some jazz"* · *"Put on The Beatles in the loft"* — music by name via
+  [Music Assistant](skills/home-assistant.md), if you run it
 - *"Is Mom home?"* · *"Who's home?"* — live from Home Assistant's
   [presence tracking](skills/builtin.md#presence), once a person's card links
   their HA account

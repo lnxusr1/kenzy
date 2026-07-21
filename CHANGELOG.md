@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [4.3.0]
+
+### Added
+
+- **"Play some jazz" — music by name, through Music Assistant.** A new fast intent hands any *play/put on/listen to …* phrase straight to Music Assistant's `play_media`, which resolves the artist/album/track/playlist itself — Kenzy carries the words and picks the right room's player (the room you name, else the room you're in, else the house's only one; a room with no player gets an honest answer). MA players are recognized by **integration ownership in HA's entity registry** — never by name — so renaming entities can't break targeting — and the guard cuts both ways: **control verbs can never touch an MA player**. Adding the MA integration imports players named after the devices they wrap (two "Office TV" entries — field bug: "turn on the TV" actuated the MA queue frontend and reported success), so name/type/group resolution is now blind to MA players entirely; only play-by-name and the transport verbs (pause/skip/volume, which want the thing that's *playing*) may target them. Titles survive intact ("Dancing in the Dark" is never mistaken for a room called Dark); houses without Music Assistant never see the intent fire. The `play_music` tool covers the fuzzy tier with the same honesty, and pause/skip/volume on a playing MA player work through the existing media transport verbs.
+
 ## [4.2.1]
 
 ### Added

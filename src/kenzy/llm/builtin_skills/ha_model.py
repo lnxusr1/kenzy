@@ -99,6 +99,9 @@ _TEMPLATE = (
 )
 
 
+_MA_TEMPLATE = "{{ integration_entities('music_assistant') | list | tojson }}"
+
+
 @dataclass(frozen=True)
 class Entity:
     """A single voice-controllable HA entity, placed in the area/floor tree."""
@@ -110,6 +113,10 @@ class Entity:
     area_name: str  # room display name
     floor: str  # floor slug; _NO_FLOOR when the area has no floor
     floor_name: str  # floor display name
+    # Owned by the Music Assistant integration (entity-REGISTRY fact, so it
+    # survives any rename — never inferred from names or entity_ids). MA
+    # players are the only valid targets for play-by-name.
+    ma: bool = False
 
 
 @dataclass
@@ -408,6 +415,21 @@ async def fetch_raw() -> list[dict[str, Any]]:
             states = await client.get(f"{base}/api/states", headers=headers)
             states.raise_for_status()
             parsed = merge_unplaced(parsed, states.json(), merge_domains)
+
+        # Music Assistant ownership (play-by-name targets). Registry-based and
+        # rename-proof; a failure (older HA, no MA) degrades to an empty set.
+        try:
+            ma_resp = await client.post(
+                f"{base}/api/template", headers=headers, json={"template": _MA_TEMPLATE}
+            )
+            ma_resp.raise_for_status()
+            ma_ids = set(json.loads(ma_resp.text))
+        except Exception:
+            ma_ids = set()
+        if ma_ids:
+            for row in parsed:
+                if str(row.get("entity_id", "")) in ma_ids:
+                    row["ma"] = True
     return parsed
 
 
@@ -480,6 +502,7 @@ def build_model(raw: list[dict[str, Any]], curation: dict[str, Any]) -> HAModel:
                 area_name=area_name,
                 floor=_slug(floor_name) or _NO_FLOOR,
                 floor_name=floor_name or _NO_FLOOR.title(),
+                ma=bool(row.get("ma")),
             )
         )
 
