@@ -49,17 +49,6 @@ def test_cookie_expiry():
     assert serviceauth.verify_cookie(serviceauth.sign_cookie("a", "s", ttl=-1), "s") is None
 
 
-# --- serviceauth: service bearer --------------------------------------------
-
-
-def test_check_bearer():
-    assert serviceauth.check_bearer(None, None) is True  # no token => open
-    assert serviceauth.check_bearer(None, "t") is False
-    assert serviceauth.check_bearer("Bearer t", "t") is True
-    assert serviceauth.check_bearer("Bearer wrong", "t") is False
-    assert serviceauth.check_bearer("t", "t") is False  # missing "Bearer " prefix
-
-
 # --- dashboard login flow ---------------------------------------------------
 
 
@@ -133,8 +122,14 @@ def test_service_auth_middleware(monkeypatch):
     c = TestClient(app)
     assert c.get("/health").status_code == 200  # open
     assert c.get("/work").status_code == 401  # needs token
-    assert c.get("/work", headers={"Authorization": "Bearer shh"}).status_code == 200
-    assert c.get("/work", headers={"Authorization": "Bearer no"}).status_code == 401
+    # legacy bearer is no longer accepted — token-proof only
+    assert c.get("/work", headers={"Authorization": "Bearer shh"}).status_code == 401
+    # a valid token-proof signature is accepted
+    sig = serviceauth.sign_service_request("shh", "GET", "/work")
+    assert c.get("/work", headers={serviceauth.SIG_HEADER: sig}).status_code == 200
+    # a signature for the wrong token is rejected
+    bad = serviceauth.sign_service_request("nope", "GET", "/work")
+    assert c.get("/work", headers={serviceauth.SIG_HEADER: bad}).status_code == 401
 
 
 def test_service_auth_noop_without_env(monkeypatch):

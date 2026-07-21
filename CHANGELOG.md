@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [4.3.1]
+
+### Security
+
+- **The legacy service-auth paths are gone — token-proof only.** During the 3.11/3.12 server-authority migration the shared fleet token stopped riding the wire — nodes prove possession with an HMAC signature in `hello.auth`, and service-to-service calls sign an `X-Kenzy-Auth` header — but servers still accepted the old raw forms so a mixed-version fleet kept working. That deprecation window is now closed: with a token configured, it can **only** be proven by signature. A raw `Authorization: Bearer <token>` on a service call and a raw `token` field in a node's `hello` are both refused (401 / connection closed), and a relay that can see the traffic never learns anything replayable. Running *without* a token is unchanged — auth stays opt-in, and tokenless meshes behave exactly as before — as are the dashboard's own login bearer and the `KENZY_SERVER_TOKEN`/`KENZY_SERVICE_TOKEN` env names; this only removes the clear-text-secret acceptance. The one operational consequence is the intended one: with a token set, every node and service must be on ≥3.12, since an older host would present the raw form and is now rejected.
+
 ## [4.3.0]
 
 ### Added

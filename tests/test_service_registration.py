@@ -28,7 +28,11 @@ async def _serve(server: TranscribingServer) -> asyncio.Task[None]:
 def _register(base_url: str, token: str | None = None, **params: Any) -> tuple[int, Any]:
     req = urllib.request.Request(f"{base_url}/register?{urlencode(params)}")
     if token:
-        req.add_header("Authorization", f"Bearer {token}")
+        from kenzy import serviceauth
+
+        req.add_header(
+            serviceauth.SIG_HEADER, serviceauth.sign_service_request(token, "GET", "/register")
+        )
     try:
         with urllib.request.urlopen(req, timeout=2.0) as resp:
             return resp.status, json.loads(resp.read().decode())
@@ -108,7 +112,7 @@ async def test_register_token_gated(tmp_path: Any, monkeypatch: Any) -> None:
         status, _ = await asyncio.to_thread(
             _register, "http://127.0.0.1:8799", service="llm", host="127.0.0.1", port=8766
         )
-        assert status == 401  # no bearer → rejected
+        assert status == 401  # no auth → rejected
         status, _ = await asyncio.to_thread(
             _register, "http://127.0.0.1:8799", "s3cret", service="llm", host="127.0.0.1", port=8766
         )

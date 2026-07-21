@@ -9,9 +9,10 @@ Three concerns live here, all small:
 * **Signed session cookies** — ``sign_cookie`` / ``verify_cookie`` produce and
   check a tamper-proof ``payload.sig`` token (HMAC-SHA256) with an expiry, so the
   dashboard needs no server-side session store.
-* **Service-to-service auth** — ``check_bearer`` verifies a shared bearer token
-  (framework-free); ``kenzy.fastapi_auth`` wraps it in middleware for the backend
-  services. No-op when no token is configured.
+* **Service-to-service auth** — a token-proof HMAC scheme
+  (``sign_service_request`` / ``verify_service_request``) so the shared token
+  never rides the wire; ``kenzy.fastapi_auth`` wraps it in middleware for the
+  backend services. No-op when no token is configured.
 """
 
 from __future__ import annotations
@@ -112,29 +113,6 @@ def verify_cookie(token: str, secret: str) -> str | None:
 
 
 # ---------------------------------------------------------------------------
-# Service-to-service bearer
-# ---------------------------------------------------------------------------
-
-
-def check_bearer(authorization: str | None, token: str | None) -> bool:
-    """Return True if the request is authorized for service-to-service calls.
-
-    No-op (always True) when ``token`` is falsy, so service auth is opt-in. Kept
-    free of any web-framework import — the server (no fastapi) imports this module
-    too; each FastAPI service wraps it in a tiny dependency.
-
-    **Legacy path** (pre-3.11): the raw token rides the wire. Superseded by the
-    token-proof HMAC scheme below, which never transmits the token; accepted
-    only during the mixed-version deprecation window.
-    """
-    if not token:
-        return True
-    auth = authorization or ""
-    presented = auth[7:] if auth.startswith("Bearer ") else ""
-    return hmac.compare_digest(presented, token)
-
-
-# ---------------------------------------------------------------------------
 # Token-proof service auth (HMAC — the token is NEVER transmitted)
 # ---------------------------------------------------------------------------
 #
@@ -151,8 +129,7 @@ def check_bearer(authorization: str | None, token: str | None) -> bool:
 
 _HMAC_SCHEME = "KENZY-HMAC"
 _MAX_SKEW = 120  # seconds; assumes NTP (Raspberry Pi OS default-on)
-#: The signature rides its OWN header, not Authorization, so the legacy bearer
-#: can accompany it during the deprecation window without a header collision.
+#: The signature rides its own header, not Authorization.
 SIG_HEADER = "X-Kenzy-Auth"
 
 
@@ -193,9 +170,8 @@ def verify_service_request(
 ) -> int | None:
     """Return the request timestamp if the KENZY-HMAC header is valid, else None.
 
-    None means "not a valid signature" — the caller decides whether to fall back
-    to :func:`check_bearer` (legacy window) or reject. ``token`` must be truthy
-    (the caller handles the auth-disabled case).
+    None means "not a valid signature" — the caller rejects. ``token`` must be
+    truthy (the caller handles the auth-disabled case).
     """
     auth = authorization or ""
     prefix = _HMAC_SCHEME + " "

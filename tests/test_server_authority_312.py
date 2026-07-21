@@ -39,16 +39,18 @@ def test_node_hello_proof_garbage():
         assert not serviceauth.verify_node_hello(bad, "t", "n", now=1)
 
 
-def test_server_join_accepts_proof_and_legacy():
+def test_server_join_requires_proof():
     srv = AudioServer({"discovery": {"token": "jt"}})
-    # 3.12 proof
+    # signature proof, bound to node_id
     proof = serviceauth.sign_node_hello("jt", "n1")
     assert srv._join_authorized({"node_id": "n1", "auth": proof})
     wrong = serviceauth.sign_node_hello("jt", "OTHER")
     assert not srv._join_authorized({"node_id": "n1", "auth": wrong})
-    # legacy raw token still accepted (straggler window)
-    assert srv._join_authorized({"node_id": "n1", "token": "jt"})
+    # the raw token field is no longer accepted (even the correct value)
+    assert not srv._join_authorized({"node_id": "n1", "token": "jt"})
     assert not srv._join_authorized({"node_id": "n1", "token": "wrong"})
+    # missing proof entirely => rejected
+    assert not srv._join_authorized({"node_id": "n1"})
     # no token configured => open
     assert AudioServer({})._join_authorized({"node_id": "n"})
 
@@ -133,11 +135,10 @@ async def test_secrets_only_over_authed_tls(certpair, tmp_path, monkeypatch):
             r = await c.get("https://127.0.0.1:8871/config/tts",
                             headers={serviceauth.SIG_HEADER: hdr})
             assert r.json().get("_secrets") == {"OPENAI_API_KEY": "sk-secret-e2e"}
-            # legacy bearer (no signature) => NO secrets, even over TLS
+            # legacy bearer (no signature) => rejected outright, even over TLS
             r2 = await c.get("https://127.0.0.1:8871/config/tts",
                              headers={"Authorization": "Bearer tok"})
-            assert r2.status_code == 200
-            assert "_secrets" not in r2.json()
+            assert r2.status_code == 401
     finally:
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
