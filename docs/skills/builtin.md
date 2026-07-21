@@ -81,6 +81,7 @@ Controls and queries smart home devices via the [Home Assistant REST API](https:
 | Function | Description |
 |---|---|
 | `handle_home_control(request, speaker)` | Natural language control of lights, fans, locks, covers, and thermostats |
+| `play_music(query, room)` | Play an artist/album/track/playlist by name via Music Assistant (MA resolves the name; `fast_play` is the instant tier) |
 
 ### Configuration
 

@@ -175,9 +175,22 @@ kitchen stops the den. Two things playing and no room named ⇒ she asks. A spok
 player **3 device notches** (one notch per command is painful by voice); tune it with
 `media_volume_steps`. Naming a media
 thing routes volume words to the *player* ("turn the music up", "mute the TV") while the
-bare forms ("turn it up", "mute") still control the Kenzy node itself. **Starting new
-music by name** ("play some jazz") is deliberately not here yet — that arrives with the
-Music Assistant integration; asked today, Kenzy says so instead of guessing.
+bare forms ("turn it up", "mute") still control the Kenzy node itself.
+
+**Playing music by name — through Music Assistant.** With the
+[Music Assistant](https://www.music-assistant.io/) integration set up in HA,
+*"play some jazz"*, *"put on The Beatles in the loft"*, *"listen to my workout
+playlist"* just work: Kenzy passes your words to MA's `play_media`, and **MA
+does all the name resolution** — artist, album, track, playlist, or genre,
+against whatever providers you've connected. Kenzy's job is picking the
+player: the room you name, else the room you're speaking from, else the
+house's only one; a room with no music player gets told so. MA's players are
+recognized by *integration ownership* in HA's entity registry — never by
+entity naming — so rename them freely; and a song title is never mistaken for
+a room ("Dancing in the Dark" stays a title). Once music is playing, all the
+transport above applies to it. Without Music Assistant installed, the phrase
+falls through to the language model, which explains what's missing instead of
+guessing.
 
 Scenes and scripts can do anything your HA lets them do — if one unlocks doors or opens
 the garage, remember that **activating it by voice is not speaker-gated** the way direct
