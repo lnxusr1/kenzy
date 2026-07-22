@@ -1099,7 +1099,10 @@ def _parse_response(content: str) -> tuple[str, str, bool]:
     """Extract (text, voice_prompt, expect_response) from a JSON response.
 
     Tries increasingly lenient strategies before falling back to raw text:
-      1. Strict json.loads on the stripped content.
+      1. json.loads on the stripped content (strict=False: raw control chars
+         inside strings — a literal newline in the text — are routine from
+         prompt-tier local models and must parse, not fall through to the raw
+         blob; 4.4 review finding).
       2. raw_decode — parses the first valid JSON object, ignores trailing garbage
          (e.g. extra characters the model appended after the closing brace).
       3. Regex search for any {...} block — handles leading/trailing prose or
@@ -1107,9 +1110,9 @@ def _parse_response(content: str) -> tuple[str, str, bool]:
     """
     stripped = content.strip()
 
-    # Strategy 1: clean JSON.
+    # Strategy 1: clean JSON (tolerating raw control chars in strings).
     try:
-        parsed = json.loads(stripped)
+        parsed = json.loads(stripped, strict=False)
         return (
             str(parsed["text"]),
             str(parsed.get("voice_prompt", _voice_prompt)),

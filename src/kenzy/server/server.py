@@ -3170,10 +3170,14 @@ class TranscribingServer(AudioServer):
         does its bookkeeping (continuation, floor arming) and then
         ``speech.close(reply)`` speaks the unspoken remainder and ends the
         session — preserving the buffered order (expect_utterance before
-        tts_end). Returns None when the endpoint isn't there (older llm) or is
-        unreachable before anything was spoken — the caller falls back to the
-        buffered path. Wake-word cancellation propagates naturally: closing the
-        HTTP stream cancels the llm-side pipeline task.
+        tts_end). Failure policy (review-hardened): None ⇒ caller falls back to
+        buffered (404/405 old llm, any pre-body HTTP error, or a transport
+        failure before ANY event arrived — nothing ran llm-side, retry is
+        safe); failure AFTER speech began keeps what was spoken (never the
+        error cue over speech); failure after events-but-before-speech raises
+        honestly (tools may have run — a buffered retry could actuate twice).
+        Wake-word cancellation propagates naturally: closing the HTTP stream
+        cancels the llm-side pipeline task.
 
         The backchannel timer here measures time-to-FIRST-AUDIO: a fast first
         sentence suppresses the cue that a slow buffered reply would earn."""
@@ -3209,6 +3213,7 @@ class TranscribingServer(AudioServer):
         speech = _StreamSpeech(self, node_id, session_id, on_first_audio=_first_audio)
         buf = ""  # delta text not yet spoken
         reply: LlmReply | None = None
+        saw_event = False  # any body event ⇒ tools may have run llm-side
         stream_url = self._llm_url.replace("/process", "/process/stream")  # type: ignore[union-attr]
         timeout = httpx.Timeout(10.0, read=max(self._llm_timeout, 60.0))
         try:
@@ -3223,11 +3228,19 @@ class TranscribingServer(AudioServer):
                     if resp.status_code in (404, 405):
                         log.info("LLM service has no /process/stream — buffered fallback")
                         return None
-                    resp.raise_for_status()
+                    if resp.status_code >= 400:
+                        # Transient 5xx / auth hiccup on the stream endpoint:
+                        # nothing has run yet, so the buffered path gets its
+                        # chance (it will surface a real, persistent failure).
+                        log.warning(
+                            "LLM /process/stream HTTP %d — buffered fallback", resp.status_code
+                        )
+                        return None
                     async for line in resp.aiter_lines():
                         if not line.strip():
                             continue
                         ev = json.loads(line)
+                        saw_event = True
                         kind = ev.get("event")
                         if kind == "head":
                             speech.voice_prompt = str(ev.get("voice_prompt") or "")
@@ -3242,22 +3255,48 @@ class TranscribingServer(AudioServer):
                             break
                         elif kind == "error":
                             raise RuntimeError(f"llm stream error: {ev.get('detail')}")
-        except (httpx.ConnectError, httpx.ConnectTimeout):
-            if not speech.started:
-                log.warning("LLM /process/stream unreachable — buffered fallback")
-                return None
+        except asyncio.CancelledError:
             await speech.abort()
             raise
-        except BaseException:
+        except Exception as exc:
+            # Failure policy (review finding): NEVER the error cue on top of
+            # speech, and NEVER a silent re-execution of skill side effects.
+            if speech.started:
+                # What the room heard stands; any unspoken buffered text ships
+                # via close() as the remainder. No actions (they ride the end
+                # event, which never came).
+                log.warning(
+                    "[%s] llm stream failed after speech began (%s) — keeping what was spoken",
+                    node_id,
+                    exc,
+                )
+                return (
+                    LlmReply(text=speech.spoken + buf, voice_prompt=speech.voice_prompt),
+                    speech,
+                )
             await speech.abort()
+            if not saw_event:
+                # Died before ANY event (connect/read-timeout, dead endpoint):
+                # nothing ran llm-side, safe to retry buffered.
+                log.warning("LLM stream failed before any output (%s) — buffered fallback", exc)
+                return None
+            # Events arrived (tools may have executed) — re-running the request
+            # buffered could actuate twice. Honest failure, like a buffered 500.
             raise
         finally:
             if not cue_task.done():
-                cue_task.cancel()
+                if cue_playing:
+                    # Mid-play cue: let the short clip finish so its tts session
+                    # closes cleanly (a bare cancel would orphan the session).
+                    try:
+                        await cue_task
+                    except Exception:  # noqa: BLE001 — cue is best-effort
+                        pass
+                else:
+                    cue_task.cancel()
         if reply is None:
             if speech.spoken:
-                # The stream died after speech began: what the room heard IS
-                # the reply of record. No actions — they ride the end event.
+                # Clean EOF without an end event: what was heard is the record.
                 log.warning("[%s] llm stream ended early — keeping spoken text", node_id)
                 reply = LlmReply(text=speech.spoken, voice_prompt=speech.voice_prompt)
             else:

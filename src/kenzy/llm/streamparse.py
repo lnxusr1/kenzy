@@ -152,9 +152,13 @@ class StreamExtract:
         Returns ``(text, voice_prompt, expect_response)`` when the buffer is
         valid contract JSON, else None (caller falls back to its lenient
         parser). This is the authoritative result — the streamed pieces are a
-        preview of exactly this ``text``."""
+        preview of exactly this ``text``. ``strict=False`` accepts raw control
+        chars inside strings (a literal newline in the text — routine from
+        prompt-tier local models; the streaming scanner passes them through, so
+        the authoritative parse must agree or history gets poisoned with the
+        raw blob)."""
         try:
-            obj = json.loads(self.buf)
+            obj = json.loads(self.buf, strict=False)
         except (json.JSONDecodeError, ValueError):
             return None
         if not isinstance(obj, dict) or "text" not in obj:

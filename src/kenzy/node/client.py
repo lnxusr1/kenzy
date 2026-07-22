@@ -1043,6 +1043,35 @@ class NodeClient:
     # TTS helpers
     # ------------------------------------------------------------------
 
+    async def _cancel_tts_task(self) -> None:
+        """Cancel + await any running TTS wait/drain task (its cancel handler
+        stops streaming mode and aborts playback)."""
+        task, self._tts_task = self._tts_task, None
+        if task is not None and not task.done():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+    async def _reset_tts_state(self) -> None:
+        """Force the TTS half of the audio state machine back to idle.
+
+        Connection teardown calls this: a session may have died at ANY point,
+        and a 4.4 streamed session must never leave the player latched in ring
+        mode — the next buffered sound would play into the (empty) ring and be
+        silent, and on half-duplex hardware `player.active` stuck true would
+        suppress wake words forever."""
+        await self._cancel_tts_task()
+        if self._player is not None and self._tts_stream:
+            self._player.stop_stream()
+        self._tts_stream = False
+        self._tts_stream_started = False
+        self._end_dialog_after_tts = False
+        if self._state == _STATE_TTS:
+            self._state = _STATE_IDLE
+            self._session_id = None
+
     async def _begin_tts(
         self,
         session_id: str,
@@ -1051,6 +1080,11 @@ class NodeClient:
         alert: bool = False,
         stream: bool = False,
     ) -> None:
+        # A prior streamed session's drain task may still be finishing — it
+        # must not outlive into THIS session (it would stop the new ring and
+        # stomp the fresh session's state ~100ms in). Same interrupt-the-old
+        # semantics the buffered path gets from play_pcm(interrupt=True).
+        await self._cancel_tts_task()
         self._stop_ringback()  # a spoken reply (decline/timeout) supersedes ringing
         self._reset_barge()
         # Deliberately NO queue drain here: _recv_loop enqueues binary frames the
@@ -2224,6 +2258,10 @@ class NodeClient:
                     self._tts_q.get_nowait()
                 except asyncio.QueueEmpty:
                     break
+            # 4.4: and it may have died mid-STREAMED-reply — force the TTS
+            # state machine (incl. the player's ring mode) back to idle so the
+            # reconnected node hears and speaks normally.
+            await self._reset_tts_state()
             self._ws = None
 
     # ------------------------------------------------------------------
