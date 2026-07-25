@@ -42,12 +42,27 @@ import time
 SERVICES = ["server", "stt", "tts", "llm", "speaker"]  # start order; node is opt-in
 
 
+def _home() -> str:
+    """The config home / operational tree — `$KENZY_HOME`, else `~/.config/kenzy`.
+
+    Children are started with this as their working directory, mirroring the
+    `WorkingDirectory=` that install.sh and kenzy-deploy put in the systemd
+    units. That matters because a few service settings are *relative* paths
+    resolved against CWD (speaker's `embeddings_dir`/`model_save_dir`), so the
+    dev stack only finds the enrolled voiceprints and cached models if it runs
+    from the same place a real install does.
+    """
+    from kenzy.config import kenzy_data_root
+
+    return str(kenzy_data_root())
+
+
 def _server_scheme() -> str:
     """ws, or wss when the dev server config enables TLS."""
     try:
         import yaml
 
-        with open(os.path.join("configs", "server.yaml")) as f:
+        with open(os.path.join(_home(), "configs", "server.yaml")) as f:
             cfg = yaml.safe_load(f) or {}
         tls = cfg.get("tls") or {}
         if tls.get("cert") and tls.get("key"):
@@ -122,7 +137,7 @@ def main() -> int:
         # config-pull boot path. Off by default — pulling is what makes the
         # dashboard's Services editor actually apply to a dev stack.
         if name in ("stt", "tts", "llm", "speaker") and args.local:
-            local = os.path.join("configs", f"{name}.yaml")
+            local = os.path.join(_home(), "configs", f"{name}.yaml")
             if not os.path.exists(local):
                 # Pin the packaged default explicitly — otherwise the resolver
                 # walks on to ~/.config/kenzy, and this machine's personal config
@@ -139,6 +154,7 @@ def main() -> int:
             text=True,
             bufsize=1,
             env=env,
+            cwd=_home(),  # relative config paths resolve here, as under systemd
         )
         t = threading.Thread(target=_pump, args=(name, color, procs[name], use_color), daemon=True)
         t.start()
