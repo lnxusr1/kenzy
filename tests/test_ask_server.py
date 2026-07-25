@@ -79,7 +79,8 @@ async def test_ask_reply_holds_floor_and_routes_answer(monkeypatch):
     )
     await srv._transcribe("k", "kitchen", "s1", b"pcm")
     assert srv._pending_ask.get("k") == {
-        "id": "c1", "capture": "text", "origin_node": "k", "origin_room": "kitchen"
+        "id": "c1", "capture": "text", "origin_node": "k", "origin_room": "kitchen",
+        "busy_cues": True,
     }  # fmt: skip
     assert any(protocol.MSG_EXPECT_UTTERANCE in m for m in ws.sent)  # floor held
 
@@ -87,6 +88,118 @@ async def test_ask_reply_holds_floor_and_routes_answer(monkeypatch):
     await srv._transcribe("k", "kitchen", "s1", b"pcm2")
     assert continues == [("c1", "add milk to the list", "alice")]
     assert "k" not in srv._pending_ask
+
+
+async def _run_ask_answer(monkeypatch, *, busy_cues: bool) -> list[str]:
+    """Drive question turn + a SLOW answer turn under a shortened cue ladder;
+    return the cue keys that fired during the answer's processing."""
+    from kenzy.server import server as srvmod
+
+    monkeypatch.setattr(
+        srvmod, "_CUE_LADDER", ((10, "sound_thinking", "thinking.wav"),)
+    )
+    srv, ws = _server_with_node()
+    continues: list = []
+    _wire(
+        srv,
+        monkeypatch,
+        stt_text="yes please",
+        replies=[
+            LlmReply("Should I create a list?", "vp", fast=True,
+                     expect_response=True, continuation="c1",
+                     ask_busy_cues=busy_cues),  # fmt: skip
+            LlmReply("Created it.", "vp", fast=True),
+        ],
+        continues=continues,
+    )
+    cues: list[str] = []
+
+    async def fake_cue(node_id, key, default):  # noqa: ANN001, ANN202
+        cues.append(key)
+        return 0.0
+
+    monkeypatch.setattr(srv, "_play_cue", fake_cue)
+
+    # Make the continuation SLOW — well past the (shortened) first rung.
+    real_continue = srv._call_llm_continue
+
+    async def slow_continue(cont_id, text, identity):  # noqa: ANN001, ANN202
+        await asyncio.sleep(0.1)
+        return await real_continue(cont_id, text, identity)
+
+    monkeypatch.setattr(srv, "_call_llm_continue", slow_continue)
+
+    await srv._transcribe("k", "kitchen", "s1", b"pcm")  # question turn
+    await srv._transcribe("k", "kitchen", "s1", b"pcm2")  # slow ANSWER turn
+    assert continues == [("c1", "yes please", "alice")]
+    await asyncio.sleep(0.05)
+    return cues
+
+
+async def test_ask_answer_cues_by_default(monkeypatch):
+    # The ladder applies to ask() answer turns by default: a skill can do real
+    # work after your "yes" (list creation, enrollment upload), and mid-dialog
+    # there is no bed — the cue is the only feedback that work would get.
+    cues = await _run_ask_answer(monkeypatch, busy_cues=True)
+    assert cues == ["sound_thinking"]
+
+
+async def test_ask_busy_cues_false_keeps_answer_turn_silent(monkeypatch):
+    # ask(busy_cues=False): a conversational skill (knock-knock) keeps its
+    # turnarounds clean — a canned "Working on it." mid-joke reads as a barge.
+    cues = await _run_ask_answer(monkeypatch, busy_cues=False)
+    assert cues == []
+
+
+async def _run_plain_dispatch(monkeypatch, *, held_floor: bool) -> list[str]:
+    """Drive a FRESH (non-ask) dispatch through _transcribe with a slow buffered
+    LLM under a shortened ladder; held_floor simulates a mid-dialog follow-up."""
+    from kenzy.server import server as srvmod
+
+    monkeypatch.setattr(srvmod, "_CUE_LADDER", ((10, "sound_thinking", "thinking.wav"),))
+    srv, ws = _server_with_node()
+    cues: list[str] = []
+
+    async def stt(pcm, room, sid):  # noqa: ANN001, ANN202
+        return "what's the weather"
+
+    async def spk(pcm, room):  # noqa: ANN001, ANN202
+        return "alice", 0.9
+
+    async def slow_llm(text, room, sid, speaker, node_id=None, identity=None):  # noqa: ANN001, ANN202
+        await asyncio.sleep(0.1)
+        return LlmReply("It's sunny.", "vp", fast=False)
+
+    async def tts(*a, **k):  # noqa: ANN002, ANN003, ANN202
+        return True
+
+    async def fake_cue(node_id, key, default):  # noqa: ANN001, ANN202
+        cues.append(key)
+        return 0.0
+
+    monkeypatch.setattr(srv, "_call_stt", stt)
+    monkeypatch.setattr(srv, "_call_speaker", spk)
+    monkeypatch.setattr(srv, "_call_llm", slow_llm)
+    monkeypatch.setattr(srv, "_run_tts", tts)
+    monkeypatch.setattr(srv, "_play_cue", fake_cue)
+    if held_floor:
+        srv._followup_turns["k"] = 1  # a prior reply is awaiting this answer
+    await srv._transcribe("k", "kitchen", "s1", b"pcm")
+    await asyncio.sleep(0.05)
+    return cues
+
+
+async def test_fresh_command_gets_cues(monkeypatch):
+    # A fresh command into the void: the cue acknowledges it.
+    cues = await _run_plain_dispatch(monkeypatch, held_floor=False)
+    assert cues == ["sound_thinking"]
+
+
+async def test_followup_turn_suppresses_cues(monkeypatch):
+    # Mid-dialog follow-up (Kenzy held the floor, user is answering): no cue —
+    # "Working on it." between the answer and her next line breaks the rhythm.
+    cues = await _run_plain_dispatch(monkeypatch, held_floor=True)
+    assert cues == []
 
 
 async def test_wakeword_cancels_pending_ask(monkeypatch):

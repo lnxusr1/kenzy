@@ -136,6 +136,10 @@ class ProcessResponse(BaseModel):
     # the question itself.
     ask_room: str | None = None
     ask_prompt: str = ""
+    # Whether the server's processing-cue ladder may speak over this question's
+    # ANSWER turn while the skill resumes (ask(busy_cues=False) opts out —
+    # conversational skills keeping their turnarounds clean).
+    ask_busy_cues: bool = True
 
 
 # ---------------------------------------------------------------------------
@@ -797,6 +801,7 @@ def _ask_prompt_response(outcome: Any, *, fast: bool) -> ProcessResponse:
         ask_cue=ch.cue,
         ask_room=ch.room,
         ask_prompt=ch.prompt,
+        ask_busy_cues=ch.busy_cues,
     )
 
 

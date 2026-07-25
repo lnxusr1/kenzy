@@ -85,10 +85,17 @@ node_defaults:
   # Pre-recorded (not synthesized) so it still plays when TTS itself is down;
   # same server-side/live semantics as the tones above. Empty = stay silent.
   sound_error: "error.wav"
-  # Spoken acknowledgement ("On it.") when a reply is taking a while — played
-  # once if the answer hasn't started after a couple of seconds. Same
-  # server-side/live semantics. Empty = never speak it.
+  # Processing-cue ladder: spoken acknowledgements while a reply is pending,
+  # duck-mixed OVER the looping waiting sound (the bed continues underneath).
+  # sound_thinking plays at ~5s ("Working on it."); sound_working ("Still
+  # working on it.") ~8s after that cue ENDS — then silence until the reply
+  # (or the error cue). Each accepts one sound OR a LIST (a pool: one is
+  # picked at random, never the same twice in a row). Same server-side/live
+  # semantics as the tones above; voice-matched renders in data/sounds/ shadow
+  # the bundled files (see the dashboard's "Regenerate spoken cues"). Empty =
+  # skip that rung.
   sound_thinking: "thinking.wav"
+  sound_working: "working.wav"
   # Whether this room's speaker does acoustic echo cancellation (the published
   # hardware guidance recommends AEC speakerphones). Calibration DETECTS and
   # sets this per node automatically (it plays a known sound and measures the
@@ -147,6 +154,17 @@ stt:
 # shared library) here. MP3/OGG/FLAC need the sound extra: pip install kenzy[sound]
 sounds:
   dirs: []
+
+# Spoken-cue PHRASES (the failure apology + the processing acknowledgements).
+# These texts are the source of truth; the WAVs are a cache. The dashboard's
+# Settings → "Regenerate spoken cues" re-records every phrase through the
+# CONFIGURED TTS voice (into data/sounds/cues/) and points the node_defaults
+# sound keys at the renders — so the cues follow a voice change with one click.
+# thinking/working accept multiple phrases: one plays at random per cue.
+# cues:
+#   error: "I'm sorry, but I'm having trouble processing your request at the moment."
+#   thinking: ["Working on it.", "Just a moment.", "One moment."]
+#   working: ["Still working on it.", "Still on it."]
 
 # (zero overhead) unless enabled. Requires the mqtt extra: pip install kenzy[server,mqtt]
 integrations:

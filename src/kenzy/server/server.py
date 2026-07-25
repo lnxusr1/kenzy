@@ -24,6 +24,7 @@ import asyncio
 import json
 import logging
 import os
+import random
 import re
 import sys
 import time
@@ -81,6 +82,7 @@ _ALLOWED_OVERRIDE_KEYS = frozenset(
         "sound_alarm",
         "sound_error",
         "sound_thinking",
+        "sound_working",
         "log_level",
         "log_capture_level",
         "volume",
@@ -103,9 +105,52 @@ _INTERCOM_VOICE_PROMPT = "Read this aloud as a brief, friendly spoken notificati
 _CALIB_VOICE_PROMPT = "Calm, clear, unhurried — you are guiding someone through a setup step."
 _CALIB_SAY_MARGIN = 0.9  # playback outlasts streaming by roughly this much
 _CALIB_PEAK_REFRACTORY_S = 1.5  # min gap between counted wake attempts
-# LLM stage running longer than this ⇒ speak the backchannel cue ("On it.") so a
-# tool-loop or slow-model reply gets an immediate spoken acknowledgement.
-_BACKCHANNEL_MS = 2000
+# Processing-cue ladder (4.4 presence audio): escalating spoken acknowledgements
+# while NO reply audio has started — the waiting bed is the instant layer, the
+# first rung says "this one's taking a beat", the second reassures the long
+# tail, then restraint: silence until the reply or the real error cue. Each
+# rung is a (delay_ms, config_key, bundled_default) triple. TIMING MODEL
+# (founder-tuned on the rig 2026-07-23): the FIRST rung's delay is absolute
+# from ladder start; every LATER rung's delay counts from when the previous
+# cue FINISHES PLAYING (the ladder sleeps out the cue's audio duration after
+# streaming it) — absolute deadlines made rung 2 land ~2s after rung 1
+# finished, which read as chatter, not reassurance. PHRASE ⇄ TIMING COUPLING
+# (founder decision 2026-07-23): the first rung fires at 5s in STATUS register
+# ("Working on it." — a report that the wait is underway), NOT a quick-ack
+# ("On it.", which only sounds right ≤3s — but 3s fires BEFORE a typical
+# prod-streamed reply lands at ~4s TTFA, taxing ordinary replies; 5s speaks
+# only on the genuinely slow tail; the bed is the instant layer). Keys accept
+# a string or a POOL (list) picked with a per-node no-immediate-repeat. Cue
+# sessions ride tts_start(cue=True) so nodes duck-mix them OVER the bed
+# instead of cutting it. Internal constants: promote to config keys only on
+# field evidence (deployment latency profiles differing enough to need it).
+_CUE_LADDER: tuple[tuple[int, str, str], ...] = (
+    (5000, "sound_thinking", "thinking.wav"),  # at 5s into the wait
+    (8000, "sound_working", "working.wav"),  # 8s after the thinking cue ends
+)
+# Spoken-cue regeneration (dashboard "Regenerate spoken cues"): the cue PHRASES
+# are the source of truth (``cues:`` in server.yaml overrides these defaults);
+# WAVs are a cache rendered through the CONFIGURED TTS voice, so the whole cue
+# set follows a voice change with one click — and a local (Kokoro) install
+# stops hearing the bundled OpenAI-voice cues against its own voice.
+_CUE_KINDS: tuple[tuple[str, str], ...] = (
+    ("error", "sound_error"),
+    ("thinking", "sound_thinking"),
+    ("working", "sound_working"),
+)
+_DEFAULT_CUE_TEXTS: dict[str, list[str]] = {
+    "error": ["I'm sorry, but I'm having trouble processing your request at the moment."],
+    "thinking": ["Working on it."],
+    "working": ["Still working on it."],
+}
+_CUE_VOICE_PROMPTS: dict[str, str] = {
+    "error": (
+        "Speak calmly and apologetically, at a measured pace — a brief, sincere "
+        "apology from a home voice assistant that cannot complete a request."
+    ),
+    "thinking": "A calm, brief status note that work is underway — light, unhurried.",
+    "working": "A calm, friendly reassurance that work is still underway — brief, unhurried.",
+}
 _CALIB_WAKE_WINDOW_S = 20.0  # wake phase cap (ends early at WAKE_TARGET attempts)
 _CALIB_WAKE_EXTEND_S = 12.0  # one extension when the phase gate fails
 _CALIB_PROBE_LEAD_S = 0.4  # skip the probe's first moments (playback lags streaming)
@@ -344,6 +389,7 @@ def _llm_reply_from(data: dict[str, Any]) -> LlmReply:
         ask_cue=bool(data.get("ask_cue", False)),
         ask_room=data.get("ask_room") or None,
         ask_prompt=str(data.get("ask_prompt") or ""),
+        ask_busy_cues=bool(data.get("ask_busy_cues", True)),
     )
 
 
@@ -367,6 +413,9 @@ class LlmReply:
     ask_cue: bool = False
     ask_room: str | None = None
     ask_prompt: str = ""
+    # Processing-cue ladder over the answer turn: on by default; a skill's
+    # ask(busy_cues=False) keeps its conversational turnarounds cue-free.
+    ask_busy_cues: bool = True
 
 
 # Sentence boundary for the 4.4 streaming aggregator: terminator (+ closing
@@ -825,6 +874,14 @@ class AudioServer:
             log.info("[%s] wrote per-node override (%d keys)", node_id, len(merged))
         else:
             log.info("[%s] cleared per-node override", node_id)
+
+    def apply_node_defaults(self, patch: dict[str, Any]) -> None:
+        """Live-update fleet-wide ``node_defaults`` (cue regeneration): the
+        caller persists the same patch to the server.local.yaml layer for the
+        next boot; this makes it effective NOW (the cue keys are read live at
+        fire time, so no config push is needed)."""
+        self._node_defaults.update(patch)
+        self._node_cfg_cache.clear()
 
     async def push_config(self, node_id: str) -> bool:
         """Re-push effective config to a connected node (live config_update)."""
@@ -1899,6 +1956,15 @@ class AudioServer:
         """
         return 0
 
+    def cue_texts_state(self) -> dict[str, Any]:
+        """Spoken-cue phrases + sound-key values (dashboard Settings card). The
+        base server has no TTS pipeline; ``TranscribingServer`` has the real one."""
+        return {"texts": {}, "keys": {}, "tts": False}
+
+    async def regenerate_cues(self) -> dict[str, Any]:
+        """Re-render the spoken cues in the configured voice. Base server: no TTS."""
+        raise RuntimeError("TTS service not configured")
+
     def list_schedules(self) -> list[dict[str, Any]]:
         """Active timers/alarms/reminders (dashboard surface). The base server
         has no scheduler; ``TranscribingServer`` provides the real one."""
@@ -2082,6 +2148,73 @@ _ALARM_RING_INTERVAL_S = 25.0
 _SCHEDULE_TONE_KEYS = {"timer": ("sound_timer", "timer.wav"), "alarm": ("sound_alarm", "alarm.wav")}
 
 
+class _CueLadder:
+    """Escalating processing acknowledgements while a reply is pending.
+
+    Walks ``_CUE_LADDER``, playing each rung's cue (pool-picked, cue-flagged
+    tts session) only if the reply hasn't landed yet. The first rung's delay is
+    measured from ``started_at`` — the wait-session start (≈ when the node's
+    waiting bed begins), passed in so the cue lands N seconds into the WAIT as
+    the user hears it, NOT N seconds after the LLM dispatch: STT+speaker run
+    first (dev CPU whisper ~3s), and counting from creation would stack that
+    latency on top of the delay (an ~8s cue for a configured 5s). Each later
+    rung's delay is a GAP measured from when the previous cue finished PLAYING
+    — ``_play_cue`` returns the streamed audio's duration and the walker sleeps
+    it out (frames arrive near-instantly over the LAN, then the node plays for
+    ~that long), so the felt silence between cues is a constant, not whatever an
+    absolute deadline left over. ``finish()`` — called the moment reply audio is
+    ready — cancels the timer outright, but lets a cue already MID-PLAY
+    complete: its tts session must close before the reply's opens (the
+    back-to-back-session ordering rule). The in-flight play is awaited through
+    ``asyncio.shield`` — cancelling the walker otherwise propagates into
+    whatever it awaits, which would cut the cue's tts session mid-frame."""
+
+    def __init__(
+        self, server: TranscribingServer, node_id: str, started_at: float | None = None
+    ) -> None:
+        self._server = server
+        self._node_id = node_id
+        # Wait-session start (time.monotonic); the first rung subtracts elapsed
+        # STT time from its delay. None ⇒ measure from creation (legacy).
+        self._started_at = started_at
+        self._play: asyncio.Task[float] | None = None
+        self._task = asyncio.create_task(self._run())
+
+    async def _run(self) -> None:
+        for i, (delay_ms, key, default) in enumerate(_CUE_LADDER):
+            delay = delay_ms / 1000.0
+            if i == 0 and self._started_at is not None:
+                # Anchor the first rung to the wait start, not to creation — so
+                # STT latency already burned doesn't push the cue later. If STT
+                # outran the delay, fire as soon as we get here (max(0, …)).
+                delay = max(0.0, delay - (time.monotonic() - self._started_at))
+            await asyncio.sleep(delay)
+            self._play = asyncio.create_task(
+                self._server._play_cue(self._node_id, key, default)
+            )
+            try:
+                duration = await asyncio.shield(self._play)
+            except Exception:  # noqa: BLE001 — cues are best-effort
+                duration = 0.0
+            if duration:
+                # Let the clip finish sounding before the next rung's gap starts.
+                await asyncio.sleep(duration)
+
+    async def finish(self) -> None:
+        """Reply audio is ready: stop future rungs, let a mid-play cue close."""
+        self._task.cancel()
+        try:
+            await self._task
+        except (asyncio.CancelledError, Exception):  # noqa: BLE001
+            pass
+        play = self._play
+        if play is not None and not play.done():
+            try:
+                await play
+            except Exception:  # noqa: BLE001
+                pass
+
+
 class TranscribingServer(AudioServer):
     """
     AudioServer subclass that transcribes each captured utterance with
@@ -2114,12 +2247,13 @@ class TranscribingServer(AudioServer):
         # the exchange ends (no re-arm, silence, stop phrase, disconnect).
         self._followup_turns: dict[str, int] = {}
         # ask() (4.2): asked-node_id → {"id", "capture", "origin_node",
-        # "origin_room"} of the parked continuation awaiting the answer.
-        # "audio" capture routes the raw PCM (no STT); origin != node is a
-        # CROSS-ROOM ask (intercom consent) — the final reply speaks at the
+        # "origin_room", "busy_cues"} of the parked continuation awaiting the
+        # answer. "audio" capture routes the raw PCM (no STT); origin != node is
+        # a CROSS-ROOM ask (intercom consent) — the final reply speaks at the
         # origin, and the asked room's wake/timeout resolves as an empty
         # answer instead of a discard (the asker deserves the outcome).
-        self._pending_ask: dict[str, dict[str, str]] = {}
+        # busy_cues (bool) gates the processing-cue ladder over the answer turn.
+        self._pending_ask: dict[str, dict[str, Any]] = {}
 
         # Timers / alarms / reminders: persisted store + firing loop (started in
         # serve(), which needs the running event loop). Ring tasks per node for
@@ -2227,6 +2361,19 @@ class TranscribingServer(AudioServer):
         for d in raw_dirs if isinstance(raw_dirs, list) else []:
             p = Path(str(d)).expanduser()
             self._sound_roots.append(p if p.is_absolute() else data_root / p)
+        # Processing-cue pools: last pick per (node_id, key) for the
+        # no-immediate-repeat guard (in-memory; variety, not state).
+        self._last_cue: dict[tuple[str, str], str] = {}
+        # Cue PHRASES (source of truth for "Regenerate spoken cues"): the
+        # ``cues:`` block in server.yaml overrides the shipped defaults.
+        cues_cfg = cfg.get("cues") if isinstance(cfg.get("cues"), dict) else {}
+        self._cue_texts: dict[str, list[str]] = {}
+        for kind, _skey in _CUE_KINDS:
+            raw = (cues_cfg or {}).get(kind, _DEFAULT_CUE_TEXTS[kind])
+            if isinstance(raw, str):
+                raw = [raw]
+            texts = [str(s).strip() for s in raw if str(s).strip()] if isinstance(raw, list) else []
+            self._cue_texts[kind] = texts or list(_DEFAULT_CUE_TEXTS[kind])
         if self._speaker_url:
             log.info(
                 "Speaker service: %s (timeout=%.0fs)", self._speaker_url, self._speaker_timeout
@@ -2292,17 +2439,19 @@ class TranscribingServer(AudioServer):
         channels: int = 1,
         alert: bool = False,
         stream: bool = False,
+        cue: bool = False,
     ) -> bool:
         """Tell a node to enter TTS mode and begin accepting audio frames.
         ``alert`` audio (doorbell chimes) plays at the muted floor on muted nodes;
-        ``stream`` marks a sentence-streamed reply (play frames as they arrive)."""
+        ``stream`` marks a sentence-streamed reply (play frames as they arrive);
+        ``cue`` marks a processing acknowledgement (duck-mixed over the bed)."""
         async with self._lock:
             session = self._nodes.get(node_id)
         if session is None:
             return False
         try:
             await session.ws.send(
-                protocol.tts_start(session_id, sample_rate, channels, alert, stream)
+                protocol.tts_start(session_id, sample_rate, channels, alert, stream, cue)
             )
             self._tts_active.add(node_id)
             return True
@@ -2427,9 +2576,16 @@ class TranscribingServer(AudioServer):
                 if pending_ask is not None:
                     # This utterance ANSWERS a parked ask(): resume the skill
                     # instead of a fresh dispatch — the whole point of ask().
-                    reply = await self._with_backchannel(
-                        node_id, self._call_llm_continue(pending_ask["id"], text, identity)
-                    )
+                    # The cue ladder applies BY DEFAULT (a skill can do real
+                    # work after the answer — list creation, enrollment upload);
+                    # ask(busy_cues=False) opts a question out for tight
+                    # conversational turnarounds where a canned "Working on it."
+                    # would read as a barge (knock-knock is the canonical case).
+                    cont = self._call_llm_continue(pending_ask["id"], text, identity)
+                    if pending_ask.get("busy_cues", True):
+                        reply = await self._with_backchannel(node_id, cont, started_at=t0)
+                    else:
+                        reply = await cont
                     if pending_ask.get("origin_node") not in (None, node_id):
                         # Cross-room ask (intercom consent): the outcome belongs
                         # to the ASKER's room; this room just answered.
@@ -2443,11 +2599,18 @@ class TranscribingServer(AudioServer):
                         )
                         return
                 else:
+                    # A mid-dialog follow-up (Kenzy held the floor and the user
+                    # is answering) gets NO processing cues: "Working on it."
+                    # between the user's answer and her next line breaks the
+                    # conversational rhythm. The cues acknowledge a FRESH command
+                    # into the void; a running back-and-forth doesn't need them.
+                    cue_this_turn = node_id not in self._followup_turns
                     # 4.4 streaming: speak sentences while the model writes.
                     # None ⇒ endpoint unavailable ⇒ buffered path, unchanged.
                     streamed = (
                         await self._call_llm_stream(
-                            text, room_name, session_id, speaker, node_id, identity
+                            text, room_name, session_id, speaker, node_id, identity,
+                            started_at=t0, cues=cue_this_turn,
                         )
                         if self._streaming_enabled
                         else None
@@ -2465,6 +2628,8 @@ class TranscribingServer(AudioServer):
                                 node_id=node_id,
                                 identity=identity,
                             ),
+                            started_at=t0,
+                            cues=cue_this_turn,
                         )
                 response_text, voice_prompt = reply.text, reply.voice_prompt
                 actions, fast = reply.actions, reply.fast
@@ -2491,6 +2656,7 @@ class TranscribingServer(AudioServer):
                         "capture": reply.ask_capture,
                         "origin_node": node_id,
                         "origin_room": room_name,
+                        "busy_cues": reply.ask_busy_cues,
                     }
 
                 # Multi-turn: if the reply deliberately holds the floor, arm the node to
@@ -2573,54 +2739,144 @@ class TranscribingServer(AudioServer):
 
     async def _play_error_cue(self, node_id: str) -> None:
         """Stream the pre-recorded failure cue (``sound_error``, read live like
-        the timer/alarm tones; empty ⇒ silent opt-out). Best effort."""
+        the timer/alarm tones; empty ⇒ silent opt-out; a voice-matched render in
+        the sound library shadows the bundle). Best effort. Deliberately NOT
+        cue-flagged: failure ends the interaction, so it replaces the bed."""
         try:
             spec = self._effective_node_config(node_id).get("sound_error", "error.wav")
         except Exception:
             spec = "error.wav"
         from . import tones
 
-        pcm = tones.load_tone(spec)
+        pcm = tones.load_tone(self._cue_file_spec(str(spec))) if spec else b""
         if pcm:
             await self._stream_pcm(node_id, pcm)
 
-    async def _play_thinking_cue(self, node_id: str) -> None:
-        """Stream the pre-recorded backchannel ("On it." — ``sound_thinking``,
-        read live like the timer/alarm tones; empty ⇒ silent opt-out)."""
+    def _pick_cue(self, node_id: str, key: str, spec: Any) -> str:
+        """Resolve a cue config value (string, or a POOL list) to one sound name.
+
+        Pools get a uniform random pick with a per-(node, key) no-immediate-repeat
+        guard so a small pool never plays the same phrase back-to-back. Empty /
+        malformed ⇒ "" (silent opt-out, like the empty-string convention)."""
+        if isinstance(spec, (list, tuple)):
+            names = [str(s).strip() for s in spec if s and str(s).strip()]
+            if not names:
+                return ""
+            last = self._last_cue.get((node_id, key))
+            candidates = [n for n in names if n != last] or names
+            choice = random.choice(candidates)
+            self._last_cue[(node_id, key)] = choice
+            return choice
+        return str(spec).strip() if spec else ""
+
+    async def _play_cue(self, node_id: str, key: str, default: str) -> float:
+        """Stream one processing-cue clip (a ladder rung — ``sound_thinking`` /
+        ``sound_working``, read live like the timer/alarm tones; empty ⇒ silent
+        opt-out). Regenerated renders in the sound library shadow the bundled
+        file; the session is cue-flagged so the node duck-mixes it over the bed.
+        Returns the clip's audio duration in seconds (0.0 when nothing played) —
+        the ladder times the next rung's gap from the end of the clip."""
         try:
-            spec = self._effective_node_config(node_id).get("sound_thinking", "thinking.wav")
+            spec = self._effective_node_config(node_id).get(key, default)
         except Exception:
-            spec = "thinking.wav"
+            spec = default
+        name = self._pick_cue(node_id, key, spec)
+        if not name:
+            return 0.0
         from . import tones
 
-        pcm = tones.load_tone(spec)
-        if pcm:
-            await self._stream_pcm(node_id, pcm)
+        pcm = tones.load_tone(self._cue_file_spec(name))
+        if not pcm:
+            return 0.0
+        await self._stream_pcm(node_id, pcm, cue=True)
+        return len(pcm) / (24000 * 2)  # 24 kHz mono int16
 
-    async def _with_backchannel(self, node_id: str, coro: Coroutine[Any, Any, Any]) -> Any:
-        """Await the LLM stage, speaking the thinking cue once if it runs past
-        ``_BACKCHANNEL_MS`` (the tool-loop / slow-model acknowledgement). If the
+    def _cue_file_spec(self, name: str) -> str:
+        """Library-first cue resolution: a file in the operator sound library
+        (``data/sounds/`` — where voice-matched regenerated cues land) shadows
+        the bundled WAV of the same name; anything else (absolute path, bare
+        bundled name) passes through to ``tones.load_tone`` unchanged."""
+        from . import tones
+
+        library = tones.resolve_sound(name, self._sound_roots)
+        return str(library) if library is not None else name
+
+    def cue_texts_state(self) -> dict[str, Any]:
+        """The cue phrases + current sound-key values (dashboard Settings card)."""
+        keys: dict[str, Any] = {}
+        for _kind, skey in _CUE_KINDS:
+            keys[skey] = self._node_defaults.get(skey)
+        return {"texts": dict(self._cue_texts), "keys": keys, "tts": bool(self._tts_url)}
+
+    async def regenerate_cues(self) -> dict[str, Any]:
+        """Re-render every spoken cue phrase through the CONFIGURED TTS voice.
+
+        Renders land in the sound library (``data/sounds/cues/`` — rides
+        backups, shadows nothing since the returned key values point straight at
+        them); the caller (dashboard) persists the returned ``node_defaults``
+        sound-key patch to the server.local.yaml layer and live-applies it via
+        :meth:`AudioServer.apply_node_defaults`. Because these cues are
+        server-streamed, one regeneration covers the whole fleet. All phrases
+        are synthesized BEFORE any old render is touched — a TTS failure leaves
+        the previous set intact."""
+        if not self._tts_url:
+            raise RuntimeError("TTS service not configured")
+        import wave
+
+        from . import tones
+
+        rendered: list[tuple[str, str, bytes]] = []  # (kind, filename, pcm)
+        keys: dict[str, Any] = {}
+        for kind, skey in _CUE_KINDS:
+            texts = self._cue_texts.get(kind) or _DEFAULT_CUE_TEXTS[kind]
+            names: list[str] = []
+            for i, phrase in enumerate(texts, start=1):
+                pcm = await self._synthesize(phrase, _CUE_VOICE_PROMPTS[kind])
+                if not pcm:
+                    raise RuntimeError(f"TTS failed rendering the {kind} cue ({phrase!r})")
+                fname = f"cues/{kind}-{i}.wav"
+                rendered.append((kind, fname, pcm))
+                names.append(fname)
+            keys[skey] = names[0] if len(names) == 1 else names
+        outdir = self._sound_roots[0] / "cues"
+        outdir.mkdir(parents=True, exist_ok=True)
+        for stale in outdir.glob("*.wav"):  # a previously larger pool must not linger
+            stale.unlink()
+        for _kind, fname, pcm in rendered:
+            with wave.open(str(self._sound_roots[0] / fname), "wb") as w:
+                w.setnchannels(1)
+                w.setsampwidth(2)
+                w.setframerate(24000)  # /speak returns 24 kHz mono int16 PCM
+                w.writeframes(pcm)
+        tones.clear_cache()  # same-path re-renders must not serve the old audio
+        log.info(
+            "Regenerated %d spoken cue(s) in the current voice → %s", len(rendered), outdir
+        )
+        return {"count": len(rendered), "keys": keys}
+
+    async def _with_backchannel(
+        self,
+        node_id: str,
+        coro: Coroutine[Any, Any, Any],
+        *,
+        started_at: float | None = None,
+        cues: bool = True,
+    ) -> Any:
+        """Await the LLM stage under the processing-cue ladder (``_CUE_LADDER``):
+        escalating spoken acknowledgements while the reply is still pending. If a
         cue is mid-play when the reply lands, the short clip finishes so its TTS
-        session closes cleanly before the reply's session starts."""
-        playing = False
-
-        async def _cue() -> None:
-            nonlocal playing
-            await asyncio.sleep(_BACKCHANNEL_MS / 1000.0)
-            playing = True
-            await self._play_thinking_cue(node_id)
-
-        cue_task = asyncio.create_task(_cue())
+        session closes cleanly before the reply's session starts. ``started_at``
+        (the wait-session start) anchors the first rung so STT latency doesn't
+        push it later. ``cues=False`` runs the stage WITHOUT the ladder — a
+        mid-dialog follow-up turn, where a canned "Working on it." between the
+        user's answer and Kenzy's next line breaks the conversational rhythm."""
+        if not cues:
+            return await coro
+        ladder = _CueLadder(self, node_id, started_at=started_at)
         try:
             return await coro
         finally:
-            if playing:
-                try:
-                    await cue_task
-                except Exception:  # noqa: BLE001 — cue is best-effort
-                    pass
-            else:
-                cue_task.cancel()
+            await ladder.finish()
 
     async def _maybe_hold_floor(
         self, node_id: str, hold: bool, *, cue: bool = False, for_ask: bool = False
@@ -2911,6 +3167,7 @@ class TranscribingServer(AudioServer):
             "capture": reply.ask_capture,
             "origin_node": origin_node,
             "origin_room": origin_room,
+            "busy_cues": reply.ask_busy_cues,
         }
         # Ringback at the origin while the question travels (node stops it on
         # the next TTS / connect / wake). Best-effort.
@@ -3162,6 +3419,8 @@ class TranscribingServer(AudioServer):
         speaker: str | None = None,
         node_id: str | None = None,
         identity: Identity | None = None,
+        started_at: float | None = None,
+        cues: bool = True,
     ) -> tuple[LlmReply, _StreamSpeech] | None:
         """Streaming pipeline (4.4): POST /process/stream and SPEAK complete
         sentences while the model is still writing — the whole point of the era.
@@ -3188,29 +3447,15 @@ class TranscribingServer(AudioServer):
             text, room_id, session_id, speaker, node_id, identity, "voice"
         )
 
-        # Backchannel: cue if no audio has started by the threshold.
-        cue_playing = False
-
-        async def _cue() -> None:
-            nonlocal cue_playing
-            await asyncio.sleep(_BACKCHANNEL_MS / 1000.0)
-            cue_playing = True
-            await self._play_thinking_cue(node_id)
-
-        cue_task = asyncio.create_task(_cue())
-
-        async def _first_audio() -> None:
-            # Let a mid-play cue finish (its session must close before ours
-            # opens); a still-pending timer is simply disarmed.
-            if cue_playing:
-                try:
-                    await cue_task
-                except Exception:  # noqa: BLE001
-                    pass
-            else:
-                cue_task.cancel()
-
-        speech = _StreamSpeech(self, node_id, session_id, on_first_audio=_first_audio)
+        # Processing-cue ladder: escalating acks while no reply audio has
+        # started — first audio finishes/disarms it (time-to-FIRST-AUDIO here:
+        # a fast first sentence suppresses cues a slow buffered reply earns).
+        # started_at anchors the first rung to the wait start (pre-STT).
+        # cues=False (a mid-dialog follow-up) runs with no ladder at all.
+        ladder = _CueLadder(self, node_id, started_at=started_at) if cues else None
+        speech = _StreamSpeech(
+            self, node_id, session_id, on_first_audio=ladder.finish if ladder else None
+        )
         buf = ""  # delta text not yet spoken
         reply: LlmReply | None = None
         saw_event = False  # any body event ⇒ tools may have run llm-side
@@ -3284,16 +3529,12 @@ class TranscribingServer(AudioServer):
             # buffered could actuate twice. Honest failure, like a buffered 500.
             raise
         finally:
-            if not cue_task.done():
-                if cue_playing:
-                    # Mid-play cue: let the short clip finish so its tts session
-                    # closes cleanly (a bare cancel would orphan the session).
-                    try:
-                        await cue_task
-                    except Exception:  # noqa: BLE001 — cue is best-effort
-                        pass
-                else:
-                    cue_task.cancel()
+            # Idempotent (first audio may already have finished it). On the
+            # buffered-fallback exits this stops the ladder before the buffered
+            # path starts its own — a mid-play cue still closes cleanly (a bare
+            # cancel would orphan its tts session). None ⇒ cues suppressed.
+            if ladder is not None:
+                await ladder.finish()
         if reply is None:
             if speech.spoken:
                 # Clean EOF without an end event: what was heard is the record.
@@ -4318,9 +4559,13 @@ class TranscribingServer(AudioServer):
             log.error("TTS synth failed: %s", exc)
             return None
 
-    async def _stream_pcm(self, node_id: str, pcm: bytes, *, alert: bool = False) -> None:
+    async def _stream_pcm(
+        self, node_id: str, pcm: bytes, *, alert: bool = False, cue: bool = False
+    ) -> None:
         sid = str(uuid.uuid4())
-        if not await self.send_tts_start(node_id, sid, sample_rate=24000, channels=1, alert=alert):
+        if not await self.send_tts_start(
+            node_id, sid, sample_rate=24000, channels=1, alert=alert, cue=cue
+        ):
             return
         for i in range(0, len(pcm), self._tts_chunk_size):
             if not await self.send_tts_frame(node_id, pcm[i : i + self._tts_chunk_size]):

@@ -33,6 +33,11 @@ def _bare_player() -> _SoundPlayer:
     p._interrupt = False
     p._alert = False
     p._pending_alert = False
+    p._loop = False
+    p._loop_left = 0
+    p._overlay_backup = None
+    p._overlay_next = None
+    p._sample_rate = 24000
     sample = np.full((4, 1), 10000, dtype=np.int16)
     p._audio = sample
     p._chime = sample

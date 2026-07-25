@@ -24,12 +24,14 @@ const TYPES = {
   sound_connect: "str",
   sound_disconnect: "str",
   sound_ringback: "str",
-  // Timer/alarm tones + the failure/thinking cues: streamed by the SERVER, so
+  // Timer/alarm tones + the failure/processing cues: streamed by the SERVER, so
   // they apply live (deliberately not in RESTART_KEYS, unlike node-played sounds).
+  // The processing cues are POOLS (lists): one clip is picked at random per play.
   sound_timer: "str",
   sound_alarm: "str",
   sound_error: "str",
-  sound_thinking: "str",
+  sound_thinking: "list",
+  sound_working: "list",
   // Declared hardware capability (can't be detected): false ⇒ half-duplex room —
   // wake ignored during playback; intercom and alarm ring loops disabled.
   hardware_aec: "bool",
@@ -71,6 +73,14 @@ const DEFAULTS = {
   sound_ringback: "ringback.wav",
   sound_dialog_end: "",
   sound_thinking: "thinking.wav",
+  sound_working: "working.wav",
+};
+
+// Per-key labels for "list" fields (wakeword_models predates the cue pools).
+const LIST_LABELS = {
+  wakeword_models: { placeholder: "path to model", add: "+ Add model" },
+  sound_thinking: { placeholder: "sound file", add: "+ Add sound" },
+  sound_working: { placeholder: "sound file", add: "+ Add sound" },
 };
 
 export function ConfigView({ node, onBack }) {
@@ -107,7 +117,8 @@ export function ConfigView({ node, onBack }) {
     for (const [key, val] of Object.entries({ ...over, ...extra })) {
       if (key === "room_id") continue; // server-managed, set via the room field
       if (TYPES[key] === "list") {
-        const arr = (val || []).map((s) => s.trim()).filter(Boolean);
+        const raw = Array.isArray(val) ? val : val ? [String(val)] : [];
+        const arr = raw.map((s) => s.trim()).filter(Boolean);
         if (arr.length) config[key] = arr;
       } else if (TYPES[key] === "num" || TYPES[key] === "range") {
         // Number/range fields hold a raw string while editing (so decimals like
@@ -218,13 +229,16 @@ export function ConfigView({ node, onBack }) {
         <option value="false" selected=${cur === false}>off</option>
       </select>`;
     } else if (t === "list") {
-      const items = set ? cur : [];
+      // A legacy single-string value (the cue keys accept both) edits as a
+      // one-item list.
+      const items = set ? (Array.isArray(cur) ? cur : [String(cur)]) : [];
+      const labels = LIST_LABELS[k] || { placeholder: "value", add: "+ Add" };
       const update = (next) => setKey(k, next.length ? next : undefined);
       input = html`<div class="list-edit">
         ${items.map(
           (item, i) => html`
             <div class="list-item" key=${i}>
-              <input disabled=${!info.controls} value=${item} placeholder="path to model"
+              <input disabled=${!info.controls} value=${item} placeholder=${labels.placeholder}
                 onInput=${(e) => update(items.map((v, j) => (j === i ? e.target.value : v)))} />
               <button class="list-x btn-ghost" disabled=${!info.controls} title="Remove"
                 onClick=${() => update(items.filter((_, j) => j !== i))}>×</button>
@@ -232,7 +246,7 @@ export function ConfigView({ node, onBack }) {
           `,
         )}
         <button class="list-add btn-ghost" disabled=${!info.controls}
-          onClick=${() => setKey(k, [...items, ""])}>+ Add model</button>
+          onClick=${() => setKey(k, [...items, ""])}>${labels.add}</button>
       </div>`;
     } else if (t === "range") {
       const r = RANGES[k];

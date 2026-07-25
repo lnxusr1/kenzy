@@ -74,12 +74,27 @@ _STATE_INTERCOM = "intercom"  # live two-way call: stream mic out, play peer aud
 # constant (not config): promoted to a key only on real-hardware evidence.
 _BARGE_RMS_FACTOR = 2.5
 
+# Grace window at the START of a floor-holding reply during which barge-in may
+# BUFFER (for pre-roll) but never duck or confirm: AEC needs a beat to converge
+# on the freshly-started reply audio, and until it does the residual of Kenzy's
+# OWN voice reads as speech — a false barge that cuts the question off in its
+# first frames (observed on the rig: a question clipped ~220ms in). You cannot
+# meaningfully answer a question that has barely started, so suppressing the
+# window costs nothing. Internal constant (bench-tunable, like _BARGE_RMS_FACTOR).
+_BARGE_GRACE_S = 0.7
+
 # Rate at which the server sends TTS PCM (fixed by the TTS service).
 _TTS_SERVER_RATE = 24_000
 
 # When muted, alert audio (the wake-word ready chime) still plays at this floor gain
 # so the user can hear the device acknowledge a wake word and knowingly unmute.
 _MUTED_ALERT_FLOOR = 0.4
+
+# Hard ceiling on looping one-shot playback (the waiting bed under a long
+# request). The reply/error cue always replaces the bed on a live pipeline;
+# this bound only matters when the server dies mid-request without a disconnect
+# — the bed must never loop forever in an empty room. Internal constant.
+_LOOP_MAX_S = 90.0
 
 
 def _volume_to_gain(value: Any) -> float:
@@ -368,6 +383,7 @@ class _SoundPlayer:
         chime_1d = chime.mean(axis=1).astype(np.int16) if chime.ndim > 1 else chime.astype(np.int16)
         chime_1d = _resample(chime_1d, chime_rate, sample_rate)
 
+        self._sample_rate: int = sample_rate
         self._chime: np.ndarray[Any, Any] = chime_1d.reshape(-1, 1)
         self._audio: np.ndarray[Any, Any] = self._chime  # currently queued audio
         self._pending: np.ndarray[Any, Any] = self._chime  # audio to switch to on restart
@@ -377,6 +393,20 @@ class _SoundPlayer:
         # on the next callback. Used to cut a chime/waiting sound the instant TTS is
         # ready, so a fast reply's audio always plays from the start (no clipped head).
         self._interrupt: bool = False
+        # Looping one-shot playback (4.4 presence audio: the waiting bed loops
+        # under the whole processing window instead of running dry at clip end).
+        # _loop_left bounds total loop count so a dead pipeline can't loop
+        # forever; all state is GIL-atomic ints/refs, RT-callback safe.
+        self._loop: bool = False
+        self._loop_left: int = 0
+        # Duck-under overlay (spoken cue mixed OVER the looping bed): the clean
+        # bed is parked in _overlay_backup while a mixed copy plays; the callback
+        # restores it at the next loop wrap (by then the overlay region is behind
+        # the cursor). When the cue straddles the loop seam, _overlay_next holds
+        # a head-only-mixed copy played for one wrap first — so the cue tail
+        # still plays, but the seam-start region can never replay.
+        self._overlay_backup: np.ndarray[Any, Any] | None = None
+        self._overlay_next: np.ndarray[Any, Any] | None = None
         # "alert" audio (the ready chime) stays audible when muted; TTS/stream do not.
         self._alert: bool = True
         self._pending_alert: bool = True
@@ -420,16 +450,34 @@ class _SoundPlayer:
             self._audio = self._pending
             self._alert = self._pending_alert
             self._pos = 0
-        remaining = len(self._audio) - self._pos
-        if remaining <= 0:
+        filled = 0
+        while filled < frames:
+            remaining = len(self._audio) - self._pos
+            if remaining <= 0:
+                if self._loop and self._loop_left > 0:
+                    # Looping bed: wrap in-callback (no per-loop silence gap).
+                    # Swap the overlay copies out as their regions finish so a
+                    # later wrap never replays a cue remnant (see overlay()).
+                    self._loop_left -= 1
+                    if self._overlay_next is not None:
+                        self._audio = self._overlay_next
+                        self._overlay_next = None
+                    elif self._overlay_backup is not None:
+                        self._audio = self._overlay_backup
+                        self._overlay_backup = None
+                    self._pos = 0
+                    continue
+                break
+            n = min(frames - filled, remaining)
+            outdata[filled : filled + n] = self._audio[self._pos : self._pos + n]
+            self._pos += n
+            filled += n
+        if filled == 0:
             outdata[:] = 0
             return
-        n = min(frames, remaining)
-        outdata[:n] = self._audio[self._pos : self._pos + n]
-        if n < frames:
-            outdata[n:] = 0
+        if filled < frames:
+            outdata[filled:] = 0
             self._restart = False  # discard restart queued while audio was playing
-        self._pos += n
         self._apply_gain(outdata, alert=self._alert)
 
     def _apply_gain(self, outdata: np.ndarray[Any, Any], alert: bool) -> None:
@@ -451,12 +499,17 @@ class _SoundPlayer:
 
     def play(self) -> None:
         """Play the chime (alert audio — stays audible when muted)."""
+        self._clear_loop()
         self._pending = self._chime
         self._pending_alert = True
         self._restart = True
 
     def play_pcm(
-        self, audio: np.ndarray[Any, Any], interrupt: bool = False, alert: bool = False
+        self,
+        audio: np.ndarray[Any, Any],
+        interrupt: bool = False,
+        alert: bool = False,
+        loop: bool = False,
     ) -> None:
         """Play arbitrary int16 mono PCM at _TTS_SAMPLE_RATE (honors mute unless
         ``alert`` — alert audio, e.g. a doorbell chime, plays at the muted floor).
@@ -465,12 +518,79 @@ class _SoundPlayer:
         very next callback (from the start), rather than waiting for the current
         sound to drain — a single atomic swap, so a concurrently-queued chime can't
         wedge between an abort and this call and clip the new audio's head.
+
+        With ``loop=True`` the clip repeats seamlessly (the waiting bed under a
+        long-running request) until replaced/aborted, bounded by _LOOP_MAX_S so a
+        dead pipeline can never loop forever. Any other playback call clears the
+        loop — a reply, chime, or stream always wins.
         """
+        self._clear_loop()
+        if loop and len(audio):
+            dur = max(len(audio) / float(self._sample_rate), 0.1)
+            self._loop_left = max(int(_LOOP_MAX_S / dur), 0)
+            self._loop = self._loop_left > 0
         self._pending = audio.reshape(-1, 1)
         self._pending_alert = alert
         if interrupt:
             self._interrupt = True
         self._restart = True
+
+    def _clear_loop(self) -> None:
+        """Drop looping + overlay state (GIL-atomic writes, RT-safe)."""
+        self._loop = False
+        self._loop_left = 0
+        self._overlay_backup = None
+        self._overlay_next = None
+
+    @property
+    def looping(self) -> bool:
+        """A looping bed is the current one-shot source (overlay() is valid)."""
+        return self._loop and not self._streaming
+
+    def overlay(
+        self, cue: np.ndarray[Any, Any], duck: float = 0.25, lead: int = 2400
+    ) -> bool:
+        """Mix ``cue`` (int16 mono at the player rate) OVER the looping bed —
+        the bed ducks to ``duck`` underneath and continues at full level after.
+
+        Main-thread pre-mix, zero RT-callback surgery: build a mixed copy of the
+        bed array and atomically swap the reference (same length, so the RT
+        cursor stays valid); the callback swaps the clean bed back in at the
+        next loop wrap. ``lead`` samples (~0.1 s) of headroom keep the mix ahead
+        of the moving cursor. Returns False when there is no looping bed to mix
+        over (caller falls back to plain playback)."""
+        if not self.looping or self._pos >= len(self._audio):
+            return False
+        base = self._overlay_backup if self._overlay_backup is not None else self._audio
+        bed = base.reshape(-1)
+        cue_1d = np.ascontiguousarray(cue, dtype=np.int16).reshape(-1)
+        if not len(cue_1d) or len(cue_1d) >= len(bed):
+            return False  # cue longer than the bed — overlay bookkeeping breaks down
+        start = (int(self._pos) + lead) % len(bed)
+        idx = (start + np.arange(len(cue_1d))) % len(bed)
+        mixed32 = bed.astype(np.int32).copy()
+        mixed32[idx] = (bed[idx].astype(np.int32) * duck).astype(np.int32) + cue_1d.astype(
+            np.int32
+        )
+        mixed = np.clip(mixed32, -32768, 32767).astype(np.int16).reshape(-1, 1)
+        if start + len(cue_1d) <= len(bed):
+            head_mixed = None  # cue fits before the seam — clean bed returns next wrap
+        else:
+            # Straddles the loop seam: after the wrap, one pass of a head-only
+            # mixed copy plays the cue tail; the clean bed returns the wrap after.
+            n_tail = (start + len(cue_1d)) - len(bed)
+            head32 = bed.astype(np.int32).copy()
+            head32[:n_tail] = (bed[:n_tail].astype(np.int32) * duck).astype(
+                np.int32
+            ) + cue_1d[-n_tail:].astype(np.int32)
+            head_mixed = np.clip(head32, -32768, 32767).astype(np.int16).reshape(-1, 1)
+        # Publication order matters (GIL-atomic refs, no lock): park the clean
+        # bed + the seam copy BEFORE the mixed array goes live, so a wrap can
+        # never observe the overlay without its restore chain.
+        self._overlay_backup = base
+        self._overlay_next = head_mixed
+        self._audio = mixed
+        return True
 
     def set_volume(self, volume: float) -> None:
         """Set output gain (0.0–1.0); clamped."""
@@ -489,12 +609,14 @@ class _SoundPlayer:
 
     def abort(self) -> None:
         """Stop playback immediately."""
+        self._clear_loop()
         self._restart = False
         self._interrupt = False
         self._pos = len(self._audio)
 
     def start_stream(self) -> None:
         """Switch to live streaming mode (a fresh, empty ring buffer)."""
+        self._clear_loop()
         self._restart = False
         self._interrupt = False
         self._ring.clear()
@@ -511,6 +633,7 @@ class _SoundPlayer:
         sound a streamed reply interrupted) is discarded FIRST — leaving stream
         mode must fall to silence, never resume a stale clip. (The buffered path
         never had this hazard: play_pcm(interrupt=True) replaces the clip.)"""
+        self._clear_loop()  # a looping bed must not resurrect either
         self._pos = len(self._audio)  # before the mode flip — no stale callback tick
         self._streaming = False
         self._ring.clear()
@@ -646,6 +769,7 @@ class NodeClient:
         self._tts_alert: bool = False  # current TTS session is alert audio (beats mute)
         self._tts_stream: bool = False  # 4.4: play this session's frames as they arrive
         self._tts_stream_started: bool = False  # first streamed frame fed (for the log)
+        self._tts_cue: bool = False  # 4.4: processing cue — duck-mix over the waiting bed
         self._tts_task: asyncio.Task[None] | None = None
 
         self._state: str = _STATE_IDLE
@@ -675,6 +799,9 @@ class NodeClient:
         self._barge_run: int = 0
         self._barge_buf: list[np.ndarray[Any, np.dtype[np.int16]]] = []
         self._barge_ducked: bool = False
+        # When the floor-holding reply's AUDIO started playing (monotonic); the
+        # _BARGE_GRACE_S window is measured from here. 0.0 = no reply audio yet.
+        self._barge_armed_at: float = 0.0
         # Set when the server signals a multi-turn dialog ended while TTS is still
         # playing; the end-of-dialog cue plays once that playback completes.
         self._end_dialog_after_tts: bool = False
@@ -910,6 +1037,17 @@ class NodeClient:
         if len(self._barge_buf) > self._dialog_onset_frames + 8:
             self._barge_buf.pop(0)
 
+        # Grace: until the reply audio has been playing for _BARGE_GRACE_S, only
+        # BUFFER (a real early answer near the end of grace is still in pre-roll)
+        # — no ducking, no confirming. AEC hasn't converged on the reply yet, so
+        # detecting here catches Kenzy's own voice as a false barge. armed_at==0
+        # means no reply audio has started (e.g. buffered collection); wait.
+        if (
+            not self._barge_armed_at
+            or time.monotonic() - self._barge_armed_at < _BARGE_GRACE_S
+        ):
+            return
+
         score = self._dialog_vad_score(flat)
         if score is None:  # no VAD model → raised-energy fallback
             rms = float(np.sqrt(np.mean(flat.astype(np.float32) ** 2)))
@@ -967,6 +1105,7 @@ class NodeClient:
     def _reset_barge(self) -> None:
         self._barge_run = 0
         self._barge_buf = []
+        self._barge_armed_at = 0.0  # next reply's grace re-arms on its first audio
         if self._barge_ducked and self._player is not None:
             self._player.unduck()
         self._barge_ducked = False
@@ -1037,7 +1176,10 @@ class NodeClient:
         # to TTS on the cmd loop; starting the waiting sound now would queue it behind
         # (or clip) the reply. _begin_tts/_begin_streaming move us out of IDLE.
         if self._state == _STATE_IDLE and self._player and self._waiting_audio is not None:
-            self._player.play_pcm(self._waiting_audio)
+            # Looping bed (4.4): repeats under the whole processing window (a
+            # long request outlives a one-shot clip); spoken cues duck-mix over
+            # it; the reply/error/stream start replaces it (loop cleared).
+            self._player.play_pcm(self._waiting_audio, loop=True)
 
     # ------------------------------------------------------------------
     # TTS helpers
@@ -1065,8 +1207,11 @@ class NodeClient:
         await self._cancel_tts_task()
         if self._player is not None and self._tts_stream:
             self._player.stop_stream()
+        if self._player is not None and self._player.looping:
+            self._player.abort()  # a looping bed must not outlive its connection
         self._tts_stream = False
         self._tts_stream_started = False
+        self._tts_cue = False
         self._end_dialog_after_tts = False
         if self._state == _STATE_TTS:
             self._state = _STATE_IDLE
@@ -1079,6 +1224,7 @@ class NodeClient:
         channels: int,
         alert: bool = False,
         stream: bool = False,
+        cue: bool = False,
     ) -> None:
         # A prior streamed session's drain task may still be finishing — it
         # must not outlive into THIS session (it would stop the new ring and
@@ -1099,16 +1245,20 @@ class NodeClient:
         # live ring-buffer path) instead of collecting until tts_end.
         self._tts_stream = stream
         self._tts_stream_started = False
+        # 4.4 processing cue ("Working on it."): collected like a buffered reply, then
+        # duck-mixed OVER the looping waiting bed at tts_end instead of cutting it.
+        self._tts_cue = cue
         if stream and self._player is not None:
             self._player.start_stream()  # cuts the waiting sound, like interrupt=True
         self._state = _STATE_TTS
         self._session_id = session_id
         log.info(
-            "[%s] TTS started (rate=%d ch=%d%s)",
+            "[%s] TTS started (rate=%d ch=%d%s%s)",
             session_id[:8],
             sample_rate,
             channels,
             " streamed" if stream else "",
+            " cue" if cue else "",
         )
 
     async def _end_tts(self, reason: str = "complete") -> None:
@@ -1137,10 +1287,22 @@ class NodeClient:
             audio = np.frombuffer(b"".join(frames), dtype=np.int16)
             if self._tts_sample_rate != self._playback_rate:
                 audio = _resample(audio, self._tts_sample_rate, self._playback_rate)
+            if self._tts_cue and self._player is not None and self._player.overlay(audio):
+                # Processing cue over a looping bed: the cue is queued INTO the
+                # bed (ducked underneath, bed continues after) — nothing to wait
+                # for, so this session is over now. The bed itself keeps playing
+                # through the IDLE wait exactly like the plain waiting sound.
+                self._tts_cue = False
+                self._state = _STATE_IDLE
+                self._session_id = None
+                log.info("Processing cue mixed over waiting bed")
+                return
+            self._tts_cue = False
             if self._player:
                 # Atomic interrupt: cut the waiting sound and start TTS from the
                 # first sample in one swap, so a fast reply is never clipped.
                 self._player.play_pcm(audio, interrupt=True, alert=self._tts_alert)
+            self._barge_armed_at = time.monotonic()  # reply audio live (barge grace)
             # Stay in TTS state while audio plays; _tts_wait_done transitions to IDLE.
             self._tts_task = asyncio.create_task(self._tts_wait_done(), name="tts_wait")
             log.info("TTS playback started")
@@ -1180,6 +1342,7 @@ class NodeClient:
         finally:
             self._tts_stream = False
             self._tts_stream_started = False
+            self._tts_cue = False
             self._state = _STATE_IDLE
             self._session_id = None
             self._tts_task = None
@@ -1219,6 +1382,7 @@ class NodeClient:
             self._player.abort()
         self._tts_stream = False
         self._tts_stream_started = False
+        self._tts_cue = False
         # Discard this aborted session's undelivered frames so they can't leak into
         # the next session (session start must never drain — see _begin_tts).
         while not self._tts_q.empty():
@@ -1546,6 +1710,7 @@ class NodeClient:
                         self._player.feed(audio)
                         if not self._tts_stream_started:
                             self._tts_stream_started = True
+                            self._barge_armed_at = time.monotonic()  # reply audio live
                             log.info("TTS playback started (streamed)")
                     else:
                         try:
@@ -1580,6 +1745,7 @@ class NodeClient:
                     channels,
                     alert=bool(msg.get("alert")),
                     stream=bool(msg.get("stream")),
+                    cue=bool(msg.get("cue")),
                 )
 
             elif mtype == protocol.MSG_TTS_END:

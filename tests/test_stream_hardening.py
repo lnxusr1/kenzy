@@ -53,9 +53,17 @@ class _FakePlayer:
 
     def abort(self) -> None:
         self.aborted = True
+        self.looping = False
 
-    def play_pcm(self, audio: Any, interrupt: bool = False, alert: bool = False) -> None:
-        pass
+    def play_pcm(
+        self, audio: Any, interrupt: bool = False, alert: bool = False, loop: bool = False
+    ) -> None:
+        self.looping = loop
+
+    def overlay(self, cue: Any, duck: float = 0.25, lead: int = 2400) -> bool:
+        return False  # no bed in this harness — cue falls back to play_pcm
+
+    looping = False
 
     @property
     def stream_pending(self) -> bool:
@@ -233,10 +241,10 @@ def _stream_server(monkeypatch, resp: _FakeStreamResp) -> TranscribingServer:
 
     monkeypatch.setattr(srv, "_synthesize", fake_synth)
 
-    async def no_cue(node_id: str) -> None:
+    async def no_cue(node_id: str, key: str, default: str) -> None:
         pass
 
-    monkeypatch.setattr(srv, "_play_thinking_cue", no_cue)
+    monkeypatch.setattr(srv, "_play_cue", no_cue)
     monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: _FakeHttpxClient(resp))
     return srv
 

@@ -133,6 +133,15 @@ function connectWS() {
         _memorySubs.forEach((fn) => fn());
       } else if (m.type === "calibration") {
         _calibSubs.forEach((fn) => fn(m));
+      } else if (m.type === "cues_result") {
+        // Spoken-cue regeneration outcome (Settings card); toast either way.
+        notify(
+          m.ok
+            ? `Regenerated ${m.count} spoken cue${m.count === 1 ? "" : "s"} in the current voice.` +
+                (m.persisted ? "" : " (Applied live only — no writable server config.)")
+            : "Cue regeneration failed: " + (m.error || "see server logs"),
+          m.ok ? "ok" : "err",
+        );
       } else if (
         m.type === "upgrade_progress" ||
         m.type === "upgrade_result" ||

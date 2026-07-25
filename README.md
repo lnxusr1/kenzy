@@ -167,6 +167,7 @@ Included skills:
 | `volume.py` | Set / adjust a room's playback volume or mute |
 | `enroll.py` | Voice speaker enrollment ("enroll me as Alice") |
 | `random_tools.py` | Coin flip, dice, random number, pick from list |
+| `knock_knock.py` | Knock-knock jokes, both directions — she tells them and plays along with yours |
 | `about.py` | Reports the installed Kenzy version |
 
 ### Adding a skill

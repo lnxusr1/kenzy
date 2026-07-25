@@ -76,6 +76,11 @@ class AskChannel:
         # kitchen." — may be empty).
         self.room: str | None = None
         self.announce: str = ""
+        # Whether the server's processing-cue ladder ("Working on it." …) may
+        # speak over THIS question's answer turn while the skill resumes. On by
+        # default (a skill can do real work after the answer); conversational
+        # skills whose turnarounds must stay clean (knock-knock!) opt out.
+        self.busy_cues: bool = True
         self.asked = asyncio.Event()
         self.reply_fut: asyncio.Future[Any] | None = None
         # Shared mutable request state, captured at run() time so the handler
@@ -98,6 +103,7 @@ async def ask(
     cue: bool = False,
     room: str | None = None,
     announce: str = "",
+    busy_cues: bool = True,
 ) -> Any:
     """Speak ``prompt``, park until the user's answer arrives, return it.
 
@@ -107,6 +113,10 @@ async def ask(
     lost-server backstop) — the node's reply window itself stays
     ``dialog_no_speech_timeout_ms``. ``capture="audio"`` returns the raw
     captured PCM bytes instead of a transcript (see :func:`ask_audio`).
+    ``busy_cues=False`` keeps the server's processing-cue ladder ("Working on
+    it." …) silent over this answer's turnaround — for skills conducting a
+    tight conversation where an interjected status phrase would break the
+    rhythm; leave it on when real work follows the answer.
     """
     ch = _CHANNEL.get()
     if ch is None:
@@ -120,6 +130,7 @@ async def ask(
     ch.cue = cue
     ch.room = (str(room).strip() or None) if room else None
     ch.announce = str(announce)
+    ch.busy_cues = bool(busy_cues)
     ch.reply_fut = loop.create_future()
     ch.asked.set()
     try:

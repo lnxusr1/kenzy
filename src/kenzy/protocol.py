@@ -253,13 +253,17 @@ def tts_start(
     channels: int = 1,
     alert: bool = False,
     stream: bool = False,
+    cue: bool = False,
 ) -> str:
     """``alert=True`` marks alert audio (doorbell chimes): a muted node still
     plays it at the audible floor, like the wake-word ready chime. ``stream=True``
     (4.4) asks the node to play frames AS THEY ARRIVE (live ring-buffer playback)
     instead of collecting until ``tts_end`` — the sentence-streamed reply path.
-    Older nodes ignore the extra keys (the chime honors mute; a streamed reply
-    plays whole at tts_end — correct, just not early)."""
+    ``cue=True`` (4.4) marks a short processing acknowledgement ("Working on it."): the
+    node mixes it OVER a looping waiting bed (bed ducks underneath and continues)
+    instead of hard-cutting it; with no bed active it plays normally. Older
+    nodes ignore the extra keys (the chime honors mute; a streamed reply plays
+    whole at tts_end; a cue interrupts the bed — correct, just less polished)."""
     payload: dict[str, Any] = {
         "type": MSG_TTS_START,
         "session_id": session_id,
@@ -270,6 +274,8 @@ def tts_start(
         payload["alert"] = True
     if stream:
         payload["stream"] = True
+    if cue:
+        payload["cue"] = True
     return json.dumps(payload)
 
 

@@ -154,7 +154,7 @@ export const NODE_HELP = {
   log_capture_level: "How deep the dashboard log viewer captures.",
   // Node-played sounds (bundled name or a path on the NODE; restart to apply).
   sound_ready: "Chime when the wake word fires. Plays even when muted.",
-  sound_waiting: "Sound while a request is being processed.",
+  sound_waiting: "Sound while a request is being processed. Loops until the reply; spoken cues duck over it.",
   sound_connect: "Chime when an intercom call connects.",
   sound_disconnect: "Chime when an intercom call ends.",
   sound_ringback: "Ring loop while calling another room.",
@@ -163,7 +163,8 @@ export const NODE_HELP = {
   sound_timer: "Lead-in tone before a timer announcement. Empty = voice only.",
   sound_alarm: "Lead-in tone for each alarm ring; still plays if speech is down. Empty = voice only.",
   sound_error: "Spoken apology when a request fails. Pre-recorded, so it works mid-outage. Empty = silent.",
-  sound_thinking: "Spoken “On it.” when an answer is taking a while. Empty = never.",
+  sound_thinking: "Spoken “Working on it.” ~5s into a slow answer, over the waiting sound. Add several for variety — one plays at random. Empty = never.",
+  sound_working: "Spoken “Still working on it.” ~8s after the first cue ends, if the answer still hasn't started. Also a random pool. Empty = never.",
 };
 
 // Node config grouped into logical sections (order preserved). Keys not listed
@@ -179,7 +180,7 @@ export const NODE_GROUPS = [
     "Dialog",
     ["hardware_aec", "dialog_no_speech_timeout_ms", "dialog_onset_ms", "dialog_onset_vad_threshold"],
   ],
-  ["Sounds", ["sound_ready", "sound_waiting", "sound_connect", "sound_disconnect", "sound_ringback", "sound_dialog_end", "sound_timer", "sound_alarm", "sound_error", "sound_thinking"]],
+  ["Sounds", ["sound_ready", "sound_waiting", "sound_connect", "sound_disconnect", "sound_ringback", "sound_dialog_end", "sound_timer", "sound_alarm", "sound_error", "sound_thinking", "sound_working"]],
   ["Playback", ["volume"]],
   ["Logging", ["log_level", "log_capture_level", "verbose"]],
 ];

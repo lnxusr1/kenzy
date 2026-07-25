@@ -95,6 +95,13 @@ skills:
 
   disabled: []
 
+  # Test-only hooks — OFF by default. Enabling this activates the `debug_delay`
+  # skill ("run a test for N seconds"), which blocks the pipeline for N seconds
+  # so slow-response behavior (the processing-cue ladder, floor holds) can be
+  # forced deterministically. Leave this off in any real deployment.
+  # testing:
+  #   enabled: true
+
   # Per-skill configuration
   # weather: no per-skill keys — the default location is the top-level `location:`
   # block above (city/state, with optional latitude/longitude). Output is in °F.
