@@ -552,6 +552,58 @@ class Dashboard:
             path.unlink()
         log.info("Wrote server override %s (%d key(s))", path, len(patch))
 
+    def _persist_node_default_sounds(self, keys: dict[str, Any]) -> bool:
+        """Persist regenerated cue sound-key values under ``node_defaults`` in the
+        server.local.yaml layer (so they survive a restart). Not routed through
+        ``_write_server_override``: these are code-derived values from the
+        regeneration action, not free-form UI input, and ``node_defaults.*`` is
+        deliberately outside the _SERVER_EDITABLE grid. Returns False when there
+        is no writable config location (live-applied only, honest about it)."""
+        import yaml
+
+        from kenzy.server.server import _server_override_path
+
+        if self._config_path is None:
+            return False
+        override = self._read_server_override()
+        for skey, value in keys.items():
+            _dotted_set(override, f"node_defaults.{skey}", value)
+        path = _server_override_path(self._config_path)
+        path.write_text(yaml.safe_dump(override, default_flow_style=False, sort_keys=True))
+        log.info("Wrote regenerated cue keys to %s", path)
+        return True
+
+    async def _do_regenerate_cues(self, connection: ServerConnection) -> None:
+        """Render the cue phrases in the current voice, persist + live-apply the
+        sound keys, and push the result event (the render outlasts request/ack)."""
+
+        async def send(payload: dict[str, Any]) -> None:
+            try:
+                await connection.send(json.dumps(payload))
+            except Exception:
+                pass
+
+        try:
+            result = await self._server.regenerate_cues()
+        except Exception as exc:
+            await send({"type": "cues_result", "ok": False, "error": str(exc)})
+            return
+        keys = result.get("keys") or {}
+        persisted = False
+        try:
+            persisted = await asyncio.to_thread(self._persist_node_default_sounds, keys)
+        except Exception as exc:
+            log.warning("could not persist regenerated cue keys: %s", exc)
+        self._server.apply_node_defaults(keys)  # effective now, fleet-wide
+        await send(
+            {
+                "type": "cues_result",
+                "ok": True,
+                "count": result.get("count", 0),
+                "persisted": persisted,
+            }
+        )
+
     def _settings_state(self) -> dict[str, Any]:
         """Read-only server/dashboard info shown on the Settings page."""
         from kenzy import installed_version
@@ -591,6 +643,9 @@ class Dashboard:
             # Names (never values) of the env secrets currently set in the config
             # home's .env, for the write-only API-keys editor's set/not-set badges.
             "env_keys": self._env_key_names(),
+            # Spoken-cue phrases + current sound-key values (the "Regenerate
+            # spoken cues" card; phrases are edited via `cues:` in server.yaml).
+            "cues": self._server.cue_texts_state(),
         }
 
     @staticmethod
@@ -2104,6 +2159,14 @@ class Dashboard:
             await ack(True)
             log.info("Dashboard requested a server restart")
             asyncio.get_running_loop().call_later(0.8, self._server.restart_server)
+        elif mtype == "regenerate_cues":
+            # Re-render the spoken cues (error/thinking/working) through the
+            # configured TTS voice — follows a voice change with one click.
+            if not self._dcfg.controls:
+                return await ack(False, "controls are disabled (set dashboard.controls: true)")
+            # Accept now; N phrase renders can outlast the request/ack timeout.
+            await ack(True)
+            asyncio.create_task(self._do_regenerate_cues(connection))
         elif mtype == "upgrade_server":
             if not self._dcfg.controls:
                 return await ack(False, "controls are disabled (set dashboard.controls: true)")

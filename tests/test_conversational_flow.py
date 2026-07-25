@@ -39,11 +39,16 @@ class _Player:
     def play(self) -> None:
         self.chimes += 1
 
-    def play_pcm(self, audio: Any, interrupt: bool = False, alert: bool = False) -> None:
+    def play_pcm(
+        self, audio: Any, interrupt: bool = False, alert: bool = False, loop: bool = False
+    ) -> None:
         self.pcm_plays.append(audio)
+        self.looping = loop
+
+    looping = False
 
     def abort(self) -> None:
-        pass
+        self.looping = False
 
 
 def _client(**cfg: Any) -> tuple[NodeClient, _WS, _Player]:
@@ -426,8 +431,10 @@ class _DuckPlayer(_Player):
         self.aborted = True
 
 
-def _barge_client(**cfg):
-    from kenzy.node.client import NodeClient
+def _barge_client(*, armed: bool = True, **cfg):
+    import time as _time
+
+    from kenzy.node.client import _BARGE_GRACE_S, NodeClient
 
     c = NodeClient({"node_id": "n1", "room_id": "office", "hardware_aec": True, **cfg})
     ws = _WS()
@@ -437,6 +444,9 @@ def _barge_client(**cfg):
     c._playback_rate = 24000
     c._state = _STATE_TTS
     c._capture_after_prompt = True  # a floor-holding reply is playing
+    # Past the barge grace by default, so detection is live; armed=False leaves
+    # the reply "just started" (grace active — no duck/confirm yet).
+    c._barge_armed_at = 0.0 if not armed else _time.monotonic() - _BARGE_GRACE_S - 1.0
     return c, ws, p
 
 
@@ -473,6 +483,44 @@ async def test_barge_false_alarm_unducks_and_keeps_playing(monkeypatch):
     assert p.duck_factor == 1.0
     assert c._state == _STATE_TTS
     assert not any(m.get("type") == protocol.MSG_AUDIO_START for m in _texts(ws))
+
+
+async def test_barge_grace_suppresses_onset_false_fire(monkeypatch):
+    # Founder rig report (2026-07-24): a question was cut off ~220ms in by a
+    # false barge — AEC hadn't converged on the reply, so Kenzy's own voice read
+    # as speech. During the grace window, even sustained "speech" must NOT duck
+    # or confirm (it's her own residual), only buffer for pre-roll.
+    import time as _time
+
+    c, ws, p = _barge_client(armed=False)  # reply audio just started
+    c._barge_armed_at = _time.monotonic()  # grace clock starts now
+    monkeypatch.setattr(c, "_dialog_vad_score", lambda flat: 0.9)  # "speech"
+
+    for _ in range(c._dialog_onset_frames + 5):
+        await c._handle_barge_frame(FRAME)
+    # No duck, no confirm, reply still playing — the false onset was ignored.
+    assert p.duck_factor == 1.0
+    assert p.aborted is False
+    assert c._state == _STATE_TTS
+    assert not any(m.get("type") == protocol.MSG_AUDIO_START for m in _texts(ws))
+    # ...but the frames were buffered, so a real answer at grace-end isn't lost.
+    assert len(c._barge_buf) > 0
+
+
+async def test_barge_confirms_after_grace_window(monkeypatch):
+    # Once the grace has elapsed, a genuine sustained answer confirms as before.
+    import time as _time
+
+    from kenzy.node.client import _BARGE_GRACE_S
+
+    c, ws, p = _barge_client(armed=False)
+    c._barge_armed_at = _time.monotonic() - _BARGE_GRACE_S - 0.1  # grace already past
+    monkeypatch.setattr(c, "_dialog_vad_score", lambda flat: 0.9)
+
+    for _ in range(c._dialog_onset_frames + 1):
+        await c._handle_barge_frame(FRAME)
+    assert p.aborted is True
+    assert c._state == _STATE_STREAMING
 
 
 async def test_barge_disabled_without_aec(monkeypatch):

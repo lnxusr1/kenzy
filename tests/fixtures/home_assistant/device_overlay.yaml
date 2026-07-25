@@ -1,0 +1,35 @@
+# Home Assistant device overlay — hand-written shortcuts and policy.
+#
+# The device *inventory* comes from device_ids.yaml / device_ids.json (and, in a
+# later step, dynamic HA discovery). This file only adds the human layer that has
+# no home in HA itself:
+#
+#   aliases:  spoken name(s) -> device code (or a list of codes for a group).
+#             Room-scoped, so the same nickname can differ per room. Resolved
+#             before fuzzy matching, so use these for bare/ambiguous words.
+#   defaults: per-type curated subset for a bare ACTIVATE command ("turn on the
+#             lights"). A bare DEACTIVATE ("turn off the lights") always means
+#             all of that type, ignoring this list.
+#   exclude:  codes that never participate in a bare group command — addressable
+#             only when named directly ("only when called directly").
+#
+# These examples were lifted from the inline comments in device_ids.yaml.
+
+rooms:
+  master_bedroom:
+    aliases:
+      "lamp": mb_chair_lamp                 # bare "lamp" in here = the chair lamp
+      "light": mb_ceiling_fan_light         # bare "light" = the ceiling fan light
+      "nightstand lamp": mb_nicki_nightstand_lamp
+      "nickis lamp": mb_nicki_nightstand_lamp
+      "nickis nightstand": mb_nicki_nightstand_lamp
+    exclude:
+      - mb_hallway_light                    # rarely used; only when called directly
+
+  kitchen:
+    exclude:
+      - kt_sink_light                       # not normally used; only when called directly
+
+  loft:
+    aliases:
+      "landing light": lf_landing_light

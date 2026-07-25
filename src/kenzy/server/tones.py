@@ -32,6 +32,12 @@ BUNDLED_DIR = Path(__file__).resolve().parent.parent / "node" / "sounds"
 _cache: dict[str, bytes | None] = {}
 
 
+def clear_cache() -> None:
+    """Forget cached tone PCM — cue regeneration rewrites files at the SAME
+    paths, so the cache would otherwise keep serving the previous voice."""
+    _cache.clear()
+
+
 def load_tone(spec: str | None) -> bytes | None:
     """Load a WAV cue as 24 kHz mono int16 PCM bytes.
 

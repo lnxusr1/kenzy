@@ -104,11 +104,13 @@ def ha(monkeypatch):
     sys.modules["home_assistant"] = mod
     spec.loader.exec_module(mod)
     mod._reset_cache()
-    # The static files are pure TEST FIXTURES now (the production fallback was
-    # retired in 3.5.1) — build the index directly from them via _index_from.
-    yaml_text = (ROOT / "data/home_assistant/device_ids.yaml").read_text()
-    device_map = json.loads((ROOT / "data/home_assistant/device_ids.json").read_text())
-    overlay_path = ROOT / "data/home_assistant/device_overlay.yaml"
+    # The static files are pure TEST FIXTURES (the production fallback was
+    # retired in 3.5.1) — they live under tests/, not the config home's data/
+    # tree, so tidying live data can't break the suite.
+    fixtures = ROOT / "tests/fixtures/home_assistant"
+    yaml_text = (fixtures / "device_ids.yaml").read_text()
+    device_map = json.loads((fixtures / "device_ids.json").read_text())
+    overlay_path = fixtures / "device_overlay.yaml"
     overlay = yaml.safe_load(overlay_path.read_text()) if overlay_path.exists() else {}
     mod._INDEX = _index_from(mod, yaml_text, device_map, overlay or {})
     mod._RESOLVER_TEXT = yaml_text

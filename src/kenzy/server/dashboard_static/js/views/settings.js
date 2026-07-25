@@ -614,6 +614,61 @@ function ApiKeys({ envKeys, controls }) {
   `;
 }
 
+// Spoken cues: the pre-recorded phrases Kenzy speaks around a request (the
+// failure apology + the processing "Working on it." / "Still working" pools). The
+// PHRASES are config (`cues:` in server.yaml); the WAVs are a cache — this
+// button re-renders every phrase through the CURRENTLY CONFIGURED TTS voice, so
+// after a voice change (or on a local-voice install hearing the bundled cues in
+// the wrong voice) one click brings the whole set in line, fleet-wide.
+const CUE_LABELS = {
+  error: "Failure apology",
+  thinking: "Processing status (~5s)",
+  working: "Still working (~8s later)",
+};
+
+function SpokenCues({ cues, controls }) {
+  const [busy, setBusy] = useState(false);
+  const texts = (cues && cues.texts) || {};
+
+  async function regenerate() {
+    setBusy(true);
+    const res = await send("regenerate_cues", {});
+    if (!res.ok) {
+      notify(res.error || "Could not start cue regeneration.", "err");
+      setBusy(false);
+      return;
+    }
+    notify("Rendering spoken cues in the current voice…");
+    // The outcome arrives as a cues_result toast; free the button shortly after.
+    setTimeout(() => setBusy(false), 4000);
+  }
+
+  return html`
+    <p class="micro">
+      Pre-recorded phrases spoken around a request (they work even when speech
+      synthesis is down). Edit the phrases via <span class="mono">cues:</span> in
+      server.yaml; regenerate to re-record them all in the current voice.
+    </p>
+    <dl class="kv">
+      ${Object.entries(CUE_LABELS).map(
+        ([kind, label]) => html`<dt>${label}</dt>
+          <dd>${((texts[kind] || []).length
+            ? texts[kind]
+            : ["—"]).map((t, i) => html`${i ? html`<br />` : ""}<span class="mono">“${t}”</span>`)}</dd>`,
+      )}
+    </dl>
+    ${controls
+      ? html`<div class="ctl-row">
+          <button class="btn" disabled=${busy || !(cues && cues.tts)}
+            title=${cues && cues.tts ? "" : "TTS service not configured"}
+            onClick=${regenerate}>${busy ? "Rendering…" : "Regenerate spoken cues"}</button>
+          <span class="micro">Uses the configured TTS voice; applies live to the whole fleet.</span>
+        </div>`
+      : html`<p class="micro">Read-only — set
+          ${" "}<span class="mono">dashboard.controls: true</span> to regenerate.</p>`}
+  `;
+}
+
 export function SettingsView({ onLogout }) {
   const [info, setInfo] = useState(null);
   const [err, setErr] = useState("");
@@ -689,6 +744,13 @@ export function SettingsView({ onLogout }) {
         <header><h2>API keys</h2><span class="rule"></span></header>
         <div class="card pad">
           <${ApiKeys} envKeys=${s.env_keys || []} controls=${s.flags && s.flags.controls} />
+        </div>
+      </section>
+
+      <section class="section">
+        <header><h2>Spoken cues</h2><span class="rule"></span></header>
+        <div class="card pad">
+          <${SpokenCues} cues=${s.cues} controls=${s.flags && s.flags.controls} />
         </div>
       </section>
 

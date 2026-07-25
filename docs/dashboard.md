@@ -415,6 +415,16 @@ takes effect on every host — you no longer maintain a separate `.env` per mach
 Requires `dashboard.controls`. Unless you've [enabled TLS](#https-optional), the
 dashboard runs over plain HTTP — enter keys from a machine on your own network.
 
+The **Spoken cues** section covers the pre-recorded phrases Kenzy speaks around a
+request — the failure apology and the processing acknowledgements ("Working on it." at ~5s,
+"Still working on it." ~8s after it, ducked over the waiting sound). The phrases are config
+(the `cues:` block in server.yaml — edit them there, add pool variants for variety) and
+the WAVs are a cache: **Regenerate spoken cues** re-records every phrase through the
+**currently configured TTS voice** into the sound library and applies the result live,
+fleet-wide. Run it after changing the TTS voice — or once on a local-voice (Kokoro)
+install, whose bundled cues were recorded with the cloud voice. A failed render leaves
+the previous set untouched. Requires `dashboard.controls` and a running TTS service.
+
 The **Updates** section compares the installed version against the latest `kenzy` release
 on PyPI and flags when one is available. It's checked lazily (only when you open Settings,
 cached ~1 hour) and degrades gracefully on an offline/air-gapped host. When an update is
