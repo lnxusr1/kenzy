@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.4.2]
+
+### Changed
+
+- **Streaming replies are on by default now.** 4.4 shipped the sentence-overlapped pipeline switched off while it soaked; it has, so `streaming.enabled` defaults to **true** and every install gets the ~11s → ~6s time-to-first-word without touching a config file. Nothing about the safety story changes: a lockbox secret still never rides a streamed preview, a provider that can't follow the streaming contract still falls back to the buffered path automatically, older nodes still play replies whole, and the wake word still cancels instantly. Set `streaming.enabled: false` in server.yaml (or from Settings) to go back to the buffered pipeline.
+
+### Fixed
+
+- **"Working on it." is no longer said twice when a streaming attempt falls back.** If the streaming endpoint hung past the five-second mark and *then* failed without producing anything, the buffered retry started the acknowledgement ladder over from the beginning — so you heard the same phrase a second time before the answer. The buffered path now continues the ladder instead of restarting it. Only reachable with streaming on, which is why it surfaced when the default flipped.
+
+- **The Settings page no longer scrolls sideways on a phone.** Four separate causes: the settings sections couldn't shrink below the widest one's natural width (so one stubborn card set the floor for every card and pushed the page past the viewport); long dotted config keys like `integrations.mqtt.discovery_prefix` overflowed their column and were silently clipped, hiding the key you were editing; the spoken-cue phrases were broken mid-word ("trouble p/rocessing") because that value style was tuned for version strings, not sentences; and the API-key picker refused to shrink below its longest key name. Verified from 320px up.
+- **Every setting now explains itself.** Some fields had a one-line description underneath and others didn't, which made the editors feel half-finished — and the Settings page was the worst of it, showing 23 bare dotted key names with no explanation at all, because the server editor had no help mechanism in the first place. All 23 server settings now carry a plain-English line, as do the log-level pair on every service, the assistant's prompts, location and news feeds, and the wake-word model field on nodes. The docs link stays for depth; the line under the field is there so you rarely need it. A test now fails the build if a new setting is added without one.
+- **Three Settings buttons had no styling at all** — they referenced a CSS class that doesn't exist, so they fell through to the browser default (on iOS, grey native pills). Regenerate spoken cues and Download backup are now proper secondary buttons, the API-key Set is a primary one, and Regenerate sits on its own line.
+
 ## [4.4.1]
 
 ### Fixed

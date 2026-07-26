@@ -358,6 +358,11 @@ button { font: inherit; cursor: pointer; }
 }
 .cfg-help { font-size: 11px; color: var(--text-dim); line-height: 1.35; }
 .cfg-key { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+/* Long dotted keys (integrations.mqtt.discovery_prefix) have no natural break
+   opportunity, so on a phone they overflowed the column and were silently
+   clipped by .cfg-grid's overflow:hidden — the operator couldn't read the key
+   they were editing. Let them wrap instead. */
+.cfg-key .mono { overflow-wrap: anywhere; }
 .applies {
   align-self: flex-start; font-family: var(--font-mono); font-size: 9px; letter-spacing: .1em;
   text-transform: uppercase; padding: 1px 6px; border-radius: 999px;
@@ -395,6 +400,9 @@ button { font: inherit; cursor: pointer; }
 .cfg-msg.err { color: var(--led-down); }
 .ctl-row { display: flex; gap: var(--s3); flex-wrap: wrap; }
 .ctl-row .btn-ghost { flex: 0 0 auto; width: auto; padding-inline: var(--s5); }
+/* An <a> styled as a button (Settings → Download backup) must not keep the
+   link underline — otherwise it reads as a hyperlink wearing a border. */
+a.btn-ghost { text-decoration: none; text-align: center; }
 .btn-ghost.danger { color: var(--led-down); border-color: color-mix(in srgb, var(--led-down) 45%, transparent); }
 .btn-ghost.danger:hover { background: color-mix(in srgb, var(--led-down) 12%, var(--panel)); color: var(--led-down); }
 .section > header .btn-ghost { width: auto; padding: 6px var(--s4); font-size: 12px; margin-left: auto; }
@@ -446,11 +454,21 @@ button { font: inherit; cursor: pointer; }
 
 /* ============================ SETTINGS ============================ */
 .settings { display: grid; gap: var(--s6); align-content: start; }
+/* Same trap as `.content > *` above: these sections are grid items, so they
+   default to min-width:auto and none of them can shrink below the WIDEST
+   section's min-content — one stubborn card pushed every card (and the page)
+   past a narrow phone viewport. */
+.settings > * { min-width: 0; }
 .card.pad { padding: var(--s5); cursor: default; }
 .card.pad:hover { transform: none; border-color: var(--border); background: var(--panel); }
 .kv { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: var(--s3) var(--s5); align-items: baseline; }
 .kv dt { color: var(--text-faint); font-size: 12px; letter-spacing: .04em; }
-.kv dd { margin: 0; text-align: right; font-size: 13px; word-break: break-all; }
+/* `anywhere`, not `break-all`: these values are mostly unbreakable tokens
+   (versions, node ids, URLs) that must not overflow, but the Spoken cues card
+   puts SENTENCES here — break-all shredded them mid-word ("trouble p/rocessing").
+   `anywhere` breaks at spaces first and only splits a word that cannot fit,
+   while still shrinking min-content so the grid column can narrow. */
+.kv dd { margin: 0; text-align: right; font-size: 13px; overflow-wrap: anywhere; }
 .kv dd .badge { font-size: 10px; }
 
 .flags { display: grid; gap: var(--s3); }
@@ -616,7 +634,10 @@ button { font: inherit; cursor: pointer; }
   outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
 }
 .enroll-row input { flex: 1 1 180px; min-width: 0; }
-.enroll-row select { flex: 0 1 200px; }
+/* min-width:0 like the input above — without it the select refuses to shrink
+   below its longest option (KENZY_MQTT_DISCOVERY…) and overflows the row on a
+   narrow phone. */
+.enroll-row select { flex: 0 1 200px; min-width: 0; }
 .enroll-row .btn-primary { width: auto; flex: none; margin: 0; padding: 10px var(--s5); }
 
 /* ---- Home Assistant curation editor ---- */

@@ -5,6 +5,16 @@
 const LOG_LEVELS = ["debug", "info", "warning", "error"];
 const CAPTURE_LEVELS = ["trace", "debug", "info", "warning", "error"];
 
+// Every service has these; keep the wording identical across them. The tls pair
+// isn't in any packaged config — the server injects its own cert/key into each
+// served service config when it terminates TLS (server.py _effective_service_config).
+const LOG_HELP = "How much detail this service prints to its console log.";
+const CAPTURE_HELP =
+  "How much detail is kept for the dashboard's Logs tab — can be deeper than the console.";
+const TLS_CERT_HELP =
+  "Certificate this service presents for HTTPS. Filled in from the server automatically when the server uses TLS.";
+const TLS_KEY_HELP = "Private key for that certificate. Filled in from the server the same way.";
+
 // Node per-node override keys → allowed values (keyed by the override key).
 export const NODE_ENUMS = {
   log_level: LOG_LEVELS,
@@ -42,7 +52,8 @@ export const SERVICE_ENUMS = {
 };
 
 // One-line help shown under each field. Keyed by dotted path (services) or key
-// (node). Kept concise — the docs are the full reference. Missing key = no hint.
+// (node). Kept concise — the docs are the full reference. Every editable key
+// must have one: tests/test_dashboard_help.py fails the build otherwise.
 export const SERVICE_HELP = {
   stt: {
     host: "Bind address for the STT HTTP service.",
@@ -53,7 +64,15 @@ export const SERVICE_HELP = {
     "whisper.compute_type": "Numeric precision. int8 for CPU, float16 for a GPU.",
     "whisper.language": "Language code, or blank to auto-detect.",
     "openai.model": "OpenAI transcription model. Needs OPENAI_API_KEY.",
+    "openai.language": "Language code for the cloud provider, or blank to auto-detect.",
+    "openai.timeout": "Seconds to wait for the cloud provider before falling back.",
     "openai.fallback": "On cloud failure, silently retry on local whisper.",
+    "wyoming.enabled": "Let Home Assistant's voice pipelines transcribe through this service.",
+    "wyoming.port": "Port for that Home Assistant listener.",
+    log_level: LOG_HELP,
+    log_capture_level: CAPTURE_HELP,
+    "tls.cert": TLS_CERT_HELP,
+    "tls.key": TLS_KEY_HELP,
   },
   tts: {
     host: "Bind address for the TTS HTTP service.",
@@ -67,6 +86,12 @@ export const SERVICE_HELP = {
     "kokoro.device": "auto picks CUDA → MPS → CPU.",
     "kokoro.speed": "Playback speed, 0.5–2.0.",
     "kokoro.lang_code": "Language code; derived from the voice if blank.",
+    "wyoming.enabled": "Let Home Assistant's voice pipelines speak with Kenzy's voice.",
+    "wyoming.port": "Port for that Home Assistant listener.",
+    log_level: LOG_HELP,
+    log_capture_level: CAPTURE_HELP,
+    "tls.cert": TLS_CERT_HELP,
+    "tls.key": TLS_KEY_HELP,
   },
   llm: {
     host: "Bind address for the LLM HTTP service.",
@@ -95,6 +120,26 @@ export const SERVICE_HELP = {
     "skills.home_assistant.thermo_min": "Lower comfort clamp (°F) for relative temp changes.",
     "skills.home_assistant.thermo_max": "Upper comfort clamp (°F) for relative temp changes.",
     "skills.home_assistant.cache_ttl": "Seconds to cache the HA topology pull.",
+    "speaker.url": "Voice-identification endpoint, used when a skill needs to check or enroll a voice (auto-wired from the server; set for multi-host).",
+    system_prompt: "The standing instructions that shape how Kenzy answers — her personality and rules.",
+    voice_prompt: "Default speaking style passed to the voice, when a reply doesn't set its own.",
+    "location.city": "Used for weather and 'near me' answers.",
+    "location.state": "State or region, for the same.",
+    "location.country": "Country, for the same.",
+    "location.timezone": "Timezone for times, alarms and 'what's today'.",
+    "location.latitude": "Latitude — sharpens local weather. Blank = use the city name.",
+    "location.longitude": "Longitude — sharpens local weather. Blank = use the city name.",
+    "skills.dir": "Folder holding your own skills. They override built-ins of the same name.",
+    "skills.disabled": "Skills or skill files to switch off. Easier to toggle from the Skills tab.",
+    "skills.news.feeds.local": "RSS feeds for local news.",
+    "skills.news.feeds.latest": "RSS feeds for top headlines.",
+    "skills.news.feeds.world": "RSS feeds for world news.",
+    "skills.news.feeds.politics": "RSS feeds for politics.",
+    "memory.classifier_keep_alive": "Keep the classifier model loaded in Ollama (e.g. 30m, or -1 forever). Blank = don't ask.",
+    log_level: LOG_HELP,
+    log_capture_level: CAPTURE_HELP,
+    "tls.cert": TLS_CERT_HELP,
+    "tls.key": TLS_KEY_HELP,
   },
   speaker: {
     host: "Bind address for the speaker-ID HTTP service.",
@@ -111,6 +156,10 @@ export const SERVICE_HELP = {
     enroll_silence_ms: "Milliseconds of silence that end an enrollment recording.",
     enroll_min_speech_ms: "Minimum milliseconds of speech for a usable enrollment sample.",
     enroll_prompts: "Sentences read aloud during voice enrollment (one per sample).",
+    log_level: LOG_HELP,
+    log_capture_level: CAPTURE_HELP,
+    "tls.cert": TLS_CERT_HELP,
+    "tls.key": TLS_KEY_HELP,
   },
 };
 
@@ -135,6 +184,7 @@ export const SERVICE_DEPS = {
 export const NODE_HELP = {
   room_id: "The room's friendly name — server-owned, sent to the assistant as context.",
   audio_device: "ALSA device. Blank = system default.",
+  wakeword_models: "Custom wake-word model files (.tflite/.onnx). Blank = the bundled \"Hey Kenzy\".",
   wakeword_threshold: "Wake-word confidence to trigger (0–1). Lower = more sensitive.",
   wakeword_vad_threshold: "Voice-detection gate (0–1); 0 = off. ~0.5 rejects near-silence false wakes.",
   silence_rms_threshold: "Loudness (0–32767) below which counts as silence.",
@@ -201,6 +251,39 @@ export function nodeHelp(key) {
   return NODE_HELP[key] || null;
 }
 
+// Server settings (the _SERVER_EDITABLE allow-list in server.py). One short line
+// per key — enough to act on without opening the docs. Keep every editable key
+// covered; tests/test_dashboard_help.py fails the build if one is missing.
+export const SERVER_HELP = {
+  experimental: "Opt in to features that aren't finished yet. Also marks the dashboard tab so you know which instance you're on.",
+  "dashboard.logs": "Enable the Logs and Activity tabs. Off = no transcripts are kept anywhere.",
+  "dashboard.controls": "Allow changes from the dashboard. Off = read-only (you can look, not touch).",
+  "stt.url": "Where the speech-to-text service lives. Blank = found automatically, or speech recognition off.",
+  "stt.timeout": "Seconds to wait for a transcription before giving up.",
+  "tts.url": "Where the text-to-speech service lives. Blank = found automatically, or Kenzy stays silent.",
+  "tts.timeout": "Seconds to wait for synthesized speech before giving up.",
+  "llm.url": "Where the assistant service lives. Blank = found automatically, or no assistant replies.",
+  "llm.timeout": "Seconds to wait for a reply before giving up.",
+  "speaker.url": "Where the voice-identification service lives. Blank = found automatically, or everyone is 'unknown'.",
+  "speaker.timeout": "Seconds to wait for voice identification before giving up.",
+  "dialog.max_turns": "How many back-and-forth turns Kenzy will hold the microphone open for before you need the wake word again.",
+  "alarm.ring_repeats": "How many times a firing alarm re-rings before giving up. A wake word stops it sooner.",
+  "alarm.ring_interval": "Seconds between alarm re-rings.",
+  "streaming.enabled": "Start speaking the first sentence while the rest is still being written — noticeably faster replies. Off = wait for the whole answer first.",
+  "discovery.enabled": "Announce this server on the network so nodes find it without being told an address.",
+  "discovery.instance": "The name this server announces itself under. Only matters if you run more than one.",
+  "integrations.mqtt.enabled": "Publish room state to an MQTT broker so Home Assistant sees your nodes as devices.",
+  "integrations.mqtt.host": "Broker address. Username and password are set under API keys, never here.",
+  "integrations.mqtt.port": "Broker port (1883 plain, 8883 TLS).",
+  "integrations.mqtt.base_topic": "Topic prefix for everything Kenzy publishes.",
+  "integrations.mqtt.discovery_prefix": "Home Assistant's discovery prefix. Leave alone unless you changed it in HA.",
+  "integrations.mqtt.commands": "Let Home Assistant control nodes (trigger, stop, volume, mute). Off = Kenzy only reports, never obeys.",
+};
+
+export function serverHelp(key) {
+  return SERVER_HELP[key] || null;
+}
+
 // Semantic sections for editors whose keys don't group cleanly by dotted parent
 // (flat keys, or backends we want combined). Each entry is [label, predicate].
 export const SERVICE_SECTIONS = {
@@ -210,6 +293,11 @@ export const SERVICE_SECTIONS = {
     ["Model", (k) => k.startsWith("model_")],
     ["Identification", (k) => ["identify_threshold", "unknown_speaker"].includes(k)],
     ["Enroll", (k) => k.startsWith("enroll_") || k === "allow_voice_enroll" || k === "embeddings_dir"],
+    // Label must be exactly the dotted parent: the row renderer only strips the
+    // prefix when group === the key's parent, so "TLS" would print "tls.cert"
+    // while every other service (grouped by parent) prints "cert". The heading
+    // is uppercased by CSS, so this still reads as TLS.
+    ["tls", (k) => k.startsWith("tls.")],
   ],
 };
 

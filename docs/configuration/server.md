@@ -127,7 +127,7 @@ Web fleet manager served by `kenzy-server`. **On by default in the shipped confi
 | `dialog.max_turns` | `6` | Max consecutive follow-up turns Kenzy holds the floor for in a multi-turn dialog before auto-ending |
 | `alarm.ring_repeats` | `10` | How many times a firing alarm re-rings before giving up (a wake word stops it sooner) |
 | `alarm.ring_interval` | `25` | Seconds between alarm re-rings |
-| `streaming.enabled` | `false` | Sentence-overlapped streaming replies: speech starts on the first sentence while the model is still writing the rest. Off = the classic buffered pipeline. Regardless of the flag: a lockbox secret never rides a streamed preview (secret exchanges deliver whole), and providers that can't follow the streaming contract fall back to the buffered path automatically. |
+| `streaming.enabled` | `true` | Sentence-overlapped streaming replies: speech starts on the first sentence while the model is still writing the rest. Off = the classic buffered pipeline. Regardless of the flag: a lockbox secret never rides a streamed preview (secret exchanges deliver whole), and providers that can't follow the streaming contract fall back to the buffered path automatically. |
 
 ### LLM service
 

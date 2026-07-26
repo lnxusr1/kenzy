@@ -29,6 +29,12 @@ def _server_with_node(node_id: str = "k") -> tuple[TranscribingServer, _Recordin
     )
     ws = _RecordingWS()
     srv._nodes[node_id] = NodeSession(ws=ws, node_id=node_id, room_id="kitchen")  # type: ignore[arg-type]
+    # These tests mock _call_llm (the buffered stage), not the /process/stream
+    # endpoint. Streaming defaults ON since 4.4.2, so leaving it enabled makes
+    # every dispatch attempt a real HTTP stream against a dead URL first — slow,
+    # and its cue ladder pollutes what the cue assertions are measuring. Tests
+    # that want the streaming path turn it back on explicitly.
+    srv._streaming_enabled = False
     return srv, ws
 
 
@@ -157,7 +163,7 @@ async def _run_plain_dispatch(monkeypatch, *, held_floor: bool) -> list[str]:
     from kenzy.server import server as srvmod
 
     monkeypatch.setattr(srvmod, "_CUE_LADDER", ((10, "sound_thinking", "thinking.wav"),))
-    srv, ws = _server_with_node()
+    srv, ws = _server_with_node()  # buffered path (see the fixture)
     cues: list[str] = []
 
     async def stt(pcm, room, sid):  # noqa: ANN001, ANN202
@@ -193,6 +199,55 @@ async def test_fresh_command_gets_cues(monkeypatch):
     # A fresh command into the void: the cue acknowledges it.
     cues = await _run_plain_dispatch(monkeypatch, held_floor=False)
     assert cues == ["sound_thinking"]
+
+
+async def test_streaming_fallback_does_not_replay_the_cue_ladder(monkeypatch):
+    """4.4.2: with streaming on by default, a stream that hangs past a rung and
+    THEN falls back used to hand the buffered path a fresh ladder — you heard
+    "Working on it." twice. The buffered path continues, it doesn't restart."""
+    from kenzy.server import server as srvmod
+
+    monkeypatch.setattr(srvmod, "_CUE_LADDER", ((10, "sound_thinking", "thinking.wav"),))
+    srv, ws = _server_with_node()
+    srv._streaming_enabled = True
+    cues: list[str] = []
+
+    async def stt(pcm, room, sid):  # noqa: ANN001, ANN202
+        return "what's the weather"
+
+    async def spk(pcm, room):  # noqa: ANN001, ANN202
+        return "alice", 0.9
+
+    async def slow_stream(*a, **k):  # noqa: ANN002, ANN003, ANN202
+        # Outlive the rung, then fall back (the reachable-but-failing provider).
+        played: list[int] | None = k.get("cue_played")
+        ladder = srvmod._CueLadder(srv, "k", started_at=k.get("started_at"))
+        await asyncio.sleep(0.08)
+        await ladder.finish()
+        if played is not None:
+            played.append(ladder.played)
+        return None
+
+    async def slow_llm(text, room, sid, speaker, node_id=None, identity=None):  # noqa: ANN001, ANN202
+        await asyncio.sleep(0.1)
+        return LlmReply("It's sunny.", "vp", fast=False)
+
+    async def tts(*a, **k):  # noqa: ANN002, ANN003, ANN202
+        return True
+
+    async def fake_cue(node_id, key, default):  # noqa: ANN001, ANN202
+        cues.append(key)
+        return 0.0
+
+    monkeypatch.setattr(srv, "_call_stt", stt)
+    monkeypatch.setattr(srv, "_call_speaker", spk)
+    monkeypatch.setattr(srv, "_call_llm_stream", slow_stream)
+    monkeypatch.setattr(srv, "_call_llm", slow_llm)
+    monkeypatch.setattr(srv, "_run_tts", tts)
+    monkeypatch.setattr(srv, "_play_cue", fake_cue)
+    await srv._transcribe("k", "kitchen", "s1", b"pcm")
+    await asyncio.sleep(0.05)
+    assert cues == ["sound_thinking"]  # spoken once, by the streaming attempt
 
 
 async def test_followup_turn_suppresses_cues(monkeypatch):

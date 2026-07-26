@@ -1,6 +1,6 @@
 import { html, useState, useEffect } from "../html.js";
 import { confirmDialog } from "../dialog.js";
-import { groupBySections, SERVER_SECTIONS } from "../schema.js";
+import { groupBySections, serverHelp, SERVER_SECTIONS } from "../schema.js";
 import { getServerFeatures, getServerUnit, getSettings } from "../api.js";
 import { send, notify, subscribeUpgrades, useFleet } from "../store.js";
 
@@ -27,6 +27,7 @@ const CODE_DEFAULTS = {
   "integrations.mqtt.base_topic": "kenzy",
   "integrations.mqtt.discovery_prefix": "homeassistant",
   "integrations.mqtt.commands": true,
+  "streaming.enabled": true,
 };
 
 // Inherited value → human placeholder/label text.
@@ -138,7 +139,8 @@ function ServerSettings() {
       input = html`<input value=${isSet ? v : ""} placeholder=${fmt(inh)}
         onInput=${(e) => set(f.key, e.target.value)} />`;
     return html`<div class=${"cfg-row" + (isSet ? " overridden" : "")}>
-      <div class="cfg-key"><span class="mono">${f.key}</span></div>
+      <div class="cfg-key"><span class="mono">${f.key}</span>
+        ${serverHelp(f.key) ? html`<span class="cfg-help">${serverHelp(f.key)}</span>` : null}</div>
       <div class="cfg-input">${input}</div></div>`;
   };
 
@@ -492,7 +494,7 @@ function BackupPanel() {
       ${" "}Include the lockbox key — the archive can then <b>restore (and decrypt) stored
       secrets</b>; untick for a shareable archive that carries lockbox ciphertext only
     </label>
-    <p><a class="btn" href=${"/api/backup" + (qs ? "?" + qs : "")} download>Download backup</a></p>
+    <div class="ctl-row"><a class="btn-ghost" href=${"/api/backup" + (qs ? "?" + qs : "")} download>Download backup</a></div>
     <${RestorePanel} />
   `;
 }
@@ -605,7 +607,7 @@ function ApiKeys({ envKeys, controls }) {
             : null}
           <input type="password" placeholder="value (write-only)" value=${value}
             onInput=${(e) => setValue(e.target.value)} autocomplete="off" />
-          <button class="btn" disabled=${busy || !effective || !value}>
+          <button class="btn-primary" disabled=${busy || !effective || !value}>
             ${busy ? "…" : "Set"}
           </button>
         </form>`
@@ -659,11 +661,12 @@ function SpokenCues({ cues, controls }) {
     </dl>
     ${controls
       ? html`<div class="ctl-row">
-          <button class="btn" disabled=${busy || !(cues && cues.tts)}
-            title=${cues && cues.tts ? "" : "TTS service not configured"}
-            onClick=${regenerate}>${busy ? "Rendering…" : "Regenerate spoken cues"}</button>
-          <span class="micro">Uses the configured TTS voice; applies live to the whole fleet.</span>
-        </div>`
+            <button class="btn-ghost" disabled=${busy || !(cues && cues.tts)}
+              title=${cues && cues.tts ? "" : "TTS service not configured"}
+              onClick=${regenerate}>${busy ? "Rendering…" : "Regenerate spoken cues"}</button>
+          </div>
+          <p class="micro">Uses the configured TTS voice; applies live to the whole
+          fleet — the cues are streamed from the server, so nodes need no update.</p>`
       : html`<p class="micro">Read-only — set
           ${" "}<span class="mono">dashboard.controls: true</span> to regenerate.</p>`}
   `;

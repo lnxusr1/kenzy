@@ -2178,6 +2178,10 @@ class _CueLadder:
         # STT time from its delay. None ⇒ measure from creation (legacy).
         self._started_at = started_at
         self._play: asyncio.Task[float] | None = None
+        #: Rungs actually started. The streaming path hands this to the buffered
+        #: fallback so a stream that hung past a rung and then failed doesn't get
+        #: the whole ladder spoken a second time ("Working on it." twice).
+        self.played: int = 0
         self._task = asyncio.create_task(self._run())
 
     async def _run(self) -> None:
@@ -2192,6 +2196,7 @@ class _CueLadder:
             self._play = asyncio.create_task(
                 self._server._play_cue(self._node_id, key, default)
             )
+            self.played += 1  # a streaming fallback must not replay this rung
             try:
                 duration = await asyncio.shield(self._play)
             except Exception:  # noqa: BLE001 — cues are best-effort
@@ -2312,11 +2317,12 @@ class TranscribingServer(AudioServer):
         acfg: dict[str, Any] = cfg.get("alarm", {}) or {}
         self._alarm_ring_repeats: int = int(acfg.get("ring_repeats", _ALARM_RING_REPEATS))
         self._alarm_ring_interval: float = float(acfg.get("ring_interval", _ALARM_RING_INTERVAL_S))
-        # 4.4 streaming pipeline (sentence-overlapped replies). Default OFF —
-        # flips on after rig soak; the buffered path stays the fallback forever
-        # (lockbox replies, non-streaming providers, and this flag).
+        # 4.4 streaming pipeline (sentence-overlapped replies). Default ON since
+        # 4.4.2 — shipped off in 4.4 pending rig soak, which it passed. The
+        # buffered path stays the fallback forever (lockbox replies,
+        # non-streaming providers, and this flag set false).
         scfg_stream: dict[str, Any] = cfg.get("streaming", {}) or {}
-        self._streaming_enabled: bool = bool(scfg_stream.get("enabled", False))
+        self._streaming_enabled: bool = bool(scfg_stream.get("enabled", True))
 
         # Remember which service URLs came from static config; auto-registration
         # (GET /register) fills the rest and must never overwrite a configured one.
@@ -2607,10 +2613,13 @@ class TranscribingServer(AudioServer):
                     cue_this_turn = node_id not in self._followup_turns
                     # 4.4 streaming: speak sentences while the model writes.
                     # None ⇒ endpoint unavailable ⇒ buffered path, unchanged.
+                    # Rungs the streaming attempt already spoke before falling
+                    # back — the buffered path must not say them over again.
+                    spoken_rungs: list[int] = []
                     streamed = (
                         await self._call_llm_stream(
                             text, room_name, session_id, speaker, node_id, identity,
-                            started_at=t0, cues=cue_this_turn,
+                            started_at=t0, cues=cue_this_turn, cue_played=spoken_rungs,
                         )
                         if self._streaming_enabled
                         else None
@@ -2629,7 +2638,7 @@ class TranscribingServer(AudioServer):
                                 identity=identity,
                             ),
                             started_at=t0,
-                            cues=cue_this_turn,
+                            cues=cue_this_turn and not any(spoken_rungs),
                         )
                 response_text, voice_prompt = reply.text, reply.voice_prompt
                 actions, fast = reply.actions, reply.fast
@@ -3421,6 +3430,7 @@ class TranscribingServer(AudioServer):
         identity: Identity | None = None,
         started_at: float | None = None,
         cues: bool = True,
+        cue_played: list[int] | None = None,
     ) -> tuple[LlmReply, _StreamSpeech] | None:
         """Streaming pipeline (4.4): POST /process/stream and SPEAK complete
         sentences while the model is still writing — the whole point of the era.
@@ -3535,6 +3545,10 @@ class TranscribingServer(AudioServer):
             # cancel would orphan its tts session). None ⇒ cues suppressed.
             if ladder is not None:
                 await ladder.finish()
+                # Tell the caller how much of the ladder was already spoken, so a
+                # buffered fallback continues rather than restarting it.
+                if cue_played is not None:
+                    cue_played.append(ladder.played)
         if reply is None:
             if speech.spoken:
                 # Clean EOF without an end event: what was heard is the record.
