@@ -54,16 +54,26 @@ class _FakePlayer:
     def abort(self) -> None:
         self.aborted = True
         self.looping = False
+        self.bed_active = False
 
     def play_pcm(
-        self, audio: Any, interrupt: bool = False, alert: bool = False, loop: bool = False
+        self,
+        audio: Any,
+        interrupt: bool = False,
+        alert: bool = False,
+        loop: bool = False,
+        bed: bool = False,
+        cue: bool = False,
     ) -> None:
         self.looping = loop
+        self.bed_active = bed or loop
 
     def overlay(self, cue: Any, duck: float = 0.25, lead: int = 2400) -> bool:
         return False  # no bed in this harness — cue falls back to play_pcm
 
     looping = False
+    bed_active = False
+    cue_remaining_s = 0.0
 
     @property
     def stream_pending(self) -> bool:

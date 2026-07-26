@@ -36,6 +36,7 @@ def _bare_player(audio: np.ndarray | None = None) -> _SoundPlayer:
     p._interrupt = False
     p._alert = False
     p._pending_alert = False
+    p._bed = False
     p._loop = False
     p._loop_left = 0
     p._overlay_backup = None
@@ -148,9 +149,55 @@ def test_overlay_straddling_the_seam_plays_the_tail_then_restores():
     assert list(_tick(p, 20)) == [1000] * 20
 
 
+def test_overlay_ducks_under_a_non_repeating_bed():
+    """4.4.1: the bed plays once, but a cue still ducks under what's left of it.
+
+    The bundled `waiting.wav` is a 26 s ambient bed, so a cue at ~5 s lands
+    mid-bed exactly as before — it just never hears the bed start over.
+    """
+    bed = np.full(100, 1000, dtype=np.int16)
+    cue = np.full(10, 8000, dtype=np.int16)
+    p = _bare_player()
+    p.play_pcm(bed, bed=True)  # one-shot bed
+    assert p.bed_active and not p.looping
+    _tick(p, 10)
+    assert p.overlay(cue, duck=0.25, lead=4)
+    out = _tick(p, 30)
+    assert list(out[:4]) == [1000] * 4  # lead: untouched bed
+    assert list(out[4:14]) == [8250] * 10  # ducked bed (250) + cue (8000)
+    assert list(out[14:]) == [1000] * 16  # bed continues at full level
+    # It ends rather than wrapping — no second pass, no repeated chime.
+    _tick(p, 60)  # cursor 40 → 100 = exactly the end of the bed
+    assert list(_tick(p, 10)) == [0] * 10
+
+
+def test_overlay_refuses_when_a_non_repeating_bed_is_too_short_for_the_cue():
+    """No wrap means the straddling tail would never play — speak it instead."""
+    bed = np.full(20, 1000, dtype=np.int16)
+    cue = np.full(8, 4000, dtype=np.int16)
+    p = _bare_player()
+    p.play_pcm(bed, bed=True)
+    _tick(p, 14)  # cursor at 14; lead 2 ⇒ 16..24 would straddle the end
+    assert not p.overlay(cue, duck=0.5, lead=2)
+    # The same overlay IS accepted when the bed repeats (the tail plays at wrap).
+    p2 = _bare_player()
+    p2.play_pcm(bed, loop=True)
+    _tick(p2, 14)
+    assert p2.overlay(cue, duck=0.5, lead=2)
+
+
+def test_overlay_refuses_once_a_one_shot_bed_has_finished():
+    """A short `sound_waiting` chime is over by cue time — cue plays plainly."""
+    p = _bare_player()
+    p.play_pcm(np.full(6, 1000, dtype=np.int16), bed=True)
+    _tick(p, 8)  # drain past the end
+    assert p.bed_active  # still flagged as the bed...
+    assert not p.overlay(np.ones(2, dtype=np.int16))  # ...but nothing left to duck
+
+
 def test_overlay_refuses_without_a_bed_or_with_an_oversized_cue():
     p = _bare_player()
-    assert not p.overlay(np.ones(4, dtype=np.int16))  # nothing looping
+    assert not p.overlay(np.ones(4, dtype=np.int16))  # no bed at all
     bed = np.ones(10, dtype=np.int16)
     p.play_pcm(bed, loop=True)
     _tick(p, 2)
@@ -182,18 +229,23 @@ class _CuePlayer:
 
     def __init__(self) -> None:
         self.looping = False
+        self.bed_active = False
+        self.cue_remaining_s = 0.0
         self.streaming = False
         self.overlays: list[Any] = []
         self.played: list[Any] = []
         self.overlay_ok = True
         self.aborted = False
 
-    def play_pcm(self, audio, interrupt=False, alert=False, loop=False):  # noqa: ANN001
+    def play_pcm(  # noqa: ANN001
+        self, audio, interrupt=False, alert=False, loop=False, bed=False, cue=False
+    ):
         self.played.append(audio)
         self.looping = loop
+        self.bed_active = bed or loop
 
     def overlay(self, cue, duck=0.25, lead=2400):  # noqa: ANN001
-        if not (self.looping and self.overlay_ok):
+        if not (self.bed_active and self.overlay_ok):
             return False
         self.overlays.append(cue)
         return True
@@ -204,6 +256,7 @@ class _CuePlayer:
     def abort(self):
         self.aborted = True
         self.looping = False
+        self.bed_active = False
 
     def start_stream(self):
         self.streaming = True
@@ -227,9 +280,9 @@ def _node() -> tuple[NodeClient, _CuePlayer]:
     return client, player
 
 
-async def test_cue_session_overlays_onto_looping_bed():
+async def test_cue_session_overlays_onto_playing_bed():
     client, player = _node()
-    player.looping = True  # the waiting bed is playing
+    player.bed_active = True  # the waiting bed is still playing
     await client._begin_tts("c1", 24000, 1, cue=True)
     assert client._state == _STATE_TTS and client._tts_cue
     client._tts_q.put_nowait(b"\x00\x01" * 480)
@@ -242,7 +295,7 @@ async def test_cue_session_overlays_onto_looping_bed():
 
 async def test_cue_session_without_bed_falls_back_to_plain_playback():
     client, player = _node()
-    assert not player.looping  # no waiting bed (dialog turn / disabled)
+    assert not player.bed_active  # no waiting bed (finished, dialog turn, or disabled)
     await client._begin_tts("c1", 24000, 1, cue=True)
     client._tts_q.put_nowait(b"\x00\x01" * 480)
     await client._end_tts(reason="complete")
@@ -255,7 +308,7 @@ async def test_cue_session_without_bed_falls_back_to_plain_playback():
 
 async def test_reply_session_is_never_cue_flagged():
     client, player = _node()
-    player.looping = True
+    player.bed_active = True
     await client._begin_tts("r1", 24000, 1)  # a real reply
     client._tts_q.put_nowait(b"\x00\x01" * 480)
     await client._end_tts(reason="complete")
@@ -264,11 +317,61 @@ async def test_reply_session_is_never_cue_flagged():
     await client._tts_task
 
 
-async def test_reset_tts_state_aborts_a_looping_bed():
+async def test_reply_waits_out_a_nearly_finished_cue():
+    """4.4.1 field report: the answer landed 0.79s into a 1.62s "Working on it."
+    and cut it mid-word ("Working o—"). A reply now waits out a cue that is
+    within _CUE_GRACE_MAX_S of finishing instead of guillotining it."""
     client, player = _node()
-    player.looping = True  # bed mid-loop when the connection tears down
+    player.cue_remaining_s = 0.05  # cue almost done
+    await client._begin_tts("r1", 24000, 1)  # the answer arrives
+    assert not player.aborted  # the cue was NOT cut
+    client._tts_q.put_nowait(b"\x00\x01" * 480)
+    await client._end_tts(reason="complete")
+    assert player.played == []  # reply held back...
+    assert client._tts_task is not None
+    await client._tts_task  # ...until the cue's tail has played
+    assert len(player.played) == 1
+    assert client._state == _STATE_IDLE
+
+
+async def test_reply_does_not_wait_for_a_cue_that_already_finished():
+    """Found live: the reply's audio can arrive seconds after its session opens
+    (synthesis time), by which point the cue is done. The wait must be re-read
+    at play time or every answer is delayed by a whole cue length."""
+    client, player = _node()
+    player.cue_remaining_s = 1.2  # cue playing when the reply session opens
+    await client._begin_tts("r1", 24000, 1)
+    player.cue_remaining_s = 0.0  # ...but it finishes while TTS is synthesized
+    client._tts_q.put_nowait(b"\x00\x01" * 480)
+    await client._end_tts(reason="complete")
+    assert len(player.played) == 1  # played at once — no stale delay
+    await client._tts_task
+
+
+async def test_reply_does_not_wait_for_a_long_cue():
+    """The grace is bounded — a long clip must never stall the answer."""
+    client, player = _node()
+    player.cue_remaining_s = 30.0  # way beyond _CUE_GRACE_MAX_S
+    await client._begin_tts("r1", 24000, 1)
+    client._tts_q.put_nowait(b"\x00\x01" * 480)
+    await client._end_tts(reason="complete")
+    assert len(player.played) == 1  # played immediately, cutting the cue
+    await client._tts_task
+
+
+async def test_streamed_reply_never_waits_for_a_cue():
+    """start_stream() cuts the player outright, so grace can't apply."""
+    client, player = _node()
+    player.cue_remaining_s = 0.05
+    await client._begin_tts("r1", 24000, 1, stream=True)
+    assert client._cue_grace_s == 0.0
+
+
+async def test_reset_tts_state_aborts_a_playing_bed():
+    client, player = _node()
+    player.bed_active = True  # bed still playing when the connection tears down
     await client._reset_tts_state()
-    assert player.aborted and not player.looping
+    assert player.aborted and not player.bed_active
 
 
 # ---------------------------------------------------------------------------

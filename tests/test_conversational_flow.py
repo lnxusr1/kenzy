@@ -40,15 +40,25 @@ class _Player:
         self.chimes += 1
 
     def play_pcm(
-        self, audio: Any, interrupt: bool = False, alert: bool = False, loop: bool = False
+        self,
+        audio: Any,
+        interrupt: bool = False,
+        alert: bool = False,
+        loop: bool = False,
+        bed: bool = False,
+        cue: bool = False,
     ) -> None:
         self.pcm_plays.append(audio)
         self.looping = loop
+        self.bed_active = bed or loop
 
     looping = False
+    bed_active = False
+    cue_remaining_s = 0.0
 
     def abort(self) -> None:
         self.looping = False
+        self.bed_active = False
 
 
 def _client(**cfg: Any) -> tuple[NodeClient, _WS, _Player]:
@@ -196,6 +206,24 @@ async def test_no_waiting_sound_after_followup_turn(monkeypatch):
     await c._begin_streaming("sid2")
     await c._end_streaming(reason="silence")
     assert len(player.pcm_plays) == 1
+
+
+async def test_waiting_bed_plays_once_and_never_repeats():
+    """4.4.1: the waiting bed is a ONE-SHOT, but still a *bed*.
+
+    4.4 repeated it to cover the whole processing window. `sound_waiting` is
+    operator-configurable, though — the bundled clip is a 26 s ambient bed, but
+    a short chime in that slot turned into a chime every couple of seconds. It
+    plays once now, while staying overlay-able (bed_active) so a spoken cue can
+    still duck under whatever is left of a long bed.
+    """
+    c, ws, player = _client()
+    c._waiting_audio = np.ones(100, dtype=np.int16)  # type: ignore[assignment]
+    await c._begin_streaming("sid1")
+    await c._end_streaming(reason="silence")
+    assert len(player.pcm_plays) == 1
+    assert not player.looping  # never repeats
+    assert player.bed_active  # ...but a cue may still duck over it
 
 
 # ---------------------------------------------------------------------------

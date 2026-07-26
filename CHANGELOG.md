@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.4.1]
+
+### Fixed
+
+- **The waiting sound plays once again, instead of chiming at you until the answer arrives.** 4.4 started repeating it so a long request wouldn't outlive the clip. That suits the bundled `waiting.wav` — 26 seconds of ambient bed — but `sound_waiting` is yours to set, and pointing it at a short chime turned a slow answer into that chime every couple of seconds. It plays once now, whatever it is. Everything the bed was doing for the long clip still happens: a spoken cue ("Working on it.") still ducks underneath it and lets it carry on, for as long as it is still playing. Once it has finished — immediately, for a chime — the cue is simply spoken, and a cue too long to fit in what's left of the bed is spoken rather than clipped mid-word.
+
+- **"Working o—" — an answer arriving mid-cue no longer cuts it off mid-word.** The acknowledgement fires at ~5 seconds precisely because nothing is ready yet, so the answer can land a fraction of a second later and take the floor while "Working on it." is still being said. The reply now waits out a cue that is within two seconds of finishing, then starts; a longer one is still cut, because nothing is worth stalling the answer for. The wait happens off the command loop, so a wake word still stops everything the instant you say it.
+
 ## [4.4.0]
 
 ### Added

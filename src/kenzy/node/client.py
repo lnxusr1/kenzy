@@ -90,6 +90,13 @@ _TTS_SERVER_RATE = 24_000
 # so the user can hear the device acknowledge a wake word and knowingly unmute.
 _MUTED_ALERT_FLOOR = 0.4
 
+# How long a reply will wait for a still-playing spoken cue to finish rather
+# than cutting it mid-word. The answer can land within a cue's length of the 5s
+# mark, and "Working o—" sounds broken. Sized just past the longest bundled cue
+# (working.wav, 1.73s) so a whole cue can always finish; anything longer than
+# this is not worth delaying the answer for. Internal constant.
+_CUE_GRACE_MAX_S = 2.0
+
 # Hard ceiling on looping one-shot playback (the waiting bed under a long
 # request). The reply/error cue always replaces the bed on a live pipeline;
 # this bound only matters when the server dies mid-request without a disconnect
@@ -393,12 +400,19 @@ class _SoundPlayer:
         # on the next callback. Used to cut a chime/waiting sound the instant TTS is
         # ready, so a fast reply's audio always plays from the start (no clipped head).
         self._interrupt: bool = False
-        # Looping one-shot playback (4.4 presence audio: the waiting bed loops
-        # under the whole processing window instead of running dry at clip end).
-        # _loop_left bounds total loop count so a dead pipeline can't loop
-        # forever; all state is GIL-atomic ints/refs, RT-callback safe.
+        # The waiting bed (4.4 presence audio). _bed marks the current one-shot
+        # as the bed, which is what makes it overlay-able by a spoken cue and
+        # abortable on teardown. It plays ONCE (4.4.1): _loop additionally
+        # repeats it, bounded by _loop_left so a dead pipeline can't loop
+        # forever. All state is GIL-atomic ints/refs, RT-callback safe.
+        self._bed: bool = False
         self._loop: bool = False
         self._loop_left: int = 0
+        # Sample index in _audio at which spoken-cue audio ends (standalone cue,
+        # or the mixed-in region of a bed). Lets the reply hold off just long
+        # enough to avoid guillotining "Working on it." mid-word — see
+        # cue_remaining_s and _CUE_GRACE_MAX_S.
+        self._cue_end: int | None = None
         # Duck-under overlay (spoken cue mixed OVER the looping bed): the clean
         # bed is parked in _overlay_backup while a mixed copy plays; the callback
         # restores it at the next loop wrap (by then the overlay region is behind
@@ -510,6 +524,8 @@ class _SoundPlayer:
         interrupt: bool = False,
         alert: bool = False,
         loop: bool = False,
+        bed: bool = False,
+        cue: bool = False,
     ) -> None:
         """Play arbitrary int16 mono PCM at _TTS_SAMPLE_RATE (honors mute unless
         ``alert`` — alert audio, e.g. a doorbell chime, plays at the muted floor).
@@ -519,12 +535,22 @@ class _SoundPlayer:
         sound to drain — a single atomic swap, so a concurrently-queued chime can't
         wedge between an abort and this call and clip the new audio's head.
 
-        With ``loop=True`` the clip repeats seamlessly (the waiting bed under a
-        long-running request) until replaced/aborted, bounded by _LOOP_MAX_S so a
-        dead pipeline can never loop forever. Any other playback call clears the
-        loop — a reply, chime, or stream always wins.
+        With ``bed=True`` the clip is the waiting bed: a spoken cue may duck-mix
+        over it via overlay() for as long as it is still playing, and connection
+        teardown aborts it. The bed does NOT repeat (4.4.1) — `sound_waiting` is
+        operator-configurable, and while the bundled 26 s clip is an ambient bed
+        that comfortably covers a request, a short chime in that slot repeating
+        every couple of seconds is just noise.
+
+        With ``loop=True`` the clip additionally repeats seamlessly until
+        replaced/aborted, bounded by _LOOP_MAX_S so a dead pipeline can never
+        loop forever. Any other playback call clears both — a reply, chime, or
+        stream always wins.
         """
         self._clear_loop()
+        self._bed = bool(bed or loop)  # a looping bed is a bed
+        if cue and len(audio):
+            self._cue_end = len(audio)  # whole clip is cue speech
         if loop and len(audio):
             dur = max(len(audio) / float(self._sample_rate), 0.1)
             self._loop_left = max(int(_LOOP_MAX_S / dur), 0)
@@ -536,30 +562,60 @@ class _SoundPlayer:
         self._restart = True
 
     def _clear_loop(self) -> None:
-        """Drop looping + overlay state (GIL-atomic writes, RT-safe)."""
+        """Drop bed/looping + overlay state (GIL-atomic writes, RT-safe)."""
         self._loop = False
         self._loop_left = 0
+        self._bed = False
+        self._cue_end = None
         self._overlay_backup = None
         self._overlay_next = None
 
     @property
     def looping(self) -> bool:
-        """A looping bed is the current one-shot source (overlay() is valid)."""
+        """The bed is *repeating* — the wrap-restore chain in overlay() applies."""
         return self._loop and not self._streaming
+
+    @property
+    def bed_active(self) -> bool:
+        """A waiting bed is the current one-shot source (overlay() may apply).
+
+        True whether or not it repeats; overlay() additionally requires that the
+        clip has not finished playing.
+        """
+        return self._bed and not self._streaming
+
+    @property
+    def cue_remaining_s(self) -> float:
+        """Seconds of spoken-cue audio still to play, or 0.0 when none is.
+
+        Covers both shapes a cue takes — played standalone, or duck-mixed into a
+        bed. The reply uses this to wait out a cue that is nearly finished
+        rather than cutting it mid-word (bounded by _CUE_GRACE_MAX_S).
+        """
+        end = self._cue_end
+        if end is None or self._streaming:
+            return 0.0
+        left = end - int(self._pos)
+        return max(0.0, left / float(self._sample_rate))
 
     def overlay(
         self, cue: np.ndarray[Any, Any], duck: float = 0.25, lead: int = 2400
     ) -> bool:
-        """Mix ``cue`` (int16 mono at the player rate) OVER the looping bed —
+        """Mix ``cue`` (int16 mono at the player rate) OVER the playing bed —
         the bed ducks to ``duck`` underneath and continues at full level after.
 
         Main-thread pre-mix, zero RT-callback surgery: build a mixed copy of the
         bed array and atomically swap the reference (same length, so the RT
-        cursor stays valid); the callback swaps the clean bed back in at the
-        next loop wrap. ``lead`` samples (~0.1 s) of headroom keep the mix ahead
-        of the moving cursor. Returns False when there is no looping bed to mix
-        over (caller falls back to plain playback)."""
-        if not self.looping or self._pos >= len(self._audio):
+        cursor stays valid); on a *repeating* bed the callback swaps the clean
+        bed back in at the next wrap. ``lead`` samples (~0.1 s) of headroom keep
+        the mix ahead of the moving cursor.
+
+        Returns False when there is no bed still playing to mix over, or when a
+        non-repeating bed has too little left to carry the whole cue — in both
+        cases the caller falls back to plain playback (which replaces the bed).
+        A short `sound_waiting` chime that has already finished lands here, which
+        is why the cue is simply spoken in that case."""
+        if not self.bed_active or self._pos >= len(self._audio):
             return False
         base = self._overlay_backup if self._overlay_backup is not None else self._audio
         bed = base.reshape(-1)
@@ -575,6 +631,11 @@ class _SoundPlayer:
         mixed = np.clip(mixed32, -32768, 32767).astype(np.int16).reshape(-1, 1)
         if start + len(cue_1d) <= len(bed):
             head_mixed = None  # cue fits before the seam — clean bed returns next wrap
+        elif not self._loop:
+            # A non-repeating bed never wraps, so the tail region would simply
+            # never be reached and the cue would be cut off mid-word. Refuse and
+            # let the caller speak it plainly instead.
+            return False
         else:
             # Straddles the loop seam: after the wrap, one pass of a head-only
             # mixed copy plays the cue tail; the clean bed returns the wrap after.
@@ -590,6 +651,9 @@ class _SoundPlayer:
         self._overlay_backup = base
         self._overlay_next = head_mixed
         self._audio = mixed
+        # Where the cue speech ends inside the bed, so a reply can wait it out
+        # (a straddling cue on a repeating bed wraps — no single index, no grace).
+        self._cue_end = start + len(cue_1d) if head_mixed is None else None
         return True
 
     def set_volume(self, volume: float) -> None:
@@ -770,6 +834,10 @@ class NodeClient:
         self._tts_stream: bool = False  # 4.4: play this session's frames as they arrive
         self._tts_stream_started: bool = False  # first streamed frame fed (for the log)
         self._tts_cue: bool = False  # 4.4: processing cue — duck-mix over the waiting bed
+        # 4.4.1: seconds this reply waits for a nearly-finished cue (_CUE_GRACE_MAX_S),
+        # and the matching "don't abort the audio" flag for cancelling its drain task.
+        self._cue_grace_s: float = 0.0
+        self._keep_audio_on_cancel: bool = False
         self._tts_task: asyncio.Task[None] | None = None
 
         self._state: str = _STATE_IDLE
@@ -1176,25 +1244,35 @@ class NodeClient:
         # to TTS on the cmd loop; starting the waiting sound now would queue it behind
         # (or clip) the reply. _begin_tts/_begin_streaming move us out of IDLE.
         if self._state == _STATE_IDLE and self._player and self._waiting_audio is not None:
-            # Looping bed (4.4): repeats under the whole processing window (a
-            # long request outlives a one-shot clip); spoken cues duck-mix over
-            # it; the reply/error/stream start replaces it (loop cleared).
-            self._player.play_pcm(self._waiting_audio, loop=True)
+            # The waiting bed: plays ONCE (4.4.1 — 4.4 looped it, which turned a
+            # short `sound_waiting` chime into a chime every couple of seconds).
+            # The bundled 26 s clip covers a long request on its own; a spoken
+            # cue still duck-mixes over whatever is left of it, and once it has
+            # finished the cue is simply spoken.
+            self._player.play_pcm(self._waiting_audio, bed=True)
 
     # ------------------------------------------------------------------
     # TTS helpers
     # ------------------------------------------------------------------
 
-    async def _cancel_tts_task(self) -> None:
+    async def _cancel_tts_task(self, keep_audio: bool = False) -> None:
         """Cancel + await any running TTS wait/drain task (its cancel handler
-        stops streaming mode and aborts playback)."""
+        stops streaming mode and aborts playback).
+
+        ``keep_audio`` leaves the sound playing: used when a reply supersedes a
+        spoken cue that is a few hundred ms from finishing, so the cue gets to
+        say its last word instead of being cut (see _CUE_GRACE_MAX_S)."""
         task, self._tts_task = self._tts_task, None
         if task is not None and not task.done():
-            task.cancel()
+            self._keep_audio_on_cancel = keep_audio
             try:
-                await task
-            except asyncio.CancelledError:
-                pass
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+            finally:
+                self._keep_audio_on_cancel = False
 
     async def _reset_tts_state(self) -> None:
         """Force the TTS half of the audio state machine back to idle.
@@ -1207,8 +1285,8 @@ class NodeClient:
         await self._cancel_tts_task()
         if self._player is not None and self._tts_stream:
             self._player.stop_stream()
-        if self._player is not None and self._player.looping:
-            self._player.abort()  # a looping bed must not outlive its connection
+        if self._player is not None and self._player.bed_active:
+            self._player.abort()  # a waiting bed must not outlive its connection
         self._tts_stream = False
         self._tts_stream_started = False
         self._tts_cue = False
@@ -1226,11 +1304,21 @@ class NodeClient:
         stream: bool = False,
         cue: bool = False,
     ) -> None:
+        # A spoken cue ("Working on it.") that is nearly finished gets to say its
+        # last word: the answer can land within a cue's length of the 5s mark, and
+        # cutting it mid-syllable sounds broken. Bounded, and never for a streamed
+        # reply (start_stream cuts the player outright); the wait itself happens
+        # inside the drain task, not here.
+        self._cue_grace_s = 0.0
+        if not stream and self._player is not None:
+            remaining = self._player.cue_remaining_s
+            if 0.0 < remaining <= _CUE_GRACE_MAX_S:
+                self._cue_grace_s = remaining
         # A prior streamed session's drain task may still be finishing — it
         # must not outlive into THIS session (it would stop the new ring and
         # stomp the fresh session's state ~100ms in). Same interrupt-the-old
         # semantics the buffered path gets from play_pcm(interrupt=True).
-        await self._cancel_tts_task()
+        await self._cancel_tts_task(keep_audio=self._cue_grace_s > 0.0)
         self._stop_ringback()  # a spoken reply (decline/timeout) supersedes ringing
         self._reset_barge()
         # Deliberately NO queue drain here: _recv_loop enqueues binary frames the
@@ -1297,11 +1385,26 @@ class NodeClient:
                 self._session_id = None
                 log.info("Processing cue mixed over waiting bed")
                 return
-            self._tts_cue = False
+            was_cue, self._tts_cue = self._tts_cue, False
+            # Re-read what's LEFT of the cue now: _begin_tts only decided that the
+            # cue was worth preserving, and the reply's audio can arrive seconds
+            # later (synthesis time), by which point the cue is usually long done.
+            # Using the stale figure would delay every answer by a whole cue length.
+            grace, self._cue_grace_s = self._cue_grace_s, 0.0
+            if grace > 0.0 and self._player is not None:
+                grace = min(self._player.cue_remaining_s, _CUE_GRACE_MAX_S)
+            if grace > 0.0:
+                # Hold the reply for the tail of a still-playing cue, then start
+                # it — inside the task, so the command loop (and STOP) stay live.
+                self._tts_task = asyncio.create_task(
+                    self._tts_wait_done(pre_delay=grace, pending=audio), name="tts_wait"
+                )
+                log.info("TTS playback starts in %.2fs (letting the cue finish)", grace)
+                return
             if self._player:
                 # Atomic interrupt: cut the waiting sound and start TTS from the
                 # first sample in one swap, so a fast reply is never clipped.
-                self._player.play_pcm(audio, interrupt=True, alert=self._tts_alert)
+                self._player.play_pcm(audio, interrupt=True, alert=self._tts_alert, cue=was_cue)
             self._barge_armed_at = time.monotonic()  # reply audio live (barge grace)
             # Stay in TTS state while audio plays; _tts_wait_done transitions to IDLE.
             self._tts_task = asyncio.create_task(self._tts_wait_done(), name="tts_wait")
@@ -1311,16 +1414,30 @@ class NodeClient:
             await self._stop_tts_playback()
             log.info("TTS stopped (%s)", reason)
 
-    async def _tts_wait_done(self) -> None:
+    async def _tts_wait_done(
+        self,
+        pre_delay: float = 0.0,
+        pending: np.ndarray[Any, Any] | None = None,
+    ) -> None:
         """Poll until _SoundPlayer finishes TTS, then return the node to IDLE.
 
         Uses asyncio.sleep so the task is truly cancellable — unlike
         run_in_executor(sd.wait), which blocks a thread that cannot be
         interrupted once started.
+
+        ``pre_delay``/``pending`` hold a reply back for the tail of a spoken cue
+        (see _CUE_GRACE_MAX_S) and then start it. The wait lives here, inside the
+        task, rather than in the caller: the command loop stays free, so a wake
+        word's STOP still cancels this task and cuts everything instantly.
         """
         completed = False
         was_stream = self._tts_stream
         try:
+            if pre_delay > 0:
+                await asyncio.sleep(pre_delay)  # let the cue finish its last word
+            if pending is not None and self._player is not None:
+                self._player.play_pcm(pending, interrupt=True, alert=self._tts_alert)
+                self._barge_armed_at = time.monotonic()
             if was_stream:
                 # Streamed session: wait for the ring to drain, allow the DAC
                 # tail, then leave streaming mode.
@@ -1334,7 +1451,7 @@ class NodeClient:
                     await asyncio.sleep(0.05)
             completed = True
         except asyncio.CancelledError:
-            if self._player is not None:
+            if self._player is not None and not self._keep_audio_on_cancel:
                 if was_stream:
                     self._player.stop_stream()
                 self._player.abort()

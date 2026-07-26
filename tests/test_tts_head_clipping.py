@@ -23,9 +23,17 @@ class _FakePlayer:
         self.aborted = False
 
     def play_pcm(
-        self, audio: np.ndarray[Any, Any], interrupt: bool = False, alert: bool = False
+        self,
+        audio: np.ndarray[Any, Any],
+        interrupt: bool = False,
+        alert: bool = False,
+        loop: bool = False,
+        bed: bool = False,
+        cue: bool = False,
     ) -> None:
         self.played.append(audio)
+
+    cue_remaining_s = 0.0
 
     def abort(self) -> None:
         self.aborted = True
