@@ -17,7 +17,7 @@ whisper:
 The cloud option exists for two honest reasons: your server hardware is too
 light to transcribe quickly (a lone Raspberry Pi), or you want to *rule out*
 local transcription while troubleshooting accuracy — switch in the dashboard
-(**Services → stt**), test, switch back. The trade is explicit: each captured
+(**Fleet → stt**), test, switch back. The trade is explicit: each captured
 utterance (what you say after the wake word) is sent to the provider.
 
 !!! note "Pulled from the server"
@@ -74,7 +74,7 @@ Set `whisper.device: cuda` to run inference on an NVIDIA GPU. Two things to know
   ~/.local/share/kenzy/venv/bin/pip install nvidia-cublas-cu12 nvidia-cudnn-cu12
   ```
 
-  Then restart the stt service (dashboard → Services → stt → Restart).
+  Then restart the stt service (dashboard → Fleet → stt → Restart).
 
   If the TTS service on the same host uses **kokoro** (PyTorch), torch has
   usually already installed these wheels into the shared venv — in that case
@@ -138,7 +138,7 @@ openai:
   language: "en"
 ```
 
-Switching provider is also a two-click change in the dashboard: **Services → stt**, pick the provider from the dropdown, Save (the service restarts and re-pulls its config).
+Switching provider is also a two-click change in the dashboard: **Fleet → stt**, pick the provider from the dropdown, Save (the service restarts and re-pulls its config).
 
 
 #### Wyoming listener (Home Assistant voice pipelines)

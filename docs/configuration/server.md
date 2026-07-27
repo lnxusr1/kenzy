@@ -160,6 +160,42 @@ Opt-in; nothing is wired (zero overhead) unless `enabled`. Requires the `mqtt` e
 
 Broker credentials come from the environment, never this file: `KENZY_MQTT_USERNAME` / `KENZY_MQTT_PASSWORD`.
 
+### Occupancy
+
+Kenzy keeps a live picture of which rooms have people in them — built from your
+Home Assistant motion/presence sensors and from who she hears speaking in each
+room — and shows it on the dashboard's **Presence** tab.
+
+In this release it is **watch-only**: nothing is spoken unprompted and no
+delivery behaviour changes. The picture is built first so it can be trusted
+before anything acts on it.
+
+| Key | Default | Description |
+|---|---|---|
+| `occupancy.enabled` | `true` | Track room occupancy. Requires Home Assistant to be configured (Fleet → **llm**); without it nothing starts, whatever this says. |
+
+Rooms read **unknown** until something says otherwise — that is deliberate.
+"Unknown" and "empty" are different claims, and only one of them is honest when
+no sensor has reported and nobody has spoken.
+
+Which sensors count as evidence is detected automatically from HA device classes
+(`motion`, `occupancy`, `presence`, plus `person` entities for home/away). Tune
+it per entity under **Home Assistant → Presence sensors** when a sensor lies — a
+hallway PIR the cat crosses, or one aimed through a window at the street, will
+otherwise keep a room permanently "occupied":
+
+```yaml
+# data/home_assistant/curation.yaml
+occupancy:
+  exclude:
+    - binary_sensor.hallway_motion     # the cat sets this off nightly
+  include:
+    - binary_sensor.workshop_door      # not a presence class, but good evidence here
+```
+
+Kenzy's own `kenzy_*` entities are never evidence — she would otherwise believe
+every room was occupied the moment she spoke — and that rule is not overridable.
+
 ## Example
 
 ```yaml

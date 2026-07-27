@@ -44,6 +44,7 @@ from websockets.http11 import Request, Response
 
 from kenzy import calibration, kenzy_version, protocol, redact, serviceauth, tlsutil
 from kenzy.config import SERVICES
+from kenzy.server import occupancy as occupancy_mod
 from kenzy.server.people import (
     UNSET,
     Identity,
@@ -253,6 +254,12 @@ _SERVER_EDITABLE: dict[str, str] = {
     "integrations.mqtt.base_topic": "str",
     "integrations.mqtt.discovery_prefix": "str",
     "integrations.mqtt.commands": "bool",
+    # v5 occupancy spine. Default ON: 5.0 is watch-only (nothing speaks, no
+    # delivery changes), so the risk of leaving it on is nil and the soak only
+    # gathers data if it is actually running — the 4.4 streaming lesson, where
+    # shipping dark just delayed the learning. This key is the kill switch, not
+    # the enabler. HA absent ⇒ nothing starts regardless.
+    "occupancy.enabled": "bool",
 }
 
 #: Endpoint path each backend service serves, appended to an announced base URL so
@@ -583,6 +590,11 @@ class AudioServer:
         # Identity core (F1): person records (voiceprint→person). Absent file ⇒
         # empty store ⇒ the resolver is a passthrough (no behavior change).
         self._people = PeopleStore(self._data_root / "data" / "people.yaml")
+        # v5 occupancy spine (Slice B). None unless main() wires it — so an
+        # install with occupancy off, or no HA, carries zero overhead and the
+        # every-utterance hook in _transcribe is a single `is not None` check.
+        self._occupancy: Any = None
+        self._ha_events: Any = None
         # F3: has this server EVER received an /assist request? Persistent
         # marker — the dashboard uses it to reveal HA surfaces for app-only
         # households (no HA_API_KEY, but the companion-app front door in use).
@@ -740,6 +752,24 @@ class AudioServer:
             return bool(self._effective_node_config(node_id).get("hardware_aec", True))
         except Exception:
             return True
+
+    def _occupancy_payload(self) -> dict[str, Any]:
+        """The occupancy snapshot for request injection (empty when disabled).
+
+        Refreshes the tracker's staleness from the socket first: a dropped
+        connection means held levels stop being trustworthy — reported as stale
+        rather than silently rewritten to "empty", which would be inventing a
+        fact about someone's house.
+        """
+        if self._occupancy is None:
+            return {}
+        if self._ha_events is not None:
+            self._occupancy.set_stale(self._ha_events.stats.is_stale())
+        rooms = [
+            occupancy_mod.room_slug(s.room_id) for s in self._nodes.values() if s.room_id
+        ]
+        snap = self._occupancy.snapshot(rooms)
+        return snap if isinstance(snap, dict) else {}
 
     def _no_aec_rooms(self) -> list[str]:
         """Connected room names lacking AEC — injected into /process so skills
@@ -2338,7 +2368,7 @@ class TranscribingServer(AudioServer):
         }
         # Voice enrollment ("enroll me as Alice") is gated by `allow_voice_enroll` in the
         # speaker *service* config (the enrollment SKILL reads it via /enroll/info, editable
-        # from the dashboard's Services tab). Active sessions keyed by node_id
+        # from the dashboard's Fleet tab). Active sessions keyed by node_id
         # (prompt → capture → POST /enroll loop).
         # Voice-guided calibration ("Hey Kenzy, calibrate") — active sessions keyed
         # by node_id; tune samples are routed to them via the always-registered
@@ -2556,6 +2586,17 @@ class TranscribingServer(AudioServer):
                 identity.tier,
                 identity.confidence,
             )
+
+            # v5 spine: the voice half of the occupancy tracker. Someone spoke
+            # here, so the room is occupied whether or not we know who; the
+            # identity anchor only fires for a RECOGNIZED voice.
+            if self._occupancy is not None:
+                self._occupancy.on_voice(
+                    occupancy_mod.room_slug(room_name),
+                    person_id=identity.person_id or "",
+                    person_name=identity.display,
+                    recognized=identity.tier != "unknown",
+                )
 
             if not text:
                 # Silence — including a held follow-up window the user let lapse: end
@@ -3386,6 +3427,11 @@ class TranscribingServer(AudioServer):
             # Rooms whose speakers lack AEC (hardware_aec: false) — alarm and
             # intercom skills refuse these targets in the reply itself.
             "no_aec_rooms": self._no_aec_rooms(),
+            # v5 spine: the occupancy snapshot — server-held room state, injected
+            # exactly like rooms/schedules/no_aec_rooms above. 5.0.0 WIRES it;
+            # nothing reads it until 5.0.1, and when a skill does it must
+            # tier-gate ("who's home" is household information, like presence).
+            "occupancy": self._occupancy_payload(),
             # Which front door (F3): node-bound skills refuse on nodeless channels.
             "channel": channel,
             # Lockbox spoken-recall gate (founder decision 2026-07-18): a secret
@@ -3393,6 +3439,33 @@ class TranscribingServer(AudioServer):
             # unknown/unreachable/nodeless-channel all read as not-local.
             "tts_local": (channel == "voice") and await self._tts_is_local(),
         }
+
+    async def llm_occupancy_map(self) -> dict[str, Any]:
+        """Fetch the occupancy evidence map from kenzy-llm (v5 spine, Slice A).
+
+        The ONLY thing that crosses the service boundary for occupancy: the
+        entity→room map, because the area knowledge and curation baking live in
+        ``ha_model.py``. Config does not cross (the server holds both HA
+        credentials); the event stream does not cross (it is consumed locally).
+        """
+        base = self._llm_url or ""
+        if base.endswith("/process"):
+            base = base[: -len("/process")]
+        if not base:
+            announced = self.announced_health_urls().get("llm", "")
+            base = announced[: -len("/health")] if announced else ""
+        if not base:
+            raise RuntimeError("llm service is not reachable")
+        import httpx
+
+        from kenzy import tlsutil
+
+        url = f"{base}/ha/map"
+        async with httpx.AsyncClient(timeout=20.0, verify=tlsutil.httpx_verify()) as client:
+            resp = await client.get(url, headers=self._service_headers("GET", url))
+            resp.raise_for_status()
+            data = resp.json()
+        return data if isinstance(data, dict) else {}
 
     async def _call_llm(
         self,
@@ -4762,12 +4835,51 @@ def main() -> None:
         _hub.subscribe(mqtt_transport.submit)
         attach_to_server(_hub, server)
 
+    # v5 occupancy spine: the HA event socket + the tracker. Default ON, but
+    # only ever starts when HA is actually configured — the server holds BOTH
+    # credentials already (HA_API_KEY in its own .env, the URL in its central
+    # store), so nothing is fetched to decide this and nothing new is configured.
+    ha_url = str(
+        (
+            (server._effective_service_config("llm").get("skills", {}) or {}).get(
+                "home_assistant", {}
+            )
+            or {}
+        ).get("url", "")
+    ).strip()
+    ha_token = os.environ.get("HA_API_KEY", "")
+    occupancy_enabled = bool((cfg.get("occupancy", {}) or {}).get("enabled", True))
+    if occupancy_enabled and ha_url and ha_token:
+        from kenzy.server.ha_events import HaEventClient
+        from kenzy.server.occupancy import OccupancyTracker
+
+        tracker = OccupancyTracker()
+
+        async def _fetch_map() -> dict[str, Any]:
+            """Only the MAP crosses the service boundary — never the stream.
+
+            Returns the whole envelope so the client can tell a switched-off
+            integration from a broken one and park instead of retrying.
+            """
+            info = await server.llm_occupancy_map()
+            return info if isinstance(info, dict) else {}
+
+        ha_client = HaEventClient(ha_url, ha_token, _fetch_map)
+        ha_client.subscribe(tracker.on_evidence)
+        server._occupancy = tracker
+        server._ha_events = ha_client
+        log.info("Occupancy spine enabled (HA events → tracker); watch-only in 5.0")
+    elif occupancy_enabled and not ha_token:
+        log.info("Occupancy spine idle: Home Assistant is not configured")
+
     async def _main() -> None:
         coros: list[Any] = [server.serve()]
         if dashboard is not None:
             coros.append(dashboard.serve())
         if mqtt_transport is not None:
             coros.append(mqtt_transport.run())
+        if server._ha_events is not None:
+            server._ha_events.start()
         if sys.stdin.isatty():
             coros.append(_stdin_control(server))
         await asyncio.gather(*coros)

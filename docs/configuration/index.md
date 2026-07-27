@@ -16,7 +16,7 @@ Everything is under your **config home** — `~/.config/kenzy` for a normal inst
 |---|---|---|
 | `configs/server.yaml` | The server: ports, discovery, dashboard, pipeline | you (file) + a scoped Settings-page editor |
 | `configs/nodes/<node_id>.yaml` | Per-room-node settings (mic, thresholds, room name, volume) | the dashboard (node Configure page) |
-| `configs/services/<svc>.yaml` | Backend service overrides (models, voices, skills) | the dashboard (Services tab) |
+| `configs/services/<svc>.yaml` | Backend service overrides (models, voices, skills) | the dashboard (Fleet → the service) |
 | `configs/node.yaml` | A node's local bootstrap **only** — how to reach the server | you, rarely (the installer writes it) |
 | `.env` | API keys and secrets | you (file, on each machine) |
 | `skills/` | Your custom skills | you |

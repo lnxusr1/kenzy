@@ -77,6 +77,11 @@ class ProcessRequest(BaseModel):
     # The speaker service base URL (server-resolved: static ← auto-registered),
     # for the enrollment skill's /enroll calls.
     speaker_url: str | None = None
+    # v5 occupancy spine: the server's per-room world model (who is where, with
+    # provenance + age), injected like rooms/schedules/no_aec_rooms. Written by
+    # 5.0.0, read by nothing until 5.0.1 — and a skill that reads it must
+    # tier-gate, since "who's home" is household information (see presence.py).
+    occupancy: dict[str, Any] = {}
     # Identity core (F1): the resolved person id (None = no record / unknown), the
     # confidence tier ("unknown"/"recognized"), and the raw voiceprint confidence.
     # Skills read these via get_request to gate on who's asking.
@@ -741,11 +746,21 @@ async def get_ha_curation() -> dict[str, Any]:
         lists = await ha_model.fetch_todo_lists()
     except Exception as exc:
         log.warning("HA todo lists unavailable for curation editor: %s", exc)
+    # Presence candidates (v5). A SEPARATE query on purpose: the device tree
+    # above walks the voice-control domains, which contain no binary_sensor and
+    # no person — so occupancy sensors are invisible to it, and the operator had
+    # no way to exclude a sensor that lies (the cat-crossed hallway PIR).
+    occupancy: list[dict[str, Any]] = []
+    try:
+        occupancy = [vars(c) for c in await ha_model.fetch_occupancy_candidates()]
+    except Exception as exc:
+        log.warning("HA presence sensors unavailable for curation editor: %s", exc)
     import os
 
     return {
         "curation": curation,
         "devices": devices,
+        "occupancy": occupancy,
         "lists": lists,
         "reachable": reachable,
         # Editor state hints: the tab stays editable when the skill is off
@@ -754,6 +769,39 @@ async def get_ha_curation() -> dict[str, Any]:
         "skill_disabled": skill_registry.is_disabled("home_assistant"),
         "configured": bool(os.environ.get("HA_API_KEY")),
     }
+
+
+@app.get("/ha/map")
+async def get_ha_occupancy_map() -> dict[str, Any]:
+    """Occupancy evidence map for the server's HA event socket (v5 spine).
+
+    The server owns the socket and the tracker but has no area knowledge, so it
+    fetches this slow, small map and consumes the fast event stream locally —
+    the only thing that crosses the service boundary. Curation's ``occupancy``
+    block is baked in HERE, so the server-side filter stays dumb and never
+    grows a second config system.
+    """
+    import os
+
+    from kenzy.llm.builtin_skills import ha_model
+
+    if skill_registry.is_disabled("home_assistant"):
+        # Switched off by the operator — a DISTINCT answer from "broken", so the
+        # server parks the socket instead of retrying forever.
+        return {
+            "ok": False,
+            "disabled": True,
+            "error": "home assistant integration disabled",
+            "entities": {},
+        }
+    if not os.environ.get("HA_API_KEY"):
+        return {"ok": False, "error": "home assistant not configured", "entities": {}}
+    try:
+        entities = await ha_model.fetch_occupancy_map()
+    except Exception as exc:
+        log.warning("Occupancy map unavailable: %s", exc)
+        return {"ok": False, "error": str(exc), "entities": {}}
+    return {"ok": True, "entities": entities}
 
 
 @app.post("/ha/curation")

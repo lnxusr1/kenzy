@@ -194,3 +194,21 @@ integrations:
     #                              or {"sound": ..., "seconds": ..., "rooms": [...]})
     # Set false for a read-only (publish-only) integration.
     commands: true
+
+# ---------------------------------------------------------------------------
+# Occupancy (v5) — the standing "who is where" world model.
+# ---------------------------------------------------------------------------
+# Subscribes to Home Assistant's event stream and tracks, per room, how
+# confident Kenzy is that someone is there (motion/presence sensors) and who was
+# most recently heard (voice). Shown on the dashboard's Presence tab.
+#
+# In this release it is WATCH-ONLY: nothing speaks unprompted and no delivery
+# behavior changes — the picture is built so it can be trusted before anything
+# acts on it. Requires Home Assistant to be configured (Services -> llm);
+# without it, nothing starts.
+#
+# Which sensors count as evidence is auto-detected from device classes, and
+# tunable per entity in the Home Assistant tab (a pet-tripped hallway PIR or a
+# window-facing sensor should be excluded, or every room reads "occupied").
+occupancy:
+  enabled: true

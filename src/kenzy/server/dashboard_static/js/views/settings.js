@@ -576,7 +576,7 @@ function ApiKeys({ envKeys, controls }) {
     if (res.ok) {
       setSetNames([...new Set([...setNames, effective])]);
       setValue("");
-      notify(`${effective} saved — restart the affected services (Services tab) to apply.`);
+      notify(`${effective} saved — restart the affected services (Fleet → the service) to apply.`);
     } else notify(res.error || "Could not save the key.", "err");
   }
 

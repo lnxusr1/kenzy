@@ -2,7 +2,7 @@
 
 **[kenzy.ai](https://kenzy.ai)** &middot; [Documentation](https://docs.kenzy.ai/) &middot; [Install](https://kenzy.ai/install.sh)
 
-A distributed home voice assistant built as six independently deployable microservices. Kenzy runs wake-word detection locally on room nodes (Orange Pi Zero 3 / 3W or Raspberry Pi 3 / 4 / 5), streams audio to a central server for transcription, runs it through an LLM with tool-calling skills, and streams synthesized speech back to the room.
+A distributed home voice assistant built as six independently deployable microservices. Kenzy runs wake-word detection locally on room nodes (Orange Pi Zero 3 / 3W or Raspberry Pi 3 / 4 / 5), streams audio to a central server for transcription, runs it through an LLM with tool-calling skills, and streams synthesized speech back to the room. It also keeps a live, per-room sense of where people are, built from your Home Assistant sensors and from who it last heard in each room.
 
 ## Architecture
 
@@ -22,6 +22,10 @@ Node (mic) ──PCM over WebSocket──► Server
                     │
              PCM over WebSocket ──► Node (speaker)
 ```
+
+Alongside the voice pipeline, the server holds a persistent subscription to Home
+Assistant's WebSocket API, feeding the room-presence model described under
+[Room presence](#room-presence). It's the one inbound stream that isn't audio.
 
 | Service | Command | Default port | Role |
 |---|---|---|---|
@@ -116,21 +120,28 @@ Prerequisites on each remote host: SSH key auth and passwordless sudo. Backend s
 
 `kenzy-server` serves a web fleet manager — **on by default** in the shipped config
 (set `dashboard.enabled: false` in `server.yaml` to disable it entirely; nothing is
-then wired up). Open `http://<server>:8770/dashboard`. It gives you one place to:
+then wired up). Open `https://<server>:8770` — `http://` if you installed without TLS.
+It gives you one place to:
 
 - See live node + backend-service health and each host's installed version
 - Configure each node, **rename its room**, and run **guided calibration** (also available by voice: "Hey Kenzy, calibrate") — it measures the room, detects echo cancellation, and applies the thresholds itself
 - Manage **skills** (enable/disable live) and **speaker profiles** (rename / delete / enroll from a room)
+- Watch **room presence** — which rooms have someone in them, what each belief rests on, and how fresh it is
 - Watch **pipeline activity** (transcripts, latency, fast-path hit rate) and read server / service / node **logs**
 - Trigger / stop / restart nodes and send TTS **announcements** to every room
 - **Upgrade** the server, backend services, and nodes in place — one click, with an "update available" check against PyPI
 - Edit a safe subset of the server's own config and change the dashboard password
 
-Traffic is plaintext by default (a trusted-LAN posture). Optional TLS — `tls: {cert, key}` in `server.yaml`, or say yes at the installer's TLS question — encrypts both the dashboard (https) and the node audio stream (wss); a self-signed cert works because Kenzy's own clients connect encrypted-but-unverified by default. See the [server configuration docs](https://docs.kenzy.ai/configuration/server/#tls-optional).
+The `install.sh` installer **enables TLS by default** (generating a self-signed pair into
+the config home; `--no-tls` opts out). A plain `pip install` starts plaintext — a
+trusted-LAN posture — until you add `tls: {cert, key}` to `server.yaml`. Either way TLS
+covers both the dashboard (https) and the node audio stream (wss); a self-signed cert
+works because Kenzy's own clients connect encrypted-but-unverified by default. See the
+[server configuration docs](https://docs.kenzy.ai/configuration/server/#tls-optional).
 
 All `/api` reads and actions require login; mutating actions also need `controls`. Login
 defaults to `admin` / `password` — change it with `kenzy-passwd` (server host only) or
-from the Settings page. It is plaintext HTTP on a LAN bind, so **do not port-forward it**.
+from the Settings page. It's a LAN appliance either way, so **do not port-forward it**.
 The Settings page also shows the **node join token** to copy when provisioning new nodes.
 See the [Dashboard guide](https://docs.kenzy.ai/dashboard/).
 
@@ -143,8 +154,8 @@ files below are the server-side store and the seed defaults.
 Key settings:
 
 * **`configs/node.yaml`** — **bootstrap-only** (identity + how to reach the server + early logging). A node auto-generates a stable `node_id`, then blocks until the server pushes its full operational config (audio device, wake-word threshold/VAD, sounds, room name) and initializes audio from that. Per-node overrides live in `configs/nodes/<node_id>.yaml`; the room name is server-owned and set from the dashboard.
-* **`configs/server.yaml`** — URLs for each downstream service (omit a URL to disable that stage), `node_defaults`, discovery, and the dashboard block
-* **`configs/services/<svc>.yaml`** — server-owned overrides for the backend services (stt/tts/llm/speaker), edited from the dashboard's **Services** tab; each service pulls its effective config (packaged default + this override, secrets stripped) from the server at boot
+* **`configs/server.yaml`** — URLs for each downstream service (omit a URL to disable that stage), `node_defaults`, discovery, room presence (`occupancy.enabled`), and the dashboard block
+* **`configs/services/<svc>.yaml`** — server-owned overrides for the backend services (stt/tts/llm/speaker), edited from the dashboard (**Fleet** → the service's chip); each service pulls its effective config (packaged default + this override, secrets stripped) from the server at boot
 * **`configs/llm.yaml` / `stt.yaml` / `tts.yaml` / `speaker.yaml`** — packaged seed defaults for those services (model/voice/thresholds/etc.)
 
 Secrets stay in each host's environment / `.env` — never in the config store.
@@ -159,13 +170,20 @@ Included skills:
 |---|---|
 | `weather.py` | Current conditions and forecast via NWS |
 | `news.py` | RSS headlines and article summaries |
+| `web_search.py` | General web search for current or niche questions the model can't answer alone |
 | `stocks.py` | Stock quotes via yfinance |
 | `home_assistant.py` | Smart home control via Home Assistant REST API (secure actions require a recognized speaker) |
+| `lists.py` | Shopping / to-do lists, backed by Home Assistant's `todo` entities — add, read, check off, create (no Kenzy-side storage, so your phone already has them) |
+| `schedule.py` | Timers, alarms, and reminders — including "turn on the lights in 30 seconds", replayed through the pipeline at fire time |
+| `memory_skill.py` | Remember / recall / forget, per person, with private / personal / shared tiers (recognized voices only) |
+| `presence.py` | "Is Mom home?" — a live read of Home Assistant's `person` entities via each person's linked HA user |
 | `datetime_skill.py` | Current date and time (with a deterministic fast path) |
 | `announce.py` | Speak a message in every room (broadcast) |
-| `intercom.py` | Start a live two-way voice call between two rooms |
+| `intercom.py` | Start a live two-way voice call between two rooms (consent-gated at the far end) |
 | `volume.py` | Set / adjust a room's playback volume or mute |
 | `enroll.py` | Voice speaker enrollment ("enroll me as Alice") |
+| `calibrate.py` | "Hey Kenzy, calibrate" — runs the guided audio calibration on the asking node |
+| `social.py` | Instant greetings and "never mind" — fast path only, no model round-trip |
 | `random_tools.py` | Coin flip, dice, random number, pick from list |
 | `knock_knock.py` | Knock-knock jokes, both directions — she tells them and plays along with yours |
 | `about.py` | Reports the installed Kenzy version |
@@ -190,7 +208,30 @@ Smart home control pulls your device **topology live from Home Assistant** — w
 
 Covered domains: lights, switches, fans, covers, locks, climate — plus **scenes, scripts, buttons, and toggle helpers** ("activate movie night", "run the goodnight routine", "turn on guest mode" — resolved by name house-wide), the **robot vacuum** ("start the vacuum", "send it home"), and **media-player transport** ("pause the TV", "skip this song", "turn the music down" — targeting whatever's actually playing; starting new music by name arrives with the Music Assistant integration).
 
-The only hand-authored input is an optional `data/home_assistant/curation.yaml` — the voice layer HA can't store: spoken aliases, per-device notes, room group-defaults, and voice-control exclusions. Edit it directly or from the dashboard's **Home Assistant** tab. Run `kenzy-ha-devices` to print the live tree with each entity ID and its included/excluded status.
+The only hand-authored input is an optional `data/home_assistant/curation.yaml` — the voice layer HA can't store: spoken aliases, per-device notes, room group-defaults, voice-control exclusions, which to-do list "the list" means, and which sensors count as presence. Edit it directly or from the dashboard's **Home Assistant** tab (sub-tabs: Devices, Presence sensors, Lists). Run `kenzy-ha-devices` to print the live tree with each entity ID and its included/excluded status.
+
+### Room presence
+
+Kenzy keeps a live picture of which rooms have someone in them. The server holds a
+persistent subscription to Home Assistant's WebSocket API and folds motion, occupancy
+and presence sensors — plus whose voice was just heard where — into a per-room belief
+that decays with time. The dashboard's **Presence** tab shows it: each room's state,
+what the claim rests on, and how old it is.
+
+Two things it does on purpose:
+
+- **"Unknown" is a real answer.** No sensor and no recent voice means Kenzy doesn't
+  know, which is not the same as the room being empty. Rooms read unknown after a
+  restart until something says otherwise.
+- **It acts on nothing.** Presence changes no behavior yet — nothing speaks unprompted,
+  no delivery is re-targeted. It's a world model you can watch, and catch being wrong,
+  before anything depends on it. Acting on it comes next.
+
+It needs Home Assistant configured; without it nothing starts and the tab stays hidden.
+Turn it off with `occupancy.enabled: false`. Which entities count is automatic (motion,
+occupancy and presence sensors, plus `person` entities for home/away) and adjustable per
+sensor under **Home Assistant → Presence sensors** — useful when a hallway sensor the cat
+trips keeps a room "occupied".
 
 ## Development
 

@@ -365,7 +365,7 @@ Set under `skills.web_search` in `llm.yaml`:
 | `region` | `"wt-wt"` | DuckDuckGo region code (`wt-wt` = no region) |
 | `searxng_url` | `"http://localhost:8888/search"` | Your SearXNG `/search` endpoint (searxng provider only) |
 
-All of these are editable from the dashboard (**Services → llm**), with the provider as a dropdown.
+All of these are editable from the dashboard (**Fleet → llm**), with the provider as a dropdown.
 
 **DuckDuckGo** (the default) is keyless and needs zero setup — it just works. If you'd rather no search queries leave your network, point the `searxng` provider at a self-hosted [SearXNG](https://docs.searxng.org/) instance; its JSON output format must be enabled (`search.formats: [html, json]` in SearXNG's `settings.yml`).
 

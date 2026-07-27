@@ -199,7 +199,7 @@ configs/
 ```
 
 - **Nodes** pull their operational config (audio device, wake-word thresholds, VAD timing, sounds, **and room name**) from the server on connect. Give a node host a `node_id:` slug in `deploy.yaml` (or let it self-generate a uuid) — it's baked into the node's `node.yaml` and keys `configs/nodes/<node_id>.yaml`. Set fleet-wide defaults in `server.yaml`'s `node_defaults`. The shared `configs/node.yaml` holds **only** bootstrap (how to reach the server + early logging); leave `server_url` unset to auto-discover the server over mDNS. See [Discovery & config-pull](configuration/server.md#discovery-and-config-pull).
-- **Services** run in pull mode and fetch `configs/services/<service>.yaml` from the server, so the dashboard's Services tab manages them.
+- **Services** run in pull mode and fetch `configs/services/<service>.yaml` from the server, so the dashboard manages them (Fleet → the service).
 - The central store is **seeded, not clobbered**: a re-deploy adds only the files the server is missing, preserving dashboard edits. Use `--reseed` to force the operator's files back.
 
 ### Legacy per-host overlay

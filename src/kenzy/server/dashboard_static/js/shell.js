@@ -5,6 +5,7 @@ import { ConfigView } from "./views/config.js";
 import { ServicesView } from "./views/services.js";
 import { SkillsView } from "./views/skills.js";
 import { PeopleView } from "./views/people.js";
+import { PresenceView } from "./views/presence.js";
 import { SchedulesView } from "./views/schedules.js";
 import { HaView } from "./views/ha.js";
 import { ActivityView } from "./views/activity.js";
@@ -25,14 +26,24 @@ function Toasts() {
   </div>`;
 }
 
+// Ordered in three bands, most-glanced first, moving from the HOME to the
+// SOFTWARE: what's happening now (fleet health, who's where, what she just did,
+// what's coming) → the household she knows (people, the house, her abilities) →
+// the machinery (backends, debugging, settings). Fleet stays first: it is the
+// default view and the wordmark's target.
 const NAV = [
+  // Now
   { id: "fleet", label: "Fleet", ico: "▣" },
-  { id: "services", label: "Services", ico: "❏" },
-  { id: "skills", label: "Skills", ico: "✦" },
-  { id: "ha", label: "Home Assistant", ico: "⌂" },
-  { id: "people", label: "People", ico: "☺" },
-  { id: "schedules", label: "Scheduled", ico: "◷" },
+  { id: "presence", label: "Presence", ico: "◎" },
   { id: "activity", label: "Activity", ico: "↗" },
+  { id: "schedules", label: "Scheduled", ico: "◷" },
+  // Household
+  { id: "people", label: "People", ico: "☺" },
+  { id: "ha", label: "Home Assistant", ico: "⌂" },
+  { id: "skills", label: "Skills", ico: "✦" },
+  // System. NB there is deliberately no "Services" entry: a service is
+  // configured by clicking its chip on Fleet, the same way a node is — Fleet is
+  // the fleet. The `services` ROUTE still exists to render that editor.
   { id: "logs", label: "Logs", ico: "≡" },
   { id: "settings", label: "Settings", ico: "⚙" },
 ];
@@ -84,6 +95,10 @@ export function Shell({ user, onLogout }) {
   // front door in use, and the home_assistant module not disabled). Absent
   // flag (older server) keeps the tab.
   const haOn = !data || !data.flags || data.flags.ha_active !== false;
+  // Presence needs a live tracker AND its tuning editor (which lives in the HA
+  // tab) — a picture you cannot correct is worse than no tab. Absent flag
+  // (older server) keeps it, same convention as ha_active above.
+  const presenceOn = !data || !data.flags || data.flags.occupancy_active !== false;
   const [view, setView] = useState("fleet");
   const [node, setNode] = useState(null);
   const [svc, setSvc] = useState(null);
@@ -93,7 +108,6 @@ export function Shell({ user, onLogout }) {
   const title = view === "config" ? "Node config" : active.label;
 
   const go = (id) => {
-    if (id === "services") setSvc(null); // sidebar Services always opens the list
     if (id === "people") setPersonSel(null); // likewise People: nav = back to the list
     setView(id);
     setNavOpen(false);
@@ -116,7 +130,7 @@ export function Shell({ user, onLogout }) {
         <div class="brand"><a href="#" class="wordmark" aria-label="Kenzy — go to Fleet"
           onClick=${(e) => { e.preventDefault(); go("fleet"); }}><span class="glyph"></span><span class="name">Kenzy</span></a></div>
         <nav class="nav">
-          ${NAV.filter((n) => n.id !== "ha" || haOn).map((n) => {
+          ${NAV.filter((n) => (n.id !== "ha" || haOn) && (n.id !== "presence" || presenceOn)).map((n) => {
             // Logs and Activity are gated by the server's `dashboard.logs` flag
             // (Activity records carry transcripts, like logs).
             const disabled = (n.id === "logs" || n.id === "activity") && !logsOn;
@@ -156,7 +170,13 @@ export function Shell({ user, onLogout }) {
           ${view === "config"
             ? html`<${ConfigView} node=${node} onBack=${() => go("fleet")} />`
             : view === "services"
-              ? html`<${ServicesView} selected=${svc} onSelect=${setSvc} />`
+              ? html`<${ServicesView} selected=${svc}
+                  onSelect=${(name) => {
+                    setSvc(name);
+                    if (!name) setView("fleet"); // Back → the fleet, not a dead list
+                  }} />`
+              : view === "presence"
+                ? html`<${PresenceView} />`
               : view === "skills"
                 ? html`<${SkillsView} />`
                 : view === "ha"

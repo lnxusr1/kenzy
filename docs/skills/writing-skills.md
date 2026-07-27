@@ -367,7 +367,7 @@ For deterministic intent/slot parsing beyond simple keyword checks, the `llm` ex
 
 1. Save your file under `~/.config/kenzy/skills/`.
 2. Restart the LLM service to load it: `systemctl --user restart kenzy-llm`
-   (or the **Restart** button on the dashboard's Services → llm page).
+   (or the **Restart** button on the dashboard's Fleet → llm page).
 3. Verify it registered: the dashboard's **Skills** tab lists every loaded skill and
    fast intent, with invocation counts — if yours is missing, the file failed to
    import (check Logs → llm for the traceback).

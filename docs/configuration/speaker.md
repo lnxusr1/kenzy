@@ -33,7 +33,7 @@ The speaker identification service uses a SpeechBrain ECAPA-TDNN model to compar
 | `embeddings_dir` | `"data/speakers"` | Directory containing per-speaker `.npy` embedding files. Each file is named `<speaker_name>.npy`. |
 | `identify_threshold` | `0.25` | Cosine similarity threshold [0.0–1.0]. Utterances below this score are attributed to `unknown_speaker`. |
 | `unknown_speaker` | `"unknown"` | Name returned when no enrolled speaker exceeds the threshold. |
-| `allow_voice_enroll` | `false` | Allow [voice enrollment](../speaker-enrollment.md#enrolling-by-voice-from-a-node) ("enroll me as Alice") from a node. The speaker service owns it (editable from the dashboard's Services → speaker; the save restarts the service to apply), and the enrollment skill checks it before every spoken enrollment. Off by default; when on, anyone in earshot can enroll — see the security warning in the enrollment guide. |
+| `allow_voice_enroll` | `false` | Allow [voice enrollment](../speaker-enrollment.md#enrolling-by-voice-from-a-node) ("enroll me as Alice") from a node. The speaker service owns it (editable from the dashboard's Fleet → **speaker** page; the save restarts the service to apply), and the enrollment skill checks it before every spoken enrollment. Off by default; when on, anyone in earshot can enroll — see the security warning in the enrollment guide. |
 
 ### Enrollment (`kenzy-enroll`)
 

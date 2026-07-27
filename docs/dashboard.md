@@ -57,7 +57,8 @@ The landing page lists:
   `hardware_aec: false` carry a **no AEC** badge. A **Configure** button opens the
   node editor.
 - **Backend services** — STT, TTS, LLM, and Speaker health (from each service's
-  `/health`), with a few details (version, model, voice, provider).
+  `/health`), with a few details (version, model, voice, provider). Click a chip to
+  open that service's config editor (see [below](#configuring-backend-services)).
 
 The status pill (top right) shows whether the live channel is connected and keeps a
 running "last update" time. State is pushed live over a WebSocket, falling back to
@@ -160,9 +161,9 @@ the dashboard or by adding them to `configs/nodes/<node_id>.yaml` (this node) or
 
 ## Configuring backend services
 
-The **Services** tab lists the configured backend services (STT, TTS, LLM, Speaker)
-with live health. Open one to edit its **effective config** in a generic editor —
-each field is the packaged default or your stored override. Saving writes
+The Fleet view's **Backend services** chips (STT, TTS, LLM, Speaker) show live health;
+click one to edit its **effective config** in a generic editor — each field is the
+packaged default or your stored override. Saving writes
 `configs/services/<service>.yaml` on the server and **restarts the service** so the new
 config takes effect (the service re-pulls on boot); a separate **Restart** button
 restarts without editing, and an **Upgrade** button pip-upgrades that service to the
@@ -188,51 +189,62 @@ on another host has nothing listening, so the page shows the one-line
 `systemctl --user enable --now kenzy-<svc>` to run there. Environments
 without systemd (dev checkouts) simply don't show these controls.
 
-## Skills
+## Presence
 
-The **Skills** tab shows everything loaded by `kenzy-llm`, grouped into
-**collapsible modules** — one accordion group per skill file (`home assistant`,
-`lists`, `schedule`, …), because a "feature" is usually several skills plus
-their fast intents. Each group header shows a skill/fast-intent count and a
-**Disable all / Enable all** toggle for the whole module; expand a group to see
-its member skills, each with a one-line description, an **invocation count**,
-and its own individual toggle.
+The **Presence** tab is Kenzy's live picture of which rooms have someone in them. It
+appears only when occupancy is running (`occupancy.enabled` in Settings *and* Home
+Assistant configured). Kenzy **watches** here — nothing on this screen makes her speak
+or act; it exists so you can catch the world model being wrong before anything depends
+on it.
 
-All toggles take effect **immediately, without restarting the service** (a
-disabled skill stays loaded but is gated out of the tool list and the fast
-path) and **persist** to `configs/services/llm.yaml` (`skills.disabled`, which
-accepts function names and module names). Group headers also carry honesty
-badges: a module that *depends* on another (lists requires `home_assistant` —
-they're stored in HA's to-do entities) is marked **inactive** while its
-dependency is off, and modules with wider blast radius say what else they power
-(disabling `home_assistant` also idles the Home Assistant screen and lists).
-Without `controls`, the tab is read-only.
+- **Rooms** — one card each: `occupied` / `maybe` / `unknown`, a confidence bar, what
+  the claim rests on (a sensor, "heard a voice", "sensor cleared"), and how long ago it
+  changed. Where a voice was recognised, the person is named. **Unknown is a real
+  state** — no sensor and no recent voice means Kenzy doesn't know, which is not the
+  same as empty, and rooms read unknown after a restart until something says otherwise.
+- **People** — home/away from HA's `person` entities, which are house-wide, not per-room.
+- **Home Assistant feed** — connection health, how long since the last event, how many
+  entities count as evidence, and how many events were *used* out of those seen (most HA
+  traffic isn't about presence). A last error shows here when the socket is unhappy.
 
-## Home Assistant
+Confidence decays with time, so the page fades on its own; it also refreshes the
+instant a voice session lands. Which entities count as evidence is set under
+[Home Assistant → Presence sensors](#home-assistant).
 
-The **Home Assistant** tab edits the device **curation** layer for the Home Assistant
-skill — the small set of things HA can't store. The device inventory itself is pulled
-**live from HA** (via `kenzy-llm`) and shown as a tree (`floor → area → domain → entity`);
-you don't list devices here. Each entity row has:
+## Activity
 
-- **aliases** — extra spoken names ("the lamp", "black light")
-- **note** — free-form context handed to the resolver ("the light by the chair")
-- **default** — include in this room's bare "turn on the lights" set
-- **in groups** — uncheck to keep it addressable by name but out of group commands (a bare "turn off all the lights" still includes it; only **exclude** removes it from voice entirely)
-- **exclude** — remove it from voice control entirely
+With `dashboard.logs: true`, the **Activity** tab shows the recent voice interactions
+the server has handled, so you can see what Kenzy heard, how it answered, and where the
+time went. Each entry shows:
 
-plus **bulk exclusions** (patterns/domains/areas) for things like smart-plug status LEDs
-that show up as controllable lights, and a **Lists** section for the shopping/to-do
-voice layer — pick which HA to-do list a bare "the list" means and give lists spoken
-aliases ("the groceries"); see [Built-in Skills → Lists](skills/builtin.md#lists).
-Saving writes `curation.yaml` and refreshes the topology immediately. The tab needs `kenzy-llm` reachable and `dashboard.controls: true`
-to edit (read-only otherwise). See [Home Assistant](skills/home-assistant.md).
+- the **transcript** (what was heard), the identified **speaker** and **room**, and the
+  spoken **response**;
+- a **fast / LLM** tag — whether the deterministic fast path handled it or it went to the
+  language model;
+- a **latency breakdown** (capture = STT + speaker ID in parallel, then LLM, then TTS)
+  and the total response time. The LLM segment is subdivided — **model calls vs tool
+  calls** vs service overhead — and clicking a row expands the ordered call list with
+  per-call timings and names ("model gpt-5.1 1.8s · ⚒ home_assistant 0.4s · model
+  0.9s"), which model actually answered (you can see a fallback rescue), and for
+  fast-path rows, which intent handled it. Names and durations only — never call
+  arguments or content.
 
-Two states the tab is honest about: with the `home_assistant` module **disabled**
-(Skills tab), a warning banner says nothing here takes effect until it's
-re-enabled — but the screen stays editable, so you can stage curation before
-flipping the feature on. And with no `HA_API_KEY` configured at all, the tab
-shows step-by-step connection guidance instead of an error.
+The header summarises the **fast-path hit rate** and **average response time** across the
+recent window. It's a bounded in-memory ring (no disk, ~200 entries) that updates live;
+because entries include transcripts it's gated by the same `dashboard.logs` flag as the
+log viewer, and nothing is recorded when that's off.
+
+The latency bars share **one time scale** across all shown interactions (the legend notes what full width represents), so segment widths are directly comparable run-to-run — a slow LLM call is visibly wider than a fast one, and fast-path replies show as slivers.
+
+## Scheduled
+
+The **Scheduled** tab lists the active **timers, alarms, and reminders** held by the
+server — kind, name/text, target room, when it fires (live countdown for timers), and
+any recurrence — with a per-entry **Cancel** button (requires `dashboard.controls`).
+Entries are set by voice (see [Timers, Alarms & Reminders](skills/builtin.md#timers-alarms-reminders))
+and persist across server restarts. The view is available to any logged-in user —
+deliberately not gated behind `dashboard.logs`, since these are future announcements
+the operator needs to see to manage.
 
 ## People
 
@@ -314,40 +326,67 @@ Person records live in `data/people.yaml` and the memory ledger in
 The consolidation log (which merges happened and why) arrives with the
 memory hardening phase.
 
-## Scheduled
+## Home Assistant
 
-The **Scheduled** tab lists the active **timers, alarms, and reminders** held by the
-server — kind, name/text, target room, when it fires (live countdown for timers), and
-any recurrence — with a per-entry **Cancel** button (requires `dashboard.controls`).
-Entries are set by voice (see [Timers, Alarms & Reminders](skills/builtin.md#timers-alarms-reminders))
-and persist across server restarts. The view is available to any logged-in user —
-deliberately not gated behind `dashboard.logs`, since these are future announcements
-the operator needs to see to manage.
+The **Home Assistant** tab edits the **curation** layer for the Home Assistant skill —
+the small set of things HA can't store. It's split into three sub-tabs that all write
+the same `curation.yaml` behind a single **Save changes** button; a dot on a sub-tab
+marks where an unsaved edit is.
 
-## Activity
+**Devices.** The inventory is pulled **live from HA** (via `kenzy-llm`) and shown as a
+tree (`floor → area → domain → entity`); you don't list devices here. Each entity row has:
 
-With `dashboard.logs: true`, the **Activity** tab shows the recent voice interactions
-the server has handled, so you can see what Kenzy heard, how it answered, and where the
-time went. Each entry shows:
+- **aliases** — extra spoken names ("the lamp", "black light")
+- **note** — free-form context handed to the resolver ("the light by the chair")
+- **default** — include in this room's bare "turn on the lights" set
+- **in groups** — uncheck to keep it addressable by name but out of group commands (a bare "turn off all the lights" still includes it; only **exclude** removes it from voice entirely)
+- **exclude** — remove it from voice control entirely
 
-- the **transcript** (what was heard), the identified **speaker** and **room**, and the
-  spoken **response**;
-- a **fast / LLM** tag — whether the deterministic fast path handled it or it went to the
-  language model;
-- a **latency breakdown** (capture = STT + speaker ID in parallel, then LLM, then TTS)
-  and the total response time. The LLM segment is subdivided — **model calls vs tool
-  calls** vs service overhead — and clicking a row expands the ordered call list with
-  per-call timings and names ("model gpt-5.1 1.8s · ⚒ home_assistant 0.4s · model
-  0.9s"), which model actually answered (you can see a fallback rescue), and for
-  fast-path rows, which intent handled it. Names and durations only — never call
-  arguments or content.
+A collapsed **Bulk exclusions** card at the top of the same sub-tab does the job by
+rule instead of by row (patterns/domains/areas) — for things like smart-plug status
+LEDs that show up as controllable lights.
 
-The header summarises the **fast-path hit rate** and **average response time** across the
-recent window. It's a bounded in-memory ring (no disk, ~200 entries) that updates live;
-because entries include transcripts it's gated by the same `dashboard.logs` flag as the
-log viewer, and nothing is recorded when that's off.
+**Presence sensors.** Which entities count as evidence that a room is occupied, feeding
+the [Presence](#presence) tab. Motion, occupancy and presence sensors count
+automatically, as do HA's `person` entities; the list shows those (and anything you've
+changed) up front, with the rest one click away. Turn one **off** when it lies — a
+hallway sensor the cat trips, or one aimed through a window — or **on** to enlist a
+sensor that isn't a presence type. Only your *divergences* are written to the file, so
+a later change to Kenzy's defaults still reaches sensors you never touched.
 
-The latency bars share **one time scale** across all shown interactions (the legend notes what full width represents), so segment widths are directly comparable run-to-run — a slow LLM call is visibly wider than a fast one, and fast-path replies show as slivers.
+**Lists.** The shopping/to-do voice layer — pick which HA to-do list a bare "the list"
+means and give lists spoken aliases ("the groceries"); see
+[Built-in Skills → Lists](skills/builtin.md#lists).
+
+Saving writes `curation.yaml` and refreshes the topology immediately. The tab needs
+`kenzy-llm` reachable and `dashboard.controls: true` to edit (read-only otherwise).
+See [Home Assistant](skills/home-assistant.md).
+
+Two states the tab is honest about: with the `home_assistant` module **disabled**
+(Skills tab), a warning banner says nothing here takes effect until it's
+re-enabled — but the screen stays editable, so you can stage curation before
+flipping the feature on. And with no `HA_API_KEY` configured at all, the tab
+shows step-by-step connection guidance instead of an error.
+
+## Skills
+
+The **Skills** tab shows everything loaded by `kenzy-llm`, grouped into
+**collapsible modules** — one accordion group per skill file (`home assistant`,
+`lists`, `schedule`, …), because a "feature" is usually several skills plus
+their fast intents. Each group header shows a skill/fast-intent count and a
+**Disable all / Enable all** toggle for the whole module; expand a group to see
+its member skills, each with a one-line description, an **invocation count**,
+and its own individual toggle.
+
+All toggles take effect **immediately, without restarting the service** (a
+disabled skill stays loaded but is gated out of the tool list and the fast
+path) and **persist** to `configs/services/llm.yaml` (`skills.disabled`, which
+accepts function names and module names). Group headers also carry honesty
+badges: a module that *depends* on another (lists requires `home_assistant` —
+they're stored in HA's to-do entities) is marked **inactive** while its
+dependency is off, and modules with wider blast radius say what else they power
+(disabling `home_assistant` also idles the Home Assistant screen and lists).
+Without `controls`, the tab is read-only.
 
 ## Logs
 
@@ -405,7 +444,7 @@ shareable archive that carries lockbox ciphertext only. See
 The **API keys** section is a **write-only** secret editor: pick a key
 (`OPENAI_API_KEY`, `HA_API_KEY`, `HF_TOKEN`, or a custom name), paste a value, and it's
 written to the server host's `.env` — values are never displayed or logged; the page
-only shows which names are *set*. Restart the affected services (Services tab) to apply.
+only shows which names are *set*. Restart the affected services (Fleet → the service) to apply.
 
 As of 3.12 this is **fleet-wide**: with TLS enabled, the server hands each backend
 service the keys it needs over the authenticated config channel, so a key set here

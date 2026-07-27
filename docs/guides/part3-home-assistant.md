@@ -27,7 +27,7 @@ create once, in your HA user profile:
 
 In the Kenzy dashboard: **Settings → API keys** → set `HA_API_KEY` to the
 token you copied. Then tell Kenzy where HA lives, in the LLM service's config
-(**Services → llm** in the dashboard, or `configs/services/llm.yaml`):
+(**Fleet → llm** in the dashboard, or `configs/services/llm.yaml`):
 
 ![HA URL Config](../img/kenzy-installer-screen3.png)
 
@@ -37,7 +37,7 @@ skills:
     url: "http://homeassistant.local:8123"   # your HA address
 ```
 
-**Save** your settings and then Restart the LLM service (**Services → llm → Restart**) so it picks both up.
+**Save** your settings and then Restart the LLM service (**Fleet → llm → Restart**) so it picks both up.
 The default `url` already says `homeassistant.local:8123` — if that's where
 your HA answers, the token alone is enough.
 

@@ -14,7 +14,7 @@ provider in the default setup anyway.
 provider: "openai"    # or "kokoro" — the local voice, no third party
 ```
 
-Switching is a dropdown in the dashboard (**Services → tts**), and
+Switching is a dropdown in the dashboard (**Fleet → tts**), and
 [Running Fully Local](../fully-local.md) walks the local path end to end,
 including the one system package Kokoro needs.
 

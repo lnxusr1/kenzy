@@ -42,7 +42,7 @@ The default prompts are phonetically diverse sentences chosen to capture a broad
 
 You can also enroll without the CLI by speaking to a room node — say something like **"Hey Kenzy, enroll me as Alice"**. Kenzy then reads out the `enroll_prompts` sentences (the same configurable list the CLI uses) and records your reply to each through that node's microphone, so the samples come from the device and room you actually use.
 
-This is **off by default**. Enable it from the **dashboard** (Services → **speaker** →
+This is **off by default**. Enable it from the **dashboard** (Fleet → **speaker** →
 toggle `allow_voice_enroll` on, Save) or by setting it in the speaker config:
 
 ```yaml

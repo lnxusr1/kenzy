@@ -31,6 +31,7 @@ from websockets.http11 import Request, Response
 
 from kenzy import kenzy_version, serviceauth, tlsutil
 from kenzy.logutil import install_ring_handler, level_value
+from kenzy.server import occupancy as occupancy_mod
 
 if TYPE_CHECKING:
     from websockets.asyncio.server import ServerConnection
@@ -268,6 +269,10 @@ class Dashboard:
         # Cache of the latest kenzy version on PyPI (checked lazily; ~1 h TTL) so the
         # update check doesn't hit PyPI on every Settings load.
         self._pypi_cache: tuple[float, str | None] | None = None
+        #: HA-availability flags, cached ~30s (see _ha_flags). Declared here so
+        #: the skill toggle can invalidate it — the Presence nav gate reads it,
+        #: and a stale flag would leave the tab wrong until the cache expired.
+        self._ha_flags_cache: tuple[float, dict[str, Any]] | None = None
         # TLS: the dashboard terminates the same cert pair as the node WS port
         # (`tls: {cert, key}` in server.yaml). Browsers see https/wss; with a
         # self-signed cert they show a one-time interstitial (or install the CA).
@@ -441,6 +446,9 @@ class Dashboard:
             return self._svc_cache[1]
         import httpx
 
+        def base_of(url: str) -> str:
+            return url[: -len("/health")] if url.endswith("/health") else url
+
         async def check(name: str, url: str) -> dict[str, Any]:
             try:
                 async with httpx.AsyncClient(timeout=2.0, verify=tlsutil.httpx_verify()) as client:
@@ -450,9 +458,16 @@ class Dashboard:
                     if r.headers.get("content-type", "").startswith("application/json")
                     else {}
                 )
-                return {"name": name, "up": r.status_code == 200, "detail": detail}
+                return {
+                    "name": name,
+                    "up": r.status_code == 200,
+                    "detail": detail,
+                    # Fleet's chip is now the only door to the service editor, so
+                    # it carries the address the old Services list used to show.
+                    "url": base_of(url),
+                }
             except Exception:
-                return {"name": name, "up": False, "detail": {}}
+                return {"name": name, "up": False, "detail": {}, "url": base_of(url)}
 
         result = list(await asyncio.gather(*(check(n, u) for n, u in targets.items())))
         self._svc_cache = (time.monotonic(), result)
@@ -467,6 +482,14 @@ class Dashboard:
                 "controls": self._dcfg.controls,
                 # Gate the HA nav tab: no-HA households see no HA surfaces.
                 "ha_active": (await self._ha_flags())["active"],
+                # Likewise Presence (v5): show it only when the tracker actually
+                # exists (occupancy enabled AND HA configured) AND the HA surfaces
+                # are on — its tuning editor lives in the HA tab, so a Presence
+                # tab without one would be a picture you cannot correct.
+                "occupancy_active": (
+                    getattr(self._server, "_occupancy", None) is not None
+                    and (await self._ha_flags())["active"]
+                ),
             },
         }
 
@@ -603,6 +626,32 @@ class Dashboard:
                 "persisted": persisted,
             }
         )
+
+    def _presence_state(self) -> dict[str, Any]:
+        """Occupancy snapshot + HA socket health for the Presence view (v5 spine).
+
+        This is the slice that makes the tracker falsifiable: the decay curves
+        are only tunable if you can watch them being wrong in a real house.
+        """
+        tracker = getattr(self._server, "_occupancy", None)
+        if tracker is None:
+            return {"enabled": False, "rooms": [], "people": [], "source": {}}
+        events = getattr(self._server, "_ha_events", None)
+        if events is not None:
+            tracker.set_stale(events.stats.is_stale())
+        rooms = [
+            occupancy_mod.room_slug(s.room_id)
+            for s in self._server._nodes.values()
+            if s.room_id
+        ]
+        snap = tracker.snapshot(rooms)
+        return {
+            "enabled": True,
+            "rooms": snap.get("rooms", []),
+            "people": snap.get("people", []),
+            "stale": snap.get("stale", False),
+            "source": events.stats.snapshot() if events is not None else {},
+        }
 
     def _settings_state(self) -> dict[str, Any]:
         """Read-only server/dashboard info shown on the Settings page."""
@@ -895,6 +944,13 @@ class Dashboard:
                 200,
                 {"schedules": self._server.list_schedules(), "controls": self._dcfg.controls},
             )
+
+        if path == "/api/presence":
+            # The v5 Presence view: the occupancy world model, plus the HA socket's
+            # health. Auth-only (household information). Empty payload when
+            # occupancy is disabled or HA isn't configured, so the nav can hide
+            # the tab rather than showing a permanently blank page.
+            return self._json(200, self._presence_state())
 
         if path == "/api/upgrade":
             return self._json(200, await self._upgrade_state())
@@ -1454,6 +1510,9 @@ class Dashboard:
             "controls": self._dcfg.controls,
             "curation": (info or {}).get("curation", {}),
             "devices": (info or {}).get("devices", []),
+            # Presence candidates (v5): a separate list from `devices`, because
+            # the voice-control domains contain no binary_sensor and no person.
+            "occupancy": (info or {}).get("occupancy", []),
             "lists": (info or {}).get("lists", []),
             "ha_reachable": bool((info or {}).get("reachable", False)),
             "skill_disabled": bool((info or {}).get("skill_disabled", False)),
@@ -1518,6 +1577,13 @@ class Dashboard:
         applied = await self._llm_skills_request("POST", {"disabled": new_list})
         if applied is None:
             return False, "saved, but live-apply failed (will take effect on restart)"
+        # Toggling the home_assistant module changes whether the occupancy socket
+        # may run. Poke it so re-enabling recovers immediately instead of waiting
+        # out the slow disabled-state re-check.
+        events = getattr(self._server, "_ha_events", None)
+        if events is not None:
+            self._ha_flags_cache = None  # the nav gate must not serve a stale flag
+            events.wake()
         return True, None
 
     # ------------------------------------------------------------------

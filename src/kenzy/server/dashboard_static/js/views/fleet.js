@@ -85,7 +85,8 @@ function ServiceChip({ svc, onConfigure }) {
     .filter(Boolean)
     .join(" · ");
   return html`
-    <div class="chip" role="button" tabindex="0" title="Configure ${svc.name}"
+    <div class="chip" role="button" tabindex="0"
+         title=${`Configure ${svc.name}${svc.url ? " — " + svc.url : ""}`}
          onClick=${() => onConfigure(svc.name)}>
       <span class=${"led " + (svc.up ? "up" : "down")}></span>
       <span class="name">${svc.name}</span>

@@ -278,6 +278,7 @@ export const SERVER_HELP = {
   "integrations.mqtt.base_topic": "Topic prefix for everything Kenzy publishes.",
   "integrations.mqtt.discovery_prefix": "Home Assistant's discovery prefix. Leave alone unless you changed it in HA.",
   "integrations.mqtt.commands": "Let Home Assistant control nodes (trigger, stop, volume, mute). Off = Kenzy only reports, never obeys.",
+  "occupancy.enabled": "Track which rooms have people in them, from your Home Assistant sensors and from who Kenzy hears. Shown on the Presence tab; she doesn't act on it yet.",
 };
 
 export function serverHelp(key) {
