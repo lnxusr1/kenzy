@@ -27,6 +27,9 @@ confidence" would make a healthy sensor fade to unknown just because time passed
 **Staleness is not absence.** When the HA socket drops, held levels stop being
 trustworthy — but they don't become evidence of an empty room. The tracker
 reports them as stale and lets the caller decide, rather than inventing a fact.
+The same applies one sensor at a time: a level that stops reporting (flat
+battery, entity deleted, sensor excluded from the map) has its hold faded out
+rather than either believed forever or slammed to unknown — see ``_drop_hold``.
 
 Nothing is persisted. ``get_states`` re-seeds level evidence at every reconnect
 (see :mod:`kenzy.server.ha_events`), and voice re-learns within its window, so a
@@ -57,6 +60,11 @@ _VOICE_HALFLIFE_S = 90.0
 #: instant: mmWave clearing usually means the person left, but a brief drop-out
 #: while they sat still shouldn't slam the room to unknown.
 _RELEASE_HALFLIFE_S = 60.0
+
+#: Sources that mean "a level stopped asserting" rather than "a pulse fired", and
+#: therefore fade on `_RELEASE_HALFLIFE_S`. "released" = the sensor said clear;
+#: "dropout" = it stopped saying anything at all (see `_drop_hold`).
+_FADING_SOURCES = ("released", "dropout")
 
 #: Confidence at or above this reads as "occupied"; below `_UNKNOWN_FLOOR` reads
 #: as "unknown". The band between them is deliberate: it's "probably, recently".
@@ -112,7 +120,8 @@ class RoomBelief:
         """Current occupancy confidence, decayed — unless a level is asserting."""
         if self.held and not stale:
             return 1.0  # a healthy sensor still says "occupied"; belief holds
-        halflife = _RELEASE_HALFLIFE_S if self.occupancy_source == "released" else _PULSE_HALFLIFE_S
+        fading = self.occupancy_source in _FADING_SOURCES
+        halflife = _RELEASE_HALFLIFE_S if fading else _PULSE_HALFLIFE_S
         return decay(self.occupancy, now - self.occupancy_at, halflife)
 
     def identity_now(self, now: float) -> float:
@@ -138,6 +147,12 @@ class OccupancyTracker:
     def on_evidence(self, ev: Any) -> None:
         """Consume one :class:`kenzy.server.ha_events.Evidence`."""
         if getattr(ev, "scope", "room") == "house":
+            if not getattr(ev, "available", True):
+                # A `person.*` entity that stopped reporting is NOT someone who
+                # left — writing `home: False` here would invent exactly the kind
+                # of fact this module refuses to. Keep the last known answer; its
+                # age is already reported, so the staleness shows.
+                return
             self._house[ev.entity_id] = {
                 "home": bool(ev.present),
                 "ts": ev.ts,
@@ -149,29 +164,73 @@ class OccupancyTracker:
             return
         belief = self._rooms.setdefault(room, RoomBelief(room=room))
         if ev.kind == "level":
-            if ev.present:
+            if not getattr(ev, "available", True):
+                # The sensor stopped reporting at all (flat battery, entity
+                # deleted). Its assertion can no longer be trusted, and NOTHING
+                # else will ever release it — HA reports the corpse as
+                # `unavailable` and a deleted entity as `new_state: null`, both
+                # of which are (rightly) not evidence of absence. Without this
+                # the hold pins the room "occupied" at full confidence forever.
+                self._drop_hold(belief, ev.entity_id, ev.ts, "dropout")
+            elif ev.present:
                 belief.held.add(ev.entity_id)
                 belief.occupancy = 1.0
                 belief.occupancy_at = ev.ts
                 belief.occupancy_source = ev.entity_id
             else:
-                was_held = ev.entity_id in belief.held
-                belief.held.discard(ev.entity_id)
-                if was_held and not belief.held:
-                    # Released after actually asserting: keep the belief but
-                    # start it fading, rather than slamming to unknown on a
-                    # momentary drop-out while someone sits still.
-                    belief.occupancy = 1.0
-                    belief.occupancy_at = ev.ts
-                    belief.occupancy_source = "released"
-                # Never asserted (the common case at seed time: a sensor that is
-                # simply idle) — that is evidence of ABSENCE, not of a recent
-                # departure. Treating it as a release made every room with a
-                # quiet motion sensor read "occupied" for minutes after startup.
+                self._drop_hold(belief, ev.entity_id, ev.ts, "released")
         elif ev.present:  # pulse: only a positive edge is evidence
             belief.occupancy = 1.0
             belief.occupancy_at = ev.ts
             belief.occupancy_source = ev.entity_id
+
+    @staticmethod
+    def _drop_hold(belief: RoomBelief, entity_id: str, ts: float, source: str) -> None:
+        """One entity stops asserting a level. The only path out of ``held``.
+
+        Two rules live here, both learned the hard way:
+
+        **Never asserted ⇒ nothing happened.** The common case at seed time is a
+        sensor that is simply idle, and that is evidence of ABSENCE, not of a
+        recent departure. Treating it as a release made every room with a quiet
+        motion sensor read "occupied" for minutes after startup.
+
+        **Still held by another sensor ⇒ belief stays pinned.** Only the last
+        assertion to drop starts the fade, and it fades from full rather than
+        slamming to unknown on a momentary drop-out while someone sits still.
+        """
+        if entity_id not in belief.held:
+            return
+        belief.held.discard(entity_id)
+        if belief.held:
+            return
+        belief.occupancy = 1.0
+        belief.occupancy_at = ts
+        belief.occupancy_source = source
+
+    def prune_held(self, valid: set[str]) -> None:
+        """The evidence map changed — forget entities it no longer covers.
+
+        Curation excluding a lying sensor (or an entity disappearing from HA
+        between reconnects) removes it from the map, after which it can never
+        emit again — so an assertion it left behind would be held forever, the
+        same stuck-pin as a dead sensor. Fades those holds out instead, and
+        drops house-scope people the map no longer carries so the Presence view
+        stops listing someone who is no longer tracked.
+
+        **Invariant this relies on:** every map refetch is followed by a
+        ``get_states`` seed in the same session (``ha_events._session``), which
+        re-establishes level state for everything the map still covers. Dropping
+        people is only safe because of that — ``person.*`` emits solely on
+        CHANGE, so pruning one without a reseed would blank it until whenever
+        they next come or go. Don't call this from anywhere that doesn't reseed.
+        """
+        now = time.monotonic()
+        for belief in self._rooms.values():
+            for entity_id in sorted(belief.held - valid):
+                self._drop_hold(belief, entity_id, now, "dropout")
+        for entity_id in [e for e in self._house if e not in valid]:
+            self._house.pop(entity_id, None)
 
     def on_voice(
         self,

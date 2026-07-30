@@ -98,6 +98,11 @@ class Evidence:
     ts: float
     #: Display name for house-scope evidence (the person's HA name).
     name: str = ""
+    #: False when the entity stopped reporting (``unavailable``/``unknown``, or a
+    #: deletion's null new_state). Only ever emitted for a LEVEL, and it is not a
+    #: claim about the room — it tells the tracker to stop trusting an assertion
+    #: that will otherwise never be released. See occupancy._drop_hold.
+    available: bool = True
 
 
 @dataclass
@@ -161,7 +166,24 @@ def normalize(
         return None
     value = (state or "").strip().lower()
     if value in ("unavailable", "unknown", ""):
-        return None  # a dropped sensor is not evidence of absence
+        # A dropped sensor is not evidence of absence, so a PULSE is simply
+        # ignored — its belief already decays on its own. A LEVEL is different:
+        # it may be mid-assertion, and this is the ONLY signal that it has
+        # stopped talking (a flat battery reads `unavailable`; a deleted entity
+        # arrives as a null new_state, i.e. ""). Dropping it here is what pinned
+        # a room "occupied" at full confidence until the server restarted.
+        if kind != "level":
+            return None
+        return Evidence(
+            entity_id=entity_id,
+            room=str(entry.get("room") or ""),
+            kind=kind,
+            scope=scope,
+            present=False,
+            ts=time.monotonic() if ts is None else ts,
+            name=str(entry.get("name") or ""),
+            available=False,
+        )
     if scope == "house":
         present = value == "home"
     else:
@@ -191,12 +213,15 @@ class HaEventClient:
         token: str,
         map_fetcher: Callable[[], Any],
         *,
-        stale_after: float = _STALE_AFTER_S,
+        on_map: Callable[[set[str]], None] | None = None,
     ) -> None:
         self._base = base_url.rstrip("/")
         self._token = token
         self._fetch_map = map_fetcher
-        self._stale_after = stale_after
+        #: Called with the map's entity ids after every successful refetch. The
+        #: tracker uses it to fade out holds from entities the map no longer
+        #: covers — A still believes nothing, it just says what it can see.
+        self._on_map = on_map
         self._map: dict[str, dict[str, Any]] = {}
         self._subscribers: list[Subscriber] = []
         self._task: asyncio.Task[None] | None = None
@@ -297,6 +322,11 @@ class HaEventClient:
         self._map = entities
         self.stats.map_entities = len(entities)
         self.stats.map_fetched_at = time.monotonic()
+        if self._on_map is not None:
+            try:
+                self._on_map(set(entities))
+            except Exception:  # a consumer must never break the socket
+                log.debug("occupancy map listener error", exc_info=True)
         log.info("Occupancy map: %d evidence entities across %d room(s)",
                  len(entities), len(self.rooms))
         return True

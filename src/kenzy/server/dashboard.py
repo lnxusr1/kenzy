@@ -1512,7 +1512,11 @@ class Dashboard:
             "devices": (info or {}).get("devices", []),
             # Presence candidates (v5): a separate list from `devices`, because
             # the voice-control domains contain no binary_sensor and no person.
+            # Its own reachability rides along: an empty list means "no presence
+            # sensors" only when the query actually SUCCEEDED, and the editor has
+            # to tell those apart before it rebuilds the curation document.
             "occupancy": (info or {}).get("occupancy", []),
+            "occupancy_reachable": bool((info or {}).get("occupancy_reachable", False)),
             "lists": (info or {}).get("lists", []),
             "ha_reachable": bool((info or {}).get("reachable", False)),
             "skill_disabled": bool((info or {}).get("skill_disabled", False)),
@@ -1526,6 +1530,17 @@ class Dashboard:
             return False, "LLM service not reachable"
         if not res.get("ok"):
             return False, res.get("error") or "could not save curation"
+        # Curation carries the `occupancy` block — which sensors count as
+        # evidence — so a save changes the running event filter's map. Poke the
+        # socket to refetch it: the map is otherwise only read at the top of a
+        # session, and a healthy connection never re-enters that code, so
+        # _MAP_TTL_S is no backstop and an exclusion would not take effect until
+        # something restarted. The poke also reseeds, which is what makes a newly
+        # INCLUDED sensor register its current state instead of waiting for its
+        # next change.
+        events = getattr(self._server, "_ha_events", None)
+        if events is not None:
+            events.wake()
         return True, None
 
     async def _skills_state(self) -> dict[str, Any]:

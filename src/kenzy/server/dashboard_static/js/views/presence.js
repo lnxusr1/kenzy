@@ -30,6 +30,9 @@ function sourceLabel(room) {
   if (!src) return "no evidence";
   if (src === "voice") return "heard a voice";
   if (src === "released") return "sensor cleared";
+  // A level that stopped reporting (flat battery, entity removed, sensor
+  // excluded) — distinct from "cleared": it never said the room was empty.
+  if (src === "dropout") return "sensor stopped reporting";
   return src.startsWith("binary_sensor.") ? "sensor" : src;
 }
 

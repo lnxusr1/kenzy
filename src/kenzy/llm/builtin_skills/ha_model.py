@@ -682,6 +682,7 @@ _OCCUPANCY_TEMPLATE = (
     "{% if e.startswith('binary_sensor.') %}"
     "{% set ns.items = ns.items + [{"
     "'entity_id': e,"
+    "'name': state_attr(e, 'friendly_name'),"
     "'area': area_name(a),"
     "'device_class': state_attr(e, 'device_class')"
     "}] %}"

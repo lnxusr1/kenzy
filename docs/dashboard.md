@@ -198,10 +198,16 @@ or act; it exists so you can catch the world model being wrong before anything d
 on it.
 
 - **Rooms** — one card each: `occupied` / `maybe` / `unknown`, a confidence bar, what
-  the claim rests on (a sensor, "heard a voice", "sensor cleared"), and how long ago it
-  changed. Where a voice was recognised, the person is named. **Unknown is a real
-  state** — no sensor and no recent voice means Kenzy doesn't know, which is not the
-  same as empty, and rooms read unknown after a restart until something says otherwise.
+  the claim rests on (a sensor, "heard a voice", "sensor cleared", "sensor stopped
+  reporting"), and how long ago it changed. Where a voice was recognised, the person is
+  named. **Unknown is a real state** — no sensor and no recent voice means Kenzy doesn't
+  know, which is not the same as empty, and rooms read unknown after a restart until
+  something says otherwise.
+- A presence sensor that goes offline (flat battery, removed from HA, or excluded under
+  Presence sensors) reads **"sensor stopped reporting"**: the room stops counting as
+  occupied after about a minute and settles to `unknown` a few minutes later, rather
+  than either staying stuck on `occupied` or snapping straight to `unknown`. It never
+  said the room was empty, so Kenzy doesn't claim it did.
 - **People** — home/away from HA's `person` entities, which are house-wide, not per-room.
 - **Home Assistant feed** — connection health, how long since the last event, how many
   entities count as evidence, and how many events were *used* out of those seen (most HA

@@ -4864,7 +4864,7 @@ def main() -> None:
             info = await server.llm_occupancy_map()
             return info if isinstance(info, dict) else {}
 
-        ha_client = HaEventClient(ha_url, ha_token, _fetch_map)
+        ha_client = HaEventClient(ha_url, ha_token, _fetch_map, on_map=tracker.prune_held)
         ha_client.subscribe(tracker.on_evidence)
         server._occupancy = tracker
         server._ha_events = ha_client

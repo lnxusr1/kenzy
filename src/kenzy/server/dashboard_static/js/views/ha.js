@@ -115,6 +115,15 @@ export function HaView() {
     setDirty("devices");
   };
 
+  // True when this load carries NO trustworthy presence candidates, so the
+  // occupancy block must be carried over from the file rather than recomputed.
+  // Both halves matter: a non-empty list is trustworthy whatever the flag says,
+  // and `!== true` (not `=== false`) means an older kenzy-llm that doesn't send
+  // the flag at all is treated as "can't tell" — pairing a newer server with an
+  // older llm must not silently discard the operator's edits.
+  const occUnavailable = () =>
+    (data.occupancy || []).length === 0 && data.occupancy_reachable !== true;
+
   function build() {
     const byId = {};
     for (const e of data.devices || []) byId[e.entity_id] = e;
@@ -164,17 +173,31 @@ export function HaView() {
     // Presence: record only DIVERGENCE from the automatic behavior, so the file
     // stays small and a later change to the defaults still reaches anyone who
     // never touched a given sensor.
-    const occExclude = [];
-    const occInclude = [];
-    for (const c of data.occupancy || []) {
-      const on = occ[c.entity_id];
-      if (on === undefined || on === c.auto) continue;
-      (on ? occInclude : occExclude).push(c.entity_id);
+    //
+    // This is the one section rebuilt from LIVE data rather than from the file
+    // (the others hydrate out of `cur.*`), and the POST replaces curation.yaml
+    // wholesale — so when the candidate query failed we must carry the existing
+    // rules through untouched instead of computing an empty block from an empty
+    // list. Saving an alias on the Devices tab would otherwise delete the
+    // operator's presence rules silently. An empty list with a HEALTHY query is
+    // a different thing (a house with no presence sensors) and is allowed to
+    // clear them.
+    if (occUnavailable()) {
+      const prev = (data.curation || {}).occupancy;
+      if (prev && Object.keys(prev).length) out.occupancy = prev;
+    } else {
+      const occExclude = [];
+      const occInclude = [];
+      for (const c of data.occupancy || []) {
+        const on = occ[c.entity_id];
+        if (on === undefined || on === c.auto) continue;
+        (on ? occInclude : occExclude).push(c.entity_id);
+      }
+      const occOut = {};
+      if (occExclude.length) occOut.exclude = occExclude.sort();
+      if (occInclude.length) occOut.include = occInclude.sort();
+      if (Object.keys(occOut).length) out.occupancy = occOut;
     }
-    const occOut = {};
-    if (occExclude.length) occOut.exclude = occExclude.sort();
-    if (occInclude.length) occOut.include = occInclude.sort();
-    if (Object.keys(occOut).length) out.occupancy = occOut;
 
     return out;
   }
@@ -336,7 +359,11 @@ export function HaView() {
         or one aimed through a window at the street — or ON to use a sensor that isn't a
         presence type. Kenzy's own entities are never used.</p>
       ${(data.occupancy || []).length === 0
-        ? html`<div class="empty">No presence-capable sensors found in Home Assistant.</div>`
+        ? occUnavailable()
+          ? html`<div class="empty">Couldn't reach Home Assistant to list presence sensors.
+              Your existing choices are preserved — saving from another tab won't
+              discard them — but they can't be edited until this loads.</div>`
+          : html`<div class="empty">No presence-capable sensors found in Home Assistant.</div>`
         : (() => {
             // A real house has one connectivity sensor per cloud light — over a
             // hundred rows of noise. Show what actually counts (or has been

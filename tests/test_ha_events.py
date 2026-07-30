@@ -17,7 +17,11 @@ from typing import Any
 
 import pytest
 
-from kenzy.llm.builtin_skills.ha_model import build_occupancy_map
+from kenzy.llm.builtin_skills.ha_model import (
+    _OCCUPANCY_TEMPLATE,
+    build_occupancy_map,
+    classify_occupancy,
+)
 from kenzy.server.ha_events import (
     _STALE_AFTER_S,
     Evidence,
@@ -61,10 +65,32 @@ def test_house_scope_reads_home_not_on():
 
 
 @pytest.mark.parametrize("state", ["unavailable", "unknown", ""])
-def test_dropped_sensor_is_not_evidence_of_absence(state):
-    """A sensor going unavailable tells us nothing about the room."""
+def test_a_dropped_pulse_is_simply_ignored(state):
+    """A PIR going unavailable tells us nothing about the room, and its belief
+    already decays on its own — so there is nothing to say."""
+    entry = MAP["binary_sensor.office_motion"]
+    assert normalize("binary_sensor.office_motion", state, entry) is None
+
+
+@pytest.mark.parametrize("state", ["unavailable", "unknown", ""])
+def test_a_dropped_level_says_so_instead_of_vanishing(state):
+    """Still not evidence of absence — but a LEVEL may be mid-assertion, and this
+    is the ONLY signal that it stopped talking (a flat battery reads
+    `unavailable`; a deleted entity arrives as a null new_state, i.e. ""). Return
+    None here and the tracker holds the room at confidence 1.0 forever."""
     entry = MAP["binary_sensor.loft_presence"]
-    assert normalize("binary_sensor.loft_presence", state, entry) is None
+    ev = normalize("binary_sensor.loft_presence", state, entry, ts=5.0)
+    assert ev is not None
+    assert ev.available is False
+    assert ev.present is False  # not a claim about the room; see occupancy tests
+    assert ev.room == "loft" and ev.kind == "level"
+
+
+def test_a_live_reading_is_always_available():
+    entry = MAP["binary_sensor.loft_presence"]
+    for state in ("on", "off"):
+        ev = normalize("binary_sensor.loft_presence", state, entry, ts=1.0)
+        assert ev is not None and ev.available is True
 
 
 def test_unknown_kind_is_refused():
@@ -115,6 +141,28 @@ def test_curation_can_exclude_a_lying_sensor():
     assert "binary_sensor.hall_motion" in build_occupancy_map(rows, [], {})
     cur = {"occupancy": {"exclude": ["binary_sensor.hall_motion"]}}
     assert build_occupancy_map(rows, [], cur) == {}
+
+
+def test_the_editor_shows_has_friendly_name():
+    """The candidate list read row["name"], but the template never fetched
+    friendly_name — so every sensor was labelled by its entity_id while the
+    person rows (named from /api/states) were not. Both halves must read alike."""
+    assert "friendly_name" in _OCCUPANCY_TEMPLATE
+    rows = [
+        {
+            "entity_id": "binary_sensor.hall_fp2_presence",
+            "name": "Hallway Presence (FP2)",
+            "area": "Hall",
+            "device_class": "occupancy",
+        }
+    ]
+    got = classify_occupancy(rows, [{"entity_id": "person.alex", "name": "Alex"}], {})
+    assert [c.name for c in got] == ["Hallway Presence (FP2)", "Alex"]
+
+
+def test_a_nameless_row_still_falls_back_to_the_entity_id():
+    rows = [{"entity_id": "binary_sensor.hall_motion", "area": "Hall", "device_class": "motion"}]
+    assert classify_occupancy(rows, [], {})[0].name == "hall motion"
 
 
 def test_ws_url_derivation():
@@ -222,6 +270,52 @@ async def test_auth_seed_and_consume():
     assert c.stats.received == 2 and c.stats.emitted == 1 and c.stats.dropped == 1
 
 
+async def test_a_dying_sensor_releases_its_room_end_to_end():
+    """The whole path, client → filter → tracker, for the failure that pinned a
+    room forever: a level asserts, then the device dies. HA never says "clear",
+    so the release has to come from the `unavailable` reading itself."""
+    from kenzy.server.occupancy import OccupancyTracker
+
+    tracker = OccupancyTracker()
+    c = _client()
+    c.subscribe(tracker.on_evidence)
+    ws = _FakeHaWs(
+        states=[{"entity_id": "binary_sensor.loft_presence", "state": "on"}],
+        events=[_state_changed("binary_sensor.loft_presence", "unavailable")],
+    )
+    await c._authenticate(ws)
+    await c._seed(ws)
+    assert tracker.room_state("loft")["state"] == "occupied"
+    assert tracker.room_state("loft")["held"] == ["binary_sensor.loft_presence"]
+
+    await c._consume(ws)
+    state = tracker.room_state("loft")
+    assert state["held"] == []  # the hold is gone, not waiting on a release
+    assert state["source"] == "dropout"
+    # And it counts as an event that was USED, not one the filter threw away —
+    # the Presence tab's "events used / seen" should not under-report it.
+    assert c.stats.emitted == 1 and c.stats.dropped == 0
+
+
+async def test_a_deleted_entity_also_releases_its_room():
+    """HA reports a removal as `new_state: null`, which reaches us as "" — the
+    same stuck-hold if it is treated as "no information"."""
+    from kenzy.server.occupancy import OccupancyTracker
+
+    tracker = OccupancyTracker()
+    c = _client()
+    c.subscribe(tracker.on_evidence)
+    ws = _FakeHaWs(
+        states=[{"entity_id": "binary_sensor.loft_presence", "state": "on"}],
+        events=[{"type": "event", "event": {"data": {
+            "entity_id": "binary_sensor.loft_presence", "new_state": None}}}],
+    )
+    await c._authenticate(ws)
+    await c._seed(ws)
+    await c._consume(ws)
+    assert tracker.room_state("loft")["held"] == []
+
+
 async def test_seed_is_what_makes_persistence_unnecessary():
     """person.* only emits on CHANGE, so without the seed an all-day-home
     household would read 'unknown' all day after a restart."""
@@ -320,6 +414,32 @@ async def test_reenabling_clears_the_disabled_flag():
     state["off"] = False
     assert await c.refresh_map() is True
     assert c.stats.disabled is False
+
+
+async def test_a_refetched_map_reports_its_entities_to_the_tracker():
+    """The seam that lets B fade out holds for entities the map dropped (curation
+    excluded them, or they left HA). Without it, an assertion left behind by an
+    entity that can never emit again is held forever."""
+    seen: list[set[str]] = []
+
+    async def fetch() -> dict[str, Any]:
+        return {"ok": True, "entities": dict(MAP)}
+
+    c = HaEventClient("http://ha.local:8123", "tok", fetch, on_map=seen.append)
+    assert await c.refresh_map() is True
+    assert seen == [set(MAP)]
+
+
+async def test_a_broken_map_listener_cannot_break_the_socket():
+    async def fetch() -> dict[str, Any]:
+        return {"ok": True, "entities": dict(MAP)}
+
+    def boom(_ids: set[str]) -> None:
+        raise RuntimeError("consumer bug")
+
+    c = HaEventClient("http://ha.local:8123", "tok", fetch, on_map=boom)
+    assert await c.refresh_map() is True  # refresh still succeeded
+    assert c.stats.map_entities == len(MAP)
 
 
 async def test_wake_cuts_a_wait_short():

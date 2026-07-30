@@ -751,9 +751,15 @@ async def get_ha_curation() -> dict[str, Any]:
     # no person — so occupancy sensors are invisible to it, and the operator had
     # no way to exclude a sensor that lies (the cat-crossed hallway PIR).
     occupancy: list[dict[str, Any]] = []
+    occupancy_reachable = True
     try:
         occupancy = [vars(c) for c in await ha_model.fetch_occupancy_candidates()]
     except Exception as exc:
+        # Reported separately from `reachable`: this is its own round-trip, so it
+        # can fail while the device tree succeeds. The editor MUST know, because
+        # a saved curation is written wholesale — rebuilt from an empty candidate
+        # list it would silently delete the operator's presence rules.
+        occupancy_reachable = False
         log.warning("HA presence sensors unavailable for curation editor: %s", exc)
     import os
 
@@ -761,6 +767,7 @@ async def get_ha_curation() -> dict[str, Any]:
         "curation": curation,
         "devices": devices,
         "occupancy": occupancy,
+        "occupancy_reachable": occupancy_reachable,
         "lists": lists,
         "reachable": reachable,
         # Editor state hints: the tab stays editable when the skill is off

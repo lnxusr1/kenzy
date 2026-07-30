@@ -813,3 +813,87 @@ async def test_server_features_and_install_mutation(tmp_path, monkeypatch):
         cap, json.dumps({"id": "3", "type": "install_server_deps", "extra": "mqtt"})
     )
     assert cap.sent[0]["ok"] is False
+
+
+# ---------------------------------------------------------------------------
+# v5 occupancy: a curation save has to reach the running event filter
+# ---------------------------------------------------------------------------
+
+
+class _FakeHaEvents:
+    """Stands in for HaEventClient — only wake() matters to the dashboard."""
+
+    def __init__(self):
+        self.woke = 0
+
+    def wake(self):
+        self.woke += 1
+
+
+async def test_curation_save_pokes_the_occupancy_socket():
+    """Curation carries the `occupancy` block, so saving changes which entities
+    count as evidence. The running socket only reads the map at the top of a
+    session and a healthy connection never re-enters that code — so without this
+    poke, excluding a lying sensor took effect only on the next restart."""
+    s = AudioServer({})
+    dash = Dashboard(s, {}, DashboardConfig(enabled=True, controls=True))
+    events = _FakeHaEvents()
+    s._ha_events = events
+
+    async def _saved(method, payload=None):
+        return {"ok": True}
+
+    dash._llm_curation_request = _saved  # type: ignore[assignment]
+    ok, err = await dash._set_ha_curation({"occupancy": {"exclude": ["binary_sensor.hall"]}})
+    assert (ok, err) == (True, None)
+    assert events.woke == 1
+
+
+async def test_a_failed_curation_save_does_not_poke():
+    """Nothing changed on disk, so there is nothing to refetch — and a reconnect
+    storm on every failed save would be its own bug."""
+    s = AudioServer({})
+    dash = Dashboard(s, {}, DashboardConfig(enabled=True, controls=True))
+    events = _FakeHaEvents()
+    s._ha_events = events
+
+    async def _unreachable(method, payload=None):
+        return None
+
+    dash._llm_curation_request = _unreachable  # type: ignore[assignment]
+    ok, _ = await dash._set_ha_curation({})
+    assert ok is False
+    assert events.woke == 0
+
+
+async def test_curation_save_works_without_an_occupancy_socket():
+    """Occupancy off, or no HA: the poke must be a no-op, not an AttributeError."""
+    s = AudioServer({})
+    dash = Dashboard(s, {}, DashboardConfig(enabled=True, controls=True))
+
+    async def _saved(method, payload=None):
+        return {"ok": True}
+
+    dash._llm_curation_request = _saved  # type: ignore[assignment]
+    assert await dash._set_ha_curation({}) == (True, None)
+
+
+async def test_presence_candidate_reachability_is_reported_separately():
+    """The editor rebuilds the occupancy block from the live candidate list, and
+    the POST replaces curation.yaml wholesale — so it must be able to tell "no
+    presence sensors" from "the query failed", or a save from another tab wipes
+    the operator's rules."""
+    s = AudioServer({})
+    dash = Dashboard(s, {}, DashboardConfig(enabled=True))
+
+    async def _partial(method, payload=None):
+        # Device tree fine, presence query failed on its own round-trip.
+        return {"curation": {"occupancy": {"exclude": ["binary_sensor.hall"]}},
+                "devices": [{"entity_id": "light.x"}], "occupancy": [],
+                "occupancy_reachable": False, "reachable": True}
+
+    dash._llm_curation_request = _partial  # type: ignore[assignment]
+    state = await dash._ha_curation_state()
+    assert state["ha_reachable"] is True
+    assert state["occupancy_reachable"] is False
+    assert state["curation"]["occupancy"] == {"exclude": ["binary_sensor.hall"]}
