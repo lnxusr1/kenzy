@@ -92,8 +92,10 @@ guard against that — the first two need no configuration:
 | `watchdog.wedge_minutes` | `5` | Restart the node process if its reconnect loop hasn't run for this long. A loop that has stopped turning is stuck in a call that will never return — no amount of waiting recovers it, only a new process. Live-applied. |
 | `watchdog.reexec_minutes` | `30` | Restart the node process after this long unable to register, even if the loop is still turning. Deliberately much longer than `wedge_minutes` so an ordinary server outage doesn't make every room restart in a loop. `0` = never. Live-applied. |
 
-Set per-fleet under `node_defaults` in `server.yaml`, or per room from the
-dashboard:
+This one is **fleet-wide only** — set it under `node_defaults` in `server.yaml`
+(Settings → the server's own config), not per room. Per-node overrides merge
+shallowly, so a room that set just one of these would silently drop the other
+three:
 
 ```yaml
 watchdog:

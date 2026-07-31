@@ -81,6 +81,18 @@ def test_returning_clears_the_grace(tmp_path):
     assert roster.known()["n1"].grace_until == 0.0
 
 
+def test_grace_survives_the_disconnect_it_covers(tmp_path):
+    """The window is granted *before* the node leaves, so stamping the departure
+    must not clear it — otherwise the node is flagged for exactly the restart we
+    asked it to perform, and the grace never covers anything at all."""
+    roster = NodeRoster(tmp_path / "nodes.json")
+    roster.touch("n1", when=1000.0)
+    roster.grant_grace("n1", 600, now=1000.0)
+    roster.touch("n1", when=1005.0, clear_grace=False)  # the disconnect itself
+    assert roster.known()["n1"].grace_until == 1600.0
+    assert not roster.is_alerting(roster.known()["n1"], 60, now=1200.0)
+
+
 def test_forget_removes_a_node(tmp_path):
     path = tmp_path / "nodes.json"
     roster = NodeRoster(path)
@@ -128,6 +140,43 @@ async def test_disconnect_leaves_the_node_visible(tmp_path, monkeypatch):
     assert [n["node_id"] for n in absent] == ["bedroom"]
     assert absent[0]["room"] == "Master Bedroom"
     assert absent[0]["offline_seconds"] >= 0
+
+
+async def test_goodbye_makes_a_planned_absence_quiet(tmp_path, monkeypatch):
+    """`systemctl restart`, a kenzy-deploy sweep and a manual stop all send
+    SIGTERM, and the node announces itself on the way out. Without that the server
+    cannot tell a restart from a power cut — and a fleet deploy would light up
+    every room on the dashboard at once."""
+    monkeypatch.setenv("KENZY_HOME", str(tmp_path))
+    from kenzy import protocol
+
+    srv = AudioServer({})
+    session = NodeSession(ws=_StubWS(), node_id="office", room_id="Office")
+    srv._nodes["office"] = session
+
+    await srv._handle_control(session, {"type": protocol.MSG_GOODBYE, "reason": "shutdown"})
+    await srv._deregister(session)
+
+    gone = srv.absent_nodes()[0]
+    assert gone["node_id"] == "office"
+    assert gone["alerting"] is False  # absent, but expected — no fault
+    assert gone["grace_until"] > 0
+
+
+async def test_unannounced_disappearance_still_alerts(tmp_path, monkeypatch):
+    """The other half: a node that dies without warning gets no grace, because
+    that is precisely the case the alert exists for."""
+    monkeypatch.setenv("KENZY_HOME", str(tmp_path))
+    srv = AudioServer({})
+    session = NodeSession(ws=_StubWS(), node_id="bedroom", room_id="Master Bedroom")
+    srv._nodes["bedroom"] = session
+
+    await srv._deregister(session)  # no goodbye — the power went out
+
+    entry = srv._roster.known()["bedroom"]
+    assert entry.grace_until == 0.0
+    # An hour later, with the default five-minute threshold, this is a fault.
+    assert srv._roster.is_alerting(entry, srv._offline_alert_s, now=entry.last_seen + 3600)
 
 
 async def test_forget_node_drops_it(tmp_path, monkeypatch):

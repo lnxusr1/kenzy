@@ -118,8 +118,16 @@ class NodeRoster:
         version: str | None = None,
         ip: str | None = None,
         when: float | None = None,
+        clear_grace: bool = True,
     ) -> None:
-        """Record that a node was just seen (registered or disconnected)."""
+        """Record that a node was just seen (registered or disconnected).
+
+        ``clear_grace`` must be **False** when stamping a *disconnection*. An
+        expected-downtime window is granted before the node leaves, so clearing it
+        on the way out destroys the very grace it was meant to cover — the node
+        would be flagged for exactly the restart we asked it to perform. Only a
+        node that has come *back* ends its own grace.
+        """
         now = time.time() if when is None else when
         entry = self._entries.get(node_id) or RosterEntry(node_id=node_id)
         entry.last_seen = now
@@ -129,7 +137,8 @@ class NodeRoster:
             entry.version = version
         if ip is not None:
             entry.ip = ip
-        entry.grace_until = 0.0  # it came back; any expected-downtime window is over
+        if clear_grace:
+            entry.grace_until = 0.0
         self._entries[node_id] = entry
         self._save()
 
@@ -138,10 +147,14 @@ class NodeRoster:
         upgrade. Without this the fleet cries wolf every time an operator uses
         the dashboard's own buttons — and an alert people learn to ignore is
         worth less than no alert at all."""
-        entry = self._entries.get(node_id)
-        if entry is None:
-            return
-        entry.grace_until = (time.time() if now is None else now) + seconds
+        stamp = time.time() if now is None else now
+        # Create on demand rather than no-op: the callers only grace a node with a
+        # live session, so it exists by definition — and silently dropping the
+        # window because the roster hadn't recorded it yet would leave exactly the
+        # planned restart we were trying to excuse looking like a failure.
+        entry = self._entries.get(node_id) or RosterEntry(node_id=node_id, last_seen=stamp)
+        entry.grace_until = stamp + seconds
+        self._entries[node_id] = entry
         self._save()
 
     def forget(self, node_id: str) -> bool:

@@ -45,6 +45,7 @@ Control messages are JSON text frames. Audio is raw int16 PCM binary frames at 1
 | `tts_end` | server → node | Ends TTS playback |
 | `status` | node → server | Node health (e.g. audio init failed) and late-arriving device-probe results |
 | `metrics` | node → server | System metrics every ~30 s (CPU/RAM/disk %, temperature) for the dashboard's fleet cards |
+| `goodbye` | node → server | This absence is deliberate (restart, upgrade, deliberate stop) — sent on SIGTERM and before a watchdog restart, so a planned departure isn't reported as a missing room |
 | `expect_utterance` | server → node | Arm one-shot capture after the next prompt plays (dialog turns, ask() questions, enrollment samples; optional record-tone cue) |
 | `followup_timeout` | node → server | A held reply window expired with nothing captured |
 | `call_ringing` | server → node | The caller's node loops ringback while a consent question travels to the other room |

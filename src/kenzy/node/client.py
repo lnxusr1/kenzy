@@ -1038,6 +1038,8 @@ class NodeClient:
         # timeout so an ordinary server outage doesn't make the fleet flap.
         self._watchdog_reexec_s: float = float(_wd.get("reexec_minutes", 30)) * 60.0
         self._force_exit_armed = False  # guards the one-shot shutdown watchdog
+        # In-flight "I'm leaving on purpose" frame, awaited briefly during teardown.
+        self._goodbye_task: asyncio.Task[None] | None = None
         # Cached audio-device probe, reported to the server so the dashboard can offer
         # a device picker. Probing touches PortAudio and can be slow/block, so it runs
         # in a daemon thread (never on the event loop); the result is pushed via a
@@ -2802,6 +2804,18 @@ class NodeClient:
     # Reconnect watchdog
     # ------------------------------------------------------------------
 
+    async def _say_goodbye(self, reason: str) -> None:
+        """Tell the server this absence is on purpose, so it doesn't raise a fault
+        over a restart we chose. Strictly best-effort and strictly bounded — we are
+        on our way out, and a wedged socket must not delay that."""
+        ws = self._ws
+        if ws is None:
+            return
+        try:
+            await asyncio.wait_for(ws.send(protocol.goodbye(reason)), timeout=1.0)
+        except Exception:  # pragma: no cover - the socket is already going away
+            pass
+
     def _reexec(self, why: str) -> None:
         """Last resort: replace this process. Re-reads config and rebuilds audio,
         and — unlike any amount of retry logic — clears whatever in-process state
@@ -2845,6 +2859,7 @@ class NodeClient:
             # not retrying — it is stuck.
             loop_quiet = now - (self._loop_alive_at or start)
             if self._watchdog_wedge_s and loop_quiet >= self._watchdog_wedge_s:
+                await self._say_goodbye("watchdog restart")
                 self._reexec(f"reconnect loop has not run for {int(loop_quiet)}s")
                 return  # unreachable after execv; keeps the contract explicit
 
@@ -2858,6 +2873,7 @@ class NodeClient:
                     self._connect_url or "…",
                 )
             if self._watchdog_reexec_s and down >= self._watchdog_reexec_s:
+                await self._say_goodbye("watchdog restart")
                 self._reexec(f"no server connection for {int(down)}s")
                 return
 
@@ -2885,6 +2901,12 @@ class NodeClient:
 
         def _request_stop() -> None:
             log.info("Shutdown signal received — stopping node")
+            # SIGTERM is what `systemctl restart`, kenzy-deploy and a manual stop
+            # all send, so this is where a *planned* absence gets announced. It has
+            # to be its own task: cancelling the run task below would otherwise
+            # take the send with it. run()'s teardown waits briefly for it.
+            if self._ws is not None:
+                self._goodbye_task = loop.create_task(self._say_goodbye("shutdown"))
             self._discovery_cancel.set()
             for ev in list(self._discovery_cancels):
                 ev.set()  # release any in-flight browse on its own event
@@ -2989,6 +3011,14 @@ class NodeClient:
                 try:
                     loop.remove_signal_handler(sig)
                 except Exception:
+                    pass
+            # Give the goodbye frame its moment before we tear the socket down —
+            # this runs after the CancelledError was caught, so it is a normal
+            # await, not one racing its own cancellation.
+            if self._goodbye_task is not None:
+                try:
+                    await asyncio.wait_for(asyncio.shield(self._goodbye_task), timeout=1.5)
+                except (TimeoutError, asyncio.CancelledError, Exception):
                     pass
             # Guaranteed cleanup regardless of how we exit (normal return,
             # CancelledError from connect or sleep, unexpected exception).

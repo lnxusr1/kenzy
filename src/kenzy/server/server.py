@@ -80,6 +80,7 @@ _ALLOWED_OVERRIDE_KEYS = frozenset(
         "sound_disconnect",
         "sound_ringback",
         "sound_dialog_end",
+        "sound_offline",
         "sound_timer",
         "sound_alarm",
         "sound_error",
@@ -261,6 +262,10 @@ _SERVER_EDITABLE: dict[str, str] = {
     # shipping dark just delayed the learning. This key is the kill switch, not
     # the enabler. HA absent ⇒ nothing starts regardless.
     "occupancy.enabled": "bool",
+    # Fleet health: how long a room may be missing before it is a fault, and the
+    # expected-downtime window granted when we ourselves take a node away.
+    "fleet.offline_alert_minutes": "num",
+    "fleet.restart_grace_minutes": "num",
 }
 
 #: Endpoint path each backend service serves, appended to an announced base URL so
@@ -1672,8 +1677,9 @@ class AudioServer:
             await self.end_intercom(peer_id, reason="peer_disconnected")
         self._cleanup_on_disconnect(session.node_id)
         # Stamp the sighting before announcing the drop: the roster keeps the node
-        # visible (as absent, with a last-seen) instead of letting it vanish.
-        self._roster.touch(session.node_id, room=session.room_id)
+        # visible (as absent, with a last-seen) instead of letting it vanish. Any
+        # expected-downtime grace survives — it exists precisely to cover this.
+        self._roster.touch(session.node_id, room=session.room_id, clear_grace=False)
         log.info(
             "Node %s (room '%s') disconnected – %d node(s) remaining",
             session.node_id,
@@ -1758,6 +1764,15 @@ class AudioServer:
                     session.audio_error,
                 )
             self._notify_state()
+
+        elif mtype == protocol.MSG_GOODBYE:
+            # The node is leaving on purpose (a restart, an upgrade, a deliberate
+            # stop). Without this the server cannot tell that from a power cut, and
+            # every `systemctl restart` — including a whole-fleet kenzy-deploy —
+            # would raise an offline fault for a node that is on its way back.
+            reason = str(msg.get("reason") or "shutdown")
+            log.info("[%s] going away on purpose (%s)", session.node_id, reason)
+            self._roster.grant_grace(session.node_id, self._restart_grace_s)
 
         elif mtype == protocol.MSG_FOLLOWUP_TIMEOUT:
             # A held-floor reply window expired silently on the node (which plays
