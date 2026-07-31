@@ -114,5 +114,11 @@ def attach_to_server(hub: IntegrationHub, server: Any) -> None:
     Safe to call even with no transport configured: the registered listeners only
     feed the hub, which is a no-op while it has no subscribers.
     """
+    # Seed from the durable roster, not from an empty set: a node that was already
+    # missing when the server started is still missing, and without this it would
+    # never be reported offline — the restart would quietly absolve it.
+    roster = getattr(server, "_roster", None)
+    if roster is not None:
+        hub._known_nodes |= set(roster.known())
     server.add_state_listener(lambda: hub.on_node_state(_server_snapshot(server)))
     server.add_session_listener(hub.on_interaction)

@@ -160,6 +160,28 @@ Opt-in; nothing is wired (zero overhead) unless `enabled`. Requires the `mqtt` e
 
 Broker credentials come from the environment, never this file: `KENZY_MQTT_USERNAME` / `KENZY_MQTT_PASSWORD`.
 
+### Fleet health
+
+When a node disconnects it stays on the dashboard as **absent**, with how long
+it has been gone, rather than disappearing from the list. That distinction
+matters more than it sounds: a room that vanishes from the fleet looks exactly
+like a room you never installed, so a house quietly losing one can go unnoticed
+for days — especially since an orphaned node keeps answering its wake word and
+seems fine from inside the room.
+
+Past `offline_alert_minutes` the card becomes a **fault** and the Fleet page
+raises a banner. If MQTT integration is on, the offline transition is also
+published as a `node_state` event, so Home Assistant can notify you.
+
+| Key | Default | Description |
+|---|---|---|
+| `fleet.offline_alert_minutes` | `5` | How long a node may be missing before it is reported as a fault rather than merely absent. `0` = never raise the fault (nodes still show as absent). |
+| `fleet.restart_grace_minutes` | `10` | Expected-downtime window granted when *you* restart or upgrade a node from the dashboard, so routine churn doesn't raise an alert. An alert people learn to ignore is worth less than no alert at all. |
+
+The roster lives in `data/nodes.json` and rides the backup slice. A node you
+have decommissioned can be dropped with **Forget** on its (offline) fleet card;
+a node told to disable itself is removed automatically.
+
 ### Occupancy
 
 Kenzy keeps a live picture of which rooms have people in them — built from your

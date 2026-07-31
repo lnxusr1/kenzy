@@ -69,6 +69,49 @@ The node service runs on each room device. It captures microphone audio, detects
 | `dialog_onset_ms` | `300` | Speech required to **start** a dialog turn — either sustained speech of this length, or a shorter *complete* word ("yes", "Boo") that ends in silence. A cough or clink can't trip the mic; your first word is buffered and kept whole. Live-applied. |
 | `dialog_onset_vad_threshold` | `0.5` | Voice-activity confidence gate for dialog onset (falls back to energy sensing if the VAD model is absent). Live-applied. |
 | `hardware_aec` | `true` | Whether this room's speaker does **acoustic echo cancellation**. **Calibration detects and sets this automatically** (it plays a known sound through the node's speaker and measures the echo); set it manually only to override an ambiguous reading. Set `false` for a non-AEC speaker and the room runs **half-duplex**: see the table below for exactly what changes. Live-applied; shown as a "no AEC" badge on the room's fleet card. |
+| `sound_offline` | `null` | Cue played when the wake word fires while the node has **no server connection**. `null` = stay silent. The activation chime is deliberately *never* used here: it means "I'm listening", and a room that cannot reach the server isn't. Needs a restart. |
+
+### Staying reachable (`watchdog`)
+
+A node that loses its server keeps running: the microphone works, the wake word
+still fires, the chime still plays. From inside the room nothing looks wrong,
+which is exactly why an orphaned node can go unnoticed for days. Three things
+guard against that — the first two need no configuration:
+
+- The node **remembers the address it last registered with** and tries that
+  before browsing for the server over mDNS. A room that has been talking to a
+  server for days is never orphaned by a single unanswered multicast query.
+- Discovery is **bounded**. A hung mDNS browse used to park the reconnect loop
+  outright, with no retry and nothing in the log.
+- The **watchdog** below notices, complains, and as a last resort restarts.
+
+| Key | Default | Description |
+|---|---|---|
+| `watchdog.enabled` | `true` | Run the reconnect watchdog. Needs a restart. |
+| `watchdog.warn_minutes` | `5` | Log loudly (and keep logging) once the node has gone this long without registering. Live-applied. |
+| `watchdog.wedge_minutes` | `5` | Restart the node process if its reconnect loop hasn't run for this long. A loop that has stopped turning is stuck in a call that will never return — no amount of waiting recovers it, only a new process. Live-applied. |
+| `watchdog.reexec_minutes` | `30` | Restart the node process after this long unable to register, even if the loop is still turning. Deliberately much longer than `wedge_minutes` so an ordinary server outage doesn't make every room restart in a loop. `0` = never. Live-applied. |
+
+Set per-fleet under `node_defaults` in `server.yaml`, or per room from the
+dashboard:
+
+```yaml
+watchdog:
+  enabled: true
+  warn_minutes: 5
+  wedge_minutes: 5
+  reexec_minutes: 30      # 0 = complain, but never restart myself
+```
+
+!!! tip "A node whose clock is wrong cannot join"
+    A node proves its identity with a signed, **timestamp-fresh** hello, so a
+    clock more than two minutes off the server's is refused — every time, until
+    the clock is fixed. Boards without a battery-backed RTC (most SBCs) boot with
+    whatever their hardware clock drifted to, so the units ship ordered after
+    `time-sync.target`. Under chrony that only means something if
+    `chrony-wait.service` is enabled on the node host. Pointing the fleet's NTP at
+    the Kenzy server host is the sturdiest arrangement: it is the clock the check
+    compares against, and it removes any dependence on internet time.
 
 ### Rooms without echo cancellation (`hardware_aec: false`)
 

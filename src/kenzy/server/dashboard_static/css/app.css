@@ -142,6 +142,14 @@ button { font: inherit; cursor: pointer; }
   padding: var(--s4) var(--s5); transition: transform var(--t-fast), border-color var(--t-fast), background var(--t-fast);
 }
 .card:hover { transform: translateY(-2px); border-color: var(--border-strong); background: var(--panel-2); }
+/* Known but not connected: still listed (a room that vanishes from the fleet is
+   how an outage hides), but visibly not a live node. */
+.card.node-offline { opacity: 0.72; border-style: dashed; }
+.card.node-alert {
+  opacity: 1; border-style: solid;
+  border-color: color-mix(in srgb, var(--led-down) 55%, transparent);
+  background: color-mix(in srgb, var(--led-down) 8%, var(--panel));
+}
 .card .top { display: flex; align-items: center; gap: var(--s3); margin-bottom: var(--s4); }
 .card .room { font-family: var(--font-mono); font-weight: 700; font-size: 15px; word-break: break-all; }
 .card dl { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 6px var(--s4); }

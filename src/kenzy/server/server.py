@@ -52,6 +52,7 @@ from kenzy.server.people import (
     resolve_assist_identity,
     resolve_voice_identity,
 )
+from kenzy.server.roster import NodeRoster
 
 log = logging.getLogger(__name__)
 
@@ -636,6 +637,40 @@ class AudioServer:
         self._announced_services: dict[str, dict[str, Any]] = {}
         # Services whose URL came from static config (never overwritten by an announce).
         self._static_services: set[str] = set()
+        # Durable roster of nodes that *exist*, so a disconnected one becomes absent
+        # rather than nonexistent. Kept next to the other operational state.
+        fleet_cfg: dict[str, Any] = cfg.get("fleet") or {}
+        #: How long a node may be missing before it is a fault rather than a note.
+        #: Comfortably longer than a restart, so ordinary churn stays quiet.
+        self._offline_alert_s: float = float(fleet_cfg.get("offline_alert_minutes", 5)) * 60.0
+        #: Expected-downtime window granted when we ourselves tell a node to go.
+        self._restart_grace_s: float = float(fleet_cfg.get("restart_grace_minutes", 10)) * 60.0
+        self._roster = NodeRoster(self._roster_path())
+
+    @staticmethod
+    def _roster_path() -> Path | None:
+        from kenzy.config import kenzy_data_root
+
+        try:
+            return kenzy_data_root() / "data" / "nodes.json"
+        except Exception:  # pragma: no cover - unresolvable data root
+            return None
+
+    def forget_node(self, node_id: str) -> bool:
+        """Drop a node from the roster. Only meaningful for one that is absent —
+        a connected node re-adds itself on its next state change."""
+        return self._roster.forget(node_id)
+
+    def absent_nodes(self) -> list[dict[str, Any]]:
+        """Known-but-not-connected nodes, as dashboard/state dicts."""
+        now = time.time()
+        out: list[dict[str, Any]] = []
+        for entry in self._roster.absent(self._nodes.keys()):
+            rec = entry.as_dict()
+            rec["offline_seconds"] = max(0.0, now - entry.last_seen)
+            rec["alerting"] = self._roster.is_alerting(entry, self._offline_alert_s, now=now)
+            out.append(rec)
+        return out
 
     def add_state_listener(self, fn: Callable[[], None]) -> None:
         """Register a callback fired (in-loop) when the node registry/state changes."""
@@ -1161,15 +1196,16 @@ class AudioServer:
             status, "OK" if status == 200 else "ERR", headers, json.dumps(payload).encode()
         )
 
-    def _join_authorized(self, msg: dict[str, Any]) -> bool:
-        """A node's hello is authorized when its ``auth`` proof verifies for the
-        claimed node_id. The raw ``token`` field (pre-3.12) is no longer accepted.
-        No configured join token ⇒ open (unauthenticated joins allowed)."""
+    def _join_check(self, msg: dict[str, Any]) -> tuple[str, str] | None:
+        """``None`` when the hello is authorized, else ``(tag, detail)``.
+
+        The raw ``token`` field (pre-3.12) is no longer accepted. No configured
+        join token ⇒ open (unauthenticated joins allowed)."""
         if not self._join_token:
-            return True
+            return None
         token = str(self._join_token)
         node_id = str(msg.get("node_id") or msg.get("room_id") or "")
-        return serviceauth.verify_node_hello(msg.get("auth"), token, node_id)
+        return serviceauth.check_node_hello(msg.get("auth"), token, node_id)
 
     def _authorize_service(
         self, request: Request, method: str, path: str
@@ -1528,10 +1564,25 @@ class AudioServer:
             log.warning("Expected hello, got '%s' from %s", msg.get("type"), ws.remote_address)
             return None
 
-        if self._join_token is not None and not self._join_authorized(msg):
-            log.warning("Rejected node from %s: bad/missing join token", ws.remote_address)
+        if self._join_token is not None and (failure := self._join_check(msg)) is not None:
+            tag, detail = failure
+            # Name the actual fault. Collapsing every join failure into "bad/missing
+            # join token" once cost two days of hunting a token problem that was in
+            # fact a node whose clock had drifted 30 minutes at boot: the server had
+            # already computed the skew and then threw it away.
+            log.warning(
+                "Rejected node '%s' (room '%s', v%s) from %s: %s",
+                msg.get("node_id") or "?",
+                msg.get("room_id") or "?",
+                msg.get("kenzy_version") or "?",
+                ws.remote_address,
+                detail,
+            )
             try:
-                await ws.close(1008, "invalid join token")
+                # The tag (not the detail) rides the wire: enough for the node's own
+                # log to say "stale timestamp" and point at NTP, without handing an
+                # unauthenticated peer the server's precise clock.
+                await ws.close(1008, f"invalid join token ({tag})")
             except Exception:
                 pass
             return None
@@ -1593,6 +1644,12 @@ class AudioServer:
             ws.remote_address,
             len(self._nodes),
         )
+        self._roster.touch(
+            node_id,
+            room=room_id,
+            version=session.kenzy_version,
+            ip=ws.remote_address[0] if ws.remote_address else None,
+        )
 
         # Config-pull: push the node's effective config so it needs no local file.
         # Always send a frame (even when empty) — zero-config nodes block on this
@@ -1614,6 +1671,9 @@ class AudioServer:
         if peer_id:
             await self.end_intercom(peer_id, reason="peer_disconnected")
         self._cleanup_on_disconnect(session.node_id)
+        # Stamp the sighting before announcing the drop: the roster keeps the node
+        # visible (as absent, with a last-seen) instead of letting it vanish.
+        self._roster.touch(session.node_id, room=session.room_id)
         log.info(
             "Node %s (room '%s') disconnected – %d node(s) remaining",
             session.node_id,
@@ -1862,6 +1922,8 @@ class AudioServer:
             return False
         try:
             await session.ws.send(protocol.restart())
+            # We asked for this absence, so don't raise a fault over it.
+            self._roster.grant_grace(node_id, self._restart_grace_s)
             return True
         except Exception as exc:
             log.warning("restart_node: %s send failed: %s", node_id, exc)
@@ -1878,6 +1940,10 @@ class AudioServer:
             return False
         try:
             await session.ws.send(protocol.disable())
+            # Deliberately out of service: drop it from the roster rather than
+            # alerting forever about an absence the operator asked for. It re-adds
+            # itself if it is ever re-enabled and reconnects.
+            self._roster.forget(node_id)
             log.warning("[%s] disable sent — node will stop until re-enabled on its host", node_id)
             return True
         except websockets.exceptions.ConnectionClosed as exc:
@@ -1893,6 +1959,8 @@ class AudioServer:
             return False
         try:
             await session.ws.send(protocol.upgrade(version))
+            # A pip install on a Pi can take minutes; expected absence, not a fault.
+            self._roster.grant_grace(node_id, self._restart_grace_s)
             return True
         except Exception as exc:
             log.warning("upgrade_node: %s send failed: %s", node_id, exc)

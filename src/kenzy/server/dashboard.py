@@ -432,6 +432,30 @@ class Dashboard:
                     "metrics": session.metrics,
                 }
             )
+        # Known-but-absent nodes. A disconnected node used to simply disappear from
+        # this list, which is why a fleet losing a room looked exactly like a fleet
+        # that never had it. Absent is a state, not an absence of state.
+        for gone in self._server.absent_nodes():
+            nodes.append(
+                {
+                    "node_id": gone["node_id"],
+                    "room": gone.get("room"),
+                    "ip": gone.get("ip"),
+                    "configured": self._server.read_node_override(gone["node_id"]) != {},
+                    "connected": False,
+                    "streaming": False,
+                    "session_id": None,
+                    "audio_ok": True,
+                    "audio_error": None,
+                    "version": gone.get("version"),
+                    "aec": self._server._node_aec(gone["node_id"]),
+                    "metrics": None,
+                    # Unix seconds: the browser recomputes "how long" on every
+                    # render, so the fault appears without waiting for a push.
+                    "last_seen": gone.get("last_seen"),
+                    "grace_until": gone.get("grace_until", 0),
+                }
+            )
         return nodes
 
     async def _services_state(self) -> list[dict[str, Any]]:
@@ -480,6 +504,8 @@ class Dashboard:
             "flags": {
                 "logs": self._dcfg.logs,
                 "controls": self._dcfg.controls,
+                # Seconds a node may be absent before the fleet calls it a fault.
+                "offline_alert_s": self._server._offline_alert_s,
                 # Gate the HA nav tab: no-HA households see no HA surfaces.
                 "ha_active": (await self._ha_flags())["active"],
                 # Likewise Presence (v5): show it only when the tracker actually
@@ -2062,6 +2088,19 @@ class Dashboard:
             }[mtype]
             ok = await action(node)
             await ack(ok, None if ok else "node not connected")
+        elif mtype == "forget_node":
+            # Decommission: drop an absent node from the roster so it stops being
+            # reported missing. Refused while it is connected — the roster would
+            # just re-add it on the next state change, which reads as a no-op bug.
+            if not self._dcfg.controls:
+                return await ack(False, "controls are disabled (set dashboard.controls: true)")
+            node = str(msg.get("node", ""))
+            if node in self._server._nodes:
+                return await ack(False, "node is connected — disable it first")
+            ok = self._server.forget_node(node)
+            await ack(ok, None if ok else "node is not in the roster")
+            if ok:
+                await self._broadcast_state()
         elif mtype == "set_muted":
             if not self._dcfg.controls:
                 return await ack(False, "controls are disabled (set dashboard.controls: true)")

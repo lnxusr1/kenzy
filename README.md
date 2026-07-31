@@ -123,7 +123,7 @@ Prerequisites on each remote host: SSH key auth and passwordless sudo. Backend s
 then wired up). Open `https://<server>:8770` — `http://` if you installed without TLS.
 It gives you one place to:
 
-- See live node + backend-service health and each host's installed version
+- See live node + backend-service health and each host's installed version — including any room that has **gone missing**, with how long it has been unreachable (an orphaned node still answers its wake word, so it looks fine from inside the room)
 - Configure each node, **rename its room**, and run **guided calibration** (also available by voice: "Hey Kenzy, calibrate") — it measures the room, detects echo cancellation, and applies the thresholds itself
 - Manage **skills** (enable/disable live) and **speaker profiles** (rename / delete / enroll from a room)
 - Watch **room presence** — which rooms have someone in them, what each belief rests on, and how fresh it is

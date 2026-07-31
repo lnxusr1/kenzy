@@ -109,6 +109,20 @@ node_defaults:
   dialog_no_speech_timeout_ms: 8000
   dialog_onset_ms: 300
   dialog_onset_vad_threshold: 0.5
+  # A node that loses the server keeps hearing its wake word, so an orphaned room
+  # looks fine from inside it. The watchdog is the node's own smoke alarm: it
+  # complains in the node log after warn_minutes, and restarts the node process if
+  # its reconnect loop stops turning (wedge_minutes) or it has been unable to
+  # register for reexec_minutes. Set reexec_minutes to 0 to never self-restart.
+  watchdog:
+    enabled: true
+    warn_minutes: 5
+    wedge_minutes: 5
+    reexec_minutes: 30
+  # Cue played when the wake word fires while the node has NO server connection.
+  # Null = silent (the ready chime is never used here: it means "I'm listening",
+  # which would be a lie). Set a distinct sound to make an orphaned room audible.
+  sound_offline: null
 
 # kenzy-speaker service — omit or set url to null to disable
 speaker:
@@ -126,6 +140,15 @@ dialog:
 alarm:
   ring_repeats: 10
   ring_interval: 25
+
+# Fleet health. A node that disconnects stays listed as absent (with a last-seen)
+# instead of vanishing, and becomes a dashboard fault once it has been missing for
+# offline_alert_minutes. restart_grace_minutes is the expected-downtime window
+# granted when the dashboard itself restarts or upgrades a node, so ordinary churn
+# doesn't cry wolf. Set offline_alert_minutes to 0 to never raise the fault.
+fleet:
+  offline_alert_minutes: 5
+  restart_grace_minutes: 10
 
 # kenzy-llm service — omit or set url to null to disable
 llm:
