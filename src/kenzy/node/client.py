@@ -103,6 +103,83 @@ _CUE_GRACE_MAX_S = 2.0
 # — the bed must never loop forever in an empty room. Internal constant.
 _LOOP_MAX_S = 90.0
 
+# How long one mDNS browse is given, and how much slack before we declare the
+# browse itself wedged. discover_server's internal wait is bounded, but the
+# zeroconf socket setup and close() around it are not — and a hang there used to
+# park the whole reconnect loop with no log and no retry.
+_DISCOVERY_TIMEOUT_S = 5.0
+_DISCOVERY_GRACE_S = 5.0
+
+# How often the reconnect watchdog checks in. Comfortably shorter than any
+# threshold it enforces, and cheap enough to be invisible on a Pi.
+_WATCHDOG_TICK_S = 30.0
+
+#: Where the last-known-good server URL is cached. A cache, deliberately not
+#: config: `server_url` in node.yaml is an operator's authoritative choice, while
+#: this is only ever a remembered observation, and mDNS still wins once it fails.
+_SERVER_CACHE_NAME = "last_server"
+
+
+def _server_cache_path() -> Path | None:
+    from kenzy.config import kenzy_data_root
+
+    try:
+        return kenzy_data_root() / "data" / _SERVER_CACHE_NAME
+    except Exception:  # pragma: no cover - no resolvable data root
+        return None
+
+
+def _read_cached_server() -> str | None:
+    """The server URL this node last registered with, or None."""
+    path = _server_cache_path()
+    if path is None or not path.is_file():
+        return None
+    try:
+        url = path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    return url if url.startswith(("ws://", "wss://")) else None
+
+
+def _write_cached_server(url: str) -> None:
+    """Remember a server URL that actually worked. Best-effort: a read-only data
+    root costs us the cache, never the connection."""
+    path = _server_cache_path()
+    if path is None:
+        return
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(url + "\n", encoding="utf-8")
+        tmp.replace(path)
+    except OSError as exc:
+        log.debug("could not cache server url: %s", exc)
+
+
+def _describe_close(exc: BaseException) -> str:
+    """Human-readable close code + reason from a websockets ConnectionClosed."""
+    rcvd = getattr(exc, "rcvd", None)
+    sent = getattr(exc, "sent", None)
+    frame = rcvd if rcvd is not None else sent
+    if frame is None:
+        return str(exc) or exc.__class__.__name__
+    side = "server" if rcvd is not None else "we"
+    code = int(getattr(frame, "code", 0))
+    reason = str(getattr(frame, "reason", "") or "")
+    return f"{side} closed with {code}" + (f" ({reason})" if reason else "")
+
+
+def _ago(stamp: float) -> str:
+    """"3m ago" / "never" for a monotonic stamp, for human-facing log lines."""
+    if not stamp:
+        return "never"
+    secs = int(max(0.0, time.monotonic() - stamp))
+    if secs < 90:
+        return f"{secs}s ago"
+    if secs < 5400:
+        return f"{secs // 60}m ago"
+    return f"{secs // 3600}h ago"
+
 
 def _volume_to_gain(value: Any) -> float:
     """Convert a 0–100 volume config value to a 0.0–1.0 gain (clamped)."""
@@ -775,6 +852,12 @@ class NodeClient:
         # a single turn). Off by default; set to a sound (e.g. "disconnect.wav") to enable.
         _sde = cfg.get("sound_dialog_end")
         self._sound_dialog_end: str | None = str(_sde) if _sde else None
+        # Orphan cue: played when the wake word fires while we have no server. Off by
+        # default (the honest answer is silence plus a log), but a household that wants
+        # audible feedback can point this at a distinct sound — it must NOT be the ready
+        # chime, which means "I'm listening" and would be a lie here.
+        _so = cfg.get("sound_offline")
+        self._sound_offline: str | None = str(_so) if _so else None
         self._capture_rate: int = int(cfg.get("capture_sample_rate", protocol.SAMPLE_RATE))
         self._playback_rate: int = int(cfg.get("playback_sample_rate", _TTS_SERVER_RATE))
         # Playback volume (config key is 0–100; stored internally as 0.0–1.0) and mute.
@@ -914,6 +997,7 @@ class NodeClient:
         self._ringback_after_tts: bool = False
         self._ringback_task: asyncio.Task[None] | None = None
         self._dialog_end_audio: np.ndarray[Any, Any] | None = None
+        self._offline_audio: np.ndarray[Any, Any] | None = None
 
         self._silence_count: int = 0
         self._speech_frames: int = 0
@@ -921,7 +1005,41 @@ class NodeClient:
         # Set on shutdown so a blocking mDNS browse returns promptly (otherwise the
         # worker thread is joined at interpreter exit, delaying Ctrl+C by ~5s).
         self._discovery_cancel = threading.Event()
+        # Per-attempt discovery cancels. A browse that overruns its own deadline is
+        # told to unwind through its own event; shutdown sets every live one.
+        self._discovery_cancels: set[threading.Event] = set()
+        # The address we last *registered* with (not merely connected to). A node
+        # that has been talking to a server for days must never be orphaned because
+        # one multicast query goes unanswered, so this is tried before mDNS and the
+        # browse becomes the fallback. Loaded from / written to the cache file.
+        self._cached_server_url: str | None = _read_cached_server()
+        # Set when an attempt on the cached address failed to register, so the next
+        # attempt asks the network instead of looping on a dead address.
+        self._cache_stale: bool = False
+        # The URL the in-flight attempt is using, promoted to the cache on register.
+        self._connect_url: str | None = None
+        # Liveness, for the watchdog. ``_loop_alive_at`` proves the reconnect loop is
+        # still iterating (a wedged await stops updating it); ``_registered_at`` is the
+        # last time a server accepted our hello and answered with a config frame.
+        self._loop_alive_at: float = 0.0
+        self._registered_at: float = 0.0
+        self._registered: bool = False
+        # Why the last connection closed, captured from the WS close frame. On a
+        # reconnect this is the only place the server's reason is visible.
+        self._close_reason: str | None = None
+        _wd = cfg.get("watchdog") or {}
+        self._watchdog_enabled: bool = bool(_wd.get("enabled", True))
+        self._watchdog_warn_s: float = float(_wd.get("warn_minutes", 5)) * 60.0
+        # A reconnect loop that has not iterated in this long is wedged in an await
+        # that will never return — the only way out is a fresh process.
+        self._watchdog_wedge_s: float = float(_wd.get("wedge_minutes", 5)) * 60.0
+        # Belt-and-braces: re-exec after this long with no registration even if the
+        # loop is still turning (0 disables). Deliberately much longer than the wedge
+        # timeout so an ordinary server outage doesn't make the fleet flap.
+        self._watchdog_reexec_s: float = float(_wd.get("reexec_minutes", 30)) * 60.0
         self._force_exit_armed = False  # guards the one-shot shutdown watchdog
+        # In-flight "I'm leaving on purpose" frame, awaited briefly during teardown.
+        self._goodbye_task: asyncio.Task[None] | None = None
         # Cached audio-device probe, reported to the server so the dashboard can offer
         # a device picker. Probing touches PortAudio and can be slow/block, so it runs
         # in a daemon thread (never on the event loop); the result is pushed via a
@@ -1181,6 +1299,24 @@ class NodeClient:
     async def _begin_streaming(self, session_id: str, followup: bool = False) -> None:
         self._reset_barge()
         self._stop_ringback()
+        if self._ws is None:
+            # Orphaned. The ready chime means "I'm listening", and playing it for a
+            # room we cannot hear is a lie — it is exactly what made a node that had
+            # been cut off for two days look like a working one. Check the connection
+            # BEFORE the cue, say so in the log, and stay quiet unless the household
+            # configured a distinct offline sound.
+            log.warning(
+                "Wake word ignored — no server connection (last registered %s)",
+                _ago(self._registered_at),
+            )
+            if self._player:
+                self._player.abort()  # a waiting bed must not outlive the connection
+                if self._offline_audio is not None:
+                    self._player.play_pcm(self._offline_audio, interrupt=True, alert=True)
+            self._state = _STATE_IDLE
+            self._session_id = None
+            self._followup_active = False
+            return
         if self._player:
             self._player.abort()  # stop waiting sound if still playing
             if not followup or self._capture_cue:
@@ -1192,11 +1328,6 @@ class NodeClient:
         self._silence_count = 0
         self._speech_frames = 0
         self._frame_count = 0
-        if self._ws is None:
-            self._state = _STATE_IDLE
-            self._session_id = None
-            self._followup_active = False
-            return
         if followup:
             # Stage 1 onset gate: send NOTHING yet. Frames buffer locally until
             # ~dialog_onset_ms of sustained speech confirms a real answer (then
@@ -1695,6 +1826,18 @@ class NodeClient:
             self._set_log_capture(bool(patch["keep_logs"]))
             applied.append("keep_logs")
 
+        # Watchdog thresholds are read on every tick, so they tune live. (Whether
+        # the loop exists at all is decided at startup — `enabled` needs a restart.)
+        if isinstance(patch.get("watchdog"), dict):
+            wd = patch["watchdog"]
+            if "warn_minutes" in wd:
+                self._watchdog_warn_s = float(wd["warn_minutes"]) * 60.0
+            if "wedge_minutes" in wd:
+                self._watchdog_wedge_s = float(wd["wedge_minutes"]) * 60.0
+            if "reexec_minutes" in wd:
+                self._watchdog_reexec_s = float(wd["reexec_minutes"]) * 60.0
+            applied.append("watchdog")
+
         restart_keys = {
             "audio_device",
             "capture_sample_rate",
@@ -1707,6 +1850,7 @@ class NodeClient:
             "sound_disconnect",
             "sound_ringback",
             "sound_dialog_end",
+            "sound_offline",
         }
 
         if initial:
@@ -1746,6 +1890,10 @@ class NodeClient:
                 sde = patch["sound_dialog_end"]
                 self._sound_dialog_end = str(sde) if sde else None
                 applied.append("sound_dialog_end")
+            if "sound_offline" in patch:
+                so = patch["sound_offline"]
+                self._sound_offline = str(so) if so else None
+                applied.append("sound_offline")
             deferred: list[str] = []
         else:
             deferred = sorted(restart_keys & patch.keys())
@@ -1781,7 +1929,11 @@ class NodeClient:
         while True:
             try:
                 raw = await ws.recv()
-            except websockets.exceptions.ConnectionClosed:
+            except websockets.exceptions.ConnectionClosed as exc:
+                # Keep the close code and reason. On a reconnect this is the ONLY
+                # place the server's "why" appears, and swallowing it is what left a
+                # silent join rejection looking identical to an ordinary drop.
+                self._close_reason = _describe_close(exc)
                 break
             if isinstance(raw, bytes):
                 if self._state == _STATE_INTERCOM and self._player is not None:
@@ -1837,6 +1989,9 @@ class NodeClient:
                 continue
 
             if mtype == protocol.MSG_CONFIG:
+                # Also the join ack: on a reconnect (audio already up) the initial
+                # config read is skipped, so this is where registration lands.
+                self._mark_registered()
                 self._apply_pulled_config(msg.get("config") or {})
 
             elif mtype == protocol.MSG_TRIGGER and self._state == _STATE_IDLE:
@@ -2142,25 +2297,114 @@ class NodeClient:
     # Server resolution (explicit config or mDNS discovery)
     # ------------------------------------------------------------------
 
-    async def _resolve_server_url(self) -> str:
-        """Return the WebSocket URL: the configured value, else mDNS discovery.
+    async def _discover_once(self) -> str | None:
+        """One bounded mDNS browse, run on a throwaway daemon thread.
 
-        Raises OSError when discovery is enabled but finds nothing, so the
-        caller's reconnect/backoff loop retries.
+        Two hazards are handled here, both learned from a node that sat orphaned
+        for two days while its wake word kept answering:
+
+        * ``discover_server`` bounds its own wait, but the zeroconf socket setup
+          and ``close()`` around it do not. Awaiting it unbounded parks the
+          reconnect loop forever — no retry, no log, nothing server-side.
+        * It must not run on the default executor. ``_audio_loop`` submits two
+          ``run_in_executor`` calls per frame to that same pool, so a handful of
+          wedged browses would starve the audio path and take the wake word down
+          with the connection. A daemon thread costs nothing and cannot.
+        """
+        from kenzy.discovery import discover_server
+
+        loop = asyncio.get_running_loop()
+        fut: asyncio.Future[str | None] = loop.create_future()
+        cancel = threading.Event()
+        if self._discovery_cancel.is_set():
+            cancel.set()  # already shutting down
+        self._discovery_cancels.add(cancel)
+
+        def _settle(value: str | None, exc: BaseException | None) -> None:
+            if fut.done():
+                return
+            if exc is not None:
+                fut.set_exception(exc)
+            else:
+                fut.set_result(value)
+
+        def _work() -> None:
+            try:
+                url = discover_server(_DISCOVERY_TIMEOUT_S, cancel)
+            except Exception as exc:  # zeroconf/socket failure — report, don't hang
+                loop.call_soon_threadsafe(_settle, None, exc)
+                return
+            loop.call_soon_threadsafe(_settle, url, None)
+
+        log.info("Discovering Kenzy server over mDNS…")
+        threading.Thread(target=_work, daemon=True, name="mdns-discover").start()
+        try:
+            return await asyncio.wait_for(
+                fut, timeout=_DISCOVERY_TIMEOUT_S + _DISCOVERY_GRACE_S
+            )
+        except TimeoutError:
+            # The browse overran a deadline it should have enforced itself: zeroconf
+            # is wedged. Tell the worker to unwind and carry on — we leak one daemon
+            # thread at worst, and never the reconnect loop.
+            cancel.set()
+            log.warning("mDNS discovery timed out — treating as not found")
+            return None
+        finally:
+            self._discovery_cancels.discard(cancel)
+
+    async def _resolve_server_url(self) -> str:
+        """Return the WebSocket URL: the configured value, else the address we last
+        registered with, else mDNS discovery.
+
+        Raises OSError when nothing resolves, so the caller's reconnect/backoff
+        loop retries.
         """
         if self._server_url:
             return self._server_url
+        # A server we were talking to minutes ago beats a fresh multicast query.
+        # mDNS is a single point of failure on the way home and the node already
+        # knows the address that worked, so the browse is the fallback, not the
+        # only route. The cache is skipped once it has failed to register, so a
+        # server that genuinely moved is still found.
+        if self._cached_server_url and not self._cache_stale:
+            log.info("Using last-known-good server %s", self._cached_server_url)
+            return self._cached_server_url
         if not self._discovery_enabled:
+            if self._cached_server_url:
+                return self._cached_server_url
             raise OSError("no server_url configured and discovery is disabled")
 
-        from kenzy.discovery import discover_server
-
-        log.info("Discovering Kenzy server over mDNS…")
-        url = await asyncio.to_thread(discover_server, 5.0, self._discovery_cancel)
+        url = await self._discover_once()
+        if url is None and self._cached_server_url:
+            # Nothing answered, but we know where the server was. A stale address
+            # beats no address; re-arm the cache so the next failure browses again.
+            log.warning(
+                "mDNS found nothing — retrying last-known-good %s", self._cached_server_url
+            )
+            self._cache_stale = False
+            return self._cached_server_url
         if url is None:
             raise OSError("no Kenzy server found on the network (mDNS)")
         log.info("Discovered server at %s", url)
         return url
+
+    def _mark_registered(self) -> None:
+        """The server answered our hello with a config frame — we are joined.
+
+        This is the one honest "the connection works" signal the node has: the
+        server always pushes a config frame right after a successful hello, and a
+        rejected join closes instead. Opening a socket proves nothing (a refused
+        join gets a socket too), which is why the backoff, the URL cache and the
+        watchdog all hang off this rather than off ``connect()``.
+        """
+        self._registered = True
+        self._registered_at = time.monotonic()
+        self._cache_stale = False
+        url = self._connect_url
+        if url and url != self._cached_server_url:
+            self._cached_server_url = url
+            _write_cached_server(url)
+            log.info("Remembered server address %s", url)
 
     # ------------------------------------------------------------------
     # Audio hardware (built lazily after the first config pull)
@@ -2182,6 +2426,7 @@ class NodeClient:
             except json.JSONDecodeError:
                 continue
             if msg.get("type") == protocol.MSG_CONFIG:
+                self._mark_registered()
                 return msg.get("config") or {}
             try:
                 self._cmd_q.put_nowait(msg)
@@ -2244,6 +2489,7 @@ class NodeClient:
         self._disconnect_audio = _chime(self._sound_disconnect)
         self._ringback_audio = _chime(self._sound_ringback)
         self._dialog_end_audio = _chime(self._sound_dialog_end)
+        self._offline_audio = _chime(self._sound_offline)
         log.info(
             "Intercom chimes: connect=%s disconnect=%s; end-of-dialog=%s",
             self._sound_connect or "off",
@@ -2546,6 +2792,90 @@ class NodeClient:
             # reconnected node hears and speaks normally.
             await self._reset_tts_state()
             self._ws = None
+            self._registered = False
+            if self._close_reason:
+                # Surfaced here, not swallowed in _recv_loop: a join refused for a
+                # bad token or a stale clock reads identically to a network drop
+                # unless the server's own words make it out to the log.
+                log.warning("Connection closed: %s", self._close_reason)
+                self._close_reason = None
+
+    # ------------------------------------------------------------------
+    # Reconnect watchdog
+    # ------------------------------------------------------------------
+
+    async def _say_goodbye(self, reason: str) -> None:
+        """Tell the server this absence is on purpose, so it doesn't raise a fault
+        over a restart we chose. Strictly best-effort and strictly bounded — we are
+        on our way out, and a wedged socket must not delay that."""
+        ws = self._ws
+        if ws is None:
+            return
+        try:
+            await asyncio.wait_for(ws.send(protocol.goodbye(reason)), timeout=1.0)
+        except Exception:  # pragma: no cover - the socket is already going away
+            pass
+
+    def _reexec(self, why: str) -> None:
+        """Last resort: replace this process. Re-reads config and rebuilds audio,
+        and — unlike any amount of retry logic — clears whatever in-process state
+        got us stuck. Same mechanic the server's restart command uses."""
+        log.error("Watchdog: %s — re-executing node", why)
+        try:
+            self._close_audio_hardware()
+        except Exception:  # pragma: no cover - best effort before exec
+            pass
+        os.execv(sys.executable, [sys.executable, *sys.argv])
+
+    async def _watchdog_loop(self) -> None:
+        """Notice, say so, and as a last resort restart.
+
+        A node that cannot reach its server is invisible: the server has nothing
+        to report about a node that never knocks, and the node's own audio keeps
+        working, so nothing looks wrong from the room either. This loop is the
+        node's own smoke alarm.
+
+        Two distinct failures, deliberately handled differently:
+
+        * The reconnect loop **stopped turning** — parked in an await that will
+          never return. Nothing recovers that but a new process, so re-exec
+          quickly (``wedge_minutes``).
+        * The loop is turning but nobody answers — an ordinary server outage.
+          Complain loudly on a schedule, and only re-exec after a much longer
+          ``reexec_minutes`` (0 disables), so a server reboot doesn't make every
+          room in the house flap.
+        """
+        warned_at = 0.0
+        start = time.monotonic()
+        while True:
+            await asyncio.sleep(_WATCHDOG_TICK_S)
+            now = time.monotonic()
+            if self._registered:
+                warned_at = 0.0
+                continue
+
+            # The reconnect loop should touch this every iteration, and it sleeps
+            # at most 60 s between attempts. If it has gone quiet for minutes it is
+            # not retrying — it is stuck.
+            loop_quiet = now - (self._loop_alive_at or start)
+            if self._watchdog_wedge_s and loop_quiet >= self._watchdog_wedge_s:
+                await self._say_goodbye("watchdog restart")
+                self._reexec(f"reconnect loop has not run for {int(loop_quiet)}s")
+                return  # unreachable after execv; keeps the contract explicit
+
+            down = now - (self._registered_at or start)
+            if down >= self._watchdog_warn_s and now - warned_at >= self._watchdog_warn_s:
+                warned_at = now
+                log.error(
+                    "No server connection for %s (last registered %s, trying %s)",
+                    f"{int(down // 60)}m" if down >= 60 else f"{int(down)}s",
+                    _ago(self._registered_at),
+                    self._connect_url or "…",
+                )
+            if self._watchdog_reexec_s and down >= self._watchdog_reexec_s:
+                await self._say_goodbye("watchdog restart")
+                self._reexec(f"no server connection for {int(down)}s")
+                return
 
     # ------------------------------------------------------------------
     # Main entry point
@@ -2571,7 +2901,15 @@ class NodeClient:
 
         def _request_stop() -> None:
             log.info("Shutdown signal received — stopping node")
+            # SIGTERM is what `systemctl restart`, kenzy-deploy and a manual stop
+            # all send, so this is where a *planned* absence gets announced. It has
+            # to be its own task: cancelling the run task below would otherwise
+            # take the send with it. run()'s teardown waits briefly for it.
+            if self._ws is not None:
+                self._goodbye_task = loop.create_task(self._say_goodbye("shutdown"))
             self._discovery_cancel.set()
+            for ev in list(self._discovery_cancels):
+                ev.set()  # release any in-flight browse on its own event
             if main_task is not None:
                 main_task.cancel()
             # Safety net: if graceful shutdown wedges in a blocking C call (PortAudio /
@@ -2601,11 +2939,23 @@ class NodeClient:
         # by the time we send hello; if not, it's pushed via a status update.
         self._kick_device_probe()
 
+        watchdog_task = (
+            asyncio.create_task(self._watchdog_loop(), name="watchdog")
+            if self._watchdog_enabled
+            else None
+        )
+
         try:
             delay = 1
             while True:
+                # Proof of life for the watchdog: a loop that stops turning is
+                # parked in an await that will never return, and only a fresh
+                # process gets out of that.
+                self._loop_alive_at = time.monotonic()
+                registered_before = self._registered_at
                 try:
                     server_url = await self._resolve_server_url()
+                    self._connect_url = server_url
                     ssl_ctx = None
                     if server_url.startswith("wss://"):
                         # Encrypted-but-unverified by default: a self-signed LAN
@@ -2615,7 +2965,6 @@ class NodeClient:
 
                         ssl_ctx = tlsutil.client_context(verify=self._tls_verify, ca=self._tls_ca)
                     ws = await websockets.connect(server_url, ssl=ssl_ctx)
-                    delay = 1
                     await self._run_session(ws)
 
                 except TimeoutError:
@@ -2639,6 +2988,17 @@ class NodeClient:
                         self._state = _STATE_IDLE
                         self._session_id = None
 
+                if self._registered_at != registered_before:
+                    # We actually joined this time round, so the next drop deserves a
+                    # prompt retry. Resetting on connect() instead treated a refused
+                    # join as success and turned it into a 1 s hot loop that also
+                    # tripped the server's per-IP rate limiter.
+                    delay = 1
+                elif self._connect_url and self._connect_url == self._cached_server_url:
+                    # The remembered address didn't get us registered — ask the
+                    # network next time round rather than hammering a dead address.
+                    self._cache_stale = True
+
                 log.info("Reconnecting in %d s…", delay)
                 await asyncio.sleep(delay)
                 delay = min(delay * 2, 60)
@@ -2652,8 +3012,22 @@ class NodeClient:
                     loop.remove_signal_handler(sig)
                 except Exception:
                     pass
+            # Give the goodbye frame its moment before we tear the socket down —
+            # this runs after the CancelledError was caught, so it is a normal
+            # await, not one racing its own cancellation.
+            if self._goodbye_task is not None:
+                try:
+                    await asyncio.wait_for(asyncio.shield(self._goodbye_task), timeout=1.5)
+                except (TimeoutError, asyncio.CancelledError, Exception):
+                    pass
             # Guaranteed cleanup regardless of how we exit (normal return,
             # CancelledError from connect or sleep, unexpected exception).
+            if watchdog_task is not None:
+                watchdog_task.cancel()
+                try:
+                    await asyncio.gather(watchdog_task, return_exceptions=True)
+                except asyncio.CancelledError:
+                    pass
             if self._audio_task is not None:
                 self._audio_task.cancel()
                 try:

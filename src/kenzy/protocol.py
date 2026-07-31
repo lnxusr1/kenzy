@@ -31,6 +31,7 @@ MSG_SET_ROOM = "set_room"
 MSG_REQUEST_LOGS = "request_logs"
 MSG_LOGS = "logs"
 MSG_STATUS = "status"  # node→server: report node health (e.g. audio init failed)
+MSG_GOODBYE = "goodbye"  # node→server: I am going away on purpose (restart/upgrade/shutdown)
 MSG_METRICS = "metrics"  # node→server: periodic system metrics (cpu/ram/disk/temp)
 MSG_TUNE_START = "tune_start"  # server→node: begin a bounded calibration window
 MSG_TUNE_STOP = "tune_stop"  # server→node: end calibration early
@@ -173,6 +174,18 @@ def status(
     if devices is not None:
         payload["devices"] = devices
     return json.dumps(payload)
+
+
+def goodbye(reason: str = "shutdown") -> str:
+    """Node→server: this absence is deliberate.
+
+    The server otherwise cannot tell "someone restarted me" from "my power went
+    out" — and it must, because one deserves an alert and the other is Tuesday.
+    Sent on SIGTERM/SIGINT (which is what ``systemctl restart``, ``kenzy-deploy``
+    and a manual stop all deliver) and before a watchdog re-exec. Best-effort by
+    nature: a node that dies without warning simply doesn't send one, which is
+    exactly the signal the fleet view wants."""
+    return json.dumps({"type": MSG_GOODBYE, "reason": reason})
 
 
 def metrics(

@@ -68,6 +68,12 @@ export async function getPeople() {
   return await r.json();
 }
 
+export async function getPresence() {
+  const r = await fetch("/api/presence");
+  if (!r.ok) throw new Error(`presence ${r.status}`);
+  return await r.json();
+}
+
 export async function getSchedules() {
   const r = await fetch("/api/schedules");
   if (!r.ok) throw new Error(`schedules ${r.status}`);

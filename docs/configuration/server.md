@@ -160,6 +160,64 @@ Opt-in; nothing is wired (zero overhead) unless `enabled`. Requires the `mqtt` e
 
 Broker credentials come from the environment, never this file: `KENZY_MQTT_USERNAME` / `KENZY_MQTT_PASSWORD`.
 
+### Fleet health
+
+When a node disconnects it stays on the dashboard as **absent**, with how long
+it has been gone, rather than disappearing from the list. That distinction
+matters more than it sounds: a room that vanishes from the fleet looks exactly
+like a room you never installed, so a house quietly losing one can go unnoticed
+for days — especially since an orphaned node keeps answering its wake word and
+seems fine from inside the room.
+
+Past `offline_alert_minutes` the card becomes a **fault** and the Fleet page
+raises a banner. If MQTT integration is on, the offline transition is also
+published as a `node_state` event, so Home Assistant can notify you.
+
+| Key | Default | Description |
+|---|---|---|
+| `fleet.offline_alert_minutes` | `5` | How long a node may be missing before it is reported as a fault rather than merely absent. `0` = never raise the fault (nodes still show as absent). |
+| `fleet.restart_grace_minutes` | `10` | Expected-downtime window granted when *you* restart or upgrade a node from the dashboard, so routine churn doesn't raise an alert. An alert people learn to ignore is worth less than no alert at all. |
+
+The roster lives in `data/nodes.json` and rides the backup slice. A node you
+have decommissioned can be dropped with **Forget** on its (offline) fleet card;
+a node told to disable itself is removed automatically.
+
+### Occupancy
+
+Kenzy keeps a live picture of which rooms have people in them — built from your
+Home Assistant motion/presence sensors and from who she hears speaking in each
+room — and shows it on the dashboard's **Presence** tab.
+
+In this release it is **watch-only**: nothing is spoken unprompted and no
+delivery behaviour changes. The picture is built first so it can be trusted
+before anything acts on it.
+
+| Key | Default | Description |
+|---|---|---|
+| `occupancy.enabled` | `true` | Track room occupancy. Requires Home Assistant to be configured (Fleet → **llm**); without it nothing starts, whatever this says. |
+
+Rooms read **unknown** until something says otherwise — that is deliberate.
+"Unknown" and "empty" are different claims, and only one of them is honest when
+no sensor has reported and nobody has spoken.
+
+Which sensors count as evidence is detected automatically from HA device classes
+(`motion`, `occupancy`, `presence`, plus `person` entities for home/away). Tune
+it per entity under **Home Assistant → Presence sensors** when a sensor lies — a
+hallway PIR the cat crosses, or one aimed through a window at the street, will
+otherwise keep a room permanently "occupied":
+
+```yaml
+# data/home_assistant/curation.yaml
+occupancy:
+  exclude:
+    - binary_sensor.hallway_motion     # the cat sets this off nightly
+  include:
+    - binary_sensor.workshop_door      # not a presence class, but good evidence here
+```
+
+Kenzy's own `kenzy_*` entities are never evidence — she would otherwise believe
+every room was occupied the moment she spoke — and that rule is not overridable.
+
 ## Example
 
 ```yaml

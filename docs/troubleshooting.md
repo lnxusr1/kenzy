@@ -56,7 +56,7 @@ that service). The usual causes:
 - **It's waiting for the server** — backend services fetch their settings from
   `kenzy-server` at startup and wait until it answers. If the server is down or
   unreachable, they sit in a retry loop. Start/fix the server first.
-- **Restart it** — the Services tab has a per-service **Restart** button; from a
+- **Restart it** — each service chip on the **Fleet** tab opens its page, which has a **Restart** button; from a
   terminal, `systemctl --user restart kenzy-<name>`.
 
 ## Kenzy doesn't hear the wake word
@@ -162,14 +162,14 @@ kenzy-node` on the device.
   different microphone doesn't transfer well. Re-enroll from the dashboard
   (**People → Enroll voice** on the person's card — it adds samples to their
   existing profile).
-- Tune `identify_threshold` (Services → speaker): **lower** it if enrolled people
+- Tune `identify_threshold` (Fleet → **speaker**): **lower** it if enrolled people
   keep coming back as "unknown"; **raise** it if the wrong names come back. See
   [Speaker Enrollment](speaker-enrollment.md#tuning-the-identification-threshold).
 
 ## Smart-home commands don't work
 
 - Check that `HA_API_KEY` is set in `.env` on the LLM service's machine and that
-  the `url` under `skills.home_assistant` (Services → llm) points at your Home
+  the `url` under `skills.home_assistant` (Fleet → **llm**) points at your Home
   Assistant.
 - If Kenzy answers but picks the wrong device (or says it can't find one), the
   fix is usually **naming**: give the device a spoken alias in the dashboard's

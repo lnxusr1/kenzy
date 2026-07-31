@@ -209,6 +209,7 @@ export const NODE_HELP = {
   sound_disconnect: "Chime when an intercom call ends.",
   sound_ringback: "Ring loop while calling another room.",
   sound_dialog_end: "Cue when a reply window expires unanswered. Empty = silent.",
+  sound_offline: "Cue when the wake word fires but this node can't reach the server. Empty = silent, which is the honest answer — the activation chime is never used here, because it means “I'm listening”.",
   // Server-streamed cues (bundled name or a path on the SERVER host; apply live).
   sound_timer: "Lead-in tone before a timer announcement. Empty = voice only.",
   sound_alarm: "Lead-in tone for each alarm ring; still plays if speech is down. Empty = voice only.",
@@ -230,7 +231,7 @@ export const NODE_GROUPS = [
     "Dialog",
     ["hardware_aec", "dialog_no_speech_timeout_ms", "dialog_onset_ms", "dialog_onset_vad_threshold"],
   ],
-  ["Sounds", ["sound_ready", "sound_waiting", "sound_connect", "sound_disconnect", "sound_ringback", "sound_dialog_end", "sound_timer", "sound_alarm", "sound_error", "sound_thinking", "sound_working"]],
+  ["Sounds", ["sound_ready", "sound_waiting", "sound_connect", "sound_disconnect", "sound_ringback", "sound_dialog_end", "sound_offline", "sound_timer", "sound_alarm", "sound_error", "sound_thinking", "sound_working"]],
   ["Playback", ["volume"]],
   ["Logging", ["log_level", "log_capture_level", "verbose"]],
 ];
@@ -278,6 +279,9 @@ export const SERVER_HELP = {
   "integrations.mqtt.base_topic": "Topic prefix for everything Kenzy publishes.",
   "integrations.mqtt.discovery_prefix": "Home Assistant's discovery prefix. Leave alone unless you changed it in HA.",
   "integrations.mqtt.commands": "Let Home Assistant control nodes (trigger, stop, volume, mute). Off = Kenzy only reports, never obeys.",
+  "occupancy.enabled": "Track which rooms have people in them, from your Home Assistant sensors and from who Kenzy hears. Shown on the Presence tab; she doesn't act on it yet.",
+  "fleet.offline_alert_minutes": "How long a room may be unreachable before the Fleet page calls it a fault. An orphaned node still answers its wake word, so nobody in the room notices. 0 = never alert.",
+  "fleet.restart_grace_minutes": "Quiet period after you restart or upgrade a node, so expected downtime doesn't raise an alert. Nodes also announce a planned shutdown themselves, so an ordinary restart is silent either way.",
 };
 
 export function serverHelp(key) {

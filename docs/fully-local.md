@@ -50,7 +50,7 @@ curl -fsSL https://ollama.com/install.sh | sh
 ollama pull qwen2.5:14b        # or another tool-calling-capable model
 ```
 
-Then in the dashboard, **Services → llm**:
+Then in the dashboard, **Fleet → llm**:
 
 ```yaml
 model: "ollama/qwen2.5:14b"
@@ -78,7 +78,7 @@ pip install 'kenzy[kokoro]'     # in Kenzy's venv (adds Kokoro + PyTorch)
 kenzy-setup                     # pre-download the voice weights
 ```
 
-Then in the dashboard, **Services → tts**: set `provider: kokoro` (voice/speed
+Then in the dashboard, **Fleet → tts**: set `provider: kokoro` (voice/speed
 under the `kokoro:` block). Output format is identical to the cloud provider,
 so nothing else changes — except one payoff: local speech is what unlocks
 **spoken [lockbox secrets](memory.md#secrets-the-lockbox)** (a cloud voice
@@ -88,7 +88,7 @@ See [TTS Configuration](configuration/tts.md#kokoro-provider).
 ### Speech-to-text — verify, don't change
 
 `provider: whisper` is the shipped default; just confirm nobody switched it to
-`openai` (**Services → stt**). Pick the model size for your CPU in the same
+`openai` (**Fleet → stt**). Pick the model size for your CPU in the same
 place ([guide](configuration/stt.md#model-size-guide)).
 
 ### Skills housekeeping

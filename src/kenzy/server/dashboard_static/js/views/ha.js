@@ -16,6 +16,14 @@ function emptyRow() {
   return { aliases: "", note: "", inGroup: true, exclude: false };
 }
 
+// Sub-tabs. All three edit ONE curation file behind ONE Save — this splits the
+// screen, not the payload, so the page stops being four stacked editors.
+const TABS = [
+  { id: "devices", label: "Devices" },
+  { id: "presence", label: "Presence sensors" },
+  { id: "lists", label: "Lists" },
+];
+
 export function HaView() {
   const [data, setData] = useState(null);
   const [err, setErr] = useState("");
@@ -26,8 +34,21 @@ export function HaView() {
   // Shopping/to-do lists: which todo entity is "the list" + spoken aliases per list.
   const [listDefault, setListDefault] = useState("");
   const [listAliases, setListAliases] = useState({}); // entity_id -> "csv"
-  const [dirty, setDirty] = useState(false);
+  // v5 presence: entity_id -> bool ("counts as evidence"). Seeded from what the
+  // llm actually resolved, so the toggles show live truth, not just the file.
+  const [occ, setOcc] = useState({});
+  const [showAllOcc, setShowAllOcc] = useState(false);
+  // One curation file, one Save — but four editors' worth of screen. Sub-tabs
+  // split the SCREEN, not the payload: build() always reads every section, so
+  // saving from any tab writes them all. `edited` remembers which tabs were
+  // touched purely so their dot tells you where the unsaved change is.
+  const [tab, setTab] = useState("devices");
+  const [edited, setEdited] = useState({});
   const [open, setOpen] = useState({}); // "floor/area" -> bool (collapsed by default)
+  const [showEx, setShowEx] = useState(false); // bulk-exclusion card (collapsed)
+
+  const dirty = Object.keys(edited).length > 0;
+  const setDirty = (where) => setEdited((m) => (where === false ? {} : { ...m, [where]: true }));
 
   function hydrate(d) {
     const cur = d.curation || {};
@@ -44,6 +65,9 @@ export function HaView() {
       devs[id] = devs[id] || emptyRow();
       devs[id].exclude = true;
     }
+    const occset = {};
+    for (const c of d.occupancy || []) occset[c.entity_id] = !!c.used;
+    setOcc(occset);
     const defset = {};
     for (const rv of Object.values(cur.rooms || {})) {
       for (const ids of Object.values((rv && rv.defaults) || {})) {
@@ -80,16 +104,25 @@ export function HaView() {
   const rowOf = (id) => dev[id] || emptyRow();
   const setRow = (id, patch) => {
     setDev((m) => ({ ...m, [id]: { ...rowOf(id), ...patch } }));
-    setDirty(true);
+    setDirty("devices");
   };
   const setDefault = (id, on) => {
     setDefs((m) => ({ ...m, [id]: on }));
-    setDirty(true);
+    setDirty("devices");
   };
   const setExField = (k, v) => {
     setEx((m) => ({ ...m, [k]: v }));
-    setDirty(true);
+    setDirty("devices");
   };
+
+  // True when this load carries NO trustworthy presence candidates, so the
+  // occupancy block must be carried over from the file rather than recomputed.
+  // Both halves matter: a non-empty list is trustworthy whatever the flag says,
+  // and `!== true` (not `=== false`) means an older kenzy-llm that doesn't send
+  // the flag at all is treated as "can't tell" — pairing a newer server with an
+  // older llm must not silently discard the operator's edits.
+  const occUnavailable = () =>
+    (data.occupancy || []).length === 0 && data.occupancy_reachable !== true;
 
   function build() {
     const byId = {};
@@ -137,6 +170,35 @@ export function HaView() {
     if (Object.keys(lal).length) lists.aliases = lal;
     if (Object.keys(lists).length) out.lists = lists;
 
+    // Presence: record only DIVERGENCE from the automatic behavior, so the file
+    // stays small and a later change to the defaults still reaches anyone who
+    // never touched a given sensor.
+    //
+    // This is the one section rebuilt from LIVE data rather than from the file
+    // (the others hydrate out of `cur.*`), and the POST replaces curation.yaml
+    // wholesale — so when the candidate query failed we must carry the existing
+    // rules through untouched instead of computing an empty block from an empty
+    // list. Saving an alias on the Devices tab would otherwise delete the
+    // operator's presence rules silently. An empty list with a HEALTHY query is
+    // a different thing (a house with no presence sensors) and is allowed to
+    // clear them.
+    if (occUnavailable()) {
+      const prev = (data.curation || {}).occupancy;
+      if (prev && Object.keys(prev).length) out.occupancy = prev;
+    } else {
+      const occExclude = [];
+      const occInclude = [];
+      for (const c of data.occupancy || []) {
+        const on = occ[c.entity_id];
+        if (on === undefined || on === c.auto) continue;
+        (on ? occInclude : occExclude).push(c.entity_id);
+      }
+      const occOut = {};
+      if (occExclude.length) occOut.exclude = occExclude.sort();
+      if (occInclude.length) occOut.include = occInclude.sort();
+      if (Object.keys(occOut).length) out.occupancy = occOut;
+    }
+
     return out;
   }
 
@@ -162,7 +224,7 @@ export function HaView() {
     return html`<div class="empty">Home Assistant isn't connected yet. Add
       <span class="mono">HA_API_KEY</span> under Settings → API keys, set the
       <span class="mono">home_assistant.url</span> in the llm service config
-      (Services → llm), restart kenzy-llm — and this screen fills with your
+      (Fleet → llm), restart kenzy-llm — and this screen fills with your
       devices, rooms, and lists.</div>`;
 
   const controls = data.controls;
@@ -179,6 +241,16 @@ export function HaView() {
 
   const included = devices.filter((e) => e.included).length;
   const aliasCount = Object.values(dev).filter((v) => v.aliases.trim()).length;
+  // Collapsed-card summary, so a rule hidden behind the caret still explains why
+  // rows below it read "excluded (pattern)".
+  const exSummary = [
+    [splitLines(ex.patterns).length, "pattern"],
+    [splitCsv(ex.domains).length, "domain"],
+    [splitCsv(ex.areas).length, "area"],
+  ]
+    .filter(([n]) => n)
+    .map(([n, w]) => `${n} ${w}${n === 1 ? "" : "s"}`)
+    .join(" · ");
 
   const checkbox = (label, checked, onChange) => html`
     <label class="ha-chk"><input type="checkbox" disabled=${ro} checked=${checked}
@@ -222,16 +294,21 @@ export function HaView() {
           re-enabled. Edits still save, so you can stage changes here first.
         </div>`
       : null}
-    <div class="stats">
-      <div class="tile"><div class="micro">Entities</div><div class="k">${devices.length}</div></div>
-      <div class="tile"><div class="micro">Voice-controllable</div><div class="k">${included}</div></div>
-      <div class="tile"><div class="micro">With aliases</div><div class="k">${aliasCount}</div></div>
-    </div>
 
-    <div class="ha-actions">
-      <button class="btn-primary" disabled=${ro || busy || !dirty} onClick=${save}>
-        ${busy ? "Saving…" : dirty ? "Save changes" : "Saved"}</button>
-      ${dirty ? html`<span class="micro">unsaved changes</span>` : null}
+    <div class="tabbar">
+      <div class="tabs" role="tablist">
+        ${TABS.map(
+          (t) => html`<button key=${t.id} role="tab" aria-selected=${tab === t.id}
+            class="tab" onClick=${() => setTab(t.id)}>
+            ${t.label}${edited[t.id] ? html`<span class="tab-dot" title="unsaved changes">•</span>` : null}
+          </button>`,
+        )}
+      </div>
+      <div class="tabbar-act">
+        <button class="btn-primary" disabled=${ro || busy || !dirty} onClick=${save}>
+          ${busy ? "Saving…" : dirty ? "Save changes" : "Saved"}</button>
+        ${dirty ? html`<span class="micro">unsaved changes</span>` : null}
+      </div>
     </div>
 
     ${ro
@@ -241,11 +318,10 @@ export function HaView() {
     ${!data.ha_reachable
       ? html`<div class="empty">Couldn't reach Home Assistant to list devices — check
           <span class="mono">HA_API_KEY</span> and <span class="mono">skills.home_assistant.url</span>.
-          The bulk exclusions below are still editable.</div>`
+          Bulk exclusions (under Devices) are still editable.</div>`
       : null}
 
-    <section class="section">
-      <header><h2>Lists</h2><span class="rule"></span></header>
+    ${tab !== "lists" ? null : html`<section class="section">
       <p class="micro">Shopping/to-do voice commands ("add milk to the list") use HA's
         to-do lists. Pick which one a bare "the list" means, and add spoken aliases
         ("the groceries"). No lists here? Add HA's <b>Local to-do</b> integration.</p>
@@ -254,47 +330,106 @@ export function HaView() {
         : html`<div class="card pad ha-bulk">
             <label class="micro">Default list ("the list")
               <select disabled=${ro} value=${listDefault}
-                onChange=${(e) => { setListDefault(e.target.value); setDirty(true); }}>
+                onChange=${(e) => { setListDefault(e.target.value); setDirty("lists"); }}>
                 <option value="">${(data.lists || []).length === 1 ? "(the only list)" : "(ask which list)"}</option>
                 ${(data.lists || []).map(
                   (l) => html`<option value=${l.entity_id}>${l.name}</option>`,
                 )}
               </select></label>
+            ${/* Label text in ONE span: .ha-bulk label is a flex column, so each
+                  bare chunk would otherwise land on its own line. */ ""}
             ${(data.lists || []).map(
               (l) => html`
                 <label class="micro" key=${l.entity_id}>
-                  ${l.name} <span class="mono">${l.entity_id}</span> — aliases (comma-separated)
+                  <span>${l.name} <span class="mono">${l.entity_id}</span> — aliases (comma-separated)</span>
                   <input disabled=${ro} placeholder="the groceries, grocery list"
                     value=${listAliases[l.entity_id] || ""}
                     onInput=${(e) => {
                       setListAliases((m) => ({ ...m, [l.entity_id]: e.target.value }));
-                      setDirty(true);
+                      setDirty("lists");
                     }} /></label>`,
             )}
           </div>`}
-    </section>
+    </section>`}
 
-    <section class="section">
-      <header><h2>Bulk exclusions</h2><span class="rule"></span></header>
-      <p class="micro">Remove entities from voice control entirely. One pattern per line
-        (fnmatch on the entity_id, e.g. <span class="mono">light.*_plug_led</span>).</p>
-      <div class="card pad ha-bulk">
-        <label class="micro">Patterns
-          <textarea rows="3" disabled=${ro} value=${ex.patterns}
-            onInput=${(e) => setExField("patterns", e.target.value)}></textarea></label>
-        <label class="micro">Domains (comma-separated)
-          <input disabled=${ro} value=${ex.domains}
-            onInput=${(e) => setExField("domains", e.target.value)} /></label>
-        <label class="micro">Areas (comma-separated)
-          <input disabled=${ro} value=${ex.areas}
-            onInput=${(e) => setExField("areas", e.target.value)} /></label>
+    ${tab !== "presence" ? null : html`<section class="section">
+      <p class="micro">Which sensors tell Kenzy a room has someone in it (shown on the
+        Presence tab). Motion, occupancy and presence sensors count automatically, as do
+        HA's person entities. Turn one OFF when it lies — a hallway sensor the cat trips,
+        or one aimed through a window at the street — or ON to use a sensor that isn't a
+        presence type. Kenzy's own entities are never used.</p>
+      ${(data.occupancy || []).length === 0
+        ? occUnavailable()
+          ? html`<div class="empty">Couldn't reach Home Assistant to list presence sensors.
+              Your existing choices are preserved — saving from another tab won't
+              discard them — but they can't be edited until this loads.</div>`
+          : html`<div class="empty">No presence-capable sensors found in Home Assistant.</div>`
+        : (() => {
+            // A real house has one connectivity sensor per cloud light — over a
+            // hundred rows of noise. Show what actually counts (or has been
+            // deliberately changed); keep the rest one click away so a door
+            // sensor can still be opted in.
+            const all = data.occupancy || [];
+            const isPrimary = (c) => c.auto || c.used || occ[c.entity_id] !== undefined && occ[c.entity_id] !== c.auto;
+            const primary = all.filter(isPrimary);
+            const others = all.filter((c) => !isPrimary(c));
+            const row = (c) => html`<label class="occ-row" key=${c.entity_id}>
+              <input type="checkbox" disabled=${ro}
+                checked=${occ[c.entity_id] === undefined ? !!c.used : !!occ[c.entity_id]}
+                onChange=${(e) => {
+                  setOcc((m) => ({ ...m, [c.entity_id]: e.target.checked }));
+                  setDirty("presence");
+                }} />
+              <span class="occ-name">${c.name}</span>
+              <span class="micro occ-where">${c.scope === "house" ? "whole house" : c.area_name || "no room"}</span>
+              <span class="micro occ-class">${c.device_class || "—"}${c.kind ? " · " + c.kind : ""}</span>
+              <span class="mono occ-id">${c.entity_id}</span>
+            </label>`;
+            return html`<div class="card pad">
+              ${primary.length ? primary.map(row) : html`<div class="empty">Nothing counts as presence yet.</div>`}
+              ${others.length
+                ? html`<div class="occ-more">
+                    <button class="btn-ghost" onClick=${() => setShowAllOcc(!showAllOcc)}>
+                      ${showAllOcc ? "Hide" : "Show"} ${others.length} other sensor${others.length === 1 ? "" : "s"}
+                    </button>
+                  </div>
+                  ${showAllOcc ? others.map(row) : null}`
+                : null}
+            </div>`;
+          })()}
+    </section>`}
+
+    ${tab !== "devices" ? null : html`<section class="section">
+      <div class="stats">
+        <div class="tile"><div class="micro">Entities</div><div class="k">${devices.length}</div></div>
+        <div class="tile"><div class="micro">Voice-controllable</div><div class="k">${included}</div></div>
+        <div class="tile"><div class="micro">With aliases</div><div class="k">${aliasCount}</div></div>
       </div>
-    </section>
-
-    <section class="section">
-      <header><h2>Devices</h2><span class="rule"></span></header>
       <p class="micro"><b>default</b>: part of "turn on the lights" for its room ·
         <b>in groups</b>: included in bare group commands · <b>exclude</b>: hidden from voice.</p>
+
+      <div class="card pad ha-ex">
+        <button class="ha-ex-h" aria-expanded=${showEx} onClick=${() => setShowEx(!showEx)}>
+          <span class="ha-caret">${showEx ? "▾" : "▸"}</span> Bulk exclusions
+          <span class="micro">${exSummary || "none"}</span>
+        </button>
+        ${showEx
+          ? html`<div class="ha-bulk">
+              <p class="micro">Remove entities from voice control by rule, instead of one row at
+                a time. One pattern per line (fnmatch on the entity_id, e.g.
+                <span class="mono">light.*_plug_led</span>).</p>
+              <label class="micro">Patterns
+                <textarea rows="3" disabled=${ro} value=${ex.patterns}
+                  onInput=${(e) => setExField("patterns", e.target.value)}></textarea></label>
+              <label class="micro">Domains (comma-separated)
+                <input disabled=${ro} value=${ex.domains}
+                  onInput=${(e) => setExField("domains", e.target.value)} /></label>
+              <label class="micro">Areas (comma-separated)
+                <input disabled=${ro} value=${ex.areas}
+                  onInput=${(e) => setExField("areas", e.target.value)} /></label>
+            </div>`
+          : null}
+      </div>
       ${Object.keys(tree).sort().map(
         (floor) => html`
           <div class="ha-floor" key=${floor}>
@@ -333,5 +468,5 @@ export function HaView() {
           </div>`,
       )}
       ${devices.length === 0 ? html`<div class="empty">No voice-controllable entities reported.</div>` : null}
-    </section>`;
+    </section>`}`;
 }

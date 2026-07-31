@@ -505,11 +505,18 @@ def _unit_content(service: str, host: HostConfig) -> str:
     else:
         exec_start = f"{host.venv_path}/bin/{info['script']} {host.install_path}/{info['config']}"
         after_server = ""
+    # A node's join proof is timestamp-fresh, so it cannot register while its clock
+    # is wrong — and an SBC without a battery-backed RTC boots wrong by however far
+    # its hardware clock has drifted. Wait for the clock instead of being refused.
+    # (Under chrony this needs chrony-wait.service enabled on the host to mean
+    # anything; the target is otherwise reached before any sync has happened.)
+    after_time = "After=time-sync.target\nWants=time-sync.target\n" if service == "node" else ""
     return (
         f"[Unit]\n"
         f"Description={info['desc']}\n"
         f"After=network.target\n"
         f"Wants=network.target\n"
+        f"{after_time}"
         f"{after_server}"
         f"\n"
         f"[Service]\n"

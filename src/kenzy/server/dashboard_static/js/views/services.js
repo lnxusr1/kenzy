@@ -1,7 +1,6 @@
 import { html, useState, useEffect } from "../html.js";
 import { confirmDialog } from "../dialog.js";
-import { useFleet, send, notify } from "../store.js";
-import { getSettings } from "../api.js";
+import { send, notify } from "../store.js";
 import { serviceEnum, serviceHelp, groupByParent, groupBySections, SERVICE_SECTIONS, fieldVisible } from "../schema.js";
 
 // --- nested ⇄ flat (dotted path) helpers for the generic editor -------------
@@ -267,7 +266,7 @@ function ServiceEditor({ name, onBack }) {
 
   return html`
     <div class="cfg">
-      <button class="btn-ghost back" onClick=${onBack}>← Services</button>
+      <button class="btn-ghost back" onClick=${onBack}>← Fleet</button>
       <div class="section">
         <header><h2>${name}</h2><span class="rule"></span><a class="docs-link" href=${`https://docs.kenzy.ai/configuration/${name}/`} target="_blank" rel="noopener">Docs ↗</a></header>
         ${!info.controls
@@ -356,38 +355,10 @@ function ServiceEditor({ name, onBack }) {
     </div>`;
 }
 
-// Controlled by the shell so a service can be deep-linked (e.g. from a Fleet
-// chip): `selected` is the open service or null for the list; `onSelect` changes it.
+// The service editor, deep-linked from a Fleet chip — there is no standalone
+// Services tab anymore (the Fleet view's service chips ARE the list). `selected`
+// is the open service; `onSelect(null)` hands the shell back to the fleet.
 export function ServicesView({ selected = null, onSelect }) {
-  const { data } = useFleet();
-  const [list, setList] = useState(null);
-
-  useEffect(() => {
-    getSettings()
-      .then((s) => setList(s.services || []))
-      .catch(() => setList([]));
-  }, []);
-
-  if (selected) return html`<${ServiceEditor} name=${selected} onBack=${() => onSelect(null)} />`;
-  if (!list) return html`<div class="empty">Loading…</div>`;
-  if (!list.length)
-    return html`<div class="empty">No backend services configured (set their <span class="mono">url</span> in server.yaml).</div>`;
-
-  const health = Object.fromEntries(((data && data.services) || []).map((s) => [s.name, s.up]));
-
-  return html`
-    <div class="chips">
-      ${list.map((svc) => {
-        const up = health[svc.name];
-        return html`
-          <div key=${svc.name} class="chip svc-chip" onClick=${() => onSelect(svc.name)}
-               role="button" tabindex="0">
-            <span class=${"led " + (up ? "up" : "down")}></span>
-            <div class="svc-meta">
-              <span class="name">${svc.name}</span>
-              <span class="detail" title=${svc.url}>${svc.url}</span>
-            </div>
-          </div>`;
-      })}
-    </div>`;
+  if (!selected) return html`<div class="empty">Pick a service from the fleet.</div>`;
+  return html`<${ServiceEditor} name=${selected} onBack=${() => onSelect(null)} />`;
 }

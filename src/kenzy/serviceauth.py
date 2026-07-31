@@ -202,23 +202,56 @@ def sign_node_hello(token: str, node_id: str, *, ts: int | None = None) -> dict[
     return {"ts": ts, "sig": sig}
 
 
-def verify_node_hello(
+#: Short, stable tags for why a join was refused. The wire-facing close reason
+#: uses these (a node's own log is where an operator looks first); the full
+#: detail — including how far out a clock is — stays server-side.
+JOIN_MISSING = "missing"
+JOIN_MALFORMED = "malformed"
+JOIN_STALE = "stale timestamp"
+JOIN_BAD_SIG = "bad signature"
+
+
+def check_node_hello(
     auth: Any, token: str, node_id: str, *, max_skew: int = _MAX_SKEW, now: int | None = None
-) -> bool:
-    """Verify a node's ``hello.auth`` proof against the claimed ``node_id``."""
+) -> tuple[str, str] | None:
+    """Verify a node's ``hello.auth`` proof; return ``None`` when it is good.
+
+    On failure returns ``(tag, detail)`` — a short wire-safe tag and a full
+    explanation for the server's log. Three very different faults used to be
+    reported identically as "bad/missing join token": no proof at all (a node
+    older than 3.12), a proof that doesn't match (wrong token), and a proof
+    whose timestamp is outside the freshness window (a drifting clock, which no
+    amount of retrying fixes and which the node cannot self-diagnose because it
+    is never told why it was refused).
+    """
     if not isinstance(auth, dict):
-        return False
+        return (JOIN_MISSING, "no auth block in hello (node older than 3.12?)")
     try:
         ts = int(auth["ts"])
         sig = str(auth["sig"])
     except (KeyError, ValueError, TypeError):
-        return False
+        return (JOIN_MALFORMED, "auth block missing or non-numeric ts/sig")
     now = int(time.time()) if now is None else now
-    if abs(now - ts) > max_skew:
-        return False
+    skew = now - ts
+    if abs(skew) > max_skew:
+        direction = "behind" if skew > 0 else "ahead of"
+        return (
+            JOIN_STALE,
+            f"hello timestamp is {abs(skew)}s {direction} this server "
+            f"(limit {max_skew}s) — check the node's clock/NTP, not its token",
+        )
     material = b"\x00".join([b"hello", str(ts).encode(), node_id.encode()])
     expected = hmac.new(_svc_key(token), material, hashlib.sha256).hexdigest()
-    return hmac.compare_digest(sig, expected)
+    if not hmac.compare_digest(sig, expected):
+        return (JOIN_BAD_SIG, f"signature does not match discovery.token for node_id '{node_id}'")
+    return None
+
+
+def verify_node_hello(
+    auth: Any, token: str, node_id: str, *, max_skew: int = _MAX_SKEW, now: int | None = None
+) -> bool:
+    """Verify a node's ``hello.auth`` proof against the claimed ``node_id``."""
+    return check_node_hello(auth, token, node_id, max_skew=max_skew, now=now) is None
 
 
 def sign_service_response(token: str, ts: int, body: bytes, *, binding: bytes = b"") -> str:

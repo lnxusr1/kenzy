@@ -43,16 +43,48 @@ def test_server_join_requires_proof():
     srv = AudioServer({"discovery": {"token": "jt"}})
     # signature proof, bound to node_id
     proof = serviceauth.sign_node_hello("jt", "n1")
-    assert srv._join_authorized({"node_id": "n1", "auth": proof})
+    assert srv._join_check({"node_id": "n1", "auth": proof}) is None
     wrong = serviceauth.sign_node_hello("jt", "OTHER")
-    assert not srv._join_authorized({"node_id": "n1", "auth": wrong})
+    assert srv._join_check({"node_id": "n1", "auth": wrong}) is not None
     # the raw token field is no longer accepted (even the correct value)
-    assert not srv._join_authorized({"node_id": "n1", "token": "jt"})
-    assert not srv._join_authorized({"node_id": "n1", "token": "wrong"})
+    assert srv._join_check({"node_id": "n1", "token": "jt"}) is not None
+    assert srv._join_check({"node_id": "n1", "token": "wrong"}) is not None
     # missing proof entirely => rejected
-    assert not srv._join_authorized({"node_id": "n1"})
+    assert srv._join_check({"node_id": "n1"}) is not None
     # no token configured => open
-    assert AudioServer({})._join_authorized({"node_id": "n"})
+    assert AudioServer({})._join_check({"node_id": "n"}) is None
+
+
+def test_join_failures_are_distinguishable():
+    """A drifted clock and a wrong token must not look the same in the log —
+    they need opposite fixes, and the server already knows which is which."""
+    srv = AudioServer({"discovery": {"token": "jt"}})
+
+    stale = serviceauth.sign_node_hello("jt", "n1", ts=1000)
+    tag, detail = srv._join_check({"node_id": "n1", "auth": stale})
+    assert tag == serviceauth.JOIN_STALE
+    assert "clock" in detail  # points the operator at NTP, not at the token
+
+    wrong_token = serviceauth.sign_node_hello("nope", "n1")
+    tag, detail = srv._join_check({"node_id": "n1", "auth": wrong_token})
+    assert tag == serviceauth.JOIN_BAD_SIG
+    assert "token" in detail
+
+    tag, _ = srv._join_check({"node_id": "n1"})
+    assert tag == serviceauth.JOIN_MISSING
+
+
+def test_stale_hello_detail_reports_direction_and_delta():
+    auth = serviceauth.sign_node_hello("t", "n", ts=1_000_000)
+    # node 1816s behind the server — the master-bedroom failure, exactly
+    failure = serviceauth.check_node_hello(auth, "t", "n", now=1_001_816)
+    assert failure is not None
+    tag, detail = failure
+    assert tag == serviceauth.JOIN_STALE
+    assert "1816s behind" in detail
+    # and the other direction reads correctly too
+    failure = serviceauth.check_node_hello(auth, "t", "n", now=998_184)
+    assert failure is not None and "1816s ahead of" in failure[1]
 
 
 # ---------------------------------------------------------------------------

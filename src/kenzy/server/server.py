@@ -44,6 +44,7 @@ from websockets.http11 import Request, Response
 
 from kenzy import calibration, kenzy_version, protocol, redact, serviceauth, tlsutil
 from kenzy.config import SERVICES
+from kenzy.server import occupancy as occupancy_mod
 from kenzy.server.people import (
     UNSET,
     Identity,
@@ -51,6 +52,7 @@ from kenzy.server.people import (
     resolve_assist_identity,
     resolve_voice_identity,
 )
+from kenzy.server.roster import NodeRoster
 
 log = logging.getLogger(__name__)
 
@@ -78,6 +80,7 @@ _ALLOWED_OVERRIDE_KEYS = frozenset(
         "sound_disconnect",
         "sound_ringback",
         "sound_dialog_end",
+        "sound_offline",
         "sound_timer",
         "sound_alarm",
         "sound_error",
@@ -253,6 +256,16 @@ _SERVER_EDITABLE: dict[str, str] = {
     "integrations.mqtt.base_topic": "str",
     "integrations.mqtt.discovery_prefix": "str",
     "integrations.mqtt.commands": "bool",
+    # v5 occupancy spine. Default ON: 5.0 is watch-only (nothing speaks, no
+    # delivery changes), so the risk of leaving it on is nil and the soak only
+    # gathers data if it is actually running — the 4.4 streaming lesson, where
+    # shipping dark just delayed the learning. This key is the kill switch, not
+    # the enabler. HA absent ⇒ nothing starts regardless.
+    "occupancy.enabled": "bool",
+    # Fleet health: how long a room may be missing before it is a fault, and the
+    # expected-downtime window granted when we ourselves take a node away.
+    "fleet.offline_alert_minutes": "num",
+    "fleet.restart_grace_minutes": "num",
 }
 
 #: Endpoint path each backend service serves, appended to an announced base URL so
@@ -583,6 +596,11 @@ class AudioServer:
         # Identity core (F1): person records (voiceprint→person). Absent file ⇒
         # empty store ⇒ the resolver is a passthrough (no behavior change).
         self._people = PeopleStore(self._data_root / "data" / "people.yaml")
+        # v5 occupancy spine (Slice B). None unless main() wires it — so an
+        # install with occupancy off, or no HA, carries zero overhead and the
+        # every-utterance hook in _transcribe is a single `is not None` check.
+        self._occupancy: Any = None
+        self._ha_events: Any = None
         # F3: has this server EVER received an /assist request? Persistent
         # marker — the dashboard uses it to reveal HA surfaces for app-only
         # households (no HA_API_KEY, but the companion-app front door in use).
@@ -624,6 +642,40 @@ class AudioServer:
         self._announced_services: dict[str, dict[str, Any]] = {}
         # Services whose URL came from static config (never overwritten by an announce).
         self._static_services: set[str] = set()
+        # Durable roster of nodes that *exist*, so a disconnected one becomes absent
+        # rather than nonexistent. Kept next to the other operational state.
+        fleet_cfg: dict[str, Any] = cfg.get("fleet") or {}
+        #: How long a node may be missing before it is a fault rather than a note.
+        #: Comfortably longer than a restart, so ordinary churn stays quiet.
+        self._offline_alert_s: float = float(fleet_cfg.get("offline_alert_minutes", 5)) * 60.0
+        #: Expected-downtime window granted when we ourselves tell a node to go.
+        self._restart_grace_s: float = float(fleet_cfg.get("restart_grace_minutes", 10)) * 60.0
+        self._roster = NodeRoster(self._roster_path())
+
+    @staticmethod
+    def _roster_path() -> Path | None:
+        from kenzy.config import kenzy_data_root
+
+        try:
+            return kenzy_data_root() / "data" / "nodes.json"
+        except Exception:  # pragma: no cover - unresolvable data root
+            return None
+
+    def forget_node(self, node_id: str) -> bool:
+        """Drop a node from the roster. Only meaningful for one that is absent —
+        a connected node re-adds itself on its next state change."""
+        return self._roster.forget(node_id)
+
+    def absent_nodes(self) -> list[dict[str, Any]]:
+        """Known-but-not-connected nodes, as dashboard/state dicts."""
+        now = time.time()
+        out: list[dict[str, Any]] = []
+        for entry in self._roster.absent(self._nodes.keys()):
+            rec = entry.as_dict()
+            rec["offline_seconds"] = max(0.0, now - entry.last_seen)
+            rec["alerting"] = self._roster.is_alerting(entry, self._offline_alert_s, now=now)
+            out.append(rec)
+        return out
 
     def add_state_listener(self, fn: Callable[[], None]) -> None:
         """Register a callback fired (in-loop) when the node registry/state changes."""
@@ -740,6 +792,24 @@ class AudioServer:
             return bool(self._effective_node_config(node_id).get("hardware_aec", True))
         except Exception:
             return True
+
+    def _occupancy_payload(self) -> dict[str, Any]:
+        """The occupancy snapshot for request injection (empty when disabled).
+
+        Refreshes the tracker's staleness from the socket first: a dropped
+        connection means held levels stop being trustworthy — reported as stale
+        rather than silently rewritten to "empty", which would be inventing a
+        fact about someone's house.
+        """
+        if self._occupancy is None:
+            return {}
+        if self._ha_events is not None:
+            self._occupancy.set_stale(self._ha_events.stats.is_stale())
+        rooms = [
+            occupancy_mod.room_slug(s.room_id) for s in self._nodes.values() if s.room_id
+        ]
+        snap = self._occupancy.snapshot(rooms)
+        return snap if isinstance(snap, dict) else {}
 
     def _no_aec_rooms(self) -> list[str]:
         """Connected room names lacking AEC — injected into /process so skills
@@ -1131,15 +1201,16 @@ class AudioServer:
             status, "OK" if status == 200 else "ERR", headers, json.dumps(payload).encode()
         )
 
-    def _join_authorized(self, msg: dict[str, Any]) -> bool:
-        """A node's hello is authorized when its ``auth`` proof verifies for the
-        claimed node_id. The raw ``token`` field (pre-3.12) is no longer accepted.
-        No configured join token ⇒ open (unauthenticated joins allowed)."""
+    def _join_check(self, msg: dict[str, Any]) -> tuple[str, str] | None:
+        """``None`` when the hello is authorized, else ``(tag, detail)``.
+
+        The raw ``token`` field (pre-3.12) is no longer accepted. No configured
+        join token ⇒ open (unauthenticated joins allowed)."""
         if not self._join_token:
-            return True
+            return None
         token = str(self._join_token)
         node_id = str(msg.get("node_id") or msg.get("room_id") or "")
-        return serviceauth.verify_node_hello(msg.get("auth"), token, node_id)
+        return serviceauth.check_node_hello(msg.get("auth"), token, node_id)
 
     def _authorize_service(
         self, request: Request, method: str, path: str
@@ -1498,10 +1569,25 @@ class AudioServer:
             log.warning("Expected hello, got '%s' from %s", msg.get("type"), ws.remote_address)
             return None
 
-        if self._join_token is not None and not self._join_authorized(msg):
-            log.warning("Rejected node from %s: bad/missing join token", ws.remote_address)
+        if self._join_token is not None and (failure := self._join_check(msg)) is not None:
+            tag, detail = failure
+            # Name the actual fault. Collapsing every join failure into "bad/missing
+            # join token" once cost two days of hunting a token problem that was in
+            # fact a node whose clock had drifted 30 minutes at boot: the server had
+            # already computed the skew and then threw it away.
+            log.warning(
+                "Rejected node '%s' (room '%s', v%s) from %s: %s",
+                msg.get("node_id") or "?",
+                msg.get("room_id") or "?",
+                msg.get("kenzy_version") or "?",
+                ws.remote_address,
+                detail,
+            )
             try:
-                await ws.close(1008, "invalid join token")
+                # The tag (not the detail) rides the wire: enough for the node's own
+                # log to say "stale timestamp" and point at NTP, without handing an
+                # unauthenticated peer the server's precise clock.
+                await ws.close(1008, f"invalid join token ({tag})")
             except Exception:
                 pass
             return None
@@ -1563,6 +1649,12 @@ class AudioServer:
             ws.remote_address,
             len(self._nodes),
         )
+        self._roster.touch(
+            node_id,
+            room=room_id,
+            version=session.kenzy_version,
+            ip=ws.remote_address[0] if ws.remote_address else None,
+        )
 
         # Config-pull: push the node's effective config so it needs no local file.
         # Always send a frame (even when empty) — zero-config nodes block on this
@@ -1584,6 +1676,10 @@ class AudioServer:
         if peer_id:
             await self.end_intercom(peer_id, reason="peer_disconnected")
         self._cleanup_on_disconnect(session.node_id)
+        # Stamp the sighting before announcing the drop: the roster keeps the node
+        # visible (as absent, with a last-seen) instead of letting it vanish. Any
+        # expected-downtime grace survives — it exists precisely to cover this.
+        self._roster.touch(session.node_id, room=session.room_id, clear_grace=False)
         log.info(
             "Node %s (room '%s') disconnected – %d node(s) remaining",
             session.node_id,
@@ -1668,6 +1764,15 @@ class AudioServer:
                     session.audio_error,
                 )
             self._notify_state()
+
+        elif mtype == protocol.MSG_GOODBYE:
+            # The node is leaving on purpose (a restart, an upgrade, a deliberate
+            # stop). Without this the server cannot tell that from a power cut, and
+            # every `systemctl restart` — including a whole-fleet kenzy-deploy —
+            # would raise an offline fault for a node that is on its way back.
+            reason = str(msg.get("reason") or "shutdown")
+            log.info("[%s] going away on purpose (%s)", session.node_id, reason)
+            self._roster.grant_grace(session.node_id, self._restart_grace_s)
 
         elif mtype == protocol.MSG_FOLLOWUP_TIMEOUT:
             # A held-floor reply window expired silently on the node (which plays
@@ -1832,6 +1937,8 @@ class AudioServer:
             return False
         try:
             await session.ws.send(protocol.restart())
+            # We asked for this absence, so don't raise a fault over it.
+            self._roster.grant_grace(node_id, self._restart_grace_s)
             return True
         except Exception as exc:
             log.warning("restart_node: %s send failed: %s", node_id, exc)
@@ -1848,6 +1955,10 @@ class AudioServer:
             return False
         try:
             await session.ws.send(protocol.disable())
+            # Deliberately out of service: drop it from the roster rather than
+            # alerting forever about an absence the operator asked for. It re-adds
+            # itself if it is ever re-enabled and reconnects.
+            self._roster.forget(node_id)
             log.warning("[%s] disable sent — node will stop until re-enabled on its host", node_id)
             return True
         except websockets.exceptions.ConnectionClosed as exc:
@@ -1863,6 +1974,8 @@ class AudioServer:
             return False
         try:
             await session.ws.send(protocol.upgrade(version))
+            # A pip install on a Pi can take minutes; expected absence, not a fault.
+            self._roster.grant_grace(node_id, self._restart_grace_s)
             return True
         except Exception as exc:
             log.warning("upgrade_node: %s send failed: %s", node_id, exc)
@@ -2338,7 +2451,7 @@ class TranscribingServer(AudioServer):
         }
         # Voice enrollment ("enroll me as Alice") is gated by `allow_voice_enroll` in the
         # speaker *service* config (the enrollment SKILL reads it via /enroll/info, editable
-        # from the dashboard's Services tab). Active sessions keyed by node_id
+        # from the dashboard's Fleet tab). Active sessions keyed by node_id
         # (prompt → capture → POST /enroll loop).
         # Voice-guided calibration ("Hey Kenzy, calibrate") — active sessions keyed
         # by node_id; tune samples are routed to them via the always-registered
@@ -2556,6 +2669,17 @@ class TranscribingServer(AudioServer):
                 identity.tier,
                 identity.confidence,
             )
+
+            # v5 spine: the voice half of the occupancy tracker. Someone spoke
+            # here, so the room is occupied whether or not we know who; the
+            # identity anchor only fires for a RECOGNIZED voice.
+            if self._occupancy is not None:
+                self._occupancy.on_voice(
+                    occupancy_mod.room_slug(room_name),
+                    person_id=identity.person_id or "",
+                    person_name=identity.display,
+                    recognized=identity.tier != "unknown",
+                )
 
             if not text:
                 # Silence — including a held follow-up window the user let lapse: end
@@ -3386,6 +3510,11 @@ class TranscribingServer(AudioServer):
             # Rooms whose speakers lack AEC (hardware_aec: false) — alarm and
             # intercom skills refuse these targets in the reply itself.
             "no_aec_rooms": self._no_aec_rooms(),
+            # v5 spine: the occupancy snapshot — server-held room state, injected
+            # exactly like rooms/schedules/no_aec_rooms above. 5.0.0 WIRES it;
+            # nothing reads it until 5.0.1, and when a skill does it must
+            # tier-gate ("who's home" is household information, like presence).
+            "occupancy": self._occupancy_payload(),
             # Which front door (F3): node-bound skills refuse on nodeless channels.
             "channel": channel,
             # Lockbox spoken-recall gate (founder decision 2026-07-18): a secret
@@ -3393,6 +3522,33 @@ class TranscribingServer(AudioServer):
             # unknown/unreachable/nodeless-channel all read as not-local.
             "tts_local": (channel == "voice") and await self._tts_is_local(),
         }
+
+    async def llm_occupancy_map(self) -> dict[str, Any]:
+        """Fetch the occupancy evidence map from kenzy-llm (v5 spine, Slice A).
+
+        The ONLY thing that crosses the service boundary for occupancy: the
+        entity→room map, because the area knowledge and curation baking live in
+        ``ha_model.py``. Config does not cross (the server holds both HA
+        credentials); the event stream does not cross (it is consumed locally).
+        """
+        base = self._llm_url or ""
+        if base.endswith("/process"):
+            base = base[: -len("/process")]
+        if not base:
+            announced = self.announced_health_urls().get("llm", "")
+            base = announced[: -len("/health")] if announced else ""
+        if not base:
+            raise RuntimeError("llm service is not reachable")
+        import httpx
+
+        from kenzy import tlsutil
+
+        url = f"{base}/ha/map"
+        async with httpx.AsyncClient(timeout=20.0, verify=tlsutil.httpx_verify()) as client:
+            resp = await client.get(url, headers=self._service_headers("GET", url))
+            resp.raise_for_status()
+            data = resp.json()
+        return data if isinstance(data, dict) else {}
 
     async def _call_llm(
         self,
@@ -4762,12 +4918,51 @@ def main() -> None:
         _hub.subscribe(mqtt_transport.submit)
         attach_to_server(_hub, server)
 
+    # v5 occupancy spine: the HA event socket + the tracker. Default ON, but
+    # only ever starts when HA is actually configured — the server holds BOTH
+    # credentials already (HA_API_KEY in its own .env, the URL in its central
+    # store), so nothing is fetched to decide this and nothing new is configured.
+    ha_url = str(
+        (
+            (server._effective_service_config("llm").get("skills", {}) or {}).get(
+                "home_assistant", {}
+            )
+            or {}
+        ).get("url", "")
+    ).strip()
+    ha_token = os.environ.get("HA_API_KEY", "")
+    occupancy_enabled = bool((cfg.get("occupancy", {}) or {}).get("enabled", True))
+    if occupancy_enabled and ha_url and ha_token:
+        from kenzy.server.ha_events import HaEventClient
+        from kenzy.server.occupancy import OccupancyTracker
+
+        tracker = OccupancyTracker()
+
+        async def _fetch_map() -> dict[str, Any]:
+            """Only the MAP crosses the service boundary — never the stream.
+
+            Returns the whole envelope so the client can tell a switched-off
+            integration from a broken one and park instead of retrying.
+            """
+            info = await server.llm_occupancy_map()
+            return info if isinstance(info, dict) else {}
+
+        ha_client = HaEventClient(ha_url, ha_token, _fetch_map, on_map=tracker.prune_held)
+        ha_client.subscribe(tracker.on_evidence)
+        server._occupancy = tracker
+        server._ha_events = ha_client
+        log.info("Occupancy spine enabled (HA events → tracker); watch-only in 5.0")
+    elif occupancy_enabled and not ha_token:
+        log.info("Occupancy spine idle: Home Assistant is not configured")
+
     async def _main() -> None:
         coros: list[Any] = [server.serve()]
         if dashboard is not None:
             coros.append(dashboard.serve())
         if mqtt_transport is not None:
             coros.append(mqtt_transport.run())
+        if server._ha_events is not None:
+            server._ha_events.start()
         if sys.stdin.isatty():
             coros.append(_stdin_control(server))
         await asyncio.gather(*coros)

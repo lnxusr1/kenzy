@@ -190,6 +190,17 @@ def load_curation() -> dict[str, Any]:
         return {}
 
 
+def _is_kenzy_entity(entity_id: str) -> bool:
+    """Kenzy's OWN HA entities (the MQTT bridge's per-node buttons/switches).
+
+    Never voice targets, and never occupancy evidence: her published sensors
+    changing state is her own echo, and believing it would mean every room reads
+    "occupied" the moment she speaks. Code rule, not curation — deliberately not
+    overridable in either consumer.
+    """
+    return entity_id.split(".", 1)[-1].startswith("kenzy_")
+
+
 def _exclude_reason(entity_id: str, domain: str, area: str, curation: dict[str, Any]) -> str:
     """Return the curation rule excluding an entity from voice control, or "".
 
@@ -200,7 +211,7 @@ def _exclude_reason(entity_id: str, domain: str, area: str, curation: dict[str, 
     # trigger/stop buttons and mute switch) are never voice targets — voice-
     # controlling your own control surface is a loop, and the mute switch
     # would otherwise ride the switch domain into "turn on the lights".
-    if entity_id.split(".", 1)[-1].startswith("kenzy_"):
+    if _is_kenzy_entity(entity_id):
         return "kenzy internal"
 
     exclude = curation.get("exclude", {}) or {}
@@ -225,7 +236,7 @@ def _excluded(entity_id: str, domain: str, area: str, curation: dict[str, Any]) 
     return bool(_exclude_reason(entity_id, domain, area, curation))
 
 
-_ALLOWED_TOP = {"exclude", "devices", "rooms", "lists"}
+_ALLOWED_TOP = {"exclude", "devices", "rooms", "lists", "occupancy"}
 _EXCLUDE_LISTS = ("entities", "patterns", "domains", "areas")
 
 
@@ -329,6 +340,31 @@ def validate_curation(data: dict[str, Any]) -> dict[str, Any]:
         clean_lists["aliases"] = clean_la
     if clean_lists:
         out["lists"] = clean_lists
+
+    # occupancy (v5): which entities count as EVIDENCE that a room holds a
+    # person. Deliberately separate from `exclude` — voice-control exclusion and
+    # evidence exclusion are different judgments (a sensor can be hidden from
+    # voice and still be good evidence, or voice-visible and terrible evidence,
+    # like the one aimed through a window at the street). "Pets exist": the
+    # pet-tripped PIR is the reason this is configurable at all.
+    occ = data.get("occupancy") or {}
+    if not isinstance(occ, dict):
+        raise ValueError("occupancy must be a mapping")
+    unknown_occ = set(occ) - {"exclude", "include"}
+    if unknown_occ:
+        raise ValueError(f"unknown occupancy keys: {sorted(unknown_occ)}")
+    clean_occ: dict[str, list[str]] = {}
+    for key in ("exclude", "include"):
+        val = occ.get(key)
+        if val is None:
+            continue
+        if not isinstance(val, list):
+            raise ValueError(f"occupancy.{key} must be a list")
+        items = [str(x).strip() for x in val if str(x).strip()]
+        if items:
+            clean_occ[key] = items
+    if clean_occ:
+        out["occupancy"] = clean_occ
 
     return out
 
@@ -613,3 +649,228 @@ def reset_cache() -> None:
     """Test hook: drop the cached topology snapshot."""
     global _MODEL
     _MODEL = None
+
+
+# ---------------------------------------------------------------------------
+# Occupancy evidence map (v5 spine, Slice A)
+# ---------------------------------------------------------------------------
+#
+# The server owns the HA event socket and the occupancy tracker, but it has no
+# area knowledge — that lives here. So it fetches this MAP (slow, small) and
+# consumes the event stream itself (fast, large). The map is the only thing
+# that crosses the service boundary; see v5-aware-era.md "Scoping the spine".
+#
+# NOTE this cannot reuse build_model(): the voice topology covers _DEFAULT_DOMAINS,
+# which contains neither `binary_sensor` nor `person` — there is not a single
+# presence entity in it. Hence a dedicated template.
+
+#: device_class → evidence kind. PULSE spikes and decays immediately (a PIR
+#: fires on motion and goes quiet while you sit still); LEVEL asserts
+#: continuously and must NOT drain while it still says "occupied" (mmWave
+#: still-presence, and person home/away).
+_OCCUPANCY_CLASSES: dict[str, str] = {
+    "motion": "pulse",
+    "moving": "pulse",
+    "occupancy": "level",
+    "presence": "level",
+}
+
+_OCCUPANCY_TEMPLATE = (
+    "{% set ns = namespace(items=[]) %}"
+    "{% for a in areas() %}"
+    "{% for e in area_entities(a) %}"
+    "{% if e.startswith('binary_sensor.') %}"
+    "{% set ns.items = ns.items + [{"
+    "'entity_id': e,"
+    "'name': state_attr(e, 'friendly_name'),"
+    "'area': area_name(a),"
+    "'device_class': state_attr(e, 'device_class')"
+    "}] %}"
+    "{% endif %}"
+    "{% endfor %}"
+    "{% endfor %}"
+    "{{ ns.items | tojson }}"
+)
+
+
+def build_occupancy_map(
+    rows: list[dict[str, Any]],
+    persons: list[dict[str, Any]],
+    curation: dict[str, Any],
+) -> dict[str, dict[str, Any]]:
+    """entity_id → {room, room_name, kind, scope} for occupancy-relevant entities.
+
+    Pure (no I/O) so it is exhaustively testable. Room-scope evidence comes from
+    area-placed ``binary_sensor``s with a presence-ish device_class; house-scope
+    evidence is ``person.*`` (home/away has no room). Curation's ``occupancy``
+    block adds entities the class heuristic missed (``include``) and removes
+    ones that lie (``exclude`` — the cat-crossed hallway, the window-facing PIR).
+    """
+    occ = curation.get("occupancy") or {}
+    excluded = {str(x).strip() for x in (occ.get("exclude") or [])}
+    included = {str(x).strip() for x in (occ.get("include") or [])}
+
+    out: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        eid = str(row.get("entity_id") or "").strip()
+        if not eid or eid in excluded or _is_kenzy_entity(eid):
+            continue
+        dev_class = str(row.get("device_class") or "").strip().lower()
+        kind = _OCCUPANCY_CLASSES.get(dev_class)
+        if kind is None:
+            # Not a presence class — only an explicit include rescues it, and a
+            # hand-picked sensor is treated as a pulse (the conservative choice:
+            # it spikes and decays rather than pinning a room "occupied").
+            if eid not in included:
+                continue
+            kind = "pulse"
+        area_name = str(row.get("area") or "").strip()
+        if not area_name:
+            continue  # unplaced sensor: no room to credit
+        out[eid] = {
+            "room": _slug(area_name),
+            "room_name": area_name,
+            "kind": kind,
+            "scope": "room",
+        }
+
+    for person in persons:
+        eid = str(person.get("entity_id") or "").strip()
+        if not eid.startswith("person.") or eid in excluded or _is_kenzy_entity(eid):
+            continue
+        out[eid] = {
+            "room": "",
+            "room_name": "",
+            "kind": "level",  # home/away asserts continuously
+            "scope": "house",
+            "name": str(person.get("name") or _name_from_id(eid)),
+        }
+    return out
+
+
+async def fetch_occupancy_rows() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Fetch the raw presence candidates from HA: (binary_sensor rows, persons).
+
+    Shared by the evidence map (what the server consumes) and the curation
+    editor's candidate list (what the operator toggles), so the two can never
+    disagree about which entities exist.
+    """
+    base, headers = ha_conn()
+    async with httpx.AsyncClient(timeout=15) as client:
+        resp = await client.post(
+            f"{base}/api/template", headers=headers, json={"template": _OCCUPANCY_TEMPLATE}
+        )
+        resp.raise_for_status()
+        rows = json.loads(resp.text)
+        if not isinstance(rows, list):
+            raise ValueError("HA occupancy template did not return a list")
+
+        states = await client.get(f"{base}/api/states", headers=headers)
+        states.raise_for_status()
+        persons = [
+            {
+                "entity_id": s.get("entity_id"),
+                "name": (s.get("attributes") or {}).get("friendly_name"),
+            }
+            for s in states.json()
+            if str(s.get("entity_id", "")).startswith("person.")
+        ]
+    return rows, persons
+
+
+async def fetch_occupancy_map() -> dict[str, dict[str, Any]]:
+    """The live occupancy evidence map (what the server's event filter uses)."""
+    rows, persons = await fetch_occupancy_rows()
+    return build_occupancy_map(rows, persons, load_curation())
+
+
+@dataclass(frozen=True)
+class OccupancyCandidate:
+    """A presence-capable entity, tagged with whether it counts as evidence.
+
+    The editor needs the ones that DON'T count as much as the ones that do —
+    excluding a lying sensor (the cat-crossed hallway PIR) and opting in an
+    unusual one both start from seeing the full list.
+    """
+
+    entity_id: str
+    name: str
+    area_name: str
+    device_class: str
+    kind: str  # "pulse" / "level" / "" when unused
+    scope: str  # "room" / "house"
+    used: bool
+    reason: str  # why it is not used, or "" when it is
+    #: Whether it WOULD be used with no curation rules at all. The editor stores
+    #: only divergence from this, so the file stays small and a later change to
+    #: the automatic behavior still reaches anyone who never touched the sensor.
+    auto: bool = False
+
+
+def classify_occupancy(
+    rows: list[dict[str, Any]],
+    persons: list[dict[str, Any]],
+    curation: dict[str, Any],
+) -> list[OccupancyCandidate]:
+    """Every presence candidate + its status. Pure; mirrors ``classify``."""
+    used_map = build_occupancy_map(rows, persons, curation)
+    auto_map = build_occupancy_map(rows, persons, {})  # the no-curation baseline
+    occ = curation.get("occupancy") or {}
+    excluded = {str(x).strip() for x in (occ.get("exclude") or [])}
+
+    out: list[OccupancyCandidate] = []
+    for row in rows:
+        eid = str(row.get("entity_id") or "").strip()
+        if not eid or _is_kenzy_entity(eid):
+            continue  # her own echo is never a candidate, so never a choice
+        area_name = str(row.get("area") or "")
+        dev_class = str(row.get("device_class") or "").strip().lower()
+        entry = used_map.get(eid)
+        if entry is not None:
+            reason = ""
+        elif eid in excluded:
+            reason = "excluded"
+        elif not area_name:
+            reason = "no room"
+        elif dev_class not in _OCCUPANCY_CLASSES:
+            reason = "not a presence sensor"
+        else:
+            reason = "excluded"
+        out.append(
+            OccupancyCandidate(
+                entity_id=eid,
+                name=str(row.get("name") or _name_from_id(eid)),
+                area_name=area_name,
+                device_class=dev_class,
+                kind=str(entry.get("kind")) if entry else "",
+                scope="room",
+                used=entry is not None,
+                reason=reason,
+                auto=eid in auto_map,
+            )
+        )
+    for person in persons:
+        eid = str(person.get("entity_id") or "").strip()
+        if not eid.startswith("person.") or _is_kenzy_entity(eid):
+            continue
+        entry = used_map.get(eid)
+        out.append(
+            OccupancyCandidate(
+                entity_id=eid,
+                name=str(person.get("name") or _name_from_id(eid)),
+                area_name="",
+                device_class="person",
+                kind=str(entry.get("kind")) if entry else "",
+                scope="house",
+                used=entry is not None,
+                reason="" if entry else "excluded",
+                auto=eid in auto_map,
+            )
+        )
+    return sorted(out, key=lambda c: (c.scope == "house", c.area_name, c.name))
+
+
+async def fetch_occupancy_candidates() -> list[OccupancyCandidate]:
+    """The curation editor's presence list (all candidates, tagged)."""
+    rows, persons = await fetch_occupancy_rows()
+    return classify_occupancy(rows, persons, load_curation())
