@@ -109,6 +109,13 @@ node_defaults:
   dialog_no_speech_timeout_ms: 8000
   dialog_onset_ms: 300
   dialog_onset_vad_threshold: 0.5
+  # One-breath commands: after a wake hit, hold the ready chime this long. If
+  # speech keeps going ("Hey Kenzy turn on the lights", no pause) the session
+  # opens silently — the chime would land on top of the sentence — and the
+  # buffered onset is flushed so the first word survives. Silence for the whole
+  # window means the classic flow: chime, then listen, just this much later.
+  # 0 = off (the chime fires the instant the wake word does). Live-applied.
+  wake_onset_ms: 400
   # A node that loses the server keeps hearing its wake word, so an orphaned room
   # looks fine from inside it. The watchdog is the node's own smoke alarm: it
   # complains in the node log after warn_minutes, and restarts the node process if

@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.0.2]
+
+### Added
+
+- **"Hey Kenzy, turn on the lights" — no pause needed.** Saying the wake word and the command in one breath now just works. The node holds the ready chime for a short window (`wake_onset_ms`, default 400 ms) after the wake word fires: keep talking and the chime is skipped entirely — it would have landed on top of your sentence — and the command is answered exactly as if you'd paused, with the processing sound as the acknowledgement. Pause as you always have, and the chime plays and Kenzy listens exactly as before, just a beat later. Under the hood the node deliberately captures the **whole wake phrase** in a ~1-second pre-roll and lets the server strip it from the *transcript* — finding the phrase boundary in audio is a losing game (the detection score lags the phrase, and anything said in that lag would be clipped), while the transcriber finds it reliably. The gate classifies "did they keep talking" by energy against the calibrated silence threshold — the same test that endpoints every capture — because the failure costs are lopsided: a false "speech" merely skips the chime, a false "silence" tramples the command. The strip knows the transcriber's spellings of her name **vary by speaker** ("Hey Kenzy," / "Hey Kinsey," / a stray "zee") and only ever removes a *leading* rendering with more text after it — "Kenzy" as an ordinary word in a sentence is left alone, and a bare "Hey Kenzy" still gets a "yes?". That strip also guards something sharper than latency: **"Hey Kenzy, stop." now hits the instant stop path** instead of riding, phrase and all, into the model. A server-side `trigger` still chimes instantly (there's no wake phrase you might be talking through), and `wake_onset_ms: 0` restores the old chime-immediately behavior per node. Live-applied, editable from each node's dashboard page. Verified end-to-end on the rig (both flows, full battery) and by real-voice testing — which is what caught the "Kinsey" rendering.
+
+### Fixed
+
+- **Secrets spoken with natural pauses now vault on the deterministic path.** The lockbox's explicit-secret matcher required "keep this secret" to be followed by a colon or comma — but the transcriber freely renders spoken pauses as sentence breaks and commas ("…secret. My locker code is 5150.", "Remember, secretly, my…"), and any such rendering pushed the exchange off the fast path onto the model tier (where the value still vaulted, but a model saw the utterance — exactly what the fast path exists to prevent). The matcher now tolerates sentence punctuation in both positions; "secret santa is on friday" still stays ordinary memory.
+
 ## [5.0.1]
 
 ### Fixed

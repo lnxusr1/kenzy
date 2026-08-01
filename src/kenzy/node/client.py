@@ -114,6 +114,11 @@ _DISCOVERY_GRACE_S = 5.0
 # threshold it enforces, and cheap enough to be invisible on a Pi.
 _WATCHDOG_TICK_S = 30.0
 
+# Wake-gate pre-roll (frames): long enough for the whole wake phrase plus
+# openwakeword's detection lag, so a one-breath command loses nothing to the
+# hit firing late. The captured phrase is stripped server-side as TEXT.
+_WAKE_PREROLL_FRAMES = 13  # ~1.0s at 80ms frames
+
 #: Where the last-known-good server URL is cached. A cache, deliberately not
 #: config: `server_url` in node.yaml is an operator's authoritative choice, while
 #: this is only ever a remembered observation, and mDNS still wins once it fails.
@@ -889,6 +894,14 @@ class NodeClient:
         )
         self._dialog_onset_frames: int = max(int(cfg.get("dialog_onset_ms", 300)) // fm_, 1)
         self._dialog_onset_vad: float = float(cfg.get("dialog_onset_vad_threshold", 0.5))
+        # One-breath commands ("Hey Kenzy turn on the lights", no pause): after a
+        # wake hit, hold the ready chime for this long. Speech continuing within
+        # the window means the command is already underway — the chime would
+        # trample it, so the session opens silently and the buffered onset is
+        # flushed. Silence for the whole window means the classic pause flow:
+        # chime then listen, exactly as before, just this much later. 0 = off
+        # (chime fires instantly, pre-gate behavior).
+        self._wake_onset_frames: int = int(cfg.get("wake_onset_ms", 400)) // fm_
         self._silence_frames: int = max(int(cfg.get("silence_ms", 400)) // protocol.FRAME_MS, 1)
         self._speech_min_frames: int = max(
             int(cfg.get("speech_min_ms", 400)) // protocol.FRAME_MS, 1
@@ -944,6 +957,21 @@ class NodeClient:
         self._onset_burst: int = 0  # length of the most recent speech burst
         self._onset_gap: int = 0  # silent frames since that burst ended
         self._onset_buf: list[np.ndarray[Any, np.dtype[np.int16]]] = []
+        # The pending onset window is a WAKE gate (one-breath command detection),
+        # not a follow-up: different expiry (chime + open a normal session, never
+        # followup_timeout — the server hasn't heard about this session at all).
+        self._wake_gate: bool = False
+        # Rolling pre-roll for the wake gate, sized to cover the WHOLE wake
+        # phrase plus openwakeword's detection lag (~1s). Deliberately not
+        # trimmed to the phrase boundary: the score crosses threshold a few
+        # frames after the phrase ends, and anything said in that lag ("turn…")
+        # would be lost to a short buffer — the rig lost exactly one word to a
+        # 1-frame version. STT is far better at finding the phrase boundary
+        # than a frame counter, so the phrase rides along as audio and the
+        # server strips it as text (_strip_wake_prefix).
+        self._idle_preroll: collections.deque[np.ndarray[Any, np.dtype[np.int16]]] = (
+            collections.deque(maxlen=_WAKE_PREROLL_FRAMES)
+        )
         self._dialog_vad: Any = None  # lazy standalone Silero VAD; False = unavailable
         # Barge-in (stage 2): listen while a floor-holding reply plays and yield
         # if the user answers early. Only when hardware_aec (echo-cancelled feed).
@@ -1139,15 +1167,34 @@ class NodeClient:
             return
         self._onset_elapsed += 1
         self._onset_buf.append(flat)
-        if len(self._onset_buf) > self._dialog_onset_frames + 8:
+        # The wake gate keeps everything it armed with (pre-roll + hit frame)
+        # plus its window + the onset length: the command may have begun before
+        # the gate armed, and a trimmed buffer would clip its first word on
+        # the flush.
+        cap = self._dialog_onset_frames + 8
+        if self._wake_gate:
+            cap += self._wake_onset_frames + _WAKE_PREROLL_FRAMES + 1
+        if len(self._onset_buf) > cap:
             self._onset_buf.pop(0)
 
-        score = self._dialog_vad_score(flat)
-        if score is None:  # no VAD model — degrade to sustained-energy gating
+        if self._wake_gate:
+            # The wake gate classifies by ENERGY, not Silero. Silero's internal
+            # state rises too slowly from cold idle for a 400ms window — on the
+            # rig it ruled a sentence in full flight "silent" and the chime
+            # landed on top of it. The asymmetry favors leniency: a false
+            # "speech" just skips the chime (the open session still captures
+            # whatever follows); a false "silence" tramples the command. RMS
+            # against the calibrated threshold is the same test that endpoints
+            # every normal session.
             rms = float(np.sqrt(np.mean(flat.astype(np.float32) ** 2)))
             speech = rms >= self._silence_rms
         else:
-            speech = score >= self._dialog_onset_vad
+            score = self._dialog_vad_score(flat)
+            if score is None:  # no VAD model — degrade to sustained-energy gating
+                rms = float(np.sqrt(np.mean(flat.astype(np.float32) ** 2)))
+                speech = rms >= self._silence_rms
+            else:
+                speech = score >= self._dialog_onset_vad
         if speech:
             self._onset_run += 1
             self._onset_burst = max(self._onset_burst, self._onset_run)
@@ -1167,8 +1214,12 @@ class NodeClient:
             self._onset_burst >= min_burst and self._onset_gap >= 2
         )
         if confirmed:
-            # The user answered. Open the real session and flush the onset buffer
-            # so their first word survives whole.
+            # The user answered (follow-up) or kept talking through the wake
+            # word (one-breath command). Open the real session and flush the
+            # buffer so their first word survives whole. The wake gate's chime
+            # stays unplayed — it would land on top of their sentence.
+            was_wake_gate = self._wake_gate
+            self._wake_gate = False
             self._onset_pending = False
             sid = self._session_id or str(uuid.uuid4())
             self._session_id = sid
@@ -1180,7 +1231,7 @@ class NodeClient:
                 for f in self._onset_buf:
                     await self._ws.send(f.tobytes())
             except Exception as exc:
-                log.warning("Could not open follow-up session: %s", exc)
+                log.warning("Could not open session: %s", exc)
                 self._state = _STATE_IDLE
                 self._session_id = None
                 self._followup_active = False
@@ -1195,7 +1246,42 @@ class NodeClient:
             self._silence_count = self._onset_gap
             self._frame_count = len(self._onset_buf)
             self._onset_buf = []
-            log.info("[%s] follow-up answer detected — streaming", sid[:8])
+            log.info(
+                "[%s] %s — streaming",
+                sid[:8],
+                "one-breath command detected" if was_wake_gate else "follow-up answer detected",
+            )
+            return
+
+        if self._wake_gate:
+            # Wake-gate expiry: silence followed the wake word (run == 0 means no
+            # speech in flight — a burst mid-word at the window edge is allowed to
+            # finish and confirm above). This is the classic pause flow: play the
+            # chime the gate was holding and open a normal wake session. The
+            # buffered silence is dropped, not sent — the server should meet this
+            # session at its audio_start, like any other.
+            if self._onset_elapsed >= self._wake_onset_frames and self._onset_run == 0:
+                self._wake_gate = False
+                self._onset_pending = False
+                self._onset_buf = []
+                if self._player is not None:
+                    self._player.play()
+                sid = self._session_id or str(uuid.uuid4())
+                self._session_id = sid
+                try:
+                    msg, _ = protocol.audio_start(sid, self._room_id)
+                    if self._ws is None:
+                        raise ConnectionError("no websocket")
+                    await self._ws.send(msg)
+                except Exception as exc:
+                    log.warning("Could not open wake session: %s", exc)
+                    self._state = _STATE_IDLE
+                    self._session_id = None
+                    return
+                self._silence_count = 0
+                self._speech_frames = 0
+                self._frame_count = 0
+                log.info("[%s] wake gate silent — chime, normal session", sid[:8])
             return
 
         if self._onset_elapsed >= self._dialog_no_speech_frames:
@@ -1303,7 +1389,21 @@ class NodeClient:
             self._player.unduck()
         self._barge_ducked = False
 
-    async def _begin_streaming(self, session_id: str, followup: bool = False) -> None:
+    async def _begin_streaming(
+        self,
+        session_id: str,
+        followup: bool = False,
+        wake_gated: bool = False,
+        gate_preroll: list[np.ndarray[Any, np.dtype[np.int16]]] | None = None,
+    ) -> None:
+        """Open a capture session.
+
+        ``wake_gated`` is passed ONLY by the wake-word paths: it arms the
+        one-breath gate (chime held until the window decides). A server
+        ``trigger`` chimes immediately as always — there is no wake phrase the
+        user might be talking through. ``gate_preroll`` carries the frames
+        around the wake hit so the command's first syllable survives whole.
+        """
         self._reset_barge()
         self._stop_ringback()
         if self._ws is None:
@@ -1324,9 +1424,10 @@ class NodeClient:
             self._session_id = None
             self._followup_active = False
             return
+        gate = wake_gated and not followup and self._wake_onset_frames > 0
         if self._player:
             self._player.abort()  # stop waiting sound if still playing
-            if not followup or self._capture_cue:
+            if not gate and (not followup or self._capture_cue):
                 self._player.play()  # wake sessions + record-after-the-tone flows chime
         self._end_dialog_after_tts = False  # a new turn began; drop any stale end cue
         self._state = _STATE_STREAMING
@@ -1335,6 +1436,20 @@ class NodeClient:
         self._silence_count = 0
         self._speech_frames = 0
         self._frame_count = 0
+        if gate:
+            # One-breath gate: send NOTHING and hold the chime. Continued speech
+            # confirms via the onset machinery below (session opens silently,
+            # buffered frames flushed); a silent window falls back to the classic
+            # chime-then-listen flow in _handle_onset_frame's expiry branch.
+            self._wake_gate = True
+            self._onset_pending = True
+            self._onset_run = 0
+            self._onset_elapsed = 0
+            self._onset_burst = 0
+            self._onset_gap = 0
+            self._onset_buf = list(gate_preroll or [])
+            log.info("[%s] wake gate open (one-breath window)", session_id[:8])
+            return
         if followup:
             # Stage 1 onset gate: send NOTHING yet. Frames buffer locally until
             # ~dialog_onset_ms of sustained speech confirms a real answer (then
@@ -1359,17 +1474,21 @@ class NodeClient:
         sid = self._session_id
         was_followup = self._followup_active
         was_pending = self._onset_pending
+        was_wake_gate = self._wake_gate
         self._state = _STATE_IDLE
         self._session_id = None
         self._followup_active = False
         self._onset_pending = False
+        self._wake_gate = False
         self._onset_buf = []
         if self._ws is not None and sid is not None:
             try:
                 if was_pending:
                     # No audio_start was ever sent — there's no session to end.
-                    # Tell the server the held floor is over instead.
-                    await self._ws.send(protocol.followup_timeout())
+                    # A held follow-up floor needs releasing; a wake gate was
+                    # never announced to the server at all, so say nothing.
+                    if not was_wake_gate:
+                        await self._ws.send(protocol.followup_timeout())
                 else:
                     await self._ws.send(protocol.audio_end(sid, reason))
             except Exception:
@@ -1796,6 +1915,10 @@ class NodeClient:
         if "dialog_onset_vad_threshold" in patch:
             self._dialog_onset_vad = float(patch["dialog_onset_vad_threshold"])
             applied.append("dialog_onset_vad_threshold")
+        if "wake_onset_ms" in patch:
+            # 0 = gate off (instant chime); no min-1 clamp, unlike the others.
+            self._wake_onset_frames = int(patch["wake_onset_ms"]) // fm
+            applied.append("wake_onset_ms")
 
         if "hardware_aec" in patch:
             self._hardware_aec = bool(patch["hardware_aec"])
@@ -2172,6 +2295,7 @@ class NodeClient:
                 if self._tuning:
                     await self._emit_tune_sample(flat, scores, loop)
                     continue
+                gate_armed_now = False  # this frame entered a gate buffer via preroll
                 for name, score in scores.items():
                     if score >= self._wakeword_threshold:
                         if (
@@ -2187,11 +2311,29 @@ class NodeClient:
                             break
                         log.info("Wake word '%s' score=%.3f", name, score)
                         if self._state == _STATE_IDLE:
-                            await self._begin_streaming(str(uuid.uuid4()))
+                            # The hit frame (and one before it) ride along: the
+                            # command's first syllable can start inside them.
+                            await self._begin_streaming(
+                                str(uuid.uuid4()),
+                                wake_gated=True,
+                                gate_preroll=[*self._idle_preroll, flat],
+                            )
+                            self._idle_preroll.clear()
+                            gate_armed_now = self._wake_gate
+                        elif self._state == _STATE_STREAMING and self._wake_gate:
+                            # The SAME utterance's score tail: openwakeword stays
+                            # above threshold for several frames after the phrase
+                            # ends. The gate is already open and this frame reaches
+                            # it via the normal path below — restarting here would
+                            # throw away everything buffered so far. (Rig finding:
+                            # a low threshold rode the tail deep into the command
+                            # and the transcript kept only its last word.)
+                            pass
                         elif self._state == _STATE_STREAMING and self._onset_pending:
-                            # Wake word instead of an answer: the user is starting
-                            # over. Abandon the held floor (server clears its turn
-                            # counter) and open a fresh wake session, chime and all.
+                            # Wake word instead of a follow-up answer: the user is
+                            # starting over. Abandon the held floor (the server
+                            # clears its turn counter) and open a fresh gated wake
+                            # session.
                             self._onset_pending = False
                             self._onset_buf = []
                             self._followup_active = False
@@ -2202,7 +2344,10 @@ class NodeClient:
                                     await self._ws.send(protocol.followup_timeout())
                                 except Exception:
                                     pass
-                            await self._begin_streaming(str(uuid.uuid4()))
+                            await self._begin_streaming(
+                                str(uuid.uuid4()), wake_gated=True, gate_preroll=[flat]
+                            )
+                            gate_armed_now = self._wake_gate
                         elif self._state == _STATE_STREAMING and self._ws is not None:
                             if self._player:
                                 self._player.play()
@@ -2217,7 +2362,10 @@ class NodeClient:
                             # new session.  on_session_start cancels the server
                             # pipeline so no STOP round-trip is needed.
                             await self._stop_tts_playback()
-                            await self._begin_streaming(str(uuid.uuid4()))
+                            await self._begin_streaming(
+                                str(uuid.uuid4()), wake_gated=True, gate_preroll=[flat]
+                            )
+                            gate_armed_now = self._wake_gate
                         elif self._state == _STATE_INTERCOM:
                             # Wake word ends the call immediately (no command needed),
                             # then opens a fresh command session on this node.
@@ -2227,8 +2375,15 @@ class NodeClient:
                                 except Exception:
                                     pass
                             await self._end_intercom(reason="wakeword")
-                            await self._begin_streaming(str(uuid.uuid4()))
+                            await self._begin_streaming(
+                                str(uuid.uuid4()), wake_gated=True, gate_preroll=[flat]
+                            )
+                            gate_armed_now = self._wake_gate
                         break
+                if gate_armed_now:
+                    # This frame rode into the gate buffer as preroll; running it
+                    # through the onset handler too would double-count it.
+                    continue
 
             if self._state == _STATE_INTERCOM:
                 if self._ws is None:
@@ -2247,6 +2402,12 @@ class NodeClient:
                 and self._hardware_aec  # can hear over her own voice
             ):
                 await self._handle_barge_frame(flat)
+                continue
+
+            if self._state == _STATE_IDLE:
+                # Rolling pre-roll for the wake gate (see _idle_preroll). Fed only
+                # while idle: the frames right before a hit are all it may carry.
+                self._idle_preroll.append(flat)
                 continue
 
             if self._state == _STATE_STREAMING and self._onset_pending:

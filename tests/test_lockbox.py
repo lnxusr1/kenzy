@@ -131,6 +131,24 @@ async def test_secret_phrasings_vault_synchronously(tmp_path):
     res = await _fm("Remember my luggage code is 0000, keep it secret", tmp_path)
     assert res.is_handled and "Locked away" in res.text
 
+    # STT sentence-splitting: "keep this secret: X" arrives as two sentences
+    # ("Keep this secret. My locker code is 5150.") often enough that the rig
+    # caught the colon-only form missing — a period is the same explicit signal.
+    res = await _fm("Keep this secret. My locker code is 5150.", tmp_path)
+    assert res.is_handled and "Locked away" in res.text
+    from kenzy.llm import lockbox as lbmod
+
+    assert "5150" in lbmod.store().list_for("john")[-1].text
+
+    # Whisper decorates spoken pauses with commas — a comma after the verb must
+    # not push the exchange onto the model path (rig finding, 2026-08-01).
+    res = await _fm("Remember, secretly, my gym code is 8181.", tmp_path)
+    assert res.is_handled and "Locked away" in res.text
+    assert "8181" in lbmod.store().list_for("john")[-1].text
+    # The santa guard still holds: no punctuation after "secret" = plain memory.
+    res = await _fm("Remember that secret santa is on friday", tmp_path)
+    assert res.is_handled and "Locked away" not in res.text
+
 
 async def test_secret_recall_wins_fast_path_owner_only(tmp_path):
     from kenzy.llm import lockbox as lbmod

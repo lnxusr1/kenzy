@@ -67,6 +67,7 @@ discovery:
 # dialog_no_speech_timeout_ms: 8000  # reply window during a held dialog (server-owned, live)
 # dialog_onset_ms: 300               # sustained speech needed to start a dialog turn (live)
 # dialog_onset_vad_threshold: 0.5    # Silero gate for dialog onset (live)
+# wake_onset_ms: 400                 # one-breath commands: hold the ready chime this long after a wake hit; 0 = chime instantly (live)
 # wakeword_models: []             # paths to .tflite/.onnx; empty = bundled
 # wakeword_threshold: 0.5         # confidence [0-1] to fire the wake word
 # wakeword_vad_threshold: 0.0     # Silero VAD gate [0-1]; 0 disables

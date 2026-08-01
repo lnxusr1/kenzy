@@ -244,10 +244,16 @@ async def _retier(topic: str, tier: str, verb: str) -> str:
 # secretly: the gate code is 4312". A bare "secret" must be followed by
 # punctuation ("remember this secret: …") so content that merely STARTS with
 # the word — "remember that secret santa is on friday" — stays ordinary
-# memory (field finding from review).
+# memory (field finding from review). A period counts as that punctuation:
+# STT renders "keep this secret: my code is X" as two sentences ("…secret. My
+# code is X.") often enough that the colon form alone missed on the rig —
+# the same finding the suffix form below already carries.
+# [,\s]+ between the verb and the signal word: Whisper freely decorates spoken
+# pauses with commas ("Remember, secretly, my…"), and a comma must not knock
+# the exchange off the deterministic path onto a model that would see the value.
 _SECRET_RE = re.compile(
-    r"^(?:please\s+)?(?:remember|keep|store|lock)\s+(?:this\s+|that\s+)?"
-    r"(?:secretly|in the lockbox|(?:as a )?secret(?=\s*[:,]))\s*[:,]?\s*(?P<fact>.+?)[.!?]?$",
+    r"^(?:please[,\s]+)?(?:remember|keep|store|lock)[,\s]+(?:this[,\s]+|that[,\s]+)?"
+    r"(?:secretly|in the lockbox|(?:as a )?secret(?=\s*[:,.]))\s*[:,.]?\s*(?P<fact>.+?)[.!?]?$",
     re.IGNORECASE,
 )
 _SECRET_SUFFIX_RE = re.compile(

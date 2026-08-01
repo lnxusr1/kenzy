@@ -79,7 +79,7 @@ class ProcessRequest(BaseModel):
     speaker_url: str | None = None
     # v5 occupancy spine: the server's per-room world model (who is where, with
     # provenance + age), injected like rooms/schedules/no_aec_rooms. Written by
-    # 5.0.0, read by nothing until 5.0.2 — and a skill that reads it must
+    # 5.0.0, read by nothing until 5.0.3 — and a skill that reads it must
     # tier-gate, since "who's home" is household information (see presence.py).
     occupancy: dict[str, Any] = {}
     # Identity core (F1): the resolved person id (None = no record / unknown), the

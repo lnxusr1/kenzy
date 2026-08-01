@@ -103,6 +103,27 @@ _SECRET_KEY_RE = re.compile(r"key|token|secret|password|passwd|credential", re.I
 _SAFE_ID_RE = re.compile(r"[A-Za-z0-9._-]+")
 # Env-var names the write-only secret editor will accept (dashboard → API keys).
 _ENV_NAME_RE = re.compile(r"^[A-Z][A-Z0-9_]{0,63}$")
+# One-breath commands: the node's wake gate deliberately captures the WHOLE wake
+# phrase in its pre-roll (finding the phrase boundary in audio is a losing game —
+# a short pre-roll cost the rig the command's first word), so the transcript
+# arrives as "Hey Kenzy, turn on the lights". Strip a LEADING rendering of the
+# phrase — Whisper's usual spellings, a bare "Kenzy" when the pre-roll started
+# mid-"Hey", or a lone "zee"/"z" tail fragment — only when more text follows, so
+# a bare "Hey Kenzy" still reaches the model (it answers "yes?", as before).
+# The bare-name form is a judged tradeoff: a transcript-leading "Kenzy" followed
+# by more words is address, not content, in essentially all real traffic.
+# k[ei]n[sz]: Whisper's renderings of the name vary by SPEAKER — the rig's
+# Kokoro voice yields "Kenzy"/"Kenzie", but a real voice produced "Kinsey"
+# (found live 2026-08-01: every fast intent missed, and "Hey Kinsey, stop."
+# reached the model — a stop must never be model-mediated).
+_WAKE_PREFIX_RE = re.compile(
+    r"^\s*(?:(?:(?:hey|hay|a|eh)[,!.\s]+)?k[ei]n[sz]\w{0,3}|zee|z)[,.!?:\s]+(?=\S)",
+    re.IGNORECASE,
+)
+
+
+def _strip_wake_prefix(text: str) -> str:
+    return _WAKE_PREFIX_RE.sub("", text, count=1)
 _ANNOUNCE_VOICE_PROMPT = "Read this aloud as a clear, calm public announcement."
 _INTERCOM_VOICE_PROMPT = "Read this aloud as a brief, friendly spoken notification."
 _CALIB_VOICE_PROMPT = "Calm, clear, unhurried — you are guiding someone through a setup step."
@@ -2652,6 +2673,11 @@ class TranscribingServer(AudioServer):
             else:
                 text, stt_ms = await _timed(self._call_stt(pcm, room_name, session_id))
                 spk_name, spk_conf, spk_ms = self._unknown_speaker, 0.0, 0.0
+
+            # A leaked wake-phrase tail is transport noise, not command text —
+            # strip it before anything downstream (fast-intent, LLM, Activity)
+            # sees the transcript.
+            text = _strip_wake_prefix(text)
 
             # Identity core (F1): resolve the voiceprint to a person. Passthrough
             # when there are no records — `speaker` stays the raw name, exactly

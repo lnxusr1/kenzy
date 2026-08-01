@@ -187,6 +187,7 @@ export const NODE_HELP = {
   wakeword_models: "Custom wake-word model files (.tflite/.onnx). Blank = the bundled \"Hey Kenzy\".",
   wakeword_threshold: "Wake-word confidence to trigger (0–1). Lower = more sensitive.",
   wakeword_vad_threshold: "Voice-detection gate (0–1); 0 = off. ~0.5 rejects near-silence false wakes.",
+  wake_onset_ms: "One-breath commands: hold the ready chime this long after the wake word. Keep talking and the chime is skipped; pause and it plays. 0 = chime instantly.",
   silence_rms_threshold: "Loudness (0–32767) below which counts as silence.",
   vad_enabled: "Off = stream until the server says stop (no voice-activity endpointing).",
   silence_ms: "Consecutive silence that ends a capture (after speech).",
@@ -222,7 +223,7 @@ export const NODE_HELP = {
 // fall into "Other".
 export const NODE_GROUPS = [
   ["Audio device", ["audio_device", "capture_sample_rate", "playback_sample_rate"]],
-  ["Wake word", ["wakeword_models", "wakeword_threshold", "wakeword_vad_threshold"]],
+  ["Wake word", ["wakeword_models", "wakeword_threshold", "wakeword_vad_threshold", "wake_onset_ms"]],
   [
     "Capture / VAD",
     ["silence_rms_threshold", "vad_enabled", "silence_ms", "speech_min_ms", "no_speech_timeout_ms", "hard_cap_ms"],

@@ -208,7 +208,7 @@ async def _run_one_wake_frame(monkeypatch, *, aec: bool, playing: bool) -> list[
     client._player = _Player()  # type: ignore[assignment]
     began: list[str] = []
 
-    async def fake_begin(sid):
+    async def fake_begin(sid, wake_gated=False, gate_preroll=None):
         began.append(sid)
 
     monkeypatch.setattr(client, "_begin_streaming", fake_begin)
