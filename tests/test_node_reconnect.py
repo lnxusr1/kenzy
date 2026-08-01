@@ -241,6 +241,68 @@ async def test_turning_loop_is_not_reexeced_for_a_server_outage(tmp_path, monkey
     assert not fired
 
 
+async def test_a_long_healthy_run_is_not_counted_as_downtime(tmp_path, monkeypatch):
+    """The master-bedroom node re-execed 8 SECONDS after a blip, reporting "no
+    server connection for 412m" — because downtime was measured from the last
+    *join*, so a 7-hour healthy run read as 7 hours overdue. Left alone, any node
+    connected longer than reexec_minutes re-execs on the first tick of any drop,
+    which is the fleet-wide flap the threshold exists to prevent.
+    """
+    node = _node(
+        tmp_path, monkeypatch, watchdog={"wedge_minutes": 60, "reexec_minutes": 30}
+    )
+    fired: list[str] = []
+    monkeypatch.setattr(node, "_reexec", lambda why: fired.append(why))
+    monkeypatch.setattr(client_mod, "_WATCHDOG_TICK_S", 0.001)
+
+    now = time.monotonic()
+    node._loop_alive_at = now  # still turning
+    node._registered_at = now - 7 * 3600  # joined seven hours ago…
+    node._registered = True
+    node._mark_disconnected()  # …and dropped just now
+    await _run_watchdog(node)
+    assert not fired
+
+
+async def test_watchdog_still_reexecs_a_genuinely_long_outage(tmp_path, monkeypatch):
+    """The other half: measuring from the right instant must not defang the
+    threshold. Past reexec_minutes of real downtime, a fresh process is still the
+    move."""
+    node = _node(
+        tmp_path, monkeypatch, watchdog={"wedge_minutes": 60, "reexec_minutes": 30}
+    )
+    fired: list[str] = []
+    monkeypatch.setattr(node, "_reexec", lambda why: fired.append(why))
+    monkeypatch.setattr(client_mod, "_WATCHDOG_TICK_S", 0.001)
+
+    now = time.monotonic()
+    node._loop_alive_at = now
+    node._registered = False
+    node._disconnected_at = now - 31 * 60
+    await _run_watchdog(node)
+    assert fired and "no server connection" in fired[0]
+
+
+async def test_registering_ends_the_outage(tmp_path, monkeypatch):
+    node = _node(tmp_path, monkeypatch)
+    node._disconnected_at = time.monotonic() - 600
+    node._mark_registered()
+    assert node._disconnected_at == 0.0
+
+
+async def test_a_refused_join_does_not_restart_the_outage_clock(tmp_path, monkeypatch):
+    """Downtime is counted from when we LOST the server, not from the last failed
+    attempt to reach it — otherwise a node retrying every 60 s never accumulates
+    any downtime and the re-exec threshold can never be reached."""
+    node = _node(tmp_path, monkeypatch)
+    dropped_at = time.monotonic() - 600
+    node._disconnected_at = dropped_at
+    node._registered = False  # this attempt never joined
+
+    node._mark_disconnected()
+    assert node._disconnected_at == dropped_at
+
+
 async def test_watchdog_can_be_disabled(tmp_path, monkeypatch):
     assert _node(tmp_path, monkeypatch, watchdog={"enabled": False})._watchdog_enabled is False
 

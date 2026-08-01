@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.0.1]
+
+### Fixed
+
+- **A room no longer restarts itself the instant its connection drops.** The reconnect watchdog measured how long a node had been unable to reach the server from the last time it *joined* one — so a node that had been connected happily all day counted that entire healthy run as downtime, and was already far past the 30-minute restart threshold on the very first check after any interruption. In the house this showed up as a node re-executing **eight seconds** into a twenty-minute network outage, logging "no server connection for 412m" when it had been talking to the server moments earlier. Every node connected for longer than `watchdog.reexec_minutes` behaved this way on any drop, which inverted the point of the threshold entirely: the longer a room had been working, the more eagerly it restarted, and a single server restart would have bounced every room in the house at once — precisely the fleet-wide flapping the long threshold exists to prevent. Downtime is now measured from the moment the connection was actually lost. The wedged-loop restart (`wedge_minutes`) was never affected, and a genuinely long outage still restarts the node exactly as documented.
+
 ## [5.0.0]
 
 The start of v5 — **"She notices."** Kenzy keeps a live picture of which rooms have people in them, and shows it to you. She doesn't act on it yet, and that is deliberate: a world model gets to be wrong in visible ways for a while before anything is allowed to speak because of it. Everything that reads or acts on presence comes in 5.0.1 and after.

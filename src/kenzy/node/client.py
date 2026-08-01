@@ -1023,6 +1023,13 @@ class NodeClient:
         # last time a server accepted our hello and answered with a config frame.
         self._loop_alive_at: float = 0.0
         self._registered_at: float = 0.0
+        # When the CURRENT outage began — stamped as a registered connection drops,
+        # cleared as one is established. Deliberately NOT ``_registered_at``: that one
+        # marks when we last *joined*, so measuring downtime from it counts the whole
+        # healthy connected run as downtime, and a node up longer than reexec_minutes
+        # re-execs on the first tick of any blip. Zero means "no outage in progress",
+        # and downtime is then measured from process start.
+        self._disconnected_at: float = 0.0
         self._registered: bool = False
         # Why the last connection closed, captured from the WS close frame. On a
         # reconnect this is the only place the server's reason is visible.
@@ -2399,12 +2406,25 @@ class NodeClient:
         """
         self._registered = True
         self._registered_at = time.monotonic()
+        self._disconnected_at = 0.0  # the outage (if any) is over
         self._cache_stale = False
         url = self._connect_url
         if url and url != self._cached_server_url:
             self._cached_server_url = url
             _write_cached_server(url)
             log.info("Remembered server address %s", url)
+
+    def _mark_disconnected(self) -> None:
+        """A session ended — start the outage clock if we were actually joined.
+
+        The mirror of ``_mark_registered``. Only a drop from a REGISTERED
+        connection begins an outage: a join that was refused, or never completed,
+        leaves an outage already in progress alone, so a run of failed attempts
+        can't keep resetting the clock the watchdog counts on.
+        """
+        if self._registered:
+            self._disconnected_at = time.monotonic()
+        self._registered = False
 
     # ------------------------------------------------------------------
     # Audio hardware (built lazily after the first config pull)
@@ -2792,7 +2812,7 @@ class NodeClient:
             # reconnected node hears and speaks normally.
             await self._reset_tts_state()
             self._ws = None
-            self._registered = False
+            self._mark_disconnected()
             if self._close_reason:
                 # Surfaced here, not swallowed in _recv_loop: a join refused for a
                 # bad token or a stale clock reads identically to a network drop
@@ -2863,7 +2883,11 @@ class NodeClient:
                 self._reexec(f"reconnect loop has not run for {int(loop_quiet)}s")
                 return  # unreachable after execv; keeps the contract explicit
 
-            down = now - (self._registered_at or start)
+            # Measured from the START OF THIS OUTAGE, not from the last join: a node
+            # that has been happily connected for hours is not hours overdue the
+            # instant its socket drops. Falls back to process start for a node that
+            # has never registered at all.
+            down = now - (self._disconnected_at or start)
             if down >= self._watchdog_warn_s and now - warned_at >= self._watchdog_warn_s:
                 warned_at = now
                 log.error(
