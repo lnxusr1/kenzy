@@ -176,7 +176,7 @@ Included skills:
 | `lists.py` | Shopping / to-do lists, backed by Home Assistant's `todo` entities — add, read, check off, create (no Kenzy-side storage, so your phone already has them) |
 | `schedule.py` | Timers, alarms, and reminders — including "turn on the lights in 30 seconds", replayed through the pipeline at fire time |
 | `memory_skill.py` | Remember / recall / forget, per person, with private / personal / shared tiers (recognized voices only) |
-| `presence.py` | "Is Mom home?" — a live read of Home Assistant's `person` entities via each person's linked HA user |
+| `presence.py` | "Is Mom home?", "where's Alice?", "is anyone in the loft?" — HA `person` entities composed with the room-presence model (where a voice was last heard, with its age). Spoken names match forgivingly ("Sara" finds Sarah; nicknames via per-person aliases on the People page), and a genuine near-tie asks instead of guessing |
 | `datetime_skill.py` | Current date and time (with a deterministic fast path) |
 | `announce.py` | Speak a message in every room (broadcast) |
 | `intercom.py` | Start a live two-way voice call between two rooms (consent-gated at the far end) |
@@ -223,9 +223,14 @@ Two things it does on purpose:
 - **"Unknown" is a real answer.** No sensor and no recent voice means Kenzy doesn't
   know, which is not the same as the room being empty. Rooms read unknown after a
   restart until something says otherwise.
-- **It acts on nothing.** Presence changes no behavior yet — nothing speaks unprompted,
-  no delivery is re-targeted. It's a world model you can watch, and catch being wrong,
-  before anything depends on it. Acting on it comes next.
+- **It answers questions, but acts on nothing.** Ask "where is Alice?" and the answer
+  composes her home/away state with where her voice was last heard — with the age
+  always spoken ("…I last heard them in the office just now"). Ask "is anyone in the
+  loft?" and the answer carries its evidence and its freshness, names a person only
+  when a recognized voice was actually heard, and never claims a room is *empty* —
+  the strongest no is "no sign of anyone for a while". But presence still changes no
+  behavior on its own: nothing speaks unprompted, no delivery is re-targeted. It's a
+  world model you can question, and catch being wrong, before anything depends on it.
 
 It needs Home Assistant configured; without it nothing starts and the tab stays hidden.
 Turn it off with `occupancy.enabled: false`. Which entities count is automatic (motion,

@@ -2442,6 +2442,11 @@ class Dashboard:
             # reserves `id` for request/ack correlation (a payload `id` would
             # clobber it and the ack would never match its caller).
             kwargs: dict[str, Any] = {}
+            if "aliases" in msg:  # absent ⇒ preserve; [] ⇒ clear
+                als = msg.get("aliases")
+                if not isinstance(als, list):
+                    return await ack(False, "aliases must be a list")
+                kwargs["aliases"] = [str(a) for a in als]
             if "memory_opt_out" in msg:  # absent ⇒ preserve
                 kwargs["memory_opt_out"] = bool(msg.get("memory_opt_out"))
             if "memory_capture" in msg:  # absent/invalid ⇒ preserve (store validates)

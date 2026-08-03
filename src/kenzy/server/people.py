@@ -61,6 +61,12 @@ class Person:
     id: str
     name: str
     voiceprints: list[str] = field(default_factory=list)
+    #: 5.0.3 slice D: other things this person is called — nicknames the fuzzy
+    #: layer can never reach ("Bud" for Robert), or a spelling the transcriber
+    #: insists on. Mirrors curation.yaml's device aliases. Editable from the
+    #: People page; save_person treats it three-state (omitted ⇒ preserved), so
+    #: callers that don't know about aliases can never silently drop them.
+    aliases: list[str] = field(default_factory=list)
     ha_user: str | None = None
     phone: str | None = None
     #: F7.4 "don't remember me": memory refuses writes AND reads for this
@@ -123,10 +129,12 @@ class PeopleStore:
             if not isinstance(rec, dict):
                 continue
             vps = [str(v).strip() for v in (rec.get("voiceprints") or []) if str(v).strip()]
+            als = [str(a).strip() for a in (rec.get("aliases") or []) if str(a).strip()]
             person = Person(
                 id=str(pid),
                 name=str(rec.get("name") or pid),
                 voiceprints=vps,
+                aliases=als,
                 ha_user=(str(rec["ha_user"]).strip() or None) if rec.get("ha_user") else None,
                 phone=(str(rec["phone"]).strip() or None) if rec.get("phone") else None,
                 memory_opt_out=bool(rec.get("memory_opt_out", False)),
@@ -211,6 +219,7 @@ class PeopleStore:
         id: str | None,
         name: str,
         voiceprints: list[str],
+        aliases: list[str] | None = None,
         ha_user: str | None = _UNSET,
         memory_opt_out: bool | None = None,
         memory_capture: str | None = None,
@@ -219,7 +228,9 @@ class PeopleStore:
         here is removed from any *other* person, so a voice belongs to exactly one
         person (assigning it elsewhere moves it). ``ha_user`` (the HA person
         entity id, F3) is three-state: omitted ⇒ preserved, a string ⇒ set,
-        ""/None ⇒ cleared."""
+        ""/None ⇒ cleared. ``aliases`` likewise: ``None`` ⇒ preserved (a caller
+        that doesn't know the field exists can't drop it), a list ⇒ set
+        (``[]`` clears)."""
         name = name.strip()
         if not name:
             raise ValueError("a name is required")
@@ -241,6 +252,8 @@ class PeopleStore:
 
         person.name = name
         person.voiceprints = vps
+        if aliases is not None:  # None ⇒ preserve; [] ⇒ clear (same cleaning as voices)
+            person.aliases = self._clean_voiceprints(aliases)
         if ha_user is not _UNSET:  # omitted ⇒ preserve; explicit value ⇒ set/clear
             person.ha_user = str(ha_user).strip() or None if ha_user else None
         if memory_opt_out is not None:  # None ⇒ preserve
@@ -288,6 +301,8 @@ class PeopleStore:
             rec: dict[str, Any] = {"name": p.name}
             if p.voiceprints:
                 rec["voiceprints"] = list(p.voiceprints)
+            if p.aliases:
+                rec["aliases"] = list(p.aliases)
             if p.ha_user:
                 rec["ha_user"] = p.ha_user
             if p.phone:

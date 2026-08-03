@@ -354,6 +354,7 @@ function PeopleList({ data, mem, facts, onOpen, reload, onConfigureService }) {
 
 function PersonDetail({ person, data, facts, secrets, memReachable, onBack, reload }) {
   const [name, setName] = useState(person.name);
+  const [aliasText, setAliasText] = useState((person.aliases || []).join(", "));
   const [voices, setVoices] = useState([...person.voiceprints]);
   const [haUser, setHaUser] = useState(person.ha_user || "");
   const [memOptOut, setMemOptOut] = useState(!!person.memory_opt_out);
@@ -373,8 +374,10 @@ function PersonDetail({ person, data, facts, secrets, memReachable, onBack, relo
   // on the People page, so cleaning up here can't delete household facts.
   const owned = facts.filter((f) => f.owner === person.id && f.tier !== "shared");
   const shown = q.trim() ? owned.filter((f) => factMatches(q, f.text)) : owned;
+  const aliasList = aliasText.split(",").map((a) => a.trim()).filter(Boolean);
   const dirty =
     name.trim() !== person.name ||
+    JSON.stringify(aliasList) !== JSON.stringify(person.aliases || []) ||
     haUser.trim() !== (person.ha_user || "") ||
     memOptOut !== !!person.memory_opt_out ||
     memCapture !== (person.memory_capture || "explicit") ||
@@ -391,6 +394,7 @@ function PersonDetail({ person, data, facts, secrets, memReachable, onBack, relo
       person_id: person.id,
       name: name.trim(),
       voiceprints: voices,
+      aliases: aliasList,
       ha_user: ha,
       memory_opt_out: memOptOut,
       memory_capture: memCapture,
@@ -530,6 +534,13 @@ function PersonDetail({ person, data, facts, secrets, memReachable, onBack, relo
             <input value=${name} disabled=${!controls}
               onInput=${(e) => setName(e.target.value)} />
           </label>
+          <label class="field">
+            <span class="micro">Also called — nicknames and spellings the speech
+              recognizer produces for them ("Bobby" for Bobbie); comma-separated.
+              Close spellings already match on their own — this is for the rest.</span>
+            <input value=${aliasText} disabled=${!controls}
+              onInput=${(e) => setAliasText(e.target.value)} />
+          </label>
           ${haField()}
           <div class="field">
             <span class="micro">Voices — which enrolled voices are this person</span>
@@ -627,8 +638,8 @@ function PersonDetail({ person, data, facts, secrets, memReachable, onBack, relo
         <header><h2>Privacy & data</h2><span class="rule"></span></header>
         <div class="card pad">
           <label class="field">
-            <span class="micro">Memory capture — when Kenzy remembers things for
-              ${person.name}. <b>Explicit</b>: only when asked ("remember that…").
+            <span class="micro">Memory capture — when Kenzy remembers things
+              for${" "}${person.name}. <b>Explicit</b>: only when asked ("remember that…").
               <b>Suggest</b>: she asks aloud before remembering — nothing
               stored without your spoken yes. <b>Auto</b>: she remembers on her own and always says
               so — her picks show a "auto" tag below, each a Forget away.</span>

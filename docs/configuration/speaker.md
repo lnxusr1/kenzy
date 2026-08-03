@@ -82,6 +82,7 @@ people:
   alex:                        # a stable id
     name: Alex                 # spoken/display name
     voiceprints: [alex, alex-kitchen]   # speaker-service names that are this person
+    aliases: [Al, Big Al]      # optional — other things this person is called (People page → "Also called")
     ha_user: person.alex       # optional — links their HA account (Assist identity + presence answers)
     phone: null                # optional
     memory_opt_out: false      # optional — "don't remember me" (People page toggle)
@@ -100,6 +101,14 @@ people:
   is fully supported. Linking `ha_user` is what lets the same person be
   recognized when they type through the [HA Assist channel](../phone.md) and
   what answers ["is Alice home?"](../skills/builtin.md#presence).
+- **Spoken names are matched forgivingly.** The transcriber spells names its own
+  way — a household's *Bobbie* is heard as "Bobby", *Vicki* as "Vikki" — so
+  questions like "where is Bobby?" resolve by closeness, not exact spelling,
+  and the answer confirms the real name ("Bobbie is home."). When two household
+  names are genuinely close (*Jon* and *John*), Kenzy asks which one you meant
+  rather than guessing. `aliases` covers what no spelling-match could: nicknames
+  ("Bud" for Robert). Aliases only ever pick the *subject* of a question — who is
+  **speaking** is always decided by voice, never by a name.
 
 ### Editing people from the dashboard
 

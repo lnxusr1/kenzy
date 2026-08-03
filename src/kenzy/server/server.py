@@ -1022,6 +1022,7 @@ class AudioServer:
                 "id": p.id,
                 "name": p.name,
                 "voiceprints": list(p.voiceprints),
+                "aliases": list(p.aliases),
                 "ha_user": p.ha_user,
                 "phone": p.phone,
                 "memory_opt_out": p.memory_opt_out,
@@ -1035,6 +1036,7 @@ class AudioServer:
         person_id: str,
         name: str,
         voiceprints: list[str],
+        aliases: list[str] | None = None,
         ha_user: str | None = UNSET,
         memory_opt_out: bool | None = None,
         memory_capture: str | None = None,
@@ -1048,6 +1050,7 @@ class AudioServer:
             id=person_id,
             name=name,
             voiceprints=voiceprints,
+            aliases=aliases,
             ha_user=ha_user,
             memory_opt_out=memory_opt_out,
             memory_capture=memory_capture,
@@ -3523,6 +3526,9 @@ class TranscribingServer(AudioServer):
                     "id": p["id"],
                     "name": p["name"],
                     "voiceprints": p["voiceprints"],
+                    # 5.0.3 slice D: what else this person answers to, for
+                    # spoken-name resolution (kenzy.llm.names).
+                    "aliases": p.get("aliases") or [],
                     # ha_user link (F1): what makes presence-on-demand zero-config.
                     "ha_user": p.get("ha_user"),
                 }

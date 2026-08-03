@@ -1047,6 +1047,12 @@ async def _process_impl(
             "tts_local": bool(req.tts_local),
             "people": req.people,
             "speaker_url": req.speaker_url,
+            # v5 occupancy snapshot (5.0.0 injected it server-side; this line —
+            # missing until 5.0.3 — is what lets a skill actually read it. Found
+            # live: the server's snapshot was full while get_request("occupancy")
+            # stayed empty). Tier-gating is the READER's job (handoff note 5);
+            # presence gates at recognized.
+            "occupancy": req.occupancy,
         }
     )
 

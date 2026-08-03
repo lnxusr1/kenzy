@@ -258,3 +258,42 @@ def test_memory_capture_setting_roundtrip(tmp_path, monkeypatch):
     ident = Identity(display="John", tier="recognized", confidence=1.0, person_id=pid)
     assert s2._person_memory_capture(ident) == "auto"
     assert s2._person_memory_capture(None) == "explicit"
+
+
+def test_aliases_load_serialize_and_survive_dashboard_edits(tmp_path):
+    """5.0.3 slice D: `aliases` is file-edited (people.yaml) and deliberately
+    absent from save_person's signature — so the invariant that matters is that
+    a dashboard edit round-trips WITHOUT dropping them (the ha_model
+    save_curation lesson: a second writer that rewrites wholesale silently
+    loses whatever it doesn't know about)."""
+    yaml_text = _YAML.replace(
+        "    ha_user: person.john\n",
+        "    ha_user: person.john\n    aliases: [Bobby, JJ]\n",
+    )
+    s = _store(tmp_path, yaml_text)
+    assert s.get("john").aliases == ["Bobby", "JJ"]
+
+    # A dashboard-style edit to the same person (rename + voiceprint change)…
+    s.save_person(id="john", name="John M", voiceprints=["john"])
+    # …and a full reload from what was written to disk:
+    s2 = PeopleStore(tmp_path / "people.yaml")
+    assert s2.get("john").name == "John M"
+    assert s2.get("john").aliases == ["Bobby", "JJ"]  # preserved, not dropped
+    # Blanks and whitespace are cleaned on load, like voiceprints.
+    s3 = _store(tmp_path, yaml_text.replace("[Bobby, JJ]", "['', '  ', Bobby]"))
+    assert s3.get("john").aliases == ["Bobby"]
+
+
+def test_aliases_set_and_clear_via_save_person(tmp_path):
+    """The dashboard path: an explicit list SETS (cleaned + case-insensitively
+    deduped, same rules as voiceprints); an explicit [] CLEARS; omitted stays
+    covered by the preserve test above."""
+    s = _store(tmp_path)
+    s.save_person(id="john", name="John", voiceprints=[], aliases=["Bobby", " jj ", "JJ", ""])
+    assert s.get("john").aliases == ["Bobby", "jj"]
+    # Survives a reload from disk…
+    assert PeopleStore(tmp_path / "people.yaml").get("john").aliases == ["Bobby", "jj"]
+    # …and an explicit empty list clears.
+    s.save_person(id="john", name="John", voiceprints=[], aliases=[])
+    assert s.get("john").aliases == []
+    assert PeopleStore(tmp_path / "people.yaml").get("john").aliases == []
