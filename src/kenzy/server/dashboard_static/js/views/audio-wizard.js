@@ -13,6 +13,11 @@ const fmt = (v) => (v === undefined || v === null || v === "" ? "default" : v);
 export function AudioWizard({ node, info, onClose, onApplied }) {
   const [step, setStep] = useState("overview");
   const [devSel, setDevSel] = useState("");
+  // 5.0.4: when the chosen device also carries volume buttons, the device step
+  // offers them here — the same breath as "which audio device", rather than a
+  // separate hunt through the key grid. Defaults ON: the buttons are what a
+  // speakerphone's owner expects, and the key is one click away either way.
+  const [wantKeys, setWantKeys] = useState(true);
   const [saving, setSaving] = useState(false);
   const [devWait, setDevWait] = useState(false); // waiting out the device restart
   const sawDrop = useRef(false);
@@ -139,15 +144,23 @@ export function AudioWizard({ node, info, onClose, onApplied }) {
     setSaving(true);
     const base = { ...(info.override || {}) };
     delete base.room_id; // server-managed; rejected by set_override
-    const res = await send("set_override", {
-      node,
-      config: {
-        ...base,
-        audio_device: d.suggested.audio_device,
-        capture_sample_rate: d.suggested.capture_sample_rate,
-        playback_sample_rate: d.suggested.playback_sample_rate,
-      },
-    });
+    const cfg = {
+      ...base,
+      audio_device: d.suggested.audio_device,
+      capture_sample_rate: d.suggested.capture_sample_rate,
+      playback_sample_rate: d.suggested.playback_sample_rate,
+    };
+    // Volume buttons ride the same write: auto resolves them from the device
+    // we just picked, so no second setting to chase.
+    if (d.volume_keys) {
+      cfg.volume_buttons = !!wantKeys;
+      // Record the EXACT endpoint we just identified rather than "auto":
+      // auto can't resolve an alias like "default", and refuses when several
+      // devices qualify — so punting here silently disabled the feature the
+      // moment the audio device changed.
+      if (wantKeys && d.volume_key_device) cfg.volume_button_device = d.volume_key_device;
+    }
+    const res = await send("set_override", { node, config: cfg });
     setSaving(false);
     if (!res.ok) {
       notify(res.error || "Could not save.", "err");
@@ -201,6 +214,15 @@ export function AudioWizard({ node, info, onClose, onApplied }) {
             ${devices.map((d) => html`<option value=${d.index}>${d.name}</option>`)}
           </select>`
         : html`<p class="micro">No selectable devices reported by this node.</p>`}
+      ${(() => {
+        const d = devices.find((x) => String(x.index) === String(devSel));
+        if (!d || !d.volume_keys) return null;
+        return html`<label class="wiz-opt">
+          <input type="checkbox" disabled=${saving} checked=${wantKeys}
+            onChange=${(e) => setWantKeys(e.target.checked)} />
+          <span>This device has volume buttons — let them change this room's volume</span>
+        </label>`;
+      })()}
       <p class="audio-current">Current: <span class="mono">${fmt(cur("audio_device"))}</span></p>
       ${wizFooter(
         html`<button class=${devSel ? "btn-primary" : "btn-ghost"} disabled=${!devSel || saving}

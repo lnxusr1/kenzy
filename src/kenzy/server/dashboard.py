@@ -310,6 +310,10 @@ class Dashboard:
         # Live-push for the Scheduled view: any schedule change (set by voice,
         # fired, cancelled) pokes connected browsers to re-fetch /api/schedules.
         server.add_schedule_listener(self._on_schedules_change)
+        # Override writes (volume buttons, voice, MQTT, calibration, editor
+        # saves) poke any open node-config page to re-fetch — its slider was
+        # otherwise stale the moment another surface changed the value.
+        server.add_node_config_listener(self._on_node_config_change)
         # Live People page: kenzy-llm pokes /notify?what=memory on any memory or
         # lockbox change; browsers get a data-less {"type":"memory"} and re-fetch.
         server.add_memory_listener(self._on_memory_change)
@@ -865,6 +869,9 @@ class Dashboard:
                     # The node's systemd --user unit state (None = unknown/offline
                     # or pre-4.2.1 node) — gates the Disable control.
                     "unit": session.capabilities.get("unit") if session else None,
+                    # 5.0.4: media-keys endpoint status (present/absent/why) —
+                    # the visibility half of the speakerphone-buttons feature.
+                    "media_keys": session.capabilities.get("media_keys") if session else None,
                 },
             )
 
@@ -2013,6 +2020,19 @@ class Dashboard:
         the auth-gated /api/schedules — no entry data rides the push itself)."""
         if self._clients:
             asyncio.create_task(self._broadcast_raw(json.dumps({"type": "schedules"})))
+
+    def _on_node_config_change(self, node_id: str) -> None:
+        """Poke connected browsers that a node's override changed (an open
+        config page re-fetches; no config data rides the push itself)."""
+        if not self._clients:
+            return
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return  # a sync/CLI writer outside the loop — nothing to poke
+        asyncio.create_task(
+            self._broadcast_raw(json.dumps({"type": "node_config", "node": node_id}))
+        )
 
     async def _broadcast_raw(self, payload: str) -> None:
         for ws in list(self._clients):

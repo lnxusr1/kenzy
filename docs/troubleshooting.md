@@ -194,6 +194,10 @@ copy-paste `apt` command instead. If the chips look right and it still
 misbehaves, the service's **Upgrade** button re-resolves the full dependency
 set as the bigger hammer.
 
+A few features need a one-time step on the machine itself that no upgrade can do
+for you — [Upgrading](upgrading.md#version-specific-steps) lists them per
+release.
+
 ## Starting over
 
 **First: grab a backup** if there's anything worth keeping (enrolled voices,

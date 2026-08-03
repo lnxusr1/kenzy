@@ -161,6 +161,13 @@ APT_EXTRA: dict[str, list[str]] = {
     "speaker": ["libportaudio2", "portaudio19-dev", "python3-dev", "libgomp1"],
 }
 
+#: OS packages required by PIP EXTRAS (deploy.yaml `extras:`), not services.
+#: mediakeys: evdev is a C extension — it builds from source on install.
+APT_FOR_EXTRA: dict[str, list[str]] = {
+    "kokoro": ["espeak-ng"],
+    "mediakeys": ["python3-dev", "gcc"],
+}
+
 # Files / dirs excluded from the base rsync to the remote.
 # Extra paths (skills/, data/, models/, etc.) are synced separately per host
 # based on service_sync in deploy.yaml.
@@ -578,13 +585,21 @@ def _effective_yaml(host: HostConfig, filename: str, local_path: Path) -> dict[s
         return yaml.safe_load(fh) or {}
 
 
+#: Held OUT of the main pip spec on purpose — see ``_install_media_keys``.
+_MK_EXTRA = "mediakeys"
+
+
 def _pip_extras(host: HostConfig, local_path: Path) -> str:
     """Build the pip extras string for this host.
 
     Runnable services + any explicit ``extras:`` (and non-service entries in
     ``services:``), plus ``kokoro`` auto-added when the TTS provider is kokoro.
+
+    ``mediakeys`` is excluded: it is default-on for nodes and evdev builds from
+    source, so it gets its own tolerated step rather than a place in the spec
+    that decides whether the host gets Kenzy at all.
     """
-    extras: list[str] = [*host.services, *host.extras]
+    extras: list[str] = [*host.services, *(e for e in host.extras if e != _MK_EXTRA)]
 
     if "tts" in host.services and "kokoro" not in extras:
         # Prefer the central store (configs/services/tts.yaml); fall back to legacy.
@@ -696,8 +711,30 @@ def _provision(host: HostConfig, local_path: Path, *, upgrade: bool, reseed: boo
         return False
     _ok("packages updated" if upgrade else "packages installed")
 
+    _install_media_keys(host, upgrade=upgrade, constraints=constraints_remote)
     _apply_pip_packages(host)
     return True
+
+
+def _install_media_keys(host: HostConfig, *, upgrade: bool, constraints: str | None) -> None:
+    """Install the volume-button extra, tolerating a build failure.
+
+    evdev ships source-only on PyPI (no wheels, any platform), so this is the one
+    dependency that needs a compiler on the target. It is default-on for nodes,
+    which means it must never be able to fail an install — and, more importantly,
+    never fail an *upgrade sweep* on a host whose toolchain went missing since.
+    Kenzy is already installed when this runs; a node without evdev reports volume
+    buttons as an inactive no-op, so the cost of a failure here is the feature.
+    """
+    if _MK_EXTRA not in host.extras:
+        return
+    target = _pip_target(host, _MK_EXTRA, upgrade=upgrade, constraints=constraints)
+    r = _ssh(host, f"{shlex.quote(host.venv_path)}/bin/pip install -q {target}")
+    if r.returncode == 0:
+        _ok("volume-button support installed")
+        return
+    _err("evdev did not build — volume buttons unavailable on this host (nothing else affected)")
+    _info("  fix: apt-get install gcc python3-dev, then re-run; or set media_keys: false")
 
 
 _TORCH_CPU_INDEX = "https://download.pytorch.org/whl/cpu"
@@ -782,7 +819,11 @@ def cmd_init(hosts: list[HostConfig]) -> None:
         _header(host.name, f"init  {host.address}")
 
         packages = sorted(
-            set(APT_BASE + [pkg for svc in host.services for pkg in APT_EXTRA.get(svc, [])])
+            set(
+                APT_BASE
+                + [pkg for svc in host.services for pkg in APT_EXTRA.get(svc, [])]
+                + [pkg for ex in host.extras for pkg in APT_FOR_EXTRA.get(ex, [])]
+            )
         )
         _info(f"apt packages: {' '.join(packages)}")
 
@@ -791,6 +832,16 @@ def cmd_init(hosts: list[HostConfig]) -> None:
             _err("apt install failed — skipping this host")
             continue
         _ok("apt packages installed")
+
+        if "mediakeys" in host.extras:
+            # /dev/input access for the volume-button watcher (5.0.4). The group
+            # reaches the systemd --user manager only after its next login — on
+            # an appliance, that means reboot before enabling the feature.
+            r = _ssh(host, f"usermod -aG input {shlex.quote(host.ssh_user)}", sudo=True)
+            if r.returncode == 0:
+                _ok(f"{host.ssh_user} added to 'input' (applies after reboot/re-login)")
+            else:
+                _err(f"could not add {host.ssh_user} to 'input' — media keys will see no devices")
 
         r = _ssh(host, f"mkdir -p {shlex.quote(host.install_path)}", sudo=True)
         if r.returncode != 0:
@@ -1087,6 +1138,15 @@ def _load_hosts(
         for e in [*defaults.get("extras", []), *hcfg.get("extras", [])]:
             if str(e) not in host_extras:
                 host_extras.append(str(e))
+
+        # Volume buttons are ON by default for node hosts (5.0.4): the recommended
+        # node is a USB speakerphone with AEC, and those carry +/- keys. Carrying
+        # the extra here is what pulls in gcc/python3-dev and the 'input' group in
+        # cmd_init. `media_keys: false` (per host, or under defaults:) opts out —
+        # for a node with no compiler, or where /dev/input access isn't wanted.
+        if "node" in svcs and bool(hcfg.get("media_keys", defaults.get("media_keys", True))):
+            if "mediakeys" not in host_extras:
+                host_extras.append("mediakeys")
 
         if explicit_server_url:
             surl: str | None = str(explicit_server_url)

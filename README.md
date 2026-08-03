@@ -53,6 +53,13 @@ kenzy-setup                          # download wake-word / speaker-ID models (r
 kenzy-init                           # scaffold a config home (~/.config/kenzy)
 ```
 
+On a room node, add `kenzy[node,mediakeys]` for a USB speakerphone's physical
+**volume buttons** (Linux only) — the one-line installer and `kenzy-deploy` do
+this by default, since the recommended node is a speakerphone and those have
+keys. It stays a separate extra because it builds a C extension (`python3-dev`
++ `gcc`), so a failed build costs the buttons and never the install; opt out
+with `--no-media-keys`. The node's user also needs to be in the `input` group.
+
 For development from a checkout, use an editable install instead:
 
 ```bash
@@ -124,7 +131,7 @@ then wired up). Open `https://<server>:8770` — `http://` if you installed with
 It gives you one place to:
 
 - See live node + backend-service health and each host's installed version — including any room that has **gone missing**, with how long it has been unreachable (an orphaned node still answers its wake word, so it looks fine from inside the room)
-- Configure each node, **rename its room**, and run **guided calibration** (also available by voice: "Hey Kenzy, calibrate") — it measures the room, detects echo cancellation, and applies the thresholds itself
+- Configure each node, **rename its room**, and run **guided calibration** (also available by voice: "Hey Kenzy, calibrate") — it measures the room, detects echo cancellation, and applies the thresholds itself; if the speakerphone you pick has **volume buttons**, it offers to wire those up in the same step
 - Manage **skills** (enable/disable live) and **speaker profiles** (rename / delete / enroll from a room)
 - Watch **room presence** — which rooms have someone in them, what each belief rests on, and how fresh it is
 - Watch **pipeline activity** (transcripts, latency, fast-path hit rate) and read server / service / node **logs**

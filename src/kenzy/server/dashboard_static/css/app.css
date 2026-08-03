@@ -301,6 +301,13 @@ button { font: inherit; cursor: pointer; }
   background: color-mix(in srgb, var(--accent) 10%, transparent);
 }
 .wiz-actions { display: flex; flex-wrap: wrap; gap: var(--s2); align-items: stretch; }
+/* A wizard checkbox whose label is a SENTENCE, not a chip: .ha-chk is
+   white-space: nowrap (right for voice/device chips, wrong here — it clipped
+   the label and forced the modal to scroll sideways). Box stays put at the
+   top; the text wraps beside it. */
+.wiz-opt { display: flex; align-items: flex-start; gap: var(--s2); font-size: 12px; color: var(--text-dim); }
+.wiz-opt input { flex: none; margin-top: 2px; }
+.wiz-opt span { white-space: normal; }
 /* Listen-phase countdown + gate notes + separation verdict (audio wizard). */
 .wiz-count { float: right; font-size: 18px; font-weight: 700; color: var(--accent); }
 .wiz-note { color: var(--led-busy); }

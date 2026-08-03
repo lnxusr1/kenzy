@@ -1,6 +1,6 @@
-import { html, useState, useEffect } from "../html.js";
+import { html, useState, useEffect, useRef } from "../html.js";
 import { confirmDialog } from "../dialog.js";
-import { send, notify } from "../store.js";
+import { send, notify, subscribeNodeConfig } from "../store.js";
 import { nodeEnum, nodeHelp, NODE_GROUPS } from "../schema.js";
 import { AudioWizard } from "./audio-wizard.js";
 
@@ -39,6 +39,11 @@ const TYPES = {
   dialog_no_speech_timeout_ms: "num",
   dialog_onset_ms: "num",
   dialog_onset_vad_threshold: "num",
+  // Speakerphone volume buttons (5.0.4): flat keys, all live; the audio
+  // wizard's device step offers the enable when the device has the buttons.
+  volume_buttons: "bool",
+  volume_button_device: "str",
+  volume_button_step: "num",
 };
 
 // Keys that re-init audio hardware: a change is pulled on the node's next boot,
@@ -89,16 +94,47 @@ export function ConfigView({ node, onBack }) {
   const [room, setRoom] = useState("");
   const [saving, setSaving] = useState(false);
   const [showWizard, setShowWizard] = useState(false);
+  // The override as LAST LOADED — the baseline that separates "the user is
+  // mid-edit on this key" from "another surface changed it" on a live refresh.
+  const baseRef = useRef({});
 
   async function load() {
     const r = await fetch(`/api/nodes/${encodeURIComponent(node)}/config`);
     const data = await r.json();
     setInfo(data);
     setOver({ ...(data.override || {}) });
+    baseRef.current = { ...(data.override || {}) };
     setRoom(data.room || "");
   }
+
+  // Live refresh on an external override write (speakerphone volume buttons,
+  // voice "turn it up", MQTT, calibration). Server values win for untouched
+  // keys; anything the user has edited-but-not-saved is preserved verbatim.
+  async function refresh() {
+    const r = await fetch(`/api/nodes/${encodeURIComponent(node)}/config`);
+    const data = await r.json();
+    setInfo(data);
+    setOver((cur) => {
+      const base = baseRef.current || {};
+      const next = { ...(data.override || {}) };
+      const keys = new Set([...Object.keys(cur), ...Object.keys(base)]);
+      for (const k of keys) {
+        const edited = JSON.stringify(cur[k]) !== JSON.stringify(base[k]);
+        if (edited) {
+          if (cur[k] === undefined) delete next[k];
+          else next[k] = cur[k];
+        }
+      }
+      return next;
+    });
+    baseRef.current = { ...(data.override || {}) };
+  }
+
   useEffect(() => {
     load();
+    return subscribeNodeConfig((n) => {
+      if (n === node) refresh();
+    });
   }, [node]);
 
   if (!info) return html`<div class="empty">Loading…</div>`;
@@ -116,6 +152,10 @@ export function ConfigView({ node, onBack }) {
     const config = {};
     for (const [key, val] of Object.entries({ ...over, ...extra })) {
       if (key === "room_id") continue; // server-managed, set via the room field
+      // Keys the grid can't edit (nested yaml-only dicts like watchdog /
+      // like watchdog) are never sent — the file is their source of truth
+      // and the server preserves them across saves.
+      if (!(key in TYPES) && !info.editable.includes(key)) continue;
       if (TYPES[key] === "list") {
         const raw = Array.isArray(val) ? val : val ? [String(val)] : [];
         const arr = raw.map((s) => s.trim()).filter(Boolean);
@@ -334,6 +374,18 @@ export function ConfigView({ node, onBack }) {
         <p class="micro">Badges: <span class="applies live">live</span> applies on save ·
           <span class="applies restart">restart</span> audio keys apply on the node's next boot or via Restart below.</p>
         ${audioSection()}
+        ${(() => {
+          const mk = info.media_keys;
+          if (!mk || mk.enabled === false) return null;
+          // Enabled but no endpoint = the feature is silently off. That earned
+          // a banner the day it cost an afternoon: "auto" refusing an ambiguous
+          // box looks identical to "the buttons stopped working".
+          return mk.present
+            ? html`<p class="micro">Volume buttons: ✓ ${mk.detail}</p>`
+            : html`<div class="banner">⚠ Volume buttons are on but not working —
+                ${mk.detail}. Set <code class="mono">volume_button_device</code> below
+                to one of the names listed.</div>`;
+        })()}
         <div class="cfg-grid">${grouped.map(groupBlock)}</div>
         <div class="cfg-actions">
           <button class="btn-primary" disabled=${!info.controls || saving} onClick=${() => save()}>

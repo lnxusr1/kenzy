@@ -126,6 +126,17 @@ node_defaults:
     warn_minutes: 5
     wedge_minutes: 5
     reexec_minutes: 30
+  # USB speakerphone volume buttons (5.0.4) — opt-in per node, Linux-only.
+  # The physical +/- buttons move Kenzy's CANONICAL volume (same clamped,
+  # persisted, dashboard-visible value as voice/dashboard/MQTT — the server
+  # stays the authority). Enable from the node's dashboard page or its audio
+  # wizard. `auto` only accepts an input endpoint tied to this node's own
+  # audio device (or the sole audio-device endpoint when the audio device is
+  # an alias like `default`); a keyboard can never qualify, and ambiguity
+  # picks nothing and says so — set volume_button_device to a name match then.
+  volume_buttons: false     # off = zero overhead
+  volume_button_device: auto       # or a stable name/phys match, e.g. "SP300U"
+  volume_button_step: 5         # 1-20, per press
   # Cue played when the wake word fires while the node has NO server connection.
   # Null = silent (the ready chime is never used here: it means "I'm listening",
   # which would be a lie). Set a distinct sound to make an orphaned room audible.

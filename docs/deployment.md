@@ -118,7 +118,7 @@ First full deployment:
 
 1. Syncs the tree to `install_path` — full source in `source` mode, `configs/` only in `pypi` mode
 2. Creates a Python virtualenv at `install_path/.venv`
-3. Installs the package with the appropriate service extras (editable from source, or from PyPI)
+3. Installs the package with the appropriate service extras (editable from source, or from PyPI). A host's `extras:` list rides along. `mediakeys` (speakerphone volume buttons) is added to every **node** host by default — set `media_keys: false` on the host or under `defaults:` to opt out. It gets its build deps (`python3-dev`, `gcc`) at `init`, which also adds the SSH user to the `input` group (effective at the host's next reboot/re-login). Because evdev builds from source, it is installed as a **separate, tolerated step** after the main install: a host without a toolchain loses the buttons, not the install or the upgrade
 4. Syncs skill/data directories per `service_sync`
 5. Syncs `.env` and any other `sync` paths
 6. Generates and installs systemd unit files

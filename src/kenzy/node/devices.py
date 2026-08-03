@@ -82,6 +82,14 @@ def probe_devices() -> list[dict[str, Any]]:
                 "playback_sample_rate": _suggest_rate(play, _KENZY_PLAYBACK),
             }
         out.append(entry)
+    # 5.0.4: mark devices whose USB parent also carries volume keys, so the
+    # audio wizard can offer the buttons while the user is picking the device.
+    try:
+        from kenzy.node.mediakeys import annotate_volume_keys
+
+        annotate_volume_keys(out)
+    except Exception:  # the probe must never break over an optional extra
+        pass
     return out
 
 

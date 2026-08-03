@@ -85,6 +85,7 @@ nav:
   - Managing It:
     - Dashboard: dashboard.md
     - Backup & Restore: backup-restore.md
+    - Upgrading: upgrading.md
     - Troubleshooting: troubleshooting.md
   - Reference:
     - Configuration:

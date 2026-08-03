@@ -89,6 +89,10 @@ _ALLOWED_OVERRIDE_KEYS = frozenset(
         "log_level",
         "log_capture_level",
         "volume",
+        # 5.0.4 speakerphone volume buttons — flat, grid-editable, live.
+        "volume_buttons",
+        "volume_button_device",
+        "volume_button_step",
         "hardware_aec",
         "dialog_no_speech_timeout_ms",
         "dialog_onset_ms",
@@ -99,6 +103,11 @@ _ALLOWED_OVERRIDE_KEYS = frozenset(
 # but NOT edited through the generic config grid (they have dedicated UI / actions).
 # The node applies them from the config frame. Preserved across editor saves.
 _SERVER_MANAGED_KEYS = frozenset({"room_id"})
+# Valid per-node override keys the EDITOR doesn't edit (nested dicts, yaml-only).
+# An editor save must neither reject nor wipe them — the file is their source of
+# truth, and the grid simply doesn't know they exist (the save_curation lesson:
+# a second writer that rewrites wholesale silently loses what it doesn't know).
+_YAML_ONLY_OVERRIDE_KEYS = frozenset({"watchdog"})
 _SECRET_KEY_RE = re.compile(r"key|token|secret|password|passwd|credential", re.IGNORECASE)
 _SAFE_ID_RE = re.compile(r"[A-Za-z0-9._-]+")
 # Env-var names the write-only secret editor will accept (dashboard → API keys).
@@ -640,6 +649,10 @@ class AudioServer:
                 log.error("TLS config invalid (%s) — continuing WITHOUT TLS", exc)
         self._state_listeners: list[Callable[[], None]] = []
         self._memory_listeners: list[Callable[[], None]] = []
+        # Node-override-changed pokes (5.0.4 follow-up): an OPEN node config
+        # page is stale the moment any other surface — speakerphone buttons,
+        # voice, MQTT, calibration — writes the override. Empty ⇒ zero overhead.
+        self._node_config_listeners: list[Callable[[str], None]] = []
         self._calib_listeners: list[Callable[[str, dict[str, Any]], None]] = []
         self._metrics_listeners: list[Callable[[], None]] = []
         # node_id → (override mtime, parsed override) — see _effective_node_config.
@@ -934,7 +947,13 @@ class AudioServer:
         return data if isinstance(data, dict) else {}
 
     def _write_override_file(self, node_id: str, mapping: dict[str, Any]) -> None:
-        """Write configs/nodes/<node_id>.yaml verbatim (empty ⇒ remove file)."""
+        """Write configs/nodes/<node_id>.yaml verbatim (empty ⇒ remove file).
+
+        The one choke point every override writer passes through — which is why
+        the node-config poke fires here: a volume button, a spoken "turn it up",
+        MQTT, calibration, and the editor's own save all land in this file, and
+        an open config page deserves to hear about all of them.
+        """
         import yaml
 
         path = self._override_path(node_id)
@@ -943,6 +962,15 @@ class AudioServer:
             path.write_text(yaml.safe_dump(dict(sorted(mapping.items())), default_flow_style=False))
         elif path.is_file():
             path.unlink()
+        for fn in self._node_config_listeners:
+            try:
+                fn(node_id)
+            except Exception:  # a listener must never break a config write
+                log.debug("node-config listener error", exc_info=True)
+
+    def add_node_config_listener(self, cb: Callable[[str], None]) -> None:
+        """Observe per-node override writes (any surface). Fired with node_id."""
+        self._node_config_listeners.append(cb)
 
     def write_node_override(self, node_id: str, mapping: dict[str, Any]) -> None:
         """Validate and persist configs/nodes/<node_id>.yaml (empty ⇒ remove file).
@@ -954,11 +982,16 @@ class AudioServer:
         self._node_cfg_cache.pop(node_id, None)  # override changing — drop the cache
         if not isinstance(mapping, dict):
             raise ValueError("override must be a mapping")
+        # Yaml-only keys are dropped from the INPUT (an older cached editor may
+        # echo them back) and re-instated from the FILE below — the file is
+        # their source of truth, never a client's copy.
+        mapping = {k: v for k, v in mapping.items() if k not in _YAML_ONLY_OVERRIDE_KEYS}
         unknown = sorted(k for k in mapping if k not in _ALLOWED_OVERRIDE_KEYS)
         if unknown:
             raise ValueError("unsupported keys: " + ", ".join(unknown))
         existing = self.read_node_override(node_id)
-        preserved = {k: existing[k] for k in _SERVER_MANAGED_KEYS if k in existing}
+        keep = _SERVER_MANAGED_KEYS | _YAML_ONLY_OVERRIDE_KEYS
+        preserved = {k: existing[k] for k in keep if k in existing}
         merged = {**preserved, **mapping}
         self._write_override_file(node_id, merged)
         if merged:
@@ -1781,6 +1814,10 @@ class AudioServer:
             session.audio_error = msg.get("audio_error") or None
             if msg.get("devices") is not None:
                 session.capabilities = {**session.capabilities, "devices": msg["devices"]}
+            if msg.get("media_keys") is not None:
+                # 5.0.4: the media-keys endpoint status (present/absent/why) —
+                # capability data for the node page's status line.
+                session.capabilities = {**session.capabilities, "media_keys": msg["media_keys"]}
             if not session.audio_ok:
                 log.warning(
                     "[%s] reports audio init FAILED: %s — fix device + restart",
@@ -1797,6 +1834,22 @@ class AudioServer:
             reason = str(msg.get("reason") or "shutdown")
             log.info("[%s] going away on purpose (%s)", session.node_id, reason)
             self._roster.grant_grace(session.node_id, self._restart_grace_s)
+
+        elif mtype == protocol.MSG_VOLUME_DELTA:
+            # A physical volume button on the node's speakerphone (5.0.4). The
+            # connection is the identity — this can only ever move the sending
+            # node's own volume — and it reuses set_node_volume wholesale, so
+            # clamping, persistence, the live push, and the dashboard broadcast
+            # are the same no matter which surface asked. The delta itself is
+            # sanity-clamped: whatever a misconfigured step or a hostile frame
+            # says, one press moves at most 20 points.
+            try:
+                delta = int(msg.get("delta") or 0)
+            except (TypeError, ValueError):
+                delta = 0
+            if delta:
+                await self.set_node_volume(session.node_id, delta=max(-20, min(20, delta)))
+                self._notify_state()
 
         elif mtype == protocol.MSG_FOLLOWUP_TIMEOUT:
             # A held-floor reply window expired silently on the node (which plays

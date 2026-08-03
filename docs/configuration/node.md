@@ -72,6 +72,69 @@ The node service runs on each room device. It captures microphone audio, detects
 | `hardware_aec` | `true` | Whether this room's speaker does **acoustic echo cancellation**. **Calibration detects and sets this automatically** (it plays a known sound through the node's speaker and measures the echo); set it manually only to override an ambiguous reading. Set `false` for a non-AEC speaker and the room runs **half-duplex**: see the table below for exactly what changes. Live-applied; shown as a "no AEC" badge on the room's fleet card. |
 | `sound_offline` | `null` | Cue played when the wake word fires while the node has **no server connection**. `null` = stay silent. The activation chime is deliberately *never* used here: it means "I'm listening", and a room that cannot reach the server isn't. Needs a restart. |
 
+### Speakerphone volume buttons
+
+Many USB speakerphones have physical `+`/`−` buttons that work on a desktop only
+because a media-key daemon consumes them; a headless node has no such daemon, so
+they emit valid input events into the void. Opt in per node and the buttons move
+**Kenzy's canonical volume** — the same clamped, persisted value the dashboard,
+voice commands and MQTT see, pushed back live by the server. Nothing touches an
+ALSA mixer, so there is never a second volume truth.
+
+**Set it up where you pick the room's audio device.** Run *Set up / calibrate
+audio* on the node's dashboard page: when the device you choose also carries
+volume buttons, the device step offers them right there — one checkbox, applied
+with the device. The three keys below then appear in the node's config grid
+under **Speakerphone volume buttons** for later changes, and in `node_defaults`
+for fleet-wide settings.
+
+| Key | Default | What it does |
+|---|---|---|
+| `volume_buttons` | `false` | The opt-in. Off costs nothing. Linux-only; anywhere else it is a clean no-op with a status line. Live-applied. |
+| `volume_button_device` | `auto` | `auto` considers **only** input endpoints that are USB siblings of this node's own audio device and advertise standard volume keys — a keyboard with media keys, or any other device, can never qualify. When `audio_device` is an alias like `default` (so no USB parent resolves), auto falls back to the **only** volume-keyed endpoint whose USB parent also hosts a sound card — the one speakerphone-shaped thing plugged in. More than one candidate does nothing and reports them; set a stable device-name match (e.g. `"SP300U"`) to choose. Never an `/dev/input/eventN` path — those change across boots. Live-applied. |
+| `volume_button_step` | `5` | Volume points per press, 1–20. Live-applied. On devices that report holds, a held button repeats (a beat of grace, then steady steps, rate-limited). **Some speakerphones don't report holds at all** — the SP300U emits an identical instant press/release burst whether tapped or held, so hold-to-repeat cannot exist there; tap per step, and raise the step if that feels slow. |
+
+The node page shows the endpoint's status (found / not found / why). Unplugging
+the speakerphone never disturbs capture or playback — the watcher just reports
+absent and rescans. Requires the **`mediakeys` extra** (`pip install
+"kenzy[node,mediakeys]"`), which the installer and `kenzy-deploy` both add to
+node hosts by default — the recommended node is a USB speakerphone with echo
+cancellation, and those carry volume keys. Without the extra the status line
+says so and nothing else changes.
+
+It is still a *separate* extra rather than part of `node`, because evdev ships
+source-only on PyPI (no wheels, any platform) and so needs `python3-dev` and
+`gcc` on the target. Both installers therefore install it as its own step and
+**tolerate a build failure**: you lose the buttons, never the install — and
+never an upgrade sweep on a host whose toolchain went missing. Opt out with
+`install.sh --no-media-keys` or `media_keys: false` in `deploy.yaml`.
+
+Upgrades keep it: the node's one-click upgrade carries the extra when evdev is
+already present (and never adds it otherwise, so a node without build tools
+can't break on it), and `kenzy-deploy` re-attempts it for any host whose
+`extras:` list includes `mediakeys`. Adding it to a node that predates 5.0.4 is
+a few one-time steps —
+[Upgrading → 5.0.4](../upgrading.md#504-volume-buttons-on-existing-nodes).
+
+Reading `/dev/input/*` also needs the node's user in the **`input` group**:
+`sudo usermod -aG input <user>`, then **reboot**. Without it the watcher sees no
+devices at all and the status line says so, naming the group.
+
+Restarting the node service is *not* enough, and this is the part that wastes an
+afternoon. Supplementary groups are fixed per **process** when a login session is
+created, so the `systemd --user` manager keeps its pre-`usermod` credentials and
+every service it forks inherits them — and with lingering enabled (the installer's
+default) that manager survives logout too. Reboot, or
+`sudo loginctl terminate-user <user>` and log in again. `SupplementaryGroups=input`
+in the unit is **not** an option for per-user installs: setting groups needs
+privilege the user manager doesn't have, so the unit fails with status 216. It
+works only in the system units `kenzy-deploy` writes for root installs.
+
+Physical **mute** buttons are deliberately not handled: on the tested devices
+they mute the microphone in hardware with no host involvement, and Kenzy's own
+`muted` is untouched in both directions — a volume press while muted adjusts the
+stored volume and nothing else.
+
 ### Staying reachable (`watchdog`)
 
 A node that loses its server keeps running: the microphone works, the wake word

@@ -59,6 +59,15 @@ export function subscribeMemory(fn) {
   return () => _memorySubs.delete(fn);
 }
 
+// Node-override change pokes ({type:"node_config", node}) — an open node
+// config page re-fetches so external volume changes (speakerphone buttons,
+// voice, MQTT, calibration) don't leave its slider lying.
+const _nodeConfigSubs = new Set();
+export function subscribeNodeConfig(fn) {
+  _nodeConfigSubs.add(fn);
+  return () => _nodeConfigSubs.delete(fn);
+}
+
 // Send a mutation over the WS and resolve with the server's {ok,error} ack.
 export function send(type, payload = {}, timeoutMs = 6000) {
   return new Promise((resolve) => {
@@ -131,6 +140,8 @@ function connectWS() {
         _scheduleSubs.forEach((fn) => fn());
       } else if (m.type === "memory") {
         _memorySubs.forEach((fn) => fn());
+      } else if (m.type === "node_config") {
+        _nodeConfigSubs.forEach((fn) => fn(m.node));
       } else if (m.type === "calibration") {
         _calibSubs.forEach((fn) => fn(m));
       } else if (m.type === "cues_result") {

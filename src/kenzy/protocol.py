@@ -32,6 +32,7 @@ MSG_REQUEST_LOGS = "request_logs"
 MSG_LOGS = "logs"
 MSG_STATUS = "status"  # node→server: report node health (e.g. audio init failed)
 MSG_GOODBYE = "goodbye"  # node→server: I am going away on purpose (restart/upgrade/shutdown)
+MSG_VOLUME_DELTA = "volume_delta"  # node→server: physical volume button (5.0.4; own node only)
 MSG_METRICS = "metrics"  # node→server: periodic system metrics (cpu/ram/disk/temp)
 MSG_TUNE_START = "tune_start"  # server→node: begin a bounded calibration window
 MSG_TUNE_STOP = "tune_stop"  # server→node: end calibration early
@@ -166,14 +167,32 @@ def status(
     audio_ok: bool,
     audio_error: str | None = None,
     devices: list[dict[str, Any]] | None = None,
+    media_keys: dict[str, Any] | None = None,
 ) -> str:
     """Node→server health update: sent when audio init fails (so the node can be
-    fixed/restarted remotely while staying connected) and when the audio-device
-    probe finishes (to deliver the device list for the dashboard picker)."""
+    fixed/restarted remotely while staying connected), when the audio-device
+    probe finishes (to deliver the device list for the dashboard picker), and
+    when the media-keys endpoint status changes (5.0.4 — present/absent/why,
+    for the node page's status line)."""
     payload: dict[str, Any] = {"type": MSG_STATUS, "audio_ok": audio_ok, "audio_error": audio_error}
     if devices is not None:
         payload["devices"] = devices
+    if media_keys is not None:
+        payload["media_keys"] = media_keys
     return json.dumps(payload)
+
+
+def volume_delta(delta: int) -> str:
+    """Node→server: a physical volume button was pressed (5.0.4).
+
+    The FIRST node→server frame that requests a change to server-owned config —
+    kept deliberately this narrow (a signed delta, nothing else) so the
+    precedent stays as small as the feature. The node's connection is its
+    identity: a node may only ever move its own volume. The server owns
+    clamping, persistence and the config push (``set_node_volume``), which is
+    the invariant that keeps hardware buttons from becoming a second volume
+    system."""
+    return json.dumps({"type": MSG_VOLUME_DELTA, "delta": int(delta)})
 
 
 def goodbye(reason: str = "shutdown") -> str:

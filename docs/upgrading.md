@@ -1,0 +1,112 @@
+# Upgrading
+
+Most upgrades need nothing beyond the upgrade itself. This page covers the ones
+that do — the releases where a new feature needs something a package upgrade
+can't bring on its own, like a system package or a group membership.
+
+Check the [changelog](https://github.com/lnxusr1/kenzy/blob/main/CHANGELOG.md)
+for what's in a release; check here for whether it asks anything of you.
+
+## Before you upgrade
+
+- **Take a backup.** Dashboard → **Settings** → *Download backup*. It carries
+  your configs, enrolled voices, memory and skills — see
+  [Backup & Restore](backup-restore.md).
+- **Version pins are honored automatically.** If you keep a `constraints.txt`
+  in the config home, every upgrade path passes it to pip, so an upgrade can't
+  silently move a pin you set deliberately.
+
+## How to upgrade
+
+Whichever way you installed:
+
+| Installed with | Upgrade with |
+|---|---|
+| The one-line installer or `pipx` | The dashboard's **Upgrade** buttons — Fleet → the server, each service chip, and each node — see [Dashboard](dashboard.md) |
+| `kenzy-deploy` | [`kenzy-deploy upgrade`](deployment.md#kenzy-deploy-upgrade) (add `--host NAME` for one machine) |
+| An editable checkout (`pip install -e`) | `git pull` — source installs don't self-upgrade, and the dashboard's Upgrade buttons are for package installs |
+
+Upgrade the **server first**, then services, then nodes.
+
+## Version-specific steps
+
+Newest first. Anything not listed needs no manual steps.
+
+### 5.0.4 — volume buttons on existing nodes
+
+New in this release: a USB speakerphone's physical `+`/`−` buttons can move the
+room's volume ([how it works](configuration/node.md#speakerphone-volume-buttons)).
+New installs get this set up automatically. **Existing nodes don't**, and the
+upgrade deliberately won't add it for you: the feature needs `evdev`, which
+builds from source, and adding a compile step to an upgrade would break any node
+without build tools. So a node that upgrades to 5.0.4 keeps working exactly as
+before, and picks the feature up only when you do the following.
+
+Skip this entirely if you don't want volume buttons on that node.
+
+**If the node was installed with the one-line installer or `pipx`**, run these on
+it, in order:
+
+```bash
+sudo apt-get install -y gcc python3-dev
+~/.local/share/kenzy/venv/bin/pip install evdev
+sudo usermod -aG input $USER
+sudo reboot
+```
+
+(Adjust the venv path if you installed with `--venv`.)
+
+**If the node was installed with `kenzy-deploy`**, there's nothing manual —
+`mediakeys` is default-on for node hosts as of 5.0.4. From your deploy machine:
+
+```bash
+kenzy-deploy init && kenzy-deploy install
+```
+
+`init` installs the build packages and adds the SSH user to the `input` group;
+`install` adds the extra. **Reboot each node afterwards** (see below). Set
+`media_keys: false` on a host, or under `defaults:`, to opt a node out.
+
+!!! warning "The reboot isn't optional"
+
+    Adding yourself to `input` and then restarting the node service does **not**
+    work. Supplementary groups are fixed per process when a login session is
+    created, so the `systemd --user` manager keeps its old credentials and hands
+    them to every service it starts — and lingering (on by default, so nodes
+    start at boot) means it survives a logout too. Reboot, or
+    `sudo loginctl terminate-user <user>` and log back in.
+
+    Without it the watcher sees *no* input devices at all, and the node page says
+    so.
+
+Then enable it per node, from the dashboard:
+
+- **Fleet → the node → the audio setup wizard.** Its device step offers a
+  *This device has volume buttons* checkbox whenever the device you picked has
+  them, and applies it in the same step. This is the easy path — it fills in the
+  device match for you.
+- Or set `volume_buttons` in the node's config grid directly, alongside
+  `volume_button_device` and `volume_button_step`.
+
+Either way it applies live, with no restart. The node page shows the endpoint's
+status — found, not found, or why not.
+
+!!! info "If `evdev` won't build"
+
+    You'll see a compiler error mentioning `Python.h` or `gcc`. It means step 1
+    didn't take. Nothing else is affected — the node runs normally and reports
+    volume buttons as unavailable.
+
+### 5.0.0 through 5.0.3
+
+No manual steps. If you're coming from 4.x, note that 5.0.0's room presence
+needs Home Assistant configured (an HA skill URL **and** `HA_API_KEY`) before it
+starts — without both it logs *idle* and stays off. See
+[Home Assistant](integrations/home-assistant.md).
+
+## A feature won't turn on after upgrading
+
+Usually a missing dependency rather than a missing setting — the service skips
+the feature instead of crashing. The service editor's **feature chips** show
+this directly and can install what's missing. Walkthrough:
+[Troubleshooting](troubleshooting.md#a-new-feature-wont-turn-on-after-an-upgrade).

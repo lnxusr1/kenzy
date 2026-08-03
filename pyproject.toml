@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "kenzy"
-version = "5.0.3"
+version = "5.0.4"
 description = "Distributed home voice-assistant: kenzy-node, kenzy-server, kenzy-stt, kenzy-tts, kenzy-llm, kenzy-speaker"
 requires-python = ">=3.11"
 readme = "README.md"
@@ -46,6 +46,14 @@ node = [
     "sounddevice>=0.4.6",
     "openwakeword>=0.6.0",
     "zeroconf>=0.130",
+]
+
+# Speakerphone volume buttons (5.0.4). Deliberately NOT in the node extra:
+# evdev is a C extension (needs python3-dev + gcc to build), and a normal node
+# that never opts in must not grow a build-time dependency — an upgrade on a
+# tool-less Pi would fail outright. The feature detects its absence and says so.
+mediakeys = [
+    "evdev>=1.6; platform_system == 'Linux'",
 ]
 
 # Install on the server host

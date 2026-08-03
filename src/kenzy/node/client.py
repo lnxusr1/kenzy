@@ -1062,6 +1062,19 @@ class NodeClient:
         # Why the last connection closed, captured from the WS close frame. On a
         # reconnect this is the only place the server's reason is visible.
         self._close_reason: str | None = None
+        # 5.0.4: USB speakerphone volume buttons — opt-in, server-owned. FLAT
+        # keys like every other editable node key (dashboard grid + wizard),
+        # not a nested dict — flatness is what makes them ordinary.
+        self._mk_enabled: bool = bool(cfg.get("volume_buttons", False))
+        self._mk_device: str = str(cfg.get("volume_button_device") or "auto")
+        self._mk_step: int = max(1, min(20, int(cfg.get("volume_button_step", 5))))
+        self._mediakeys_task: asyncio.Task[None] | None = None
+        #: What the watcher last reported — re-sent to the server on reconnect
+        #: so the dashboard's endpoint-status line survives a server restart.
+        self._mediakeys_status: dict[str, Any] | None = None
+        #: The (enabled, match, step, audio_device) tuple the running task was
+        #: built from; _sync_mediakeys restarts the task only when it changes.
+        self._mediakeys_built_from: tuple[Any, ...] | None = None
         _wd = cfg.get("watchdog") or {}
         self._watchdog_enabled: bool = bool(_wd.get("enabled", True))
         self._watchdog_warn_s: float = float(_wd.get("warn_minutes", 5)) * 60.0
@@ -1958,6 +1971,16 @@ class NodeClient:
 
         # Watchdog thresholds are read on every tick, so they tune live. (Whether
         # the loop exists at all is decided at startup — `enabled` needs a restart.)
+        if "volume_buttons" in patch:
+            self._mk_enabled = bool(patch["volume_buttons"])
+            applied.append("volume_buttons")
+        if "volume_button_device" in patch:
+            self._mk_device = str(patch["volume_button_device"] or "auto")
+            applied.append("volume_button_device")
+        if "volume_button_step" in patch:
+            self._mk_step = max(1, min(20, int(patch["volume_button_step"])))
+            applied.append("volume_button_step")
+
         if isinstance(patch.get("watchdog"), dict):
             wd = patch["watchdog"]
             if "warn_minutes" in wd:
@@ -2034,6 +2057,9 @@ class NodeClient:
             log.info("Server config needs restart (not applied live): %s", ", ".join(deferred))
         if not applied and not deferred:
             log.debug("Server config had no applicable keys")
+        # Media keys derive from the media_* keys AND audio_device — re-sync
+        # after every apply; it's a no-op unless one of its inputs changed.
+        self._sync_mediakeys()
 
     async def _metrics_loop(self, ws: ClientConnection) -> None:
         """Report system metrics (cpu/ram/disk/temp) every ~30 s while connected.
@@ -2219,7 +2245,19 @@ class NodeClient:
 
                 version = msg.get("version") or None
                 log.warning("Server requested upgrade (%s) — installing…", version or "latest")
-                ok, output = await run_pip_upgrade("node", version)
+                # Carry the mediakeys extra ONLY when evdev is already importable:
+                # a node that has it keeps it upgraded, and a node that doesn't
+                # never grows a source build mid-upgrade (evdev is a C extension —
+                # adding it here unconditionally would break upgrades on any Pi
+                # without gcc, which is exactly why it isn't in the node extra).
+                extra = "node"
+                try:
+                    import evdev  # type: ignore[import-untyped, import-not-found]  # noqa: F401
+
+                    extra = "node,mediakeys"
+                except ImportError:
+                    pass
+                ok, output = await run_pip_upgrade(extra, version)
                 if ok:
                     log.warning("Upgrade installed — re-executing node")
                     os.execv(sys.executable, [sys.executable, *sys.argv])
@@ -2569,11 +2607,87 @@ class NodeClient:
         self._registered_at = time.monotonic()
         self._disconnected_at = 0.0  # the outage (if any) is over
         self._cache_stale = False
+        # Re-deliver the media-keys endpoint status: the server's copy lives in
+        # the connection session, so a server restart forgot it.
+        self._push_mediakeys_status()
         url = self._connect_url
         if url and url != self._cached_server_url:
             self._cached_server_url = url
             _write_cached_server(url)
             log.info("Remembered server address %s", url)
+
+    # ------------------------------------------------------------------
+    # Media keys (5.0.4): speakerphone volume buttons → server volume_delta
+    # ------------------------------------------------------------------
+
+    async def _send_volume_delta(self, delta: int) -> None:
+        """The watcher's only outlet. Registered connections only — a press on
+        an orphaned node is dropped, not queued (stale volume moves arriving on
+        reconnect would be worse than lost ones)."""
+        ws = self._ws
+        if ws is None or not self._registered:
+            return
+        await ws.send(protocol.volume_delta(delta))
+
+    def _on_mediakeys_status(self, status: dict[str, Any]) -> None:
+        self._mediakeys_status = status
+        self._push_mediakeys_status()
+
+    def _push_mediakeys_status(self) -> None:
+        """Best-effort status frame carrying the endpoint state (dashboard line)."""
+        ws = self._ws
+        if ws is None or self._mediakeys_status is None:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        frame = protocol.status(
+            audio_ok=not self._audio_failed,
+            audio_error=self._audio_error,
+            media_keys=self._mediakeys_status,
+        )
+
+        async def _send() -> None:
+            try:
+                await ws.send(frame)
+            except Exception:
+                pass
+
+        loop.create_task(_send())
+
+    def _sync_mediakeys(self) -> None:
+        """Start/restart/stop the watcher to match config. Live-applied: called
+        after every config apply; a no-op unless something it derives from
+        changed. Safe without a loop (sync tests) — then it only records."""
+        want: tuple[Any, ...] | None = (
+            (self._mk_device, self._mk_step, self._audio_device) if self._mk_enabled else None
+        )
+        if want == self._mediakeys_built_from:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        if self._mediakeys_task is not None:
+            self._mediakeys_task.cancel()
+            self._mediakeys_task = None
+        self._mediakeys_built_from = want
+        if want is None:
+            if self._mediakeys_status is not None:
+                self._mediakeys_status = {"enabled": False}
+                self._push_mediakeys_status()
+            return
+        from kenzy.node.mediakeys import MediaKeyWatcher
+
+        watcher = MediaKeyWatcher(
+            step=self._mk_step,
+            device_match=self._mk_device,
+            audio_device=self._audio_device if isinstance(self._audio_device, str) else None,
+            send_delta=self._send_volume_delta,
+            on_status=self._on_mediakeys_status,
+        )
+        self._mediakeys_task = loop.create_task(watcher.run(), name="mediakeys")
 
     def _mark_disconnected(self) -> None:
         """A session ended — start the outage clock if we were actually joined.
@@ -3211,6 +3325,12 @@ class NodeClient:
                 watchdog_task.cancel()
                 try:
                     await asyncio.gather(watchdog_task, return_exceptions=True)
+                except asyncio.CancelledError:
+                    pass
+            if self._mediakeys_task is not None:
+                self._mediakeys_task.cancel()
+                try:
+                    await asyncio.gather(self._mediakeys_task, return_exceptions=True)
                 except asyncio.CancelledError:
                     pass
             if self._audio_task is not None:

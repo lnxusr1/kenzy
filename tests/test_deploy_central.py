@@ -255,3 +255,58 @@ def test_dashboard_owned_paths_protected_from_sync() -> None:
     # pypi mode (configs-only rsync; paths relative to configs/)
     for path in ("nodes/", "services/", "server.local.yaml"):
         assert path in _CONFIG_SYNC_EXCLUDES
+
+
+# --- volume buttons: default-on for nodes, held out of the main pip spec -----
+# The recommended room node is a USB speakerphone with AEC, and those carry
+# volume keys — so `mediakeys` rides along by default rather than being a flag
+# nobody knows to pass. It stays OUT of the main pip extras because evdev ships
+# source-only on PyPI: a failed build must cost the buttons, not the install.
+
+
+def _nodes_yaml(tmp_path: Path, body: str) -> str:
+    cfg = tmp_path / "deploy.yaml"
+    cfg.write_text(f"hosts:\n{body}")
+    return str(cfg)
+
+
+def test_node_hosts_get_mediakeys_by_default(tmp_path: Path) -> None:
+    hosts = {
+        h.name: h
+        for h in _load_hosts(
+            _nodes_yaml(
+                tmp_path,
+                "  kitchen:\n    address: 1.1.1.1\n    services: [node]\n"
+                "  brain:\n    address: 1.1.1.2\n    services: [server, llm]\n",
+            )
+        )
+    }
+    assert "mediakeys" in hosts["kitchen"].extras
+    # A server-only host has no audio device and nothing to listen to.
+    assert "mediakeys" not in hosts["brain"].extras
+
+
+@pytest.mark.parametrize("scope", ["host", "defaults"])
+def test_media_keys_false_opts_out(tmp_path: Path, scope: str) -> None:
+    body = "  kitchen:\n    address: 1.1.1.1\n    services: [node]\n"
+    if scope == "host":
+        body += "    media_keys: false\n"
+    else:
+        body = "defaults:\n  media_keys: false\n" + "hosts:\n" + body
+        cfg = tmp_path / "deploy.yaml"
+        cfg.write_text(body)
+        hosts = {h.name: h for h in _load_hosts(str(cfg))}
+        assert "mediakeys" not in hosts["kitchen"].extras
+        return
+    hosts = {h.name: h for h in _load_hosts(_nodes_yaml(tmp_path, body))}
+    assert "mediakeys" not in hosts["kitchen"].extras
+
+
+def test_mediakeys_is_excluded_from_the_main_pip_spec(tmp_path: Path) -> None:
+    """A source build that fails must not be able to abort the whole install."""
+    from kenzy.deploy.deploy import _pip_extras
+
+    host = _host(services=["node"], extras=["mediakeys", "mqtt"])
+    extras = _pip_extras(host, tmp_path).split(",")
+    assert "mediakeys" not in extras
+    assert extras == ["node", "mqtt"]  # everything else still rides along
