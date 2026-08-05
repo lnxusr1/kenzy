@@ -70,9 +70,8 @@ how it all fits together.
 
 ## Quick links
 
-- **[Talking to Kenzy](talking-to-kenzy.md)** — the five-minute guide to using her: waking, interrupting, canceling, muting, conversations
-
-- [Setup Guides](getting-started.md) — Part 1: first conversation → Part 4: everything connected, each part short and ending with something working
+- **[Setup Guides](getting-started.md)** — Part 1: first conversation → Part 4: everything connected, each part short and ending with something working
+- [Talking to Kenzy](talking-to-kenzy.md) — the five-minute guide to using her: waking, interrupting, canceling, muting, conversations
 - [Troubleshooting](troubleshooting.md) — when something doesn't work
 - [Dashboard](dashboard.md) — the web page where you manage everything
 - [Home Assistant](skills/home-assistant.md) — voice-control your smart home

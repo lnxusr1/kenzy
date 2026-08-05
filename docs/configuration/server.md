@@ -11,7 +11,7 @@ The server is the central WebSocket hub. It accepts connections from room nodes,
 |---|---|---|
 | `host` | `"0.0.0.0"` | Bind address. `0.0.0.0` listens on all interfaces. |
 | `port` | `8765` | WebSocket port |
-| `tls.cert` / `tls.key` | — | Optional TLS: paths to a certificate + private key on the server host. When both are set the node WebSocket port speaks **wss** and the dashboard **https** (one cert pair covers both). See [TLS](#tls-optional) below. |
+| `tls.cert` / `tls.key` | — | Paths to a certificate + private key on the server host. When both are set and load successfully, the node WebSocket port speaks **wss** and the dashboard **https** (one cert pair covers both). See [TLS configuration](#tls-configuration) below. |
 | `log_level` | `"info"` | Log verbosity |
 | `experimental` | `false` | Opt this server into experimental features that aren't ready to ship officially (none gated yet — reserved for future previews). Also switches the dashboard favicon to the experimental mark — gold tile, petrol "K", corner badge dot — so the browser tab is distinguishable from production at a glance. Editable from the dashboard's Settings tab. |
 
@@ -51,11 +51,18 @@ For a ready-to-use Home Assistant `rest_command`, see [Home Assistant Integratio
 
 Its sound-alert twin `/chime` (same port, same auth) plays library sounds instead of speech — see [Home Assistant integration](../integrations/home-assistant.md) for payloads and a `rest_command` example.
 
-### TLS (optional)
+### TLS configuration
 
-Kenzy runs in plaintext by default — normal for a trusted home LAN. The
-[installer](../getting-started.md) offers to set this all up for you (say yes at the TLS
-question, or pass `--tls`); to do it by hand, give the server a certificate and key:
+Whether a new Kenzy server starts with TLS depends on **how it was installed**:
+
+| Installation path | Initial transport |
+|---|---|
+| The one-line `install.sh` installer, profile `server` or `all` | **TLS on by default.** It generates a self-signed certificate in the config home and writes the `tls:` block below. Choose `--no-tls` (or decline the prompt) for plaintext. |
+| `pip` / `pipx`, `kenzy-init`, or a hand-built config home | **Plaintext.** The packaged `server.yaml` has no active `tls:` block; add one yourself to turn TLS on. |
+
+The installer falls back to plaintext with a warning if it cannot generate the
+certificate (for example, `openssl` is unavailable). To configure TLS by hand,
+give the server a certificate and key:
 
 ```yaml
 tls:
@@ -86,6 +93,11 @@ the whole mesh (pipeline calls, dashboard proxies, health checks) is then encryp
 no extra setup. Services on *other* hosts supply their own pair via `KENZY_TLS_CERT` /
 `KENZY_TLS_KEY` in their environment.
 
+!!! warning "A bad TLS configuration does not fail closed"
+    If either path is missing or the certificate cannot load, `kenzy-server` logs the
+    error and continues in plaintext. Confirm the scheme after changing TLS; do not
+    assume that the presence of a `tls:` block means the listener is encrypted.
+
 Operators with a real CA can turn verification on at each client: `tls_verify: true` /
 `tls_ca:` in `node.yaml` (see [Node Configuration](node.md)), or `KENZY_TLS_VERIFY=1` /
 `KENZY_TLS_CA=/path` in a backend service's environment. The `tls` keys are deliberately
@@ -100,7 +112,7 @@ Web fleet manager served by `kenzy-server`. **On by default in the shipped confi
 | Key | Default | Description |
 |---|---|---|
 | `dashboard.enabled` | `true` *(shipped config; `false` when the key is absent)* | Master switch. `false` ⇒ nothing below is mounted. |
-| `dashboard.bind` | `"0.0.0.0"` | Listener address. `0.0.0.0` is reachable across your LAN (the default — **change the default password!**); use `127.0.0.1` to restrict it to the server itself. Never port-forward it (plaintext HTTP) |
+| `dashboard.bind` | `"0.0.0.0"` | Listener address. `0.0.0.0` is reachable across your LAN (the default — **change the default password!**); use `127.0.0.1` to restrict it to the server itself. Never port-forward it; without TLS it is plaintext HTTP. |
 | `dashboard.port` | `8770` | Dashboard HTTP port (separate from the node WS port) |
 | `dashboard.auth.username` / `dashboard.auth.password_hash` | `admin` / *(hash of `password`)* | Browser login. Change it with the server-only **`kenzy-passwd`** CLI (or the dashboard's Settings page); never edit the hash by hand. |
 | `dashboard.auth_token` | `null` | Optional bearer token for API/CLI clients (the browser uses the login cookie, not this) |
@@ -109,7 +121,9 @@ Web fleet manager served by `kenzy-server`. **On by default in the shipped confi
 | `dashboard.allowed_hosts` | `[]` | Optional list of hostnames the dashboard will accept in the `Host` header (DNS-rebinding defense). Empty = no Host restriction; the cross-site `Origin` check always applies. Set it when serving under a fixed name (e.g. `["kenzy.local"]`). |
 
 !!! warning "Keep the dashboard off the public internet"
-    Login runs over plaintext HTTP on a LAN bind and defaults to `admin` / `password`. Bind it to localhost or the LAN only, change the password with `kenzy-passwd`, and do **not** port-forward the dashboard port.
+    On a manual/plaintext install, login runs over HTTP and defaults to `admin` /
+    `password`. Bind it to localhost or the LAN only, change the password with
+    `kenzy-passwd`, and do **not** port-forward the dashboard port.
 
 ### STT service
 

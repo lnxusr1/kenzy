@@ -3,16 +3,18 @@
 The dashboard is the web page where you run your Kenzy home: see every room and
 service at a glance, name rooms, pick and tune microphones, enroll voices, send
 announcements, read logs, and install updates — all from a browser, no terminal
-needed after install. It's served by `kenzy-server` and is **on by default**,
-reachable from any machine on your network at `https://<server>:8770`. (Set
-`dashboard.enabled: false` to turn it off entirely — when disabled, nothing is
-mounted and it adds zero overhead.)
+needed after install. It's served by `kenzy-server` and is **on by default**.
+Its address is `https://<server>:8770` for the default one-line installer, or
+`http://<server>:8770` for a manual/plaintext install. (Set `dashboard.enabled:
+false` to turn it off entirely — when disabled, nothing is mounted and it adds
+zero overhead.)
 
 !!! warning "Keep it on the LAN"
-    Login runs over **plaintext HTTP** by default and defaults to `admin` / `password`.
-    Bind the dashboard to localhost or your LAN, change the password (below), and
-    **never port-forward** the dashboard port to the public internet. To encrypt it,
-    [enable TLS](#https-optional).
+    A manual/plaintext install sends login and dashboard traffic over HTTP and defaults
+    to `admin` / `password`. The one-line installer enables TLS by default with a
+    self-signed certificate. Either way, bind the dashboard to localhost or your LAN,
+    change the password, and **never port-forward** the dashboard port to the public
+    internet. See [TLS configuration](configuration/server.md#tls-configuration).
 
 ## Enabling it
 
@@ -27,9 +29,15 @@ dashboard:
   logs: true            # enable the log viewer + Activity tab
 ```
 
-Open `https://<server>:8770` in a browser (the same machine can use
-`https://localhost:8770`). After changing this block, restart `kenzy-server`. See the
-full key reference in [Server Configuration](configuration/server.md#dashboard).
+Open the URL that matches the server's transport:
+
+- **Default one-line installer:** `https://<server>:8770` (or
+  `https://localhost:8770` on the server). Accept the browser's one-time warning for
+  the generated self-signed certificate, or install that certificate locally.
+- **Manual/plaintext install:** `http://<server>:8770` (or `http://localhost:8770`).
+
+After changing this block, restart `kenzy-server`. See the full key reference in
+[Server Configuration](configuration/server.md#dashboard).
 
 ## Logging in
 
@@ -457,7 +465,7 @@ service the keys it needs over the authenticated config channel, so a key set he
 takes effect on every host — you no longer maintain a separate `.env` per machine.
 (Without TLS, secrets aren't served, and remote hosts fall back to their own local
 `.env`.) The server's value wins, so rotating a key here actually rotates it everywhere.
-Requires `dashboard.controls`. Unless you've [enabled TLS](#https-optional), the
+Requires `dashboard.controls`. Unless you've [enabled TLS](#https-tls), the
 dashboard runs over plain HTTP — enter keys from a machine on your own network.
 
 The **Spoken cues** section covers the pre-recorded phrases Kenzy speaks around a
@@ -515,20 +523,22 @@ place, it requires login but not `controls`.
   (the browser `Origin` must match the `Host`). For extra **DNS-rebinding** protection
   when you serve the dashboard under a fixed name, set `dashboard.allowed_hosts`.
 
-### HTTPS (optional)
+### HTTPS / TLS
 
-Login and traffic are **plaintext by default** — fine on a trusted wired LAN, weaker on
-Wi-Fi. Two ways to encrypt it:
+The one-line installer enables TLS by default and generates a self-signed certificate;
+the packaged manual configuration remains plaintext until you add a valid `tls:` block.
+Two ways to encrypt a manual/plaintext install:
 
 - **Built-in TLS** — set `tls: {cert, key}` in `server.yaml` and the dashboard serves
   **https** (and the node WebSocket port **wss**) directly. A self-signed cert works;
   your browser shows a one-time warning (or install the cert). See
-  [Server Configuration → TLS](configuration/server.md#tls-optional) for the
+  [Server Configuration → TLS](configuration/server.md#tls-configuration) for the
   one-line `openssl` command and how Kenzy's own clients handle it.
 - **Reverse proxy** terminating TLS (Caddy gets you an automatic cert for a routable
   name; nginx/Traefik work with your own cert). Have the proxy forward
   `X-Forwarded-Proto: https`.
 
-Either way the dashboard marks its session cookie `Secure` automatically. Kenzy never
-generates certs for you — TLS is a deliberate opt-in with a cert you supply. Whatever
-you do, keep the dashboard off the public internet.
+Either way the dashboard marks its session cookie `Secure` automatically. See
+[TLS configuration](configuration/server.md#tls-configuration) for the exact
+installer/manual behavior and the fail-open warning. Whatever you do, keep the
+dashboard off the public internet.

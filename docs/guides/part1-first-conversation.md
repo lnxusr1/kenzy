@@ -55,6 +55,9 @@ https://localhost:8770
 (or https://<the-computer's-IP>:8770 from another machine)
 ```
 
+The one-line installer enables TLS by default and generates a self-signed
+certificate, so your browser will show a one-time warning.
+
 Log in with **`admin` / `password`**.
 
 !!! note "✓ Checkpoint"

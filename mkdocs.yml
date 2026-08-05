@@ -77,21 +77,24 @@ markdown_extensions:
 nav:
   - Home: index.md
   - Setup Guides:
-    - Overview: getting-started.md
-    - "Part 1 — First Conversation": guides/part1-first-conversation.md
-    - "Part 2 — People & Rooms": guides/part2-rooms-and-people.md
-    - "Part 3 — Home Assistant Basics": guides/part3-home-assistant.md
-    - "Part 4 — Home Assistant, the Works": guides/part4-ha-complete.md
+    - Getting Started:
+      - Overview: getting-started.md
+      - "Part 1 — First Conversation": guides/part1-first-conversation.md
+      - "Part 2 — People & Rooms": guides/part2-rooms-and-people.md
+      - "Part 3 — Home Assistant Basics": guides/part3-home-assistant.md
+      - "Part 4 — Home Assistant, the Works": guides/part4-ha-complete.md
   - Using Kenzy:
-    - Talking to Kenzy: talking-to-kenzy.md
-    - Memory: memory.md
-    - On Your Phone: phone.md
-    - Speaker Enrollment: speaker-enrollment.md
-  - Managing It:
-    - Dashboard: dashboard.md
-    - Backup & Restore: backup-restore.md
-    - Upgrading: upgrading.md
-    - Troubleshooting: troubleshooting.md
+    - Everyday use:
+      - Talking to Kenzy: talking-to-kenzy.md
+      - Memory: memory.md
+    - Identity & access:
+      - Speaker Enrollment: speaker-enrollment.md
+      - On Your Phone: phone.md
+    - Operate Kenzy:
+      - Dashboard: dashboard.md
+      - Backup & Restore: backup-restore.md
+      - Upgrading: upgrading.md
+      - Troubleshooting: troubleshooting.md
   - Reference:
     - Configuration:
       - Overview: configuration/index.md
