@@ -1682,7 +1682,14 @@ def main() -> None:
     from kenzy.jobs import Job, JobRunner, install_jobs_endpoint
 
     runner = JobRunner()
-    interval = float(mem_cfg.get("maintenance_interval", 60))
+    # Hourly, because this is a BACKSTOP: writes kick it (see _release below),
+    # so the interval only has to catch what no write can — a fact reaching its
+    # expiry, or a tombstone aging past superseded_keep_days. Both are
+    # time-driven, which is why this can't be gated on "was there activity".
+    # It defaulted to 60 SECONDS until 5.0.5 while the comment here claimed
+    # hourly, so the sweep ran ~60× more often than intended and the kicks it
+    # was designed around were decoration.
+    interval = float(mem_cfg.get("maintenance_interval", 3600))
     keep_days = float(mem_cfg.get("superseded_keep_days", 30))
     if memory.store() is not None and interval > 0:
         # Mechanical consolidation (F2.7's no-model half): expiry, supersession

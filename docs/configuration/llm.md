@@ -204,7 +204,7 @@ history is visible on the service's token-gated `GET /jobs`).
 |---|---|---|
 | `memory.enabled` | `true` | The whole memory feature. `false` ⇒ no ledger, no memory skills, the `/memory` endpoints answer 503, and the dashboard's memory surfaces say so. |
 | `memory.file` | `"data/memory/facts.jsonl"` | The ledger file, config-home-relative — plain JSONL, human-readable, rides backups. |
-| `memory.maintenance_interval` | `60` | Seconds between mechanical sweeps (expired facts, exact duplicates, superseded tombstones past their keep window). No model involved. `0` disables. |
+| `memory.maintenance_interval` | `3600` | **Backstop** cadence for the mechanical sweep (expired facts, exact duplicates, superseded tombstones past their keep window). No model involved. Each write already kicks the sweep, so this interval only has to catch what a write can't: a fact reaching its expiry, or a tombstone ageing out. `0` disables. *(Was 60 s before 5.0.5 — if your config carries an explicit value, clear the key to follow the default.)* |
 | `memory.superseded_keep_days` | `30` | How long a superseded fact stays on disk (recoverable) before the sweep removes it. |
 | `memory.semantic_interval` | `86400` | The daily backstop for **semantic consolidation** (merging restatements with your configured model). The real trigger is each "remember…" — this catches anything a failed run left behind. `0` disables the semantic layer entirely. |
 | `memory.semantic_cooldown` | `30` | Rate limit between model-driven consolidation runs — dictating five facts in a row costs one model call, not five. |

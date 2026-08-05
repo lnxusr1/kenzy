@@ -414,9 +414,11 @@ class MemoryStore:
         memory-consolidation job's body. NO model is involved: maintenance has
         no LLM in its critical path (plan of record). Three passes:
 
-        1. expiry — facts past their ``expires`` are removed (the write path
-           doesn't set expiry yet; the sweep makes decay real the moment F2.4
-           starts setting policies),
+        1. expiry — facts past their ``expires`` are removed. ``remember()``
+           still never sets an expiry, but the dashboard's People page does
+           (``expires_days`` → :meth:`update`), so this pass is live today —
+           and it is why the job's interval can NOT be gated on "did anything
+           get written": nothing writes when a retention window runs out,
         2. supersession retention — superseded facts already never recall;
            after ``superseded_keep_days`` the tombstone is removed too,
         3. exact dedupe — same owner + tier + identical *normalized* text

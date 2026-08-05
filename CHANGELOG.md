@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Most releases need nothing beyond the upgrade itself. When one does, it's noted
 here and spelled out in **[Upgrading](https://docs.kenzy.ai/upgrading/)**.
 
+## [5.0.5]
+
+### Changed
+
+- **Memory upkeep no longer sweeps every minute.** The mechanical pass — expiring old facts, clearing tombstones past their keep window, removing exact duplicates — is meant to be *kicked by writes*, with the timer as a backstop for the two things no write can trigger: a fact reaching its expiry, and a tombstone ageing out. The backstop was set to 60 **seconds** while the code beside it described itself as hourly, so it swept about sixty times more often than intended and the write-driven design it was built around was decorative. It's hourly now. Nothing about *when memory changes* has changed — a "remember…" still consolidates within seconds. **If your config carries an explicit `memory.maintenance_interval`** (anything scaffolded from an older install does), clear the key to pick up the new default. `GET /jobs` shows the live cadence.
+
+### Fixed
+
+- **Saying the wake word now actually stops a ringing alarm.** It didn't, and the only way out was restarting the room's device — an alarm you can't turn off is worse than one that never rings. The acknowledgement was wired to the wrong signal: when you speak while Kenzy is making noise, the node stops its own audio and opens a fresh conversation rather than reporting a wake word, so the server never saw the one message it was listening for. It was also listening only in the moment an alarm *can't* be ringing — during capture — which means voice acknowledgement had never worked, not since alarms shipped. The ring now stops the instant a new session opens on that node, which covers both cases that occur in practice: speaking over the alarm, and speaking in the gap between repeats.
+
 ## [5.0.4]
 
 > **Upgrading an existing node?** The volume buttons below need a few one-time

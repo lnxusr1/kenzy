@@ -221,3 +221,29 @@ def test_kick_unregistered_job_is_noop():
     from kenzy.jobs import JobRunner
 
     JobRunner().kick("not-registered")
+
+
+def test_memory_maintenance_is_an_hourly_backstop_not_a_poll():
+    """The mechanical sweep is kicked by writes; the interval only catches what
+    a write can't (a fact hitting expiry, a tombstone ageing out).
+
+    It shipped at 60 SECONDS while the code comment beside it said "hourly", so
+    it swept ~60x more often than intended and the kicks it was designed around
+    were decoration. Both the code fallback and the packaged config are pinned
+    here because either one alone silently loses: an install that scaffolded a
+    config keeps its explicit value forever.
+    """
+    import inspect
+    from pathlib import Path
+
+    import yaml
+
+    from kenzy.llm import llm as llm_mod
+
+    src = inspect.getsource(llm_mod)
+    assert 'mem_cfg.get("maintenance_interval", 3600)' in src, "code fallback is not hourly"
+
+    packaged = Path(llm_mod.__file__).resolve().parents[1] / "data" / "configs" / "llm.yaml"
+    cfg = yaml.safe_load(packaged.read_text())
+    shipped = float(cfg["memory"]["maintenance_interval"])
+    assert shipped >= 3600, f"packaged maintenance_interval is {shipped}s — that's a poll"

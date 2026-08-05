@@ -102,7 +102,7 @@ export const SERVICE_HELP = {
     "params.service_tier": "OpenAI service tier. priority = paid low-latency. Blank = don't send it.",
     max_tool_iterations: "Max skill-call loops before returning whatever the model has.",
     "memory.enabled": "Per-person memory (the fact ledger). Off = no memory skills, no /memory API.",
-    "memory.maintenance_interval": "Seconds between mechanical sweeps (dedupe, expiry). 0 disables.",
+    "memory.maintenance_interval": "Backstop cadence for the mechanical sweep (dedupe, expiry, tombstones). Writes already kick it, so this only catches time-driven work. Default hourly. 0 disables.",
     "memory.superseded_keep_days": "How long a superseded fact stays recoverable on disk.",
     "memory.semantic_interval": "Daily backstop for model-driven consolidation (the real trigger is each write). 0 disables it entirely.",
     "memory.semantic_cooldown": "Min seconds between consolidation model runs — bursts of writes coalesce into one call.",

@@ -504,12 +504,68 @@ async def test_alarm_rings_until_acknowledged(tmp_path, monkeypatch):
     await asyncio.sleep(0.05)
     assert len(said) >= 2 and "7:00 AM" in said[0]  # repeated, not a one-shot
 
-    s._stop_ringing("n-off")  # the wake-word acknowledgment path
+    # Acknowledge the way a real node does. Saying the wake word while the alarm
+    # is playing does NOT send a `wakeword` frame — the node stops its own audio
+    # and opens a fresh session, so `audio_start` (on_session_start) is all the
+    # server ever sees. Drive that, not the private helper: calling
+    # _stop_ringing() directly passed for months while the feature was dead.
+    await s.on_session_start(s._nodes["n-off"])
     await asyncio.sleep(0.03)
     count = len(said)
     await asyncio.sleep(0.03)
     assert len(said) == count  # ringing stopped
     assert "n-off" not in s._ring_tasks
+
+
+async def test_alarm_ack_via_wakeword_frame_still_works(tmp_path, monkeypatch):
+    """The other entry point: a wake word arriving mid-capture."""
+    s = _server(tmp_path, monkeypatch)
+    said: list[str] = []
+
+    async def fake_deliver(node_id: str, room: str, text: str, kind: str) -> None:
+        said.append(text)
+
+    async def fake_stop_node(node_id: str) -> bool:
+        return True
+
+    monkeypatch.setattr(s, "_deliver_schedule", fake_deliver)
+    monkeypatch.setattr(s, "stop_node", fake_stop_node)
+    s._alarm_ring_interval = 0.01
+
+    a = s._scheduler.add("alarm", "n-off", "office", at="07:00")
+    await s._fire_schedule(a)
+    await asyncio.sleep(0.05)
+    assert len(said) >= 2
+
+    await s.on_wakeword(s._nodes["n-off"], "hey_kenzy", 0.9)
+    await asyncio.sleep(0.03)
+    count = len(said)
+    await asyncio.sleep(0.03)
+    assert len(said) == count
+    assert "n-off" not in s._ring_tasks
+
+
+async def test_alarm_delivery_does_not_cancel_its_own_ring_loop(tmp_path, monkeypatch):
+    """Guard: acknowledging on session-start must not be self-triggering.
+
+    Alarm delivery streams PCM and never opens a capture session, so nothing in
+    the ring loop can reach on_session_start. If a future change makes an alarm
+    hold the floor, this test fails rather than the alarm silently ringing once.
+    """
+    s = _server(tmp_path, monkeypatch)
+    said: list[str] = []
+
+    async def fake_deliver(node_id: str, room: str, text: str, kind: str) -> None:
+        said.append(text)
+
+    monkeypatch.setattr(s, "_deliver_schedule", fake_deliver)
+    s._alarm_ring_interval = 0.01
+
+    a = s._scheduler.add("alarm", "n-off", "office", at="07:00")
+    await s._fire_schedule(a)
+    await asyncio.sleep(0.06)
+    assert len(said) >= 3, "the ring loop stopped on its own"
+    assert "n-off" in s._ring_tasks
 
 
 # ---------------------------------------------------------------------------

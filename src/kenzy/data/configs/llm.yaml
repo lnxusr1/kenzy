@@ -152,7 +152,10 @@ memory:
   # file: data/memory/facts.jsonl   # config-home-relative (the default)
   # Mechanical upkeep (expired facts, superseded tombstones past their keep
   # window, exact duplicates) runs as a background job — see GET /jobs.
-  maintenance_interval: 60        # seconds between runs (sequential — a long pass just delays the next); 0 disables
+  # This is a BACKSTOP, not the trigger: each write kicks the sweep, so the
+  # interval only catches what no write can — a fact hitting its expiry, or a
+  # tombstone aging out. 0 disables.
+  maintenance_interval: 3600      # seconds between backstop runs (hourly)
   superseded_keep_days: 30        # tombstone retention before removal
   # Semantic consolidation: your configured model merges same-thought
   # restatements seconds after each "remember…" (never deletes — superseded

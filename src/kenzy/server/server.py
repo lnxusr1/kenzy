@@ -2588,6 +2588,15 @@ class TranscribingServer(AudioServer):
         self._tts_active.discard(session.node_id)
         self._buffers[session.node_id] = bytearray()
         self._calib_saw_wake(session.node_id)  # an idle wake opens a session
+        # A ringing alarm is acknowledged HERE, not only in on_wakeword. A wake
+        # word spoken while audio is playing never sends a `wakeword` frame at
+        # all: the node stops its own playback and opens a fresh session (see
+        # _audio_loop's TTS branch), so `audio_start` is the only thing that
+        # reaches us. Same for a wake between ring repeats, when the node is
+        # idle. on_wakeword only fires for a wake DURING capture — which is the
+        # one moment an alarm can't be ringing — so acknowledging there alone
+        # meant the ring loop outlived every real acknowledgment.
+        self._stop_ringing(session.node_id)
 
     async def on_audio_frame(self, session: NodeSession, data: bytes) -> None:
         buf = self._buffers.get(session.node_id)
