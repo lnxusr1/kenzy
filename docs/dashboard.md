@@ -16,7 +16,7 @@ mounted and it adds zero overhead.)
 
 ## Enabling it
 
-The shipped config already has it on. The relevant block in `configs/server.yaml`:
+It's on by default. The relevant block in `configs/server.yaml`:
 
 ```yaml
 dashboard:

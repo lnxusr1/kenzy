@@ -3,22 +3,71 @@
 **File:** `configs/stt.yaml`  
 **Command:** `kenzy-stt [config_path]`
 
-This service is Kenzy's ears — audio in, transcript out. The default is
-**local** ([faster-whisper](https://github.com/SYSTRAN/faster-whisper) on
-your own hardware): **your voice never leaves your network**, and for most
-setups there's nothing to change here.
+This service is Kenzy's ears — audio in, transcript out. **This is the one
+service that defaults to local**, and for most setups there is nothing to
+change here.
 
-```yaml
-provider: "whisper"    # local, the default — or "openai" (cloud)
-whisper:
-  model: "tiny"        # bigger = more accurate, slower: tiny/base/small/medium
-```
+## Local or cloud?
 
-The cloud option exists for two honest reasons: your server hardware is too
-light to transcribe quickly (a lone Raspberry Pi), or you want to *rule out*
-local transcription while troubleshooting accuracy — switch in the dashboard
-(**Fleet → stt**), test, switch back. The trade is explicit: each captured
-utterance (what you say after the wake word) is sent to the provider.
+|  | **Local** ([faster-whisper](https://github.com/SYSTRAN/faster-whisper)) | **Cloud** (OpenAI) |
+|---|---|---|
+| **What it needs** | A model download (~75 MB for `tiny`) and some CPU. A GPU helps but isn't required. | An API key. No download, near-zero CPU. |
+| **What leaves your network** | Nothing. **Your voice never leaves.** | Every captured utterance — the audio after the wake word. |
+| **What it costs** | CPU time on your server. | Per-minute billing from the provider. |
+
+**The default is local**, and it's the recommended path if you care that spoken
+audio stays on your hardware. The cloud option exists for two honest reasons:
+your server is too light to transcribe quickly (a lone Raspberry Pi), or you
+want to *rule out* local transcription while troubleshooting accuracy — switch,
+test, switch back.
+
+Deciding this across *all* the services at once? Start at
+[Running Fully Local](../fully-local.md).
+
+## Set it up
+
+Switching is also a dropdown in the dashboard (**Fleet → stt**).
+
+=== "Local (default)"
+
+    ```yaml
+    provider: "whisper"
+
+    whisper:
+      model: "base"          # tiny/base/small/medium/large-v3
+      device: "cpu"          # or "cuda"
+      compute_type: "int8"
+      language: "en"
+    ```
+
+    **Requires:** no API key. The model downloads on first use.
+
+    Which size to pick is the [model size guide](#model-size-guide); running on
+    an NVIDIA card is [GPU (CUDA)](#gpu-cuda). Both are below.
+
+    !!! tip "Don't run this on a room node"
+        Keep speech recognition off the Pi-class boards that run rooms — put it
+        on a more capable server and point `stt.url` in `server.yaml` at it.
+        `tiny` or `base` on a modern x86 CPU gives acceptable latency.
+
+=== "Cloud"
+
+    ```yaml
+    provider: "openai"
+
+    openai:
+      model: "gpt-4o-mini-transcribe"
+      language: "en"
+    ```
+
+    **Requires:** `OPENAI_API_KEY` in `~/.config/kenzy/.env` — the same key the
+    default voice and language-model setup already uses.
+
+    !!! warning "Your voice leaves the network"
+        With this provider, **everything captured after the wake word is sent
+        to OpenAI** for transcription. (Audio only, and nothing is recorded
+        between wake words either way.) If keeping spoken audio on your own
+        hardware matters to you, stay on the default.
 
 !!! note "Pulled from the server"
     `kenzy-stt` pulls this config from the server at boot — it discovers the server via mDNS (or `KENZY_SERVER_URL`) and blocks until it answers, so start the server first. Edit it from the dashboard's **Services** tab (writes `configs/services/stt.yaml` on the server and restarts the service). Passing an explicit path (`kenzy-stt configs/stt.yaml`) loads locally instead — a dev/offline escape hatch. See [central config for backend services](server.md#central-config-for-backend-services).
@@ -98,23 +147,9 @@ install and upgrade, so the pin sticks.
 !!! tip "Run STT off the node"
     Don't run STT on a room-node board (Orange Pi Zero 3 / Raspberry Pi 3–5) — run it on a more powerful server and point `stt.url` in `server.yaml` at it. The `tiny` or `base` model on a modern x86 CPU gives acceptable latency.
 
-### Example
-
-```yaml
-provider: "whisper"
-
-whisper:
-  model: "base"
-  device: "cpu"
-  compute_type: "int8"
-  language: "en"
-```
-
 ---
 
 ### OpenAI provider (cloud)
-
-**Requires:** `OPENAI_API_KEY` in `.env` (the same key the default TTS/LLM setup already uses)
 
 No model download, near-zero CPU/RAM — the whole transcription happens on OpenAI's side. This is the right choice when the server host is underpowered (or you'd rather not budget cores for Whisper), and the accuracy of the `gpt-4o-transcribe` family is excellent.
 
@@ -128,15 +163,6 @@ No model download, near-zero CPU/RAM — the whole transcription happens on Open
 !!! warning "Your voice leaves the network"
     With this provider, **everything captured after the wake word is sent to OpenAI** for transcription (audio only — nothing is recorded between wake words either way). If keeping spoken audio on your own hardware matters to you, stay on the default `whisper` provider. This is the same trade the default OpenAI TTS/LLM setup already makes for text.
 
-### Example
-
-```yaml
-provider: "openai"
-
-openai:
-  model: "gpt-4o-mini-transcribe"
-  language: "en"
-```
 
 Switching provider is also a two-click change in the dashboard: **Fleet → stt**, pick the provider from the dropdown, Save (the service restarts and re-pulls its config).
 

@@ -3,40 +3,93 @@
 **File:** `configs/llm.yaml`  
 **Command:** `kenzy-llm [config_path]`
 
-The language model is Kenzy's "thinking" — and **whose computer it thinks on
-is your call**. The default is a cloud model because it's the fastest way to
-a working setup (one key, no downloads, runs beside everything else on a
-small box), but it's a means to an end, not the point: Kenzy speaks
-[LiteLLM](https://github.com/BerriAI/litellm), so any provider works — 
-including one running entirely in your house.
+The language model is Kenzy's "thinking" — and **whose computer it thinks on is
+your call**. Kenzy speaks [LiteLLM](https://github.com/BerriAI/litellm), so any
+provider works, including one running entirely in your house.
 
-The two keys that matter:
+## Cloud or local?
 
-```yaml
-model: "gpt-5-mini"                    # which model does the thinking
-# base_url: "http://127.0.0.1:11434"   # where it lives (only for local/self-hosted)
-```
+|  | **Cloud** (OpenAI, Anthropic, OpenRouter) | **Local** (Ollama, LM Studio) |
+|---|---|---|
+| **What it needs** | An API key. No downloads. | A GPU with 8–16 GB VRAM, or an Apple-silicon Mac. See the hardware note below. |
+| **What leaves your network** | The transcribed *text* of each request. With the default local speech recognition, your audio never leaves home. | Nothing. |
+| **What it costs** | Per-token billing from the provider. | Electricity and the hardware you already own. |
 
-- **Cloud quick-start** — set `model` to an OpenAI (`gpt-5-mini`), Anthropic
-  (`claude-sonnet-5`), or OpenRouter (`openrouter/…`) model string and give
-  Kenzy that provider's API key (below). Only the transcribed *text* of each
-  request goes to the provider — with the default local speech recognition,
-  your audio never leaves home.
-- **Your own hardware, no third party** — run [Ollama](https://ollama.com) or
-  LM Studio and point `model`/`base_url` at it. The full walkthrough,
-  including honest hardware guidance, is
-  [Running Fully Local](../fully-local.md#configuring-the-brain-the-llm).
-- **Both** — a cloud primary with a local `fallback` model keeps working
-  through an internet outage (see the reference below).
+**The default is cloud** — one key, no downloads, and it runs beside everything
+else on a small box. That makes it the fastest route to a working system, not a
+recommendation about where your data belongs.
 
-!!! tip "API keys, if you're new to them"
-    An API key is a password that lets Kenzy use an account you hold with a
-    provider. You create it in the provider's account pages (OpenAI:
-    *platform.openai.com → API keys*; Anthropic: *console.anthropic.com*;
-    OpenRouter: *openrouter.ai → Keys*), copy it once, and paste it into
-    Kenzy's dashboard under **Settings → API keys** (or `~/.config/kenzy/.env`).
-    Kenzy stores it on your server, never displays it again, and never sends
-    it anywhere except to that provider.
+!!! warning "Local models and tool calling"
+    This is the one service where local costs real iron. Kenzy's skills depend
+    on **tool calling**, and small models are noticeably worse at it. A ~7–14B
+    model on a GPU gives a good experience; CPU-only LLM inference is
+    technically possible and practically frustrating. (Speech recognition and
+    the voice, by contrast, are perfectly happy on a CPU.)
+
+Deciding this across *all* the services at once? Start at
+[Running Fully Local](../fully-local.md).
+
+## Set it up
+
+=== "Cloud (default)"
+
+    Set `model` to a provider's model string and give Kenzy that provider's API
+    key. No `base_url` — LiteLLM infers the provider from the prefix.
+
+    ```yaml
+    model: "gpt-5-mini"        # or "claude-sonnet-5", "openrouter/…"
+    ```
+
+    **Requires:** the matching key in `~/.config/kenzy/.env` — `OPENAI_API_KEY`,
+    `ANTHROPIC_API_KEY`, or the provider's equivalent. Set it from the
+    dashboard under **Settings → API keys**.
+
+    !!! tip "API keys, if you're new to them"
+        An API key is a password that lets Kenzy use an account you hold with a
+        provider. You create it in the provider's account pages (OpenAI:
+        *platform.openai.com → API keys*; Anthropic: *console.anthropic.com*;
+        OpenRouter: *openrouter.ai → Keys*), copy it once, and paste it into
+        Kenzy's dashboard. Kenzy stores it on your server, never displays it
+        again, and never sends it anywhere except to that provider.
+
+=== "Local"
+
+    Run [Ollama](https://ollama.com) or LM Studio, then point Kenzy at it:
+
+    ```bash
+    curl -fsSL https://ollama.com/install.sh | sh
+    ollama pull qwen2.5:14b        # any tool-calling-capable model
+    ```
+
+    ```yaml
+    model: "ollama/qwen2.5:14b"
+    base_url: "http://127.0.0.1:11434"
+    ```
+
+    **Requires:** no API key. Skill sub-calls (news summaries, the Home
+    Assistant resolver) follow the same model unless you override their
+    per-skill `model`.
+
+    The end-to-end walkthrough, including picking a model, is
+    [Running Fully Local](../fully-local.md#configuring-the-brain-the-llm).
+
+=== "Both"
+
+    A cloud primary with a local `fallback` keeps Kenzy working through an
+    internet outage. When the primary call fails, the request is silently
+    retried once against the fallback, and the rest of that request stays there:
+
+    ```yaml
+    model: "gpt-5-mini"
+    fallback:
+      model: "ollama/qwen2.5:14b"
+      base_url: "http://127.0.0.1:11434"
+    ```
+
+    See [the hybrid option](../fully-local.md#the-hybrid-option-cloud-primary-local-fallback).
+
+!!! note "Custom endpoints never receive a cloud provider's API key"
+    `base_url` redirects model calls to a server you choose. Requests to it deliberately carry **none** of the provider keys from your environment (`OPENAI_API_KEY` etc.) — so a changed or mistyped endpoint can never leak a cloud credential. Local providers (Ollama, LM Studio) need no key and just work. If your custom endpoint is a **hosted proxy that requires auth** (a LiteLLM proxy, OpenRouter), put its key in `CUSTOM_LLM_API_KEY` in `.env` — that is the one credential ever sent to a `base_url`. (If you previously kept such a proxy key in `OPENAI_API_KEY`, move it there.)
 
 !!! note "Pulled from the server"
     `kenzy-llm` pulls this config from the server at boot — it discovers the server via mDNS (or `KENZY_SERVER_URL`) and blocks until it answers, so start the server first. Edit it from the dashboard's **Services** tab (writes `configs/services/llm.yaml` on the server and restarts the service). Passing an explicit path loads locally instead (dev/offline). See [central config for backend services](server.md#central-config-for-backend-services).
@@ -55,7 +108,7 @@ LiteLLM encodes the provider in the model string prefix:
 
 API keys are read automatically from the environment. See the [LiteLLM provider docs](https://docs.litellm.ai/docs/providers) for the required environment variable per provider.
 
-## Example
+## A complete example
 
 ```yaml
 host: "127.0.0.1"
@@ -89,17 +142,6 @@ skills:
     curation_file: "data/home_assistant/curation.yaml"   # optional
     default_room: "living_room"
 ```
-
-!!! tip "Using a local model"
-    To run entirely offline with Ollama:
-    ```yaml
-    model: "ollama/hermes3"
-    base_url: "http://localhost:11434"
-    ```
-    No API key is required. Skill sub-calls (news summaries, HA resolution) also use this model unless overridden with a per-skill `model` key.
-
-!!! note "Custom endpoints never receive a cloud provider's API key"
-    `base_url` redirects model calls to a server you choose. Requests to it deliberately carry **none** of the provider keys from your environment (`OPENAI_API_KEY` etc.) — so a changed or mistyped endpoint can never leak a cloud credential. Local providers (Ollama, LM Studio) need no key and just work. If your custom endpoint is a **hosted proxy that requires auth** (a LiteLLM proxy, OpenRouter), put its key in `CUSTOM_LLM_API_KEY` in `.env` — that is the one credential ever sent to a `base_url`. (If you previously kept such a proxy key in `OPENAI_API_KEY`, move it there.)
 
 ## Advanced
 

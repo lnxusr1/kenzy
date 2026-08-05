@@ -3,20 +3,72 @@
 **File:** `configs/tts.yaml`  
 **Command:** `kenzy-tts [config_path]`
 
-This service is Kenzy's voice — text in, speech out. Out of the box it uses a
-cloud voice (OpenAI's TTS) because it needs zero downloads and sounds good on
-day one — but the voice can live **entirely in your house**: the
-[Kokoro](https://github.com/hexgrad/kokoro) provider runs locally on your own
-hardware, and only what Kenzy *says* (never what you say) goes to a cloud
-provider in the default setup anyway.
+This service is Kenzy's voice — text in, speech out. It can speak from a cloud
+provider or **entirely from your own hardware**.
 
-```yaml
-provider: "openai"    # or "kokoro" — the local voice, no third party
-```
+## Cloud or local?
 
-Switching is a dropdown in the dashboard (**Fleet → tts**), and
-[Running Fully Local](../fully-local.md) walks the local path end to end,
-including the one system package Kokoro needs.
+|  | **Cloud** (OpenAI) | **Local** ([Kokoro](https://github.com/hexgrad/kokoro)) |
+|---|---|---|
+| **What it needs** | An API key. No downloads. | The `kokoro` extra plus one system package. Happy on a CPU. |
+| **What leaves your network** | Only what Kenzy *says* — never what you say. | Nothing. |
+| **What it costs** | Per-character billing from the provider. | Some CPU while she's speaking. |
+
+**The default is cloud** — zero downloads and it sounds good on day one.
+
+!!! tip "Local speech unlocks spoken secrets"
+    [Lockbox secrets](../memory.md#secrets-the-lockbox) are only ever **spoken
+    aloud** when speech stays on-box. With a cloud voice, asking for a secret
+    gets a polite deflection to the dashboard instead. This is mechanical, not
+    a setting — it fails closed.
+
+Deciding this across *all* the services at once? Start at
+[Running Fully Local](../fully-local.md).
+
+## Set it up
+
+Switching is also a dropdown in the dashboard (**Fleet → tts**).
+
+=== "Cloud (default)"
+
+    ```yaml
+    provider: "openai"
+
+    openai:
+      model: "gpt-4o-mini-tts"
+      voice: "nova"
+      speed: 1.1
+    ```
+
+    **Requires:** `OPENAI_API_KEY` in `~/.config/kenzy/.env`, set from the
+    dashboard under **Settings → API keys**.
+
+    Voices, speed range and the automatic Kokoro failover are in
+    [OpenAI provider](#openai-provider) below.
+
+=== "Local (Kokoro)"
+
+    ```bash
+    sudo apt-get install espeak-ng          # phonemization library
+    pip install 'kenzy[kokoro]'             # the extra: kokoro + PyTorch
+    kenzy-setup                             # pre-download the model weights
+    ```
+
+    ```yaml
+    provider: "kokoro"
+
+    kokoro:
+      voice: "af_heart"
+      device: "auto"
+      speed: 1.0
+    ```
+
+    **Requires:** no API key and no internet at runtime. In a source checkout
+    the extra is `pip install -e ".[kokoro]"`.
+
+    Voice names, languages and device selection are in
+    [Kokoro provider](#kokoro-provider) below; the end-to-end walkthrough is
+    [Running Fully Local](../fully-local.md#the-voice-kokoro).
 
 !!! note "Pulled from the server"
     `kenzy-tts` pulls this config from the server at boot — it discovers the server via mDNS (or `KENZY_SERVER_URL`) and blocks until it answers, so start the server first. Edit it from the dashboard's **Services** tab (writes `configs/services/tts.yaml` on the server and restarts the service). Passing an explicit path loads locally instead (dev/offline). `log_level` (console) and `log_capture_level` (dashboard viewer depth, default `debug`) work like every service. See [central config for backend services](server.md#central-config-for-backend-services).
@@ -42,8 +94,6 @@ Everything below is the full reference.
 
 ### OpenAI provider
 
-**Requires:** `OPENAI_API_KEY` in `.env`
-
 Long responses are automatically split at sentence boundaries and concatenated, so there is no effective limit on response length.
 
 | Key | Default | Description |
@@ -57,25 +107,9 @@ Long responses are automatically split at sentence boundaries and concatenated, 
 
 `alloy` · `ash` · `ballad` · `coral` · `echo` · `fable` · `nova` · `onyx` · `sage` · `shimmer`
 
-### Example
-
-```yaml
-provider: "openai"
-
-openai:
-  model: "gpt-4o-mini-tts"
-  voice: "nova"
-  speed: 1.1
-```
-
 ---
 
 ### Kokoro provider
-
-**Requires:**
-- The `kokoro` extra: `pip install 'kenzy[kokoro]'` (or `pip install -e ".[kokoro]"` in a source checkout) — installs the `kokoro` package and PyTorch
-- `sudo apt-get install espeak-ng` (system phonemization library)
-- Run `kenzy-setup` after install to pre-download model weights
 
 Kokoro runs entirely locally with no API key or internet connection required at runtime. It produces high-quality speech and outputs at 24 kHz mono — the same format as the OpenAI provider, so audio handling downstream is unchanged. One behavior *does* depend on the provider: [lockbox secrets](../memory.md#secrets-the-lockbox) are only ever **spoken** when speech stays on-box — with a cloud provider, asking for a secret gets a polite deflection to the dashboard instead. Local speech is what unlocks spoken secret read-backs.
 
@@ -110,31 +144,6 @@ The voice name prefix determines the language:
 | `bm_` | British English (male) | `bm_lewis`, `bm_george` |
 
 The `lang_code` is derived from the first character of the voice name (`af_heart` → `'a'`, `bf_emma` → `'b'`). Set it explicitly only if you need to override this.
-
-### Example
-
-```yaml
-provider: "kokoro"
-
-kokoro:
-  voice: "af_heart"
-  device: "auto"
-  speed: 1.0
-```
-
-### Installation
-
-```bash
-# System dependency
-sudo apt-get install espeak-ng
-
-# Python package (or `pip install -e ".[kokoro]"` in a source checkout)
-pip install 'kenzy[kokoro]'
-
-# Pre-download model weights
-kenzy-setup
-```
-
 
 ### Wyoming listener (Home Assistant voice pipelines)
 

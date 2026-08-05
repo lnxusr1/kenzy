@@ -8,7 +8,7 @@ language model for the "thinking" — this guide uses the OpenAI default, but
 any compatible provider or a local model works
 ([details](../configuration/llm.md)).
 
-## 1. Install everything on one computer
+## 1. Basic install
 
 Plug in your speakerphone first (so setup can find it), then run:
 
@@ -16,19 +16,34 @@ Plug in your speakerphone first (so setup can find it), then run:
 curl -fsSL https://kenzy.ai/install.sh | bash
 ```
 
-When it asks what to install, choose **Option 3** (everything on this machine). The
-installer then:
+![The installer asking what to install](../img/kenzy-installer-screen1.png)
+
+**Pick what fits your setup:**
+
+| | Choose it when | |
+|---|---|---|
+| **1) Room node** | This machine is a device in a room — a mic and speaker, nothing else | Needs a server to exist first |
+| **2) Server stack** | This machine does the thinking, but you'll listen and speak somewhere else | Install a room node afterwards, on that other machine |
+| **3) Everything** | This machine is both — the simplest way to start | |
+
+If your microphone and speaker are plugged into the same computer that will do
+the thinking, **choose 3** and you're done in one pass. If they're on different
+machines — say a mini-PC in a cupboard and a speakerphone in the kitchen —
+install the **server stack** first, then run the same command on the room
+machine and choose **room node**. The rest of this guide is written for a single
+machine; with two, everything is the same except that the audio steps happen on
+the room machine.
+
+Whichever you pick, the installer:
 
 - creates a private Python environment and installs Kenzy from [PyPI](https://pypi.org/project/kenzy/),
 - downloads the wake-word and voice-identification models,
 - creates your **config home** at `~/.config/kenzy` (all your settings live there),
 - sets the services to start automatically, and starts them now.
 
-It prints a **join token** near the end — that's the password room devices will use
-to connect later. Don't worry about copying it; the dashboard can show it to you
-any time.
-
-![Installer](../img/kenzy-installer-screen1.png)
+A server install prints a **join token** near the end — the password room
+devices use to connect. You don't need to copy it now; the dashboard can show it
+to you any time. (A room node asks you to paste it.)
 
 ## 2. Open the dashboard
 
@@ -91,7 +106,7 @@ Give it to Kenzy right in the dashboard:
 !!! tip "Prefer the terminal?"
     Edit the text file `~/.config/kenzy/.env` and set `OPENAI_API_KEY` there.<br />Restart the services with `systemctl --user restart 'kenzy-*'`
 
-## 4. Set up the node's audio
+## 4. Calibrate the audio
 
 Every room, mic, and speaker is different — the default listening thresholds
 are almost never *your* room's. Two minutes in the dashboard fixes that, and
@@ -132,6 +147,6 @@ Now talk to it. Say:
 **That's a working Kenzy.** Everything below is optional.
 
 
-**Where you are:** a working Kenzy on one computer. When you're ready for
+**Where you are:** a working Kenzy in one room. When you're ready for
 more rooms — and for her to know *who's* talking —
 **[Continue](part2-rooms-and-people.md)** to **[Part 2 — People & Rooms](part2-rooms-and-people.md)**.

@@ -66,6 +66,11 @@ markdown_extensions:
       anchor_linenums: true
   - pymdownx.superfences
   - pymdownx.inlinehilite
+  # Cloud-vs-local setup blocks on the service pages. Setup instructions only —
+  # reference material stays in normal sections, because tab content can't be
+  # deep-linked and a search hit lands on the page with the wrong tab showing.
+  - pymdownx.tabbed:
+      alternate_style: true
   - toc:
       permalink: true
 
@@ -105,4 +110,5 @@ nav:
       - Home Assistant: integrations/home-assistant.md
     - Running Fully Local: fully-local.md
     - Architecture: architecture.md
+    - Installation Reference: install-reference.md
     - Deployment: deployment.md

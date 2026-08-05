@@ -5,6 +5,13 @@
 
 The speaker identification service uses a SpeechBrain ECAPA-TDNN model to compare incoming audio against enrolled speaker profiles and return the closest match.
 
+!!! info "This one is local-only, by design"
+    Unlike the [language model](llm.md), [voice](tts.md) and
+    [speech recognition](stt.md) services, speaker ID has no cloud option and
+    won't be getting one. Voiceprints are biometric data: they stay on your
+    hardware, and the comparison happens there too. There is no API key and
+    nothing to choose — which is why this page has no cloud/local section.
+
 !!! note "Pulled from the server"
     `kenzy-speaker` pulls this config from the server at boot — it discovers the server via mDNS (or `KENZY_SERVER_URL`) and blocks until it answers, so start the server first. Edit it from the dashboard's **Services** tab (writes `configs/services/speaker.yaml` on the server and restarts the service). Passing an explicit path loads locally instead (dev/offline). The `kenzy-enroll` CLI still reads a local config. See [central config for backend services](server.md#central-config-for-backend-services).
 

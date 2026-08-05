@@ -15,6 +15,15 @@ swapping the brain: the ears, the voice, and the skills each have their own
 story. This page is the whole recipe, stage by stage — flip everything local,
 or mix cloud and local deliberately.
 
+!!! note "This page vs the service pages"
+    **This page is the journey**: the order to do things in, what each stage
+    costs, and how to verify the result end to end. Each service page —
+    [the brain](configuration/llm.md), [her voice](configuration/tts.md),
+    [her ears](configuration/stt.md) — has a *Cloud or local?* comparison and a
+    tabbed **Set it up** block covering that one service either way, plus the
+    full key reference. Come here to decide and to walk it; go there to look
+    something up.
+
 ## What "fully local" means here
 
 The **voice pipeline** — wake word, speech-to-text, reasoning, text-to-speech,
@@ -87,7 +96,7 @@ See [TTS Configuration](configuration/tts.md#kokoro-provider).
 
 ### Speech-to-text — verify, don't change
 
-`provider: whisper` is the shipped default; just confirm nobody switched it to
+`provider: whisper` is the default; just confirm nobody switched it to
 `openai` (**Fleet → stt**). Pick the model size for your CPU in the same
 place ([guide](configuration/stt.md#model-size-guide)).
 
