@@ -23,10 +23,11 @@ symptom.
 ## What you'll need
 
 - **A Linux computer to be the "brain."** Debian or Ubuntu with Python 3.11+.
-  With the default setup, a mini-PC, desktop, or home server is comfortable. A
-  Raspberry Pi can serve too if you also switch speech recognition to its cloud
-  option — local transcription is the one default that wants more CPU than a Pi
-  has. Running the *language model* locally is the only thing that wants a GPU.
+  Use a mini-PC, desktop, home server, or cloud host for this role. A Raspberry
+  Pi is not a practical host for the brain or for local AI and speech services.
+  It is, however, an excellent separate **room node**: run the brain on a more
+  capable PC or in the cloud, then connect the Pi and its speakerphone in the
+  room.
 - **A microphone and speaker.** Strongly recommended: a **USB conference
   speakerphone** (an Anker PowerConf or similar). These have built-in echo
   cancellation, which is what lets Kenzy hear you while she's speaking. A webcam
@@ -34,8 +35,11 @@ symptom.
   is the single best purchase for this project. Without echo cancellation,
   calibration detects it and Kenzy adapts honestly — intercom and alarm
   ring-loops turn off in that room, and everything else works normally.
-- **An API key** for the default setup, from
-  [platform.openai.com](https://platform.openai.com).
+- **An API key, if you use cloud services.** The default [brain
+  (language model)](configuration/llm.md) and default voice both use OpenAI,
+  so the standard setup needs an OpenAI API key. You can instead choose another
+  cloud provider for the brain (or run it locally); use the matching provider's
+  key.
 - **Optional:** [Home Assistant](https://www.home-assistant.io/), if you want
   voice control of your smart home. You can add it any time.
 
