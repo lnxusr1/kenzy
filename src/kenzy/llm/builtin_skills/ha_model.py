@@ -748,6 +748,130 @@ def build_occupancy_map(
     return out
 
 
+#: Binary-sensor device classes that count as Tier A safety, and how Kenzy
+#: names them out loud. Every one of these is a DEVICE asserting a hazard —
+#: she relays the assertion and infers nothing, which is the boundary that
+#: makes the tier safe to speak unprompted. Anything requiring her to conclude
+#: something ("a door opened and everyone seems to be out") is deliberately
+#: absent and belongs to a later tier.
+_SAFETY_CLASSES: dict[str, str] = {
+    "smoke": "smoke",
+    "carbon_monoxide": "carbon monoxide",
+    "gas": "gas",
+    "moisture": "a water leak",
+}
+
+#: The alarm panel is not a binary sensor: it asserts by STATE, and only this
+#: one. "armed" is not an emergency; "triggered" is.
+_ALARM_DOMAIN = "alarm_control_panel"
+_ALARM_ASSERTED = "triggered"
+
+
+def build_safety_map(
+    rows: list[dict[str, Any]],
+    curation: dict[str, Any],
+) -> dict[str, dict[str, Any]]:
+    """entity_id → {room, room_name, hazard, asserted} for Tier A entities.
+
+    Pure, and the sibling of :func:`build_occupancy_map` — same shape, same
+    curation-baked-in-here principle, so the server's filter stays dumb and
+    never grows a second config system.
+
+    ``asserted`` is the state string that means "this hazard is happening
+    NOW". Carrying it in the map is what lets the server treat a smoke sensor
+    (``on``) and an alarm panel (``triggered``) identically without knowing
+    what either one is — the same trick the occupancy map plays with ``kind``.
+
+    Unlike occupancy, an unplaced entity is still kept: a smoke alarm with no
+    area assigned is worth announcing house-wide, whereas a PIR with no room is
+    just noise. Failing to name the room is a much smaller error than failing
+    to mention the fire.
+    """
+    block = curation.get("safety") or {}
+    excluded = {str(x).strip() for x in (block.get("exclude") or [])}
+    included = {str(x).strip() for x in (block.get("include") or [])}
+
+    out: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        eid = str(row.get("entity_id") or "").strip()
+        if not eid or eid in excluded or _is_kenzy_entity(eid):
+            continue
+        domain = eid.split(".", 1)[0]
+        dev_class = str(row.get("device_class") or "").strip().lower()
+
+        if domain == _ALARM_DOMAIN:
+            # Phrased to fit the same "There's ___" frame as every other hazard,
+            # so the server composes one sentence and never branches on type.
+            hazard, asserted = "an alarm going off", _ALARM_ASSERTED
+        elif dev_class in _SAFETY_CLASSES:
+            hazard, asserted = _SAFETY_CLASSES[dev_class], "on"
+        elif eid in included:
+            # Hand-picked by the operator. Assume the binary-sensor convention
+            # rather than guessing a hazard name — "an alert" is honest about
+            # not knowing, and better than inventing a category.
+            hazard, asserted = "an alert", "on"
+        else:
+            continue
+
+        area_name = str(row.get("area") or "").strip()
+        out[eid] = {
+            "room": _slug(area_name) if area_name else "",
+            "room_name": area_name,
+            "hazard": hazard,
+            "asserted": asserted,
+        }
+    return out
+
+
+#: Safety candidates walk ENTITIES, not areas — unlike the occupancy template.
+#: An alarm panel is usually house-wide with no area at all, and a smoke sensor
+#: nobody assigned to a room is still worth announcing; an area-walk would drop
+#: both silently. ``area_name(entity_id)`` yields None when unassigned, which
+#: :func:`build_safety_map` reads as "no room" rather than a reason to skip.
+_SAFETY_TEMPLATE = (
+    "{% set ns = namespace(items=[]) %}"
+    "{% for d in ['binary_sensor', 'alarm_control_panel'] %}"
+    "{% for e in states[d] %}"
+    "{% set ns.items = ns.items + [{"
+    "'entity_id': e.entity_id,"
+    "'name': state_attr(e.entity_id, 'friendly_name'),"
+    "'area': area_name(e.entity_id),"
+    # state_attr, NOT e.attributes.device_class: a sensor without one yields
+    # LoggingUndefined, which is not JSON-serializable and 400s the WHOLE
+    # render. Most binary_sensors have no device_class, so this is the common
+    # case, not an edge one.
+    "'device_class': state_attr(e.entity_id, 'device_class')"
+    "}] %}"
+    "{% endfor %}"
+    "{% endfor %}"
+    "{{ ns.items | tojson }}"
+)
+
+
+async def fetch_safety_rows() -> list[dict[str, Any]]:
+    """Hazard candidates from HA: every binary_sensor and alarm panel.
+
+    Shared by the map (what the server's filter uses) and, later, the curation
+    editor's candidate list — so the two can never disagree about which
+    entities exist. Same contract as :func:`fetch_occupancy_rows`.
+    """
+    base, headers = ha_conn()
+    async with httpx.AsyncClient(timeout=15) as client:
+        resp = await client.post(
+            f"{base}/api/template", headers=headers, json={"template": _SAFETY_TEMPLATE}
+        )
+        resp.raise_for_status()
+        rows = json.loads(resp.text)
+        if not isinstance(rows, list):
+            raise ValueError("HA safety template did not return a list")
+    return rows
+
+
+async def fetch_safety_map() -> dict[str, dict[str, Any]]:
+    """The live Tier A hazard map (what the server's safety filter uses)."""
+    return build_safety_map(await fetch_safety_rows(), load_curation())
+
+
 async def fetch_occupancy_rows() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Fetch the raw presence candidates from HA: (binary_sensor rows, persons).
 
@@ -874,3 +998,68 @@ async def fetch_occupancy_candidates() -> list[OccupancyCandidate]:
     """The curation editor's presence list (all candidates, tagged)."""
     rows, persons = await fetch_occupancy_rows()
     return classify_occupancy(rows, persons, load_curation())
+
+
+@dataclass(frozen=True)
+class SafetyCandidate:
+    """A hazard-capable entity, tagged with whether Kenzy would announce it.
+
+    The editor needs the ones that DON'T count as much as the ones that do:
+    excluding a smoke sensor the soldering iron trips, and opting in a sump
+    float that has no standard device class, both start from seeing the list.
+    """
+
+    entity_id: str
+    name: str
+    area_name: str
+    device_class: str
+    hazard: str  # what she'd call it out loud; "" when unused
+    used: bool
+    reason: str  # why it's unused ("excluded" / "not a hazard sensor")
+    #: Whether it WOULD count with no curation at all. The editor stores only
+    #: divergence from this, so the file stays small and a later change to the
+    #: automatic behaviour still reaches anyone who never touched the sensor.
+    auto: bool = False
+
+
+def classify_safety(
+    rows: list[dict[str, Any]],
+    curation: dict[str, Any],
+) -> list[SafetyCandidate]:
+    """Every hazard candidate + its status. Pure; mirrors ``classify_occupancy``."""
+    used_map = build_safety_map(rows, curation)
+    auto_map = build_safety_map(rows, {})  # the no-curation baseline
+    block = curation.get("safety") or {}
+    excluded = {str(x).strip() for x in (block.get("exclude") or [])}
+
+    out: list[SafetyCandidate] = []
+    for row in rows:
+        eid = str(row.get("entity_id") or "").strip()
+        if not eid or _is_kenzy_entity(eid):
+            continue  # her own entities are never a hazard source, so never a choice
+        dev_class = str(row.get("device_class") or "").strip().lower()
+        entry = used_map.get(eid)
+        if entry is not None:
+            reason = ""
+        elif eid in excluded:
+            reason = "excluded"
+        else:
+            reason = "not a hazard sensor"
+        out.append(
+            SafetyCandidate(
+                entity_id=eid,
+                name=str(row.get("name") or _name_from_id(eid)),
+                area_name=str(row.get("area") or ""),
+                device_class=dev_class,
+                hazard=str(entry.get("hazard") or "") if entry else "",
+                used=entry is not None,
+                reason=reason,
+                auto=eid in auto_map,
+            )
+        )
+    return out
+
+
+async def fetch_safety_candidates() -> list[SafetyCandidate]:
+    """The curation editor's hazard list (all candidates, tagged)."""
+    return classify_safety(await fetch_safety_rows(), load_curation())

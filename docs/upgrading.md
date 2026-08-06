@@ -32,6 +32,13 @@ Upgrade the **server first**, then services, then nodes.
 
 Newest first. Anything not listed needs no manual steps.
 
+### 5.0.5 and 5.0.6
+
+No manual steps. 5.0.6 adds proactive safety announcements, but they are **off
+until you switch them on** — see
+[Proactive speech](configuration/server.md#proactive-speech) — so an upgrade
+changes nothing about when Kenzy speaks.
+
 ### 5.0.4 — volume buttons on existing nodes
 
 New in this release: a USB speakerphone's physical `+`/`−` buttons can move the

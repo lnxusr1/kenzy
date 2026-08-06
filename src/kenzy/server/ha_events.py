@@ -214,6 +214,7 @@ class HaEventClient:
         map_fetcher: Callable[[], Any],
         *,
         on_map: Callable[[set[str]], None] | None = None,
+        on_payload: Callable[[dict[str, Any]], None] | None = None,
     ) -> None:
         self._base = base_url.rstrip("/")
         self._token = token
@@ -222,8 +223,15 @@ class HaEventClient:
         #: tracker uses it to fade out holds from entities the map no longer
         #: covers — A still believes nothing, it just says what it can see.
         self._on_map = on_map
+        #: Called with the WHOLE /ha/map envelope after each successful
+        #: refetch. Consumers that aren't occupancy (Tier A safety) read
+        #: their own section from it, so one fetch keeps every map in step —
+        #: the server can never hold a presence map from one moment and a
+        #: hazard map from another.
+        self._on_payload = on_payload
         self._map: dict[str, dict[str, Any]] = {}
         self._subscribers: list[Subscriber] = []
+        self._raw_subscribers: list[Callable[[str, str], None]] = []
         self._task: asyncio.Task[None] | None = None
         self._stop = asyncio.Event()
         #: Set by wake() to cut short a wait — used when the operator re-enables
@@ -236,6 +244,22 @@ class HaEventClient:
 
     def subscribe(self, fn: Subscriber) -> None:
         self._subscribers.append(fn)
+
+    def subscribe_raw(self, fn: Callable[[str, str], None]) -> None:
+        """Tap EVERY state change, before the occupancy filter.
+
+        The socket already carries the whole house — ``subscribe_events`` asks
+        for ``state_changed`` with no entity filter, and the occupancy map is
+        applied here, client-side. So a second consumer needs no second socket
+        and no protocol change; it needs this tee.
+
+        Deliberately raw ``(entity_id, state)`` rather than :class:`Evidence`:
+        that type is presence-shaped (``present`` is documented as evidence FOR
+        presence) and pushing "smoke detected" through it would be a category
+        error that poisons the tracker's vocabulary. Consumers that aren't
+        about occupancy normalize their own way.
+        """
+        self._raw_subscribers.append(fn)
 
     def unsubscribe(self, fn: Subscriber) -> None:
         if fn in self._subscribers:
@@ -321,6 +345,11 @@ class HaEventClient:
             return False
         self._map = entities
         self.stats.map_entities = len(entities)
+        if self._on_payload is not None:
+            try:
+                self._on_payload(payload)
+            except Exception:  # a consumer must never break the socket
+                log.debug("map payload listener error", exc_info=True)
         self.stats.map_fetched_at = time.monotonic()
         if self._on_map is not None:
             try:
@@ -474,7 +503,13 @@ class HaEventClient:
             new_state = data.get("new_state") or {}
             self.stats.received += 1
             self.stats.last_event_at = time.monotonic()
-            ev = self._evidence_from(entity_id, str(new_state.get("state") or ""))
+            state = str(new_state.get("state") or "")
+            for raw_fn in list(self._raw_subscribers):
+                try:
+                    raw_fn(entity_id, state)
+                except Exception:  # a consumer must never break the socket
+                    log.debug("raw subscriber error", exc_info=True)
+            ev = self._evidence_from(entity_id, state)
             if ev is None:
                 self.stats.dropped += 1
                 continue

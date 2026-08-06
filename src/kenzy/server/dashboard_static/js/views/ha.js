@@ -21,6 +21,7 @@ function emptyRow() {
 const TABS = [
   { id: "devices", label: "Devices" },
   { id: "presence", label: "Presence sensors" },
+  { id: "safety", label: "Safety sensors" },
   { id: "lists", label: "Lists" },
 ];
 
@@ -38,6 +39,10 @@ export function HaView() {
   // llm actually resolved, so the toggles show live truth, not just the file.
   const [occ, setOcc] = useState({});
   const [showAllOcc, setShowAllOcc] = useState(false);
+  // 5.0.6 hazards: entity_id -> bool ("Kenzy announces this"). Same shape as
+  // presence above, and stored the same way — only divergence from `auto`.
+  const [saf, setSaf] = useState({});
+  const [showAllSaf, setShowAllSaf] = useState(false);
   // One curation file, one Save — but four editors' worth of screen. Sub-tabs
   // split the SCREEN, not the payload: build() always reads every section, so
   // saving from any tab writes them all. `edited` remembers which tabs were
@@ -67,6 +72,9 @@ export function HaView() {
     }
     const occset = {};
     for (const c of d.occupancy || []) occset[c.entity_id] = !!c.used;
+    const safset = {};
+    for (const c of d.safety || []) safset[c.entity_id] = !!c.used;
+    setSaf(safset);
     setOcc(occset);
     const defset = {};
     for (const rv of Object.values(cur.rooms || {})) {
@@ -123,6 +131,11 @@ export function HaView() {
   // older llm must not silently discard the operator's edits.
   const occUnavailable = () =>
     (data.occupancy || []).length === 0 && data.occupancy_reachable !== true;
+  // Same reasoning as occUnavailable, and it matters for the same reason: the
+  // POST replaces curation.yaml wholesale, so a failed hazard query must carry
+  // the existing safety rules through rather than compute an empty block.
+  const safUnavailable = () =>
+    (data.safety || []).length === 0 && data.safety_reachable !== true;
 
   function build() {
     const byId = {};
@@ -197,6 +210,23 @@ export function HaView() {
       if (occExclude.length) occOut.exclude = occExclude.sort();
       if (occInclude.length) occOut.include = occInclude.sort();
       if (Object.keys(occOut).length) out.occupancy = occOut;
+    }
+
+    if (safUnavailable()) {
+      const prev = (data.curation || {}).safety;
+      if (prev && Object.keys(prev).length) out.safety = prev;
+    } else {
+      const safExclude = [];
+      const safInclude = [];
+      for (const c of data.safety || []) {
+        const on = saf[c.entity_id];
+        if (on === undefined || on === c.auto) continue;
+        (on ? safInclude : safExclude).push(c.entity_id);
+      }
+      const safOut = {};
+      if (safExclude.length) safOut.exclude = safExclude.sort();
+      if (safInclude.length) safOut.include = safInclude.sort();
+      if (Object.keys(safOut).length) out.safety = safOut;
     }
 
     return out;
@@ -320,6 +350,54 @@ export function HaView() {
           <span class="mono">HA_API_KEY</span> and <span class="mono">skills.home_assistant.url</span>.
           Bulk exclusions (under Devices) are still editable.</div>`
       : null}
+
+    ${tab !== "safety" ? null : html`<section class="section">
+      <p class="micro">Which sensors make Kenzy <strong>speak up on her own</strong>. Smoke,
+        carbon monoxide, gas and water-leak sensors count automatically, as does an alarm
+        panel once it has actually triggered — armed is not an emergency. She only ever
+        repeats what a device asserted; she never decides for herself that something is
+        wrong. Turn one OFF when it cries wolf (the smoke sensor above a soldering
+        bench), or ON for something unusual that deserves shouting about. Kenzy's own
+        entities are never used.</p>
+      <p class="micro">Nothing is announced until <span class="mono">proactive.safety.enabled</span>${" "}is on in Settings. When it is, alerts play in <strong>every</strong> room including
+        muted ones — say anything to Kenzy to silence one, and it stays silent until that
+        sensor goes off and trips again.</p>
+      ${(data.safety || []).length === 0
+        ? safUnavailable()
+          ? html`<div class="empty">Couldn't reach Home Assistant to list hazard sensors.
+              Your existing choices are preserved — saving from another tab won't
+              discard them — but they can't be edited until this loads.</div>`
+          : html`<div class="empty">No hazard-capable sensors found in Home Assistant.</div>`
+        : (() => {
+            const all = data.safety || [];
+            const isPrimary = (c) => c.auto || c.used || (saf[c.entity_id] !== undefined && saf[c.entity_id] !== c.auto);
+            const primary = all.filter(isPrimary);
+            const others = all.filter((c) => !isPrimary(c));
+            const row = (c) => html`<label class="occ-row" key=${c.entity_id}>
+              <input type="checkbox" disabled=${ro}
+                checked=${saf[c.entity_id] === undefined ? !!c.used : !!saf[c.entity_id]}
+                onChange=${(e) => {
+                  setSaf((m) => ({ ...m, [c.entity_id]: e.target.checked }));
+                  setDirty("safety");
+                }} />
+              <span class="occ-name">${c.name}</span>
+              <span class="micro occ-where">${c.area_name || "no room"}</span>
+              <span class="micro occ-class">${c.hazard || c.device_class || "—"}</span>
+              <span class="mono occ-id">${c.entity_id}</span>
+            </label>`;
+            return html`<div class="card pad">
+              ${primary.length ? primary.map(row) : html`<div class="empty">Nothing counts as a hazard yet.</div>`}
+              ${others.length
+                ? html`<div class="occ-more">
+                    <button class="btn-ghost" onClick=${() => setShowAllSaf(!showAllSaf)}>
+                      ${showAllSaf ? "Hide" : "Show"} ${others.length} other sensor${others.length === 1 ? "" : "s"}
+                    </button>
+                  </div>
+                  ${showAllSaf ? others.map(row) : null}`
+                : null}
+            </div>`;
+          })()}
+    </section>`}
 
     ${tab !== "lists" ? null : html`<section class="section">
       <p class="micro">Shopping/to-do voice commands ("add milk to the list") use HA's

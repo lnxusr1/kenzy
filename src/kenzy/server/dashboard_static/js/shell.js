@@ -6,6 +6,7 @@ import { ServicesView } from "./views/services.js";
 import { SkillsView } from "./views/skills.js";
 import { PeopleView } from "./views/people.js";
 import { PresenceView } from "./views/presence.js";
+import { ProactiveView } from "./views/proactive.js";
 import { SchedulesView } from "./views/schedules.js";
 import { HaView } from "./views/ha.js";
 import { ActivityView } from "./views/activity.js";
@@ -35,6 +36,7 @@ const NAV = [
   // Now
   { id: "fleet", label: "Fleet", ico: "▣" },
   { id: "presence", label: "Presence", ico: "◎" },
+  { id: "proactive", label: "Proactive", ico: "◬" },
   { id: "activity", label: "Activity", ico: "↗" },
   { id: "schedules", label: "Scheduled", ico: "◷" },
   // Household
@@ -99,6 +101,10 @@ export function Shell({ user, onLogout }) {
   // tab) — a picture you cannot correct is worse than no tab. Absent flag
   // (older server) keeps it, same convention as ha_active above.
   const presenceOn = !data || !data.flags || data.flags.occupancy_active !== false;
+  // Proactive is shown whenever the gate EXISTS — including switched off. The
+  // point of the page is that "she's been silent for months" is visible, so
+  // hiding it when disabled would hide the very thing worth seeing.
+  const proactiveOn = !data || !data.flags || data.flags.proactive_active !== false;
   const [view, setView] = useState("fleet");
   const [node, setNode] = useState(null);
   const [svc, setSvc] = useState(null);
@@ -130,7 +136,7 @@ export function Shell({ user, onLogout }) {
         <div class="brand"><a href="#" class="wordmark" aria-label="Kenzy — go to Fleet"
           onClick=${(e) => { e.preventDefault(); go("fleet"); }}><span class="glyph"></span><span class="name">Kenzy</span></a></div>
         <nav class="nav">
-          ${NAV.filter((n) => (n.id !== "ha" || haOn) && (n.id !== "presence" || presenceOn)).map((n) => {
+          ${NAV.filter((n) => (n.id !== "ha" || haOn) && (n.id !== "presence" || presenceOn) && (n.id !== "proactive" || proactiveOn)).map((n) => {
             // Logs and Activity are gated by the server's `dashboard.logs` flag
             // (Activity records carry transcripts, like logs).
             const disabled = (n.id === "logs" || n.id === "activity") && !logsOn;
@@ -177,6 +183,8 @@ export function Shell({ user, onLogout }) {
                   }} />`
               : view === "presence"
                 ? html`<${PresenceView} />`
+              : view === "proactive"
+                ? html`<${ProactiveView} />`
               : view === "skills"
                 ? html`<${SkillsView} />`
                 : view === "ha"

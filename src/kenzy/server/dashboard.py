@@ -520,6 +520,11 @@ class Dashboard:
                     getattr(self._server, "_occupancy", None) is not None
                     and (await self._ha_flags())["active"]
                 ),
+                # Proactive (5.0.6): shown whenever the gate exists, INCLUDING
+                # when it's switched off — the whole reason this surface exists
+                # is so "she's been silent for months" is visible rather than
+                # inferred. Hiding the tab when disabled would hide the fault.
+                "proactive_active": getattr(self._server, "_proactive", None) is not None,
             },
         }
 
@@ -984,6 +989,23 @@ class Dashboard:
             # occupancy is disabled or HA isn't configured, so the nav can hide
             # the tab rather than showing a permanently blank page.
             return self._json(200, self._presence_state())
+
+        if path == "/api/proactive":
+            # What she has said on her own, and why she stayed quiet when she
+            # did. Auth-only, and deliberately NOT gated on `dashboard.logs`
+            # the way Activity is: Activity carries household transcripts, but
+            # this is Kenzy's own conduct. An audit trail that vanishes when a
+            # privacy flag flips would not be one.
+            return self._json(
+                200,
+                {
+                    **self._server.proactive_state(),
+                    "log": self._server.proactive_log(),
+                    # The view needs this to disable its buttons on a read-only
+                    # dashboard, the same as every other actionable surface.
+                    "controls": self._dcfg.controls,
+                },
+            )
 
         if path == "/api/upgrade":
             return self._json(200, await self._upgrade_state())
@@ -1550,6 +1572,12 @@ class Dashboard:
             # to tell those apart before it rebuilds the curation document.
             "occupancy": (info or {}).get("occupancy", []),
             "occupancy_reachable": bool((info or {}).get("occupancy_reachable", False)),
+            # Hazard candidates (5.0.6), and its own reachability for the same
+            # reason: curation is saved wholesale, so "no hazard sensors" and
+            # "couldn't ask" must be distinguishable before the editor rebuilds
+            # the document from an empty list.
+            "safety": (info or {}).get("safety", []),
+            "safety_reachable": bool((info or {}).get("safety_reachable", False)),
             "lists": (info or {}).get("lists", []),
             "ha_reachable": bool((info or {}).get("reachable", False)),
             "skill_disabled": bool((info or {}).get("skill_disabled", False)),
@@ -2291,6 +2319,20 @@ class Dashboard:
             asyncio.get_running_loop().call_later(
                 0.8, lambda: asyncio.get_running_loop().run_in_executor(None, _disable)
             )
+        elif mtype == "test_proactive":
+            # Fire a synthetic hazard through the real gate + delivery path, so
+            # this can be verified without setting off an actual smoke alarm.
+            if not self._dcfg.controls:
+                return await ack(False, "controls are disabled (set dashboard.controls: true)")
+            result = await self._server.test_proactive_alert()
+            await ack(bool(result.get("ok")), result.get("reason"))
+
+        elif mtype == "set_proactive_enabled":
+            if not self._dcfg.controls:
+                return await ack(False, "controls are disabled (set dashboard.controls: true)")
+            ok = self._server.set_proactive_enabled(bool(msg.get("enabled", True)))
+            await ack(ok, None if ok else "could not persist the change")
+
         elif mtype == "restart_server":
             # Standalone restart — previously only reachable as a side effect of
             # saving a config change (founder-reported UX gap).

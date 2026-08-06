@@ -133,3 +133,72 @@ def test_help_strings_are_short_enough_to_sit_under_a_field():
             if len(text) > 200:
                 too_long.append(f"{block}.{key} ({len(text)} chars)")
     assert not too_long, f"Help strings should stay under ~200 chars: {too_long}"
+
+
+def test_every_editable_server_key_has_a_code_default():
+    """The Settings grid shows "inherit (<default>)" — but `inherited` is read
+    from the user's OWN server.yaml, so a config file older than the feature has
+    nothing to inherit and the UI falls back to settings.js's CODE_DEFAULTS.
+
+    A key missing from that map renders as "unset" for a setting that plainly
+    has a value in effect. This map has silently drifted twice already
+    (occupancy + fleet in 5.0.0, proactive in 5.0.6), which is why it's pinned:
+    nothing else notices, because nothing fails.
+    """
+    import re
+
+    from kenzy.server.server import _SERVER_EDITABLE
+
+    src = (_STATIC / "js/views/settings.js").read_text()
+    block = re.search(r"const CODE_DEFAULTS = \{(.*?)\n\};", src, re.S)
+    assert block, "CODE_DEFAULTS map not found in settings.js"
+    known = set(re.findall(r'^\s*"?([A-Za-z_][\w.]*)"?\s*:', block.group(1), re.MULTILINE))
+
+    # Service URLs are exempt as a RULE, not a list, so adding a service can't
+    # quietly re-open the hole: they have no static default because a blank one
+    # means "find it by auto-registration", and "unset" is the honest label for
+    # a value that is discovered at runtime rather than defaulted.
+    editable = {k for k in _SERVER_EDITABLE if not k.endswith(".url")}
+    missing = sorted(editable - known)
+    assert not missing, (
+        "Editable server keys with no CODE_DEFAULTS entry — the Settings grid "
+        'will show "unset" instead of the value actually in effect: ' + ", ".join(missing)
+    )
+
+
+def test_every_editable_node_key_shows_a_real_default():
+    """The node editor shows "inherit (<default>)" from the effective config, and
+    falls back to config.js's DEFAULTS when the inherited layer doesn't carry the
+    key. A key in NEITHER renders as the bare word "default", which tells an
+    operator nothing about what is actually in effect.
+
+    Same drift as CODE_DEFAULTS on the server side: a hand-maintained map with a
+    "keep in sync with node/client.py" comment and nothing enforcing it.
+    """
+    import re
+
+    import yaml
+
+    from kenzy.server.server import _ALLOWED_OVERRIDE_KEYS
+
+    packaged = yaml.safe_load((_CONFIGS / "server.yaml").read_text())
+    inherited = set((packaged.get("node_defaults") or {}).keys())
+
+    js = (_STATIC / "js/views/config.js").read_text()
+    defaults_blk = re.search(r"const DEFAULTS = \{(.*?)\n\};", js, re.S)
+    ranges_blk = re.search(r"const RANGES = \{(.*?)\};", js, re.S)
+    assert defaults_blk and ranges_blk, "DEFAULTS/RANGES not found in config.js"
+    known = set(re.findall(r'^\s*"?([A-Za-z_][\w.]*)"?\s*:', defaults_blk.group(1), re.MULTILINE))
+    known |= set(re.findall(r"(\w+):\s*\{", ranges_blk.group(1)))
+
+    # Exempt because their default is genuinely DYNAMIC, not a value anyone
+    # could type: the audio device falls back to whatever the OS calls default,
+    # and an empty wakeword list falls back to the bundled model paths. Naming
+    # them here is deliberate — a silent gap is what this test exists to stop.
+    dynamic = {"audio_device", "wakeword_models"}
+
+    missing = sorted(set(_ALLOWED_OVERRIDE_KEYS) - inherited - known - dynamic)
+    assert not missing, (
+        'Editable node keys that render as a bare "default" — add the real value '
+        "to config.js DEFAULTS (or node_defaults in server.yaml): " + ", ".join(missing)
+    )

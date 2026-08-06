@@ -232,6 +232,54 @@ occupancy:
 Kenzy's own `kenzy_*` entities are never evidence — she would otherwise believe
 every room was occupied the moment she spoke — and that rule is not overridable.
 
+## Proactive speech
+
+The only place Kenzy talks without being asked. **Everything is off until you
+switch it on**, one category at a time.
+
+An announcement *you* send — from the dashboard, or from a Home Assistant
+automation using the MQTT announce topic — does **not** go through any of this.
+That's you speaking through her, and quiet hours shouldn't swallow a message you
+deliberately sent. What's below governs the case where a sensor changed and
+*she* decided it was worth saying.
+
+| Key | Default | Description |
+|---|---|---|
+| `proactive.enabled` | `true` | Master switch. `false` ⇒ she never speaks unprompted, whatever the categories say. |
+| `proactive.quiet_hours` | `""` | A window when unprompted speech is held, e.g. `"22:00-07:00"`. Wrapping past midnight is normal. **Safety ignores this** — fires are nocturnal. |
+| `proactive.dnd_rooms` | `[]` | Rooms that receive no unprompted speech. **Safety ignores this too.** |
+| `proactive.rate_limit` | `6` | Most unprompted announcements allowed per `rate_window`. `0` disables the cap. |
+| `proactive.rate_window` | `3600` | The rate limit's window, in seconds. |
+| `proactive.safety.enabled` | `false` | **Tier A.** Smoke, carbon monoxide, gas, water leak, and an alarm panel that has actually *triggered*. Speaks in every room, immediately, **including muted ones**. Off by default because it will interrupt anything. |
+| `proactive.safety.repeat_after` | `300` | Seconds before re-announcing a hazard that is *still* asserting. |
+
+Every entry Tier A acts on is a hazard a **device asserted** — a smoke sensor
+reading `on`, a panel reading `triggered`. Kenzy relays it; she never concludes
+one from a combination of states. That boundary is what makes speaking
+unprompted defensible, and it's why "a door opened while everyone's out" is not
+in this release.
+
+Which entities count is detected from HA device classes, and tunable the same
+way presence sensors are:
+
+```yaml
+# data/home_assistant/curation.yaml
+safety:
+  exclude:
+    - binary_sensor.workshop_smoke     # the soldering iron sets this off
+  include:
+    - binary_sensor.sump_high_water    # not a standard class, but worth shouting about
+```
+
+### Silencing an alert
+
+Say anything to Kenzy while an alert is sounding and it stops — **and stays
+stopped until that sensor goes off and trips again**. It is not a snooze: a
+condition that's still asserting stays silent for as long as it keeps
+asserting, so "is it silenced?" is answerable without also knowing what time it
+is. The sensor cycling is what marks a genuinely new event, and that speaks
+immediately rather than waiting out any window.
+
 ## Example
 
 ```yaml

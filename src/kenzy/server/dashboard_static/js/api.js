@@ -74,6 +74,12 @@ export async function getPresence() {
   return await r.json();
 }
 
+export async function getProactive() {
+  const r = await fetch("/api/proactive");
+  if (!r.ok) throw new Error(`proactive ${r.status}`);
+  return await r.json();
+}
+
 export async function getSchedules() {
   const r = await fetch("/api/schedules");
   if (!r.ok) throw new Error(`schedules ${r.status}`);

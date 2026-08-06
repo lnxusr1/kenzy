@@ -253,3 +253,22 @@ integrations:
 # window-facing sensor should be excluded, or every room reads "occupied").
 occupancy:
   enabled: true
+
+# Proactive speech (5.0.6) — the only place Kenzy talks without being asked.
+# DEFAULT-DENY: nothing here speaks until you switch a category on. An announce
+# you send yourself (dashboard, or an HA automation on the MQTT announce topic)
+# is NOT governed by this — that's you speaking through her, and quiet hours
+# must not swallow a message you deliberately sent.
+proactive:
+  enabled: true              # master off-switch; false = never speak unprompted
+  quiet_hours: ""            # e.g. "22:00-07:00". Safety ignores it — fires are nocturnal
+  dnd_rooms: []              # rooms that don't get unprompted speech. Safety ignores it too
+  rate_limit: 6              # most unprompted announcements per rate_window
+  rate_window: 3600
+  # Tier A — smoke, carbon monoxide, gas, water leak, and an alarm panel that
+  # has actually TRIGGERED. Every one is a hazard a device asserted; Kenzy
+  # relays it and never infers one. Speaks in every room including muted ones.
+  # Silencing it by voice lasts until that sensor goes off and trips again.
+  safety:
+    enabled: false           # opt in deliberately — she will interrupt anything
+    repeat_after: 300        # seconds before re-announcing a hazard still asserting

@@ -28,6 +28,15 @@ const CODE_DEFAULTS = {
   "integrations.mqtt.discovery_prefix": "homeassistant",
   "integrations.mqtt.commands": true,
   "streaming.enabled": true,
+  "occupancy.enabled": true,
+  "fleet.offline_alert_minutes": 5,
+  "fleet.restart_grace_minutes": 10,
+  "proactive.enabled": true,
+  "proactive.quiet_hours": "",
+  "proactive.rate_limit": 6,
+  "proactive.rate_window": 3600,
+  "proactive.safety.enabled": false,
+  "proactive.safety.repeat_after": 300,
 };
 
 // Inherited value → human placeholder/label text.

@@ -1,7 +1,7 @@
 import { html, useState, useEffect } from "../html.js";
 import { confirmDialog } from "../dialog.js";
 import { send, notify } from "../store.js";
-import { serviceEnum, serviceHelp, groupByParent, groupBySections, SERVICE_SECTIONS, fieldVisible } from "../schema.js";
+import { serviceEnum, serviceHelp, enumLabel, groupByParent, groupBySections, SERVICE_SECTIONS, fieldVisible } from "../schema.js";
 
 // --- nested ⇄ flat (dotted path) helpers for the generic editor -------------
 
@@ -50,20 +50,21 @@ const typeOf = (v) =>
         : "str";
 
 // Inherited value → human placeholder/label text.
-const fmt = (v) =>
-  v === undefined
-    ? "unset"
-    : v === null
-      ? "null"
-      : Array.isArray(v)
-        ? v.length
-          ? v.join(", ")
-          : "empty"
-        : typeof v === "boolean"
-          ? v
-            ? "on"
-            : "off"
-          : String(v);
+// Inherited/default values → the label shown in an "inherit (…)" option.
+//
+// An empty string is a REAL value for several settings ("don't send this
+// parameter at all", "use the service model") rather than an absent one, so it
+// needs a word: without one the label rendered as "inherit ()", which looks
+// like a bug and says nothing. "blank" matches the wording the per-field help
+// already uses ("Blank = don't send it").
+const fmt = (v) => {
+  if (v === undefined) return "unset";
+  if (v === "") return "blank";
+  if (v === null) return "null";
+  if (Array.isArray(v)) return v.length ? v.join(", ") : "empty";
+  if (typeof v === "boolean") return v ? "on" : "off";
+  return String(v);
+};
 
 // Sentinel for the "inherit" select option ("" can be a real enum value, e.g.
 // reasoning_effort's "don't send").
@@ -209,7 +210,7 @@ function ServiceEditor({ name, onBack }) {
       input = html`<select disabled=${!info.controls}
         onChange=${(e) => setKey(k, e.target.value === INHERIT ? undefined : e.target.value)}>
         <option value=${INHERIT} selected=${!set}>inherit (${fmt(defs[k])})</option>
-        ${opts.map((o) => html`<option value=${o} selected=${set && v === o}>${o || "(unset)"}</option>`)}
+        ${opts.map((o) => html`<option value=${o} selected=${set && v === o}>${enumLabel(name, k, o) || "(blank)"}</option>`)}
       </select>`;
     } else if (t === "bool") {
       input = html`<select disabled=${!info.controls}

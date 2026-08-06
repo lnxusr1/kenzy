@@ -286,6 +286,15 @@ _SERVER_EDITABLE: dict[str, str] = {
     "integrations.mqtt.base_topic": "str",
     "integrations.mqtt.discovery_prefix": "str",
     "integrations.mqtt.commands": "bool",
+    # Proactive speech (5.0.6). `dnd_rooms` is deliberately absent: it's a list,
+    # and the editable grid only coerces bool/num/str — it stays file-managed
+    # rather than being half-supported here.
+    "proactive.enabled": "bool",
+    "proactive.quiet_hours": "str",
+    "proactive.rate_limit": "num",
+    "proactive.rate_window": "num",
+    "proactive.safety.enabled": "bool",
+    "proactive.safety.repeat_after": "num",
     # v5 occupancy spine. Default ON: 5.0 is watch-only (nothing speaks, no
     # delivery changes), so the risk of leaving it on is nil and the soak only
     # gathers data if it is actually running — the 4.4 streaming lesson, where
@@ -631,6 +640,22 @@ class AudioServer:
         # every-utterance hook in _transcribe is a single `is not None` check.
         self._occupancy: Any = None
         self._ha_events: Any = None
+        #: Tier A (5.0.6). Both stay None unless the occupancy spine started —
+        #: safety rides its socket, so no HA means no hazard announcements.
+        self._proactive: Any = None
+        self._safety: Any = None
+        #: Every proactive decision, refusals included. Deliberately on the
+        #: SERVER and not in the dashboard's Activity ring: Activity is gated on
+        #: `dashboard.logs` because its records carry household transcripts,
+        #: but this is Kenzy's own conduct, and an audit trail that disappears
+        #: when a privacy flag flips is not an audit trail. In-memory like the
+        #: job history — persistence lands with the panel that displays it.
+        self._proactive_log: deque[dict[str, Any]] = deque(maxlen=200)
+        #: Where server.yaml came from, so the VOICE off-switch can persist
+        #: without the dashboard. A feature you disabled because it misbehaved
+        #: must not return on the next restart, and the panic button must not
+        #: require `dashboard.enabled`.
+        self._config_path: str | None = None
         # F3: has this server EVER received an /assist request? Persistent
         # marker — the dashboard uses it to reveal HA surfaces for app-only
         # households (no HA_API_KEY, but the companion-app front door in use).
@@ -2160,6 +2185,43 @@ class AudioServer:
         has no scheduler; ``TranscribingServer`` provides the real one."""
         return []
 
+    def proactive_log(self) -> list[dict[str, Any]]:
+        """Newest-first record of every proactive decision, refusals included.
+
+        Lives here rather than in the dashboard's Activity ring because
+        Activity is gated on ``dashboard.logs`` — it carries household
+        transcripts — while this is Kenzy's own conduct. An audit trail that
+        disappears when a privacy flag flips is not an audit trail.
+        """
+        return list(reversed(self._proactive_log))
+
+    async def test_proactive_alert(self) -> dict[str, Any]:
+        """Fire a synthetic hazard for verification. Base server: nothing to fire."""
+        return {"ok": False, "reason": "proactive speech is not available"}
+
+    def set_proactive_enabled(self, enabled: bool) -> bool:
+        """The off-switch. Base server has no gate, so nothing to switch."""
+        return False
+
+    def proactive_state(self) -> dict[str, Any]:
+        """Current posture: on/off, which categories, what's silenced.
+
+        Reports ``enabled: false`` on purpose. The voice off-switch persists,
+        so the failure mode worth guarding against is the feature sitting off
+        for months with nobody aware — off-and-visible is fine, off-and-silent
+        is not.
+        """
+        gate = self._proactive
+        if gate is None:
+            return {"available": False}
+        return {
+            "available": True,
+            "enabled": bool(gate.enabled),
+            "categories": sorted(gate.categories_enabled),
+            "silenced": gate.silenced(),
+            "watching": self._safety.known() if self._safety is not None else 0,
+        }
+
     def cancel_schedule_ids(self, ids: list[str]) -> int:
         """Cancel schedule entries by id; returns how many were removed."""
         return 0
@@ -2588,6 +2650,8 @@ class TranscribingServer(AudioServer):
         self._tts_active.discard(session.node_id)
         self._buffers[session.node_id] = bytearray()
         self._calib_saw_wake(session.node_id)  # an idle wake opens a session
+        # Live safety alerts count as heard too — same reasoning, same hook.
+        self._acknowledge_proactive("a new session")
         # A ringing alarm is acknowledged HERE, not only in on_wakeword. A wake
         # word spoken while audio is playing never sends a `wakeword` frame at
         # all: the node stops its own playback and opens a fresh session (see
@@ -2618,6 +2682,167 @@ class TranscribingServer(AudioServer):
         )
         self._stt_tasks[session.node_id] = task
 
+    def _on_safety_state(self, entity_id: str, state: str) -> None:
+        """Raw HA state change → maybe a Tier A announcement.
+
+        Sync (the socket's consume loop calls it) so the decision is immediate
+        and delivery is a task: a slow TTS render must never stall the event
+        stream that occupancy is also reading from.
+        """
+        watcher = self._safety
+        if watcher is None:
+            return
+        announcement = watcher.consider(entity_id, state)
+        if announcement is None:
+            return
+        asyncio.create_task(self._speak_safety(announcement), name=f"safety-{entity_id}")
+
+    async def _speak_safety(self, announcement: Any) -> bool:
+        """Say it in every room, at the alert floor, then start the repeat window.
+
+        Synthesized ONCE and streamed to each node — a hazard in ten rooms is
+        one TTS render, not ten, and every room says the identical sentence.
+
+        A lead-in tone is prepended per node, the same as an alarm delivery and
+        for the same reason: **the tone still plays when TTS is down.** A safety
+        announcement must not depend on a healthy speech service to make noise,
+        which matters more here than it does for a kitchen timer.
+        """
+        rooms = set(announcement.rooms)
+        targets = [nid for nid, s in list(self._nodes.items()) if not rooms or s.room_id in rooms]
+        if not targets:
+            log.warning("Safety: %r but no node is connected to say it", announcement.text)
+            return False
+
+        pcm = await self._synthesize(announcement.text, _INTERCOM_VOICE_PROMPT)
+        if pcm is None:
+            log.warning("Safety: speech synthesis unavailable — tone only")
+
+        delivered = False
+        for node_id in targets:
+            try:
+                tone = self._schedule_tone(node_id, "alarm")
+                audio = (tone or b"") + (pcm or b"")
+                if not audio:
+                    continue
+                await self._stream_pcm(node_id, audio, alert=announcement.alert)
+                delivered = True
+            except Exception as exc:  # one dead room must not silence the others
+                log.warning("Safety: delivery to %s failed: %s", node_id, exc)
+
+        if delivered:
+            # Only a delivered announcement starts the repeat window — the same
+            # split as the gate's evaluate/commit, so a house that heard nothing
+            # tries again instead of going quiet.
+            self._safety.spoken(announcement.key)
+            log.info("Safety announced: %s", announcement.text)
+        return delivered
+
+    def _record_proactive(self, key: str, decision: Any, text: str) -> None:
+        """Append one decision to the audit trail (allowed or refused)."""
+        record = {"ts": time.time(), "category": "safety", "key": key, "text": text}
+        record.update(decision.as_record())
+        self._proactive_log.append(record)
+
+    def set_proactive_enabled(self, enabled: bool) -> bool:
+        """The spoken off-switch. Applies live AND persists.
+
+        Persisting matters: something switched off because it was misbehaving
+        must not come back on after the next upgrade or power cut. The cost of
+        persisting is that it can be off forever without anyone noticing, which
+        is why the dashboard shows it — off-and-visible is fine, off-and-silent
+        is not.
+
+        Returns False when it could not be persisted, so the caller can say so
+        rather than implying a durable change that isn't.
+        """
+        gate = self._proactive
+        if gate is None:
+            return False
+        gate.enabled = bool(enabled)
+        log.info("Proactive speech %s by voice", "enabled" if enabled else "DISABLED")
+        if self._config_path is None:
+            log.warning("Proactive change not persisted — server config path unknown")
+            return False
+        try:
+            import yaml
+
+            path = _server_override_path(self._config_path)
+            data: dict[str, Any] = {}
+            if path.is_file():
+                loaded = yaml.safe_load(path.read_text()) or {}
+                if isinstance(loaded, dict):
+                    data = loaded
+            block = data.get("proactive")
+            if not isinstance(block, dict):
+                block = {}
+            block["enabled"] = bool(enabled)
+            data["proactive"] = block
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(yaml.safe_dump(data, sort_keys=False))
+            return True
+        except Exception as exc:
+            log.error("Could not persist proactive setting: %s", exc)
+            return False
+
+    async def test_proactive_alert(self) -> dict[str, Any]:
+        """Fire a synthetic hazard through the REAL path, for verification.
+
+        Deliberately goes through the gate rather than round it. Testing a
+        safety announcement by bypassing the thing that decides whether to
+        announce would verify the half that was never in doubt — and the common
+        setup mistakes (category switched off, feature disabled by voice
+        months ago) live in the gate, so a test that skips it reports success
+        on a house that would stay silent in a fire.
+
+        The alternative was setting off a real smoke detector to find out the
+        phrasing is wrong.
+        """
+        gate = self._proactive
+        if gate is None:
+            return {"ok": False, "reason": "proactive speech is not available"}
+
+        from kenzy.server.proactive import SAFETY
+
+        key = "kenzy.test_alert"
+        text = "This is a test of Kenzy's safety announcements."
+        decision = gate.evaluate(SAFETY, key, ())
+        self._record_proactive(key, decision, text)
+        if not decision.allowed:
+            return {"ok": False, "reason": decision.reason, "text": text}
+
+        from kenzy.server.safety import Announcement
+
+        spoke = await self._speak_safety(
+            Announcement(key=key, text=text, rooms=decision.rooms, alert=decision.alert)
+        )
+        # Released immediately: a test is a one-off, and leaving it "asserted"
+        # would mean the next test is refused as a repeat of this one.
+        gate.clear(key)
+        if not spoke:
+            # The gate said yes and nothing came out. Reporting success here
+            # would be the worst possible answer from a test whose entire job
+            # is telling you whether the house can actually shout.
+            return {"ok": False, "reason": "no room could play it", "text": text}
+        return {"ok": True, "text": text}
+
+    def _acknowledge_proactive(self, why: str) -> None:
+        """Someone interacted with Kenzy — treat live alerts as heard.
+
+        **Called from on_session_start, not on_wakeword.** A wake word spoken
+        over playing audio never sends a ``wakeword`` frame: the node stops its
+        own playback and opens a fresh session, so ``audio_start`` is all the
+        server sees. Wiring an acknowledgement to ``on_wakeword`` alone is
+        exactly the bug that left ringing alarms unstoppable until 5.0.5, and
+        an alert announcement is playing audio by definition.
+        """
+        gate = self._proactive
+        if gate is None:
+            return
+        silenced = gate.acknowledge()
+        if silenced:
+            log.info("Proactive: silenced %d alert(s) after %s", len(silenced), why)
+
     async def on_wakeword(self, session: NodeSession, model: str, score: float) -> None:
         self._cancel_stt(session.node_id)
         self._calib_saw_wake(session.node_id)  # mid-stream/TTS wake counts too
@@ -2626,6 +2851,7 @@ class TranscribingServer(AudioServer):
         self._abandon_pending_ask(session.node_id, "wakeword")
         # The wake word acknowledges a ringing alarm (mirrors the intercom hang-up).
         self._stop_ringing(session.node_id)
+        self._acknowledge_proactive("a wake word")
         # If the node is not currently streaming audio to us it may be playing
         # TTS or waiting idle — send STOP so it can interrupt and re-activate.
         if not session.streaming:
@@ -3876,6 +4102,15 @@ class TranscribingServer(AudioServer):
                 # Voice-guided audio calibration on the asking node (spawns its own
                 # task — the guided flow runs ~30-60s and must not block dispatch).
                 await self.start_calibration(source_node_id, source_room)
+            elif atype == "silence_proactive":
+                # "Stop the alerts" — quiet what's sounding, change nothing
+                # about the future. Not node-bound: an alert plays in every
+                # room, so silencing it from any of them is the whole point.
+                self._acknowledge_proactive("an explicit request")
+            elif atype == "set_proactive":
+                # The spoken off-switch. Not node-bound: it is a house-wide
+                # setting, so it works from any room and on the assist channel.
+                self.set_proactive_enabled(bool(action.get("enabled", True)))
             elif atype == "set_volume":
                 # Volume/mute change targeting the asking node (room context the
                 # server already holds — no room resolution needed).
@@ -4945,6 +5180,7 @@ def main() -> None:
     )
 
     server = TranscribingServer(cfg)
+    server._config_path = str(config_path)  # lets the voice off-switch persist
 
     # mDNS advertisement so nodes can discover this server without a server_url.
     discovery_cfg = cfg.get("discovery", {}) or {}
@@ -5041,11 +5277,37 @@ def main() -> None:
             info = await server.llm_occupancy_map()
             return info if isinstance(info, dict) else {}
 
-        ha_client = HaEventClient(ha_url, ha_token, _fetch_map, on_map=tracker.prune_held)
+        # Tier A safety (5.0.6) rides the SAME socket: the hose already carries
+        # every state change in the house, so this is a tee on it, not a second
+        # connection. The gate is default-deny, so a fleet that never enables it
+        # pays for one dict lookup per event and nothing else.
+        from kenzy.server.proactive import ProactiveGate
+        from kenzy.server.safety import SafetyWatcher
+
+        gate = ProactiveGate.from_config(cfg.get("proactive") or {})
+        watcher = SafetyWatcher(gate, on_decision=server._record_proactive)
+
+        def _on_map_payload(payload: dict[str, Any]) -> None:
+            watcher.set_map(payload.get("safety") or {})
+
+        ha_client = HaEventClient(
+            ha_url,
+            ha_token,
+            _fetch_map,
+            on_map=tracker.prune_held,
+            on_payload=_on_map_payload,
+        )
         ha_client.subscribe(tracker.on_evidence)
+        ha_client.subscribe_raw(server._on_safety_state)
         server._occupancy = tracker
+        server._proactive = gate
+        server._safety = watcher
         server._ha_events = ha_client
         log.info("Occupancy spine enabled (HA events → tracker); watch-only in 5.0")
+        if "safety" in gate.categories_enabled:
+            log.info("Tier A safety announcements ENABLED (proactive.safety.enabled)")
+        else:
+            log.info("Tier A safety announcements off (proactive.safety.enabled: false)")
     elif occupancy_enabled and not ha_token:
         log.info("Occupancy spine idle: Home Assistant is not configured")
 

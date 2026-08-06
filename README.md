@@ -134,6 +134,7 @@ It gives you one place to:
 - Configure each node, **rename its room**, and run **guided calibration** (also available by voice: "Hey Kenzy, calibrate") — it measures the room, detects echo cancellation, and applies the thresholds itself; if the speakerphone you pick has **volume buttons**, it offers to wire those up in the same step
 - Manage **skills** (enable/disable live) and **speaker profiles** (rename / delete / enroll from a room)
 - Watch **room presence** — which rooms have someone in them, what each belief rests on, and how fresh it is
+- See everything she has said **on her own** — and, just as usefully, every time she decided *not* to, with the reason. Includes a "test an alert" button so safety announcements can be verified without setting off a real smoke detector
 - Watch **pipeline activity** (transcripts, latency, fast-path hit rate) and read server / service / node **logs**
 - Trigger / stop / restart nodes and send TTS **announcements** to every room
 - **Upgrade** the server, backend services, and nodes in place — one click, with an "update available" check against PyPI
@@ -215,7 +216,7 @@ Smart home control pulls your device **topology live from Home Assistant** — w
 
 Covered domains: lights, switches, fans, covers, locks, climate — plus **scenes, scripts, buttons, and toggle helpers** ("activate movie night", "run the goodnight routine", "turn on guest mode" — resolved by name house-wide), the **robot vacuum** ("start the vacuum", "send it home"), and **media-player transport** ("pause the TV", "skip this song", "turn the music down" — targeting whatever's actually playing; starting new music by name arrives with the Music Assistant integration).
 
-The only hand-authored input is an optional `data/home_assistant/curation.yaml` — the voice layer HA can't store: spoken aliases, per-device notes, room group-defaults, voice-control exclusions, which to-do list "the list" means, and which sensors count as presence. Edit it directly or from the dashboard's **Home Assistant** tab (sub-tabs: Devices, Presence sensors, Lists). Run `kenzy-ha-devices` to print the live tree with each entity ID and its included/excluded status.
+The only hand-authored input is an optional `data/home_assistant/curation.yaml` — the voice layer HA can't store: spoken aliases, per-device notes, room group-defaults, voice-control exclusions, which to-do list "the list" means, and which sensors count as presence. Edit it directly or from the dashboard's **Home Assistant** tab (sub-tabs: Devices, Presence sensors, Safety sensors, Lists). Run `kenzy-ha-devices` to print the live tree with each entity ID and its included/excluded status.
 
 ### Room presence
 
@@ -244,6 +245,27 @@ Turn it off with `occupancy.enabled: false`. Which entities count is automatic (
 occupancy and presence sensors, plus `person` entities for home/away) and adjustable per
 sensor under **Home Assistant → Presence sensors** — useful when a hallway sensor the cat
 trips keeps a room "occupied".
+
+### Speaking first
+
+Kenzy can start a conversation, and so far only for emergencies: smoke, carbon monoxide,
+gas, a water leak, or an alarm panel that has actually **triggered**. She says it in every
+room including muted ones. Every one of those is a hazard a *device asserted* — she relays
+it and never infers one herself, which is the boundary that makes speaking unprompted
+defensible at all.
+
+It is **off until you switch it on** (`proactive.safety.enabled`), rides the same Home
+Assistant subscription as presence, and picks its sensors the same way — automatic by
+device class, adjustable under **Home Assistant → Safety sensors**.
+
+Say anything at all — "stop", or just the wake word — and a sounding alert goes quiet
+until that sensor cycles. Turning the feature off needs a different sentence, *"disable
+the alerts"*, and confirms first. Both work with the language model out of the picture,
+because if she is talking nonsense the model is a suspect. The **Proactive** tab shows
+every decision, including the times she stayed silent and why.
+
+Announcements *you* send — from the dashboard, or an HA automation on the MQTT topic —
+never pass through any of this. It governs her initiative, not your instructions.
 
 ## Development
 

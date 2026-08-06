@@ -761,6 +761,19 @@ async def get_ha_curation() -> dict[str, Any]:
         # list it would silently delete the operator's presence rules.
         occupancy_reachable = False
         log.warning("HA presence sensors unavailable for curation editor: %s", exc)
+    # Hazard candidates (5.0.6) — its own round-trip for the same reason as
+    # presence: it walks binary_sensor AND alarm_control_panel, neither of which
+    # the voice-control device tree contains. Reported separately so an editor
+    # that saves curation wholesale can refuse rather than rebuild the safety
+    # rules from an empty list and delete them.
+    safety: list[dict[str, Any]] = []
+    safety_reachable = True
+    try:
+        safety = [vars(c) for c in await ha_model.fetch_safety_candidates()]
+    except Exception as exc:
+        safety_reachable = False
+        log.warning("HA safety sensors unavailable for curation editor: %s", exc)
+
     import os
 
     return {
@@ -768,6 +781,8 @@ async def get_ha_curation() -> dict[str, Any]:
         "devices": devices,
         "occupancy": occupancy,
         "occupancy_reachable": occupancy_reachable,
+        "safety": safety,
+        "safety_reachable": safety_reachable,
         "lists": lists,
         "reachable": reachable,
         # Editor state hints: the tab stays editable when the skill is off
@@ -808,7 +823,17 @@ async def get_ha_occupancy_map() -> dict[str, Any]:
     except Exception as exc:
         log.warning("Occupancy map unavailable: %s", exc)
         return {"ok": False, "error": str(exc), "entities": {}}
-    return {"ok": True, "entities": entities}
+    # Tier A hazards ride the same envelope: one fetch, one seam, and a server
+    # that can't end up with a presence map from one moment and a safety map
+    # from another. A safety failure must NOT sink the occupancy map with it —
+    # losing the world model because a template render failed would be a much
+    # worse trade than starting without hazard announcements.
+    try:
+        safety = await ha_model.fetch_safety_map()
+    except Exception as exc:
+        log.warning("Safety map unavailable: %s", exc)
+        safety = {}
+    return {"ok": True, "entities": entities, "safety": safety}
 
 
 @app.post("/ha/curation")

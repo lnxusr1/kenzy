@@ -8,6 +8,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Most releases need nothing beyond the upgrade itself. When one does, it's noted
 here and spelled out in **[Upgrading](https://docs.kenzy.ai/upgrading/)**.
 
+## [5.0.6]
+
+### Added
+
+- **Kenzy can speak first — for emergencies, and nothing else yet.** Every release until now, she only talked when talked to. This is the first one where she starts the conversation, and the shape of it is deliberately narrow: smoke, carbon monoxide, gas, a water leak, or an alarm panel that has actually **triggered** (armed is not an emergency). She says it in **every room, immediately, including muted ones** — the same audio floor the wake chime uses. Everything is **off until you switch it on**, one category at a time, under Settings → `proactive.safety.enabled`.
+
+  The boundary is the point: every one of those is a hazard a **device asserted**. She relays it and never concludes one herself — "a door opened and everyone seems to be out, so that's an intruder" is exactly the kind of inference that isn't here, and won't be until it has a lot more thought behind it. Which sensors count is detected from Home Assistant device classes and tunable per entity under **Home Assistant → Safety sensors**, the same way presence sensors already are: the editor shows the ones that *don't* count and why, because you can't opt in a sump-pump float you were never shown, or exclude the smoke sensor above a soldering bench.
+
+  **Announcements you send yourself are untouched by all of this.** A dashboard announce, or one an HA automation puts on the MQTT topic, is you speaking through her — quiet hours must never swallow a message you deliberately sent, and a rate limit must never eat your second call to dinner. The gate governs her *initiative*, not your *instructions*, and that distinction is written into the code so nobody later "fixes" it.
+
+- **Two ways to stop her, deliberately different.** Say **anything at all** — "stop", "cancel", or just the wake word — and a sounding alert goes quiet. No phrase to remember, because someone woken at 3am shouldn't have to get the words right. **It is not a snooze**: silenced stays silenced until that sensor goes off and trips again, so "is it silenced?" is answerable without also knowing what time it is, and a sensor cycling is the honest signal of a genuinely new event.
+
+  Turning the feature *off* is a different act and needs a different sentence — **"disable the alerts"** — and it confirms first: *"Are you sure you want to permanently disable the safety alerts? That includes smoke and water leaks."* Only a plain yes counts; "maybe", "yes but not the smoke one", and a timed-out window all leave them armed. Silencing needs no confirmation and no recognised voice, because whoever is standing in front of a shrieking speaker should be able to make it stop, guest or child; disabling needs both. Both work with the language model completely out of the picture — if unprompted speech is misbehaving, the model is a suspect, and an off-switch that needs it fails exactly when you need it.
+
+- **A Proactive tab that shows what she decided, including when she said nothing.** *"Why didn't she tell me about the leak?"* is as important a question as *"why did she just say that?"*, and only one of them is answerable from a log that records successes — so this one keeps the refusals, with the reason and the sentence she would have said. It lives on the server and **survives `dashboard.logs: false`**: that flag exists because Activity records carry household transcripts, but this is Kenzy's own conduct, and an audit trail that disappears when a privacy switch flips is not an audit trail. The tab also shows what's silenced right now, how many hazard sensors are being watched, and — deliberately, rather than hiding itself — a full-width warning when unprompted speech is switched off, since a voice off-switch that persists across restarts is only safe if the house can't be silently disarmed for months.
+
+- **"Test an alert"**, so this can be verified without setting fire to anything. It goes through the **real gate**, not around it: if your category is off, or the feature was disabled by voice last winter, the test refuses and tells you which — because a test that skipped the gate would report success on a house that would stay silent in a fire. It reports honestly when the gate said yes and no room actually played anything.
+
+### Fixed
+
+- **Settings and the node editor stopped claiming they didn't know their own defaults.** Nine server settings showed "inherit (unset)" or a bare "unset" placeholder — including `fleet.offline_alert_minutes` and `fleet.restart_grace_minutes`, which have been doing real work with 5- and 10-minute defaults all along — and five node settings showed the word "default", among them `log_level` and `log_capture_level`. In every case the value was in effect and simply had no way to be displayed: the inherited value is read from your own `server.yaml`, so a config file older than a feature has nothing to inherit, and the fallback maps behind that had quietly stopped being updated two releases ago. Both maps are now covered by tests, because both carried a "keep this in sync" comment and drifted anyway — a comment is not a gate.
+
+- **The LLM service editor showed `inherit ()`** for `params.reasoning_effort` and `params.service_tier`. Empty is a real setting for both ("don't send this parameter to the provider at all"), not a missing one, so it now reads **blank** — and since blank and `none` sit next to each other in what looks like an ordered scale while meaning categorically different things, `none` now reads **"no effort"**. Blank leaves the model's own adaptive default in charge; `none` explicitly asks for zero reasoning, which on some models routes differently — sometimes slower — than omitting the parameter. The value sent to the provider is unchanged.
+
 ## [5.0.5]
 
 ### Changed

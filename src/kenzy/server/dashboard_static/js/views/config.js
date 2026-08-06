@@ -71,6 +71,11 @@ const RANGES = { volume: { min: 0, max: 100, step: 1, default: 100 } };
 // and the server's cue fallbacks. An explicit "" means "off unless set" — the
 // honest placeholder for those is empty, not the word "default".
 const DEFAULTS = {
+  log_level: "info",
+  log_capture_level: "debug",
+  capture_sample_rate: 16000,
+  playback_sample_rate: 24000,
+  wakeword_vad_threshold: 0,
   sound_ready: "ready.wav",
   sound_waiting: "waiting.wav",
   sound_connect: "connect.wav",

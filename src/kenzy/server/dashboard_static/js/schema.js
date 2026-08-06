@@ -249,6 +249,26 @@ export function serviceEnum(service, path) {
   return (SERVICE_ENUMS[service] || {})[path] || null;
 }
 
+// Display labels for enum VALUES whose raw API string reads misleadingly on its
+// own. The value SENT to the provider never changes — only what we call it in
+// the dropdown, so anyone reading a provider's own documentation still sees the
+// string they expect. A value with no entry falls back to itself, so this can
+// go stale without breaking anything.
+const ENUM_LABELS = {
+  llm: {
+    // "" (don't send the parameter) and "none" (send it, asking for zero
+    // reasoning) sit next to each other in what looks like an ordered scale,
+    // and read as the same thing. They are not: blank leaves the model's own
+    // adaptive default in charge, and on some models an explicit value routes
+    // differently — sometimes slower — than omitting it.
+    "params.reasoning_effort": { none: "no effort" },
+  },
+};
+
+export function enumLabel(service, path, value) {
+  return ((ENUM_LABELS[service] || {})[path] || {})[value] ?? value;
+}
+
 export function serviceHelp(service, path) {
   return (SERVICE_HELP[service] || {})[path] || null;
 }
@@ -285,6 +305,12 @@ export const SERVER_HELP = {
   "integrations.mqtt.discovery_prefix": "Home Assistant's discovery prefix. Leave alone unless you changed it in HA.",
   "integrations.mqtt.commands": "Let Home Assistant control nodes (trigger, stop, volume, mute). Off = Kenzy only reports, never obeys.",
   "occupancy.enabled": "Track which rooms have people in them, from your Home Assistant sensors and from who Kenzy hears. Shown on the Presence tab; she doesn't act on it yet.",
+  "proactive.enabled": "Master switch for Kenzy speaking without being asked. Off means she never starts a conversation, whatever the categories below say. Announcements you send yourself are unaffected.",
+  "proactive.quiet_hours": "A window when unprompted speech waits, e.g. 22:00-07:00. Safety alerts ignore it — fires are nocturnal. Blank for no quiet hours.",
+  "proactive.rate_limit": "Most unprompted announcements in one window, so a misbehaving sensor can't turn the house into a klaxon. 0 for no cap.",
+  "proactive.rate_window": "How long the rate limit counts over, in seconds (3600 = per hour).",
+  "proactive.safety.enabled": "Announce smoke, carbon monoxide, gas, water leaks, and a triggered alarm panel — in every room, immediately, including muted ones. Off by default because it will interrupt anything.",
+  "proactive.safety.repeat_after": "Seconds before repeating a hazard that is still going. Silencing one by voice stops it until that sensor goes off and trips again.",
   "fleet.offline_alert_minutes": "How long a room may be unreachable before the Fleet page calls it a fault. An orphaned node still answers its wake word, so nobody in the room notices. 0 = never alert.",
   "fleet.restart_grace_minutes": "Quiet period after you restart or upgrade a node, so expected downtime doesn't raise an alert. Nodes also announce a planned shutdown themselves, so an ordinary restart is silent either way.",
 };
