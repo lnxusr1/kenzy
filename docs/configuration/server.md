@@ -269,7 +269,29 @@ safety:
     - binary_sensor.workshop_smoke     # the soldering iron sets this off
   include:
     - binary_sensor.sump_high_water    # not a standard class, but worth shouting about
+    - input_boolean.test_hazard        # a toggle helper — see below
 ```
+
+### Toggle helpers, for testing and your own automations
+
+Home Assistant `input_boolean` helpers appear in the candidate list too. **None
+of them ever count automatically** — they carry no device class, so only an
+explicit tick promotes one. Opted in, a helper behaves like any other hazard:
+`on` announces, `off` releases it, and silencing works the same way.
+
+That buys two things a real detector can't:
+
+- **Rehearsal.** Flip the helper and hear the whole path — the tone, the
+  wording, every room, the silence — without setting off a smoke alarm. (The
+  Proactive tab's *Test an alert* button does this too, without needing a
+  helper at all.)
+- **Your own conditions.** An HA automation can decide something is wrong on
+  whatever logic you like and flip a helper to say so. That keeps Kenzy's
+  boundary intact: your automation does the concluding, and she still only ever
+  relays a state a device is asserting.
+
+A hand-picked helper is announced as *"There's an alert"* — she won't invent a
+hazard type for something she can't classify.
 
 ### Silencing an alert
 

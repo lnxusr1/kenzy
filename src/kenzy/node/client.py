@@ -55,6 +55,7 @@ import websockets.exceptions
 from websockets.asyncio.client import ClientConnection
 
 from kenzy import kenzy_version, protocol
+from kenzy.features import probe_import
 from kenzy.logutil import TRACE
 
 log = logging.getLogger(__name__)
@@ -310,9 +311,26 @@ def _resample(audio: np.ndarray[Any, Any], from_rate: int, to_rate: int) -> np.n
 
 
 def _bundled_model_paths() -> list[str]:
-    """Return real filesystem path to the bundled hey_ken_zee.tflite wake-word model."""
+    """The bundled wake-word model, in a format THIS host can actually run.
+
+    openwakeword needs ``tflite-runtime`` to load a ``.tflite`` model, and that
+    package publishes no wheel past cp311 and none current for macOS — while
+    ``onnxruntime`` is one of its unconditional dependencies and is therefore
+    always present. So the bundled ``.tflite`` is unusable on exactly the hosts
+    where the runtime is missing, even though the file is right there.
+
+    Choosing by CAPABILITY rather than by file extension means a Mac (or any
+    host without the tflite runtime) uses the ONNX copy automatically, instead
+    of failing at first detection with an error about a missing module nobody
+    asked for. tflite stays preferred where it runs: it is the lighter path on
+    Pi-class ARM, which is most of the fleet.
+    """
     model_dir = files("kenzy.node").joinpath("models")
-    return [str(model_dir.joinpath("hey_ken_zee.tflite"))]
+    tflite = model_dir.joinpath("hey_ken_zee.tflite")
+    onnx = model_dir.joinpath("hey_ken_zee.onnx")
+    if not probe_import("tflite_runtime") and onnx.is_file():
+        return [str(onnx)]
+    return [str(tflite)]
 
 
 def _infer_framework(model_paths: list[str]) -> str:
@@ -1122,7 +1140,12 @@ class NodeClient:
             from openwakeword.model import Model  # type: ignore[import-untyped]
         except ImportError as exc:
             raise RuntimeError(
-                "openwakeword is not installed – run: pip install openwakeword"
+                "openwakeword is not installed — a node cannot detect its wake word "
+                "without it. Install the wake-word extra: pip install 'kenzy[wakeword]'. "
+                "On Linux with Python 3.12+ that extra fails (openwakeword requires "
+                "tflite-runtime, which has no wheel past 3.11); install it without its "
+                "dependencies instead: pip install --no-deps openwakeword && "
+                "pip install onnxruntime tqdm scipy scikit-learn requests"
             ) from exc
 
         _ensure_oww_resources()

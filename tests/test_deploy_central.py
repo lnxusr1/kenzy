@@ -309,4 +309,6 @@ def test_mediakeys_is_excluded_from_the_main_pip_spec(tmp_path: Path) -> None:
     host = _host(services=["node"], extras=["mediakeys", "mqtt"])
     extras = _pip_extras(host, tmp_path).split(",")
     assert "mediakeys" not in extras
-    assert extras == ["node", "mqtt"]  # everything else still rides along
+    # Everything else still rides along — including `wakeword`, which a node
+    # host gains automatically now that the engine is its own extra.
+    assert extras == ["node", "mqtt", "wakeword"]

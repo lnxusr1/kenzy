@@ -38,9 +38,39 @@ Assistant's WebSocket API, feeding the room-presence model described under
 
 ## Requirements
 
-- Python 3.11+
+- Python 3.11+ (a room node on 3.12+ installs its wake-word engine differently — see below)
 - On Raspberry Pi OS / Debian: `sudo apt-get install libportaudio2 portaudio19-dev`
 - API keys: OpenAI (TTS + LLM), Home Assistant (home control skill). The weather skill uses the National Weather Service API — no key required.
+
+### Wake-word engine: a Python ceiling on Linux, and a note for macOS
+
+Wake-word detection uses [openwakeword](https://github.com/dscripka/openWakeWord),
+which declares `tflite-runtime` as a hard dependency **on Linux** — and that package
+publishes no wheel past **Python 3.11** and no sdist. Its own code imports tflite
+lazily and only fails if you hand it a `.tflite` model, so the requirement is real
+only in the packaging.
+
+Because of that, the engine lives in its **own extra**: a working node is
+`pip install "kenzy[node,wakeword]"`. On Linux with Python 3.12+ that extra can't
+resolve, so install it without its dependencies instead — Kenzy then uses the
+bundled ONNX model automatically:
+
+```bash
+pip install "kenzy[node]"
+pip install --no-deps openwakeword
+pip install onnxruntime tqdm scipy scikit-learn requests
+```
+
+The one-line installer picks the right path from your Python version. The server
+and backend services are unaffected — only room nodes run a wake word.
+
+**On macOS it's the opposite problem, and it's already handled.** `tflite-runtime`
+is excluded there by a platform marker, so the install succeeds and there is no
+tflite runtime at all. Kenzy ships the wake-word model in **both** formats and picks
+by what the host can actually run — a Mac uses the bundled ONNX copy automatically,
+with no conversion step and nothing to configure. ONNX measured ~13% *faster* than
+tflite on x86 and ~36% slower on Pi-class ARM, which is why the choice is made per
+host rather than globally.
 
 ## Setup
 

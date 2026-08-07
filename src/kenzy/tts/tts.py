@@ -174,16 +174,15 @@ def _synthesise_openai(text: str, voice_prompt: str) -> bytes:
 
 
 def _resolve_device(device: str) -> str:
-    """Resolve 'auto' to the best available PyTorch device."""
-    if device != "auto":
-        return device
-    import torch  # type: ignore[import-untyped]
+    """Resolve 'auto' to the best available PyTorch device.
 
-    if torch.cuda.is_available():
-        return "cuda"
-    if torch.backends.mps.is_available():
-        return "mps"
-    return "cpu"
+    Thin wrapper over :func:`kenzy.torchdevice.resolve_device`, which the
+    ``kenzy-setup`` pre-warm shares — it used to have its own handling and
+    passed the literal string "auto" straight to Kokoro.
+    """
+    from kenzy.torchdevice import resolve_device
+
+    return resolve_device(device)
 
 
 def _synthesise_kokoro(text: str) -> bytes:

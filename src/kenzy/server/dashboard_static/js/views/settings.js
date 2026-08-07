@@ -503,7 +503,7 @@ function BackupPanel() {
       ${" "}Include the lockbox key — the archive can then <b>restore (and decrypt) stored
       secrets</b>; untick for a shareable archive that carries lockbox ciphertext only
     </label>
-    <div class="ctl-row"><a class="btn-ghost" href=${"/api/backup" + (qs ? "?" + qs : "")} download>Download backup</a></div>
+    <div class="ctl-row"><a class="btn-ghost" href=${"/api/backup" + (qs ? "?" + qs : "")} download="">Download backup</a></div>
     <${RestorePanel} />
   `;
 }

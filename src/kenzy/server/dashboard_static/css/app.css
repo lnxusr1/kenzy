@@ -413,7 +413,11 @@ button { font: inherit; cursor: pointer; }
 .cfg-msg { margin-top: var(--s4); font-size: 13px; }
 .cfg-msg.ok { color: var(--led-up); }
 .cfg-msg.err { color: var(--led-down); }
-.ctl-row { display: flex; gap: var(--s3); flex-wrap: wrap; }
+/* Action rows sit BELOW the thing they act on, so they need the same breathing
+   room .cfg-actions has — otherwise a button ends up flush against the list or
+   label above it (Settings → Regenerate spoken cues, Download backup) while an
+   otherwise identical row elsewhere is spaced. Same token, deliberately. */
+.ctl-row { display: flex; gap: var(--s3); flex-wrap: wrap; margin-top: var(--s5); }
 .ctl-row .btn-ghost { flex: 0 0 auto; width: auto; padding-inline: var(--s5); }
 /* An <a> styled as a button (Settings → Download backup) must not keep the
    link underline — otherwise it reads as a hyperlink wearing a border. */

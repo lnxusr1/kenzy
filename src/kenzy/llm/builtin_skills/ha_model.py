@@ -828,9 +828,17 @@ def build_safety_map(
 #: nobody assigned to a room is still worth announcing; an area-walk would drop
 #: both silently. ``area_name(entity_id)`` yields None when unassigned, which
 #: :func:`build_safety_map` reads as "no room" rather than a reason to skip.
+#:
+#: ``input_boolean`` is here so toggle helpers can be OFFERED, never so they
+#: count: they carry no device class, so nothing auto-detects them and only an
+#: explicit curation ``include`` promotes one. That gives two things a hazard
+#: sensor can't — a way to rehearse the whole path without setting off a real
+#: detector, and a target an HA automation can flip when it decides something
+#: is wrong, which keeps the "she relays, never infers" boundary intact: the
+#: automation does the concluding, Kenzy still just relays an asserted state.
 _SAFETY_TEMPLATE = (
     "{% set ns = namespace(items=[]) %}"
-    "{% for d in ['binary_sensor', 'alarm_control_panel'] %}"
+    "{% for d in ['binary_sensor', 'alarm_control_panel', 'input_boolean'] %}"
     "{% for e in states[d] %}"
     "{% set ns.items = ns.items + [{"
     "'entity_id': e.entity_id,"
@@ -849,7 +857,7 @@ _SAFETY_TEMPLATE = (
 
 
 async def fetch_safety_rows() -> list[dict[str, Any]]:
-    """Hazard candidates from HA: every binary_sensor and alarm panel.
+    """Hazard candidates from HA: binary sensors, alarm panels, toggle helpers.
 
     Shared by the map (what the server's filter uses) and, later, the curation
     editor's candidate list — so the two can never disagree about which

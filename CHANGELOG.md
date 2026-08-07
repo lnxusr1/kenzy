@@ -8,6 +8,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Most releases need nothing beyond the upgrade itself. When one does, it's noted
 here and spelled out in **[Upgrading](https://docs.kenzy.ai/upgrading/)**.
 
+## [5.0.7]
+
+### Added
+
+- **Toggle helpers can be safety sources**, which makes the whole path rehearsable. Home Assistant `input_boolean` helpers now appear in the **Safety sensors** list. **None of them ever count automatically** — they carry no device class, so only an explicit tick promotes one — but ticked, a helper behaves exactly like a smoke sensor: `on` announces, `off` releases it, silencing works the same way. That buys two things a real detector can't. You can flip a switch and hear the tone, the wording, every room and the silence, without setting off an actual alarm. And your own automation can decide something is wrong on whatever logic you like and flip a helper to say so — which keeps Kenzy's boundary exactly where it was: your automation does the concluding, she still only relays a state a device is asserting.
+
+### Fixed
+
+- **`kenzy-setup` crashed instead of skipping when the wake-word engine was absent.** The guard wrapped the *import* of the node client, but that module imports `sounddevice` eagerly and openwakeword lazily — so on a host with one and not the other the import succeeded and the *call* raised. Not hypothetical: the `speaker` extra ships `sounddevice`, and this step runs before the SpeechBrain download, so `pip install kenzy[speaker] && kenzy-setup` blew up without ever fetching the model it was run for. It now probes the real dependency, and neither download can abort the others.
+
+- **The pre-warm script asked Kokoro for a device called "auto".** `auto` is the packaged default for `kokoro.device` and a string PyTorch cannot use; the TTS service resolved it and `kenzy-setup` passed it through raw — so the one code path whose entire job is warming the model was the path getting it wrong on a default install. The two also disagreed about the default itself (`auto` in the service, `cpu` in setup), meaning a GPU host could pre-warm on CPU and then run on CUDA. Both now share one implementation.
+
+- **`kenzy-speaker` never read `.env`.** Alone among the five services it never called `load_dotenv()`, so it never saw `KENZY_SERVICE_TOKEN` and authenticated as though no token existed — invisible until a token is actually set, at which point exactly one service quietly fails to register.
+
+- **The "Regenerate spoken cues" button sat flush against the phrases above it.** Action rows using `.ctl-row` — Regenerate, Download backup, the node's Trigger/Stop/Restart group — had no top margin, while the visually identical `.cfg-actions` rows had one. So the same shape was spaced in some places and not others, depending purely on which class it happened to use. `.ctl-row` now carries the same spacing token.
+
+- **A downloaded backup was named "true".** The Download backup link carried a bare `download` attribute, which the template layer turns into `download="true"` — and that attribute's *value* is what the browser uses as the suggested filename, silently overriding the perfectly good `kenzy-backup-<timestamp>.tar.gz` the server was already sending. An empty value means "download it, and use the server's name", which is what it now has. (Also closes a long-standing backlog worry: modern browsers raise no "insecure download" warning here, so the only real problem was the name.)
+
+### Changed
+
+- **Room nodes install their wake-word engine separately, and Macs now work out of the box.** openwakeword declares `tflite-runtime` as a hard dependency **on Linux**, and that package publishes no wheel past Python 3.11 and no source archive at all. So `pip install "kenzy[node]"` simply failed on 3.12+, inside a transitive dependency, with an error naming neither Kenzy nor the wake word — while on macOS the install *succeeded* and then couldn't detect anything, because the bundled model was in a format with no runtime present.
+
+  Three changes close it. The wake-word model now ships in **both** tflite and ONNX form, and the node picks **by what the host can actually run** rather than by file extension — so a Mac uses ONNX automatically, with no hand-converted model and nothing to configure. tflite stays preferred wherever its runtime exists, because it measured ~36% cheaper per frame on Pi-class ARM (and, for what it's worth, ~13% *dearer* on x86 — which is why the choice is made per host and not globally). And the engine moved into its own **`wakeword`** extra, so a working node is `kenzy[node,wakeword]`; on Linux 3.12+ the installer installs it without its dependencies instead, and the ONNX fallback takes over.
+
+  Install *order* cannot avoid this, which is worth recording: pip re-resolves an installed package's declared requirements, so pre-installing openwakeword and then asking for anything that depends on it pulls `tflite-runtime` straight back in. The dependency had to become unreachable from the `node` extra, not merely already-satisfied.
+
+  **The one sharp edge:** `pip install "kenzy[node]"` on its own now yields a node with no wake engine. It says so clearly at startup, and gives the exact command for your Python version.
+
 ## [5.0.6]
 
 ### Added

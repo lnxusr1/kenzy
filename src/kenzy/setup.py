@@ -17,18 +17,36 @@ import logging
 import sys
 from typing import Any
 
+from kenzy.features import probe_import
+from kenzy.torchdevice import resolve_device
+
 log = logging.getLogger(__name__)
 
 
 def _setup_openwakeword() -> None:
-    try:
-        from kenzy.node.client import _ensure_oww_resources  # type: ignore[import-untyped]
-    except ImportError:
+    # Probe the ACTUAL dependency, not a module that happens to use it. The node
+    # client imports sounddevice at module scope but openwakeword lazily, inside
+    # _ensure_oww_resources — so on a host with sounddevice and no openwakeword
+    # the import succeeded and the CALL raised. That host is not hypothetical:
+    # the `speaker` extra ships sounddevice, and this step runs before the
+    # SpeechBrain download, so `pip install kenzy[speaker] && kenzy-setup` blew
+    # up and never fetched the model it was actually run for.
+    if not probe_import("openwakeword"):
         log.info("openwakeword not installed — skipping")
         return
+    try:
+        from kenzy.node.client import _ensure_oww_resources  # type: ignore[import-untyped]
+    except ImportError as exc:
+        log.info("node extra not installed — skipping openwakeword models (%s)", exc)
+        return
     log.info("Checking openwakeword infrastructure models…")
-    _ensure_oww_resources()
-    log.info("openwakeword models ready.")
+    try:
+        _ensure_oww_resources()
+        log.info("openwakeword models ready.")
+    except Exception as exc:
+        # A download failure is worth a warning, never an abort: the steps after
+        # this one fetch different models for different services.
+        log.warning("openwakeword model setup failed: %s", exc)
 
 
 def _setup_speechbrain(model_source: str, model_save_dir: str) -> None:
@@ -44,12 +62,16 @@ def _setup_speechbrain(model_source: str, model_save_dir: str) -> None:
         log.info("SpeechBrain model already present at %s — skipping", model_save_dir)
         return
     log.info("Downloading SpeechBrain model '%s' → %s…", model_source, model_save_dir)
-    EncoderClassifier.from_hparams(
-        source=model_source,
-        savedir=model_save_dir,
-        run_opts={"device": "cpu"},
-    )
-    log.info("SpeechBrain model ready.")
+    try:
+        EncoderClassifier.from_hparams(
+            source=model_source,
+            savedir=model_save_dir,
+            run_opts={"device": "cpu"},
+        )
+        log.info("SpeechBrain model ready.")
+    except Exception as exc:
+        # Same reasoning as above — one model's download must not abort the run.
+        log.warning("SpeechBrain model setup failed: %s", exc)
 
 
 def _setup_kokoro(voice: str, device: str, lang_code: str) -> None:
@@ -107,7 +129,9 @@ def main() -> None:
     if str(tts_cfg.get("provider", "openai")).lower() == "kokoro":
         kcfg = tts_cfg.get("kokoro", {})
         voice = str(kcfg.get("voice", "af_heart"))
-        device = str(kcfg.get("device", "cpu"))
+        # "auto" is the packaged default AND a value Kokoro cannot consume, so it
+        # must be resolved here exactly as kenzy-tts resolves it.
+        device = resolve_device(str(kcfg.get("device", "auto")))
         lang_code = str(kcfg.get("lang_code") or voice[0])
         _setup_kokoro(voice, device, lang_code)
 

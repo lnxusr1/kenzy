@@ -43,6 +43,37 @@ curl -fsSL https://kenzy.ai/install.sh | bash -s -- --profile node --token <toke
     node; that's the secure default. Clear `discovery.token` in `server.yaml` only
     if you deliberately want open joins.
 
+## Platform limits for room nodes
+
+Wake-word detection uses [openwakeword](https://github.com/dscripka/openWakeWord),
+and its packaging imposes one hard limit and one quirk:
+
+| Host | What happens |
+|---|---|
+| **Linux, Python ≤ 3.11** | `kenzy[node,wakeword]`. `tflite-runtime` installs and the bundled `.tflite` model is used — the faster path on ARM. |
+| **Linux, Python 3.12+** | `kenzy[node]`, then openwakeword **without its dependencies**. `tflite-runtime` has no wheel past cp311 and no sdist, so the `wakeword` extra cannot resolve; the ONNX model is used instead. |
+| **macOS** | `kenzy[node,wakeword]`. `tflite-runtime` is excluded by a platform marker, so the ONNX model is used automatically. Nothing to configure. |
+
+The one-line installer picks the right path from the interpreter version. Server
+and backend-service hosts are unaffected — only room nodes run a wake word.
+
+Installing openwakeword by hand on 3.12+:
+
+```bash
+pip install --no-deps openwakeword
+pip install onnxruntime tqdm scipy scikit-learn requests
+```
+
+Note that install *order* cannot avoid this: pip re-resolves an installed
+package's declared requirements, so pre-installing openwakeword and then asking
+for an extra that depends on it pulls `tflite-runtime` back in. The dependency
+has to be unreachable from the extra, which is why the engine is split out.
+
+The model format is chosen by **what the host can run**, not by configuration:
+if `tflite-runtime` is importable the `.tflite` model is used, otherwise the
+`.onnx` one. On Pi-class ARM tflite measured ~36% cheaper per frame, which is
+why it stays preferred where it exists.
+
 ## Manual installation
 
 Prefer to do it by hand, without the installer script? Kenzy installs from PyPI into

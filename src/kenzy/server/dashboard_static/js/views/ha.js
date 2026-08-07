@@ -359,6 +359,10 @@ export function HaView() {
         wrong. Turn one OFF when it cries wolf (the smoke sensor above a soldering
         bench), or ON for something unusual that deserves shouting about. Kenzy's own
         entities are never used.</p>
+      <p class="micro">Toggle helpers (<span class="mono">input_boolean</span>) are listed
+        too and never count unless you tick one — handy for rehearsing the whole path
+        without a real detector, or for letting your own Home Assistant automation decide
+        something is wrong and flip a switch to say so.</p>
       <p class="micro">Nothing is announced until <span class="mono">proactive.safety.enabled</span>${" "}is on in Settings. When it is, alerts play in <strong>every</strong> room including
         muted ones — say anything to Kenzy to silence one, and it stays silent until that
         sensor goes off and trips again.</p>

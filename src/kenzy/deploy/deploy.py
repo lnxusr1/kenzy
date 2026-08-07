@@ -601,6 +601,14 @@ def _pip_extras(host: HostConfig, local_path: Path) -> str:
     """
     extras: list[str] = [*host.services, *(e for e in host.extras if e != _MK_EXTRA)]
 
+    # A node needs the wake-word engine, which lives in its own extra because
+    # openwakeword hard-requires tflite-runtime on Linux (no wheel past cp311).
+    # Deploy targets are Pi-class hosts on 3.11, so the extra is the right path
+    # here; a 3.12+ target needs the --no-deps install the one-line installer
+    # does, which is why this is added rather than assumed.
+    if "node" in host.services and "wakeword" not in extras:
+        extras.append("wakeword")
+
     if "tts" in host.services and "kokoro" not in extras:
         # Prefer the central store (configs/services/tts.yaml); fall back to legacy.
         central = local_path / "configs" / "services" / "tts.yaml"

@@ -283,6 +283,12 @@ def main() -> None:
     global _classifier, _embeddings_dir, _identify_threshold, _unknown_speaker, _sem, _model_name
 
     import uvicorn  # type: ignore[import-untyped]
+    from dotenv import load_dotenv  # type: ignore[import-untyped]
+
+    # The other four services all do this; speaker did not, so it never saw
+    # KENZY_SERVICE_TOKEN from .env and authenticated as if no token existed —
+    # silently, because an unauthenticated mesh looks identical until one is set.
+    load_dotenv()  # KENZY_SERVICE_TOKEN, HF_TOKEN; harmless when absent
 
     from kenzy.logutil import configure_logging, level_value
     from kenzy.serviceboot import (

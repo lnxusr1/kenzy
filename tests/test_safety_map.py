@@ -136,3 +136,40 @@ def test_the_hazard_template_reads_device_class_safely():
 
     assert "state_attr(e.entity_id, 'device_class')" in _SAFETY_TEMPLATE
     assert "e.attributes.device_class" not in _SAFETY_TEMPLATE
+
+
+# --- toggle helpers ----------------------------------------------------------
+
+
+def test_toggle_helpers_are_offered_but_never_count_on_their_own():
+    """A house is full of input_booleans for unrelated things. They're fetched so
+    they can be OFFERED in the editor; only an explicit include promotes one."""
+    from kenzy.llm.builtin_skills.ha_model import classify_safety
+
+    rows = [
+        _row("input_boolean.enable_sprinklers", "", ""),
+        _row("input_boolean.test_hazard", "", "Kitchen"),
+    ]
+    assert build_safety_map(rows, {}) == {}  # nothing auto-counts
+
+    cands = {c.entity_id: c for c in classify_safety(rows, {})}
+    assert cands["input_boolean.test_hazard"].used is False
+    assert cands["input_boolean.test_hazard"].reason == "not a hazard sensor"
+
+
+def test_an_opted_in_helper_behaves_like_any_other_hazard():
+    rows = [_row("input_boolean.test_hazard", "", "Kitchen")]
+    out = build_safety_map(rows, {"safety": {"include": ["input_boolean.test_hazard"]}})
+    entry = out["input_boolean.test_hazard"]
+    assert entry["asserted"] == "on"  # input_boolean states are on/off
+    assert entry["room"] == "kitchen"
+    # Honest about not knowing what kind of hazard a hand-picked toggle is.
+    assert entry["hazard"] == "an alert"
+
+
+def test_the_template_fetches_helpers():
+    """Without the domain in the query they never appear as candidates, so even
+    the `include` escape hatch can't reach them."""
+    from kenzy.llm.builtin_skills.ha_model import _SAFETY_TEMPLATE
+
+    assert "input_boolean" in _SAFETY_TEMPLATE

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "kenzy"
-version = "5.0.6"
+version = "5.0.7"
 description = "Distributed home voice-assistant: kenzy-node, kenzy-server, kenzy-stt, kenzy-tts, kenzy-llm, kenzy-speaker"
 requires-python = ">=3.11"
 readme = "README.md"
@@ -41,11 +41,26 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Install on the room node (Pi Zero 2 W or similar)
+# Install on the room node (Pi Zero 2 W or similar).
+# NB: the wake-word engine is a SEPARATE extra — install `kenzy[node,wakeword]`
+# for a working node. See the `wakeword` extra below for why it is split out.
 node = [
     "sounddevice>=0.4.6",
-    "openwakeword>=0.6.0",
     "zeroconf>=0.130",
+]
+
+# The wake-word engine. Split out of `node` because openwakeword declares
+# tflite-runtime as a HARD dependency on Linux, and that package publishes no
+# wheel past cp311 and no sdist — so `pip install kenzy[node]` simply failed on
+# Python 3.12+, inside a transitive dependency, naming neither Kenzy nor the
+# wake word. openwakeword's own code imports tflite lazily and only errors if
+# you hand it a .tflite model, so on 3.12+ the installer installs it with
+# --no-deps plus its real requirements and Kenzy falls back to the bundled ONNX
+# model automatically (see node/client.py:_bundled_model_paths). Keeping it in
+# `node` would make that impossible: pip re-resolves an installed package's
+# declared requirements, so no install ordering can dodge it.
+wakeword = [
+    "openwakeword>=0.6.0",
 ]
 
 # Speakerphone volume buttons (5.0.4). Deliberately NOT in the node extra:
@@ -167,6 +182,10 @@ where = ["src"]
 ]
 "kenzy.node" = [
     "models/*.tflite",
+    # An ONNX copy of the wake-word model, for hosts with no tflite runtime
+    # (macOS, and any Python past 3.11). Optional: _bundled_model_paths picks
+    # whichever format the host can actually run.
+    "models/*.onnx",
     "sounds/*.wav",
 ]
 "kenzy.server" = [
