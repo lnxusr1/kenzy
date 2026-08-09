@@ -8,6 +8,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Most releases need nothing beyond the upgrade itself. When one does, it's noted
 here and spelled out in **[Upgrading](https://docs.kenzy.ai/upgrading/)**.
 
+## [5.0.8]
+
+### Fixed
+
+- **A room node on Python 3.12 installed cleanly and then couldn't hear a thing.** The same shape as the macOS bug 5.0.7 fixed, and it hid the same way: pip exited 0, every command ran, and the wake word never loaded. Kenzy capped NumPy below 2.0 for *every* host, while the wake engine's own dependency `scipy` now requires NumPy 2 and dies on a missing attribute the moment a model is opened.
+
+  That cap was not gratuitous — `tflite-runtime` is compiled against NumPy 1.x and has never been rebuilt, so a NumPy 2 host cannot load a `.tflite` model at all. But that only applies where tflite is *used*, which is Python 3.11 and older. Above that there is no tflite wheel and the ONNX path runs instead, so the cap was buying nothing and costing everything. The requirement is now split at 3.12, and both halves are forced rather than preferred.
+
+- **The server and all-in-one profiles could not install at all on Python 3.13 or newer.** The same cap pinned NumPy to a release that publishes no wheel for 3.13, so pip tried to build it from source and failed part-way through, naming NumPy and nothing about Kenzy. Debian 13 ships Python 3.13, so this was waiting for anyone moving to a current distribution.
+
+- **Choosing the local voice broke the whole install on Python 3.13 or newer.** Kokoro publishes no build for 3.13 yet, and it was a hard requirement of the `kokoro` extra — so `--local-voice` on a current distribution failed the entire install rather than the one feature. The extra is now version-gated and the installer says plainly that the TTS service will use its cloud provider on that host, because silently handing someone a cloud voice when they deliberately asked for a local one is the wrong kind of quiet.
+
+### Changed
+
+- **A machine with no NVIDIA card no longer downloads 2.7 GB of CUDA it can't use.** The speaker service and the local voice both pull PyTorch, whose default Linux wheels bundle the whole CUDA runtime. On a GPU-less server that is dead weight in every install, every upgrade, and every backup of the disk it sits on — measured here at **5.7 GB of virtualenv down to 1.9 GB**.
+
+  The installer now detects whether an NVIDIA card is present and only takes the CUDA build when there is one, so a GPU host is unaffected. `--cpu-torch` and `--cuda-torch` force it either way, and if the CPU-only download fails the install simply continues with the standard build. **An existing install keeps the build it has** — see [Upgrading → 5.0.8](https://docs.kenzy.ai/upgrading/#508-an-existing-install-keeps-the-pytorch-build-it-already-has).
+
+- **Python 3.13 and 3.14 are supported**, and now say so. Both were verified end to end — install, services running, wake word loading — before the claim was added.
+
+- **The installer script moved into the main repository.** `https://kenzy.ai/install.sh` is unchanged and the one-liner in the docs still works; the file simply lives with the package it installs now, so it can be tested automatically on every change instead of only when someone remembers.
+
+  That testing is why this release is mostly packaging fixes: every bug above was found by running the real installer across Debian 12/13, Ubuntu 24.04/26.04, macOS, x86 and arm64, and Python 3.11 through 3.14 — and then checking that the wake-word model actually **loads and infers**, rather than that the install command returned success. Three of the four had already reached a machine.
+
 ## [5.0.7]
 
 ### Added

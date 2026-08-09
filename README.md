@@ -40,6 +40,10 @@ Assistant's WebSocket API, feeding the room-presence model described under
 
 - Python 3.11+ (a room node on 3.12+ installs its wake-word engine differently — see below)
 - On Raspberry Pi OS / Debian: `sudo apt-get install libportaudio2 portaudio19-dev`
+- On a Linux/x86 host with **no NVIDIA card**, the installer picks the CPU-only PyTorch
+  build for the speaker service and the local voice, skipping ~2.7 GB of unusable CUDA
+  runtime. Detected automatically; `--cpu-torch` / `--cuda-torch` override. An existing
+  install keeps the build it already has.
 - API keys: OpenAI (TTS + LLM), Home Assistant (home control skill). The weather skill uses the National Weather Service API — no key required.
 
 ### Wake-word engine: a Python ceiling on Linux, and a note for macOS
@@ -213,6 +217,7 @@ Included skills:
 | `home_assistant.py` | Smart home control via Home Assistant REST API (secure actions require a recognized speaker) |
 | `lists.py` | Shopping / to-do lists, backed by Home Assistant's `todo` entities — add, read, check off, create (no Kenzy-side storage, so your phone already has them) |
 | `schedule.py` | Timers, alarms, and reminders — including "turn on the lights in 30 seconds", replayed through the pipeline at fire time |
+| `proactive_control.py` | Voice control over unprompted announcements — "stop" silences a sounding alert until its sensor cycles; "disable the alerts" turns the feature off entirely, and confirms first |
 | `memory_skill.py` | Remember / recall / forget, per person, with private / personal / shared tiers (recognized voices only) |
 | `presence.py` | "Is Mom home?", "where's Alice?", "is anyone in the loft?" — HA `person` entities composed with the room-presence model (where a voice was last heard, with its age). Spoken names match forgivingly ("Sara" finds Sarah; nicknames via per-person aliases on the People page), and a genuine near-tie asks instead of guessing |
 | `datetime_skill.py` | Current date and time (with a deterministic fast path) |

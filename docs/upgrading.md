@@ -32,6 +32,33 @@ Upgrade the **server first**, then services, then nodes.
 
 Newest first. Anything not listed needs no manual steps.
 
+### 5.0.8 — an existing install keeps the PyTorch build it already has
+
+New installs on a Linux/x86 machine with no NVIDIA card now get the CPU-only
+build of PyTorch, which skips roughly **2.7 GB** of CUDA runtime that machine
+could never use. An upgrade will **not** switch you over: pip sees `torch`
+already installed and satisfying the requirement, so it leaves it alone. That
+is deliberate — an upgrade replacing a working PyTorch is a bigger risk than
+the disk it would reclaim.
+
+Nothing is broken if you do nothing. If you want the space back on a machine
+with no GPU, remove the virtualenv and re-install:
+
+```bash
+rm -rf ~/.local/share/kenzy/venv
+curl -fsSL https://kenzy.ai/install.sh | bash -s -- --profile server --yes
+```
+
+Your configuration, data and voiceprints live in `~/.config/kenzy` and are
+untouched by this. On a machine that **does** have an NVIDIA card, the installer
+detects it and keeps the standard CUDA build; `--cpu-torch` and `--cuda-torch`
+force either way.
+
+### 5.0.7
+
+No manual steps. Room nodes on Python 3.12 or newer, and on macOS, install the
+wake-word engine differently — but the installer handles that for you.
+
 ### 5.0.5 and 5.0.6
 
 No manual steps. 5.0.6 adds proactive safety announcements, but they are **off
