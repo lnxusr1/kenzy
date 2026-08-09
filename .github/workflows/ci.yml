@@ -33,10 +33,28 @@ jobs:
           cache: pip
 
       - name: System packages
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq libportaudio2 portaudio19-dev
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libportaudio2 portaudio19-dev espeak-ng
 
       - name: Install
-        run: pip install -e ".[server,stt,tts,llm,speaker,node,dev]"
+        # The gate needs EVERY optional dependency present. mypy reads the same
+        # source whether or not an extra is installed, and the narrow
+        # `# type: ignore[import-untyped]` comments do not cover a module that
+        # is missing outright — that is `import-not-found`. The dev venv here
+        # happens to have them all, which is exactly why this passed locally and
+        # failed on the runner.
+        run: |
+          # CPU torch first: speaker and kokoro both pull it, and the CUDA build
+          # is ~2.7 GB of runtime no hosted runner can use.
+          pip install --index-url https://download.pytorch.org/whl/cpu torch torchaudio
+          pip install -e ".[server,stt,tts,llm,speaker,node,mediakeys,sound,kokoro,mqtt,dev]"
+          # The wake-word engine without its declared tflite dependency, which
+          # has no wheel past cp311. This is NOT a claim about which backend a
+          # real install would choose — that is the install matrix's question.
+          # The gate only needs the module to exist so mypy can see it.
+          pip install --no-deps openwakeword
+          pip install onnxruntime tqdm scipy scikit-learn requests
 
       - name: ruff
         run: ruff check src/ tests/
