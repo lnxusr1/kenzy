@@ -15,6 +15,7 @@ installed here and no host needs keys to any other.
     scripts/lab.py all                   # build -> install -> smoke -> fleet
     scripts/lab.py install --hosts vm1,vm2
     scripts/lab.py fleet                 # assert the roster on the server
+    scripts/lab.py reset --hosts pi-a    # uninstall+purge: a revert for real hardware
 
 Rolling back to the pre-install snapshots is deliberately NOT automated here:
 it needs credentials on the hypervisor, which this script has no business
@@ -154,6 +155,38 @@ def stage_check(hosts: list[str]) -> bool:
     return out
 
 
+def stage_reset(hosts: list[str]) -> bool:
+    """Return hosts to their pre-install state — a snapshot revert for machines
+    that cannot be snapshotted.
+
+    The boards are physical, so a VM-only rollback leaves them carrying the old
+    `discovery.token` while the rebuilt server generates a new one. install.sh
+    cannot fix that on a re-run: kenzy-init deliberately refuses to clobber an
+    existing config, which is right for a real host and wrong for a test rig.
+
+    Uses the product's own uninstaller, so this exercises `--uninstall --purge`
+    as a side effect — a path nothing else tests. --purge is the part that
+    matters: it removes the config home, and therefore the stale token.
+    """
+    print("\n[reset] uninstall + purge")
+
+    def one(h: str) -> bool:
+        if not scp(h, INSTALLER, "/tmp/install.sh"):
+            return record(h, "push installer", False)
+        r = ssh(h, "chmod +x /tmp/install.sh && /tmp/install.sh --uninstall --purge --yes",
+                timeout=600)
+        if r.returncode != 0:
+            tail = (r.stdout + r.stderr).strip().splitlines()[-4:]
+            return record(h, "uninstall --purge", False, "; ".join(tail)[:300])
+        left = ssh(h, "ls -d ~/.config/kenzy ~/.local/share/kenzy 2>/dev/null | tr '\\n' ' '",
+                   timeout=60).stdout.strip()
+        return record(h, "uninstall --purge", not left, f"still present: {left}")
+
+    out = all(fan(hosts, one))
+    flush()
+    return out
+
+
 def stage_build() -> Path | None:
     print("\n[build] wheel from the working tree")
     dist = REPO / "dist"
@@ -250,8 +283,13 @@ def stage_install(hosts: list[str], wheel: Path) -> bool:
             print("  server install failed — skipping dependent nodes")
             return False
 
-    token = _server_token() if SERVER in hosts else ""
-    if SERVER in hosts:
+    # Fetch the token whenever a net-1 NODE is being installed, not merely when
+    # the server is in this run. Scoping a run to the boards alone (which is
+    # exactly what a physical-host reset needs) would otherwise install them
+    # with no token against a server that has one, and the join fails silently.
+    need_token = any(HOSTS[h].net == 1 and HOSTS[h].profile == "node" for h in hosts)
+    token = _server_token() if need_token else ""
+    if need_token:
         record(SERVER, "discovery token " + ("read" if token else "ABSENT"), bool(token))
 
     rest = [h for h in hosts if h != SERVER]
@@ -361,7 +399,8 @@ def stage_fleet(hosts: list[str]) -> bool:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("stage", choices=["check", "build", "install", "smoke", "fleet", "all"])
+    ap.add_argument("stage",
+                    choices=["check", "reset", "build", "install", "smoke", "fleet", "all"])
     ap.add_argument("--hosts", help="comma-separated subset (default: all)")
     args = ap.parse_args()
 
@@ -378,6 +417,8 @@ def main() -> int:
     ok = True
     if args.stage in ("check", "all"):
         ok &= stage_check(hosts)
+    if args.stage == "reset":
+        return 0 if stage_reset(hosts) else 1
     if args.stage in ("build", "install", "all"):
         wheel = stage_build()
         if wheel is None:

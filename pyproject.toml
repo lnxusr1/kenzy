@@ -39,16 +39,19 @@ classifiers = [
 dependencies = [
     "websockets>=12.0",
     "PyYAML>=6.0",
-    # numpy is version-split on purpose, and the ceiling is load-bearing: numpy 2
-    # broke the stack on the 3.11 hosts, which is what prod runs, so <=3.12 keeps
-    # the pin exactly as it was. 3.13+ cannot honour it — numpy 1.26 publishes no
-    # cp313 wheel, and the scipy that does have one is built against numpy 2 and
-    # references np.long — so those hosts get numpy 2 because there is no
-    # alternative, not because it was chosen. Found by the test lab: the older
-    # single pin let a node install cleanly on 3.13 and then fail to load a wake
-    # word at all.
-    "numpy>=1.26,<2.0; python_version < '3.13'",
-    "numpy>=2.1; python_version >= '3.13'",
+    # No upper bound. There was one — `<2.0` — carried since v3.0.0, and it
+    # cost three separate failures before anyone wrote down why it existed:
+    # a GTX 1080 old enough to need an ancient CUDA, hence an ancient torch,
+    # hence numpy 1.x. That is a constraint of ONE DEPLOYMENT's hardware, not
+    # of this package, and pinning it here imposed it on every user who has no
+    # such card — while current scipy requires numpy>=2 at runtime and dies on
+    # np.long without it.
+    #
+    # Operator pins belong in the config home's `constraints.txt`, which is
+    # honoured on install AND on every auto-upgrade precisely so a deployment
+    # can hold a dependency back without the project doing it globally. The
+    # packaged example file uses `numpy<2.0` as its illustration.
+    "numpy>=1.26",
 ]
 
 [project.optional-dependencies]

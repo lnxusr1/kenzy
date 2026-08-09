@@ -92,6 +92,17 @@ jobs:
       - name: Bootstrap
         run: apt-get update -qq && apt-get install -y -qq --no-install-recommends ca-certificates git
 
+      # A container has no sound server, and sounddevice initialises PortAudio
+      # at IMPORT — so `import kenzy.node.client` dies before any check runs.
+      # Debian's portaudio finds an ALSA fallback; Ubuntu's reaches for
+      # PulseAudio and there is nothing to connect to. A null ALSA default gives
+      # it a host API to open. This is an environment gap: a real node has a
+      # sound stack, and the node's own audio init is separately non-fatal.
+      - name: Null audio device
+        run: |
+          apt-get install -y -qq --no-install-recommends libasound2-plugins || true
+          printf 'pcm.!default { type null }\nctl.!default { type null }\n' > /etc/asound.conf
+
       - uses: actions/checkout@v4
 
       - uses: actions/download-artifact@v4
@@ -178,6 +189,18 @@ jobs:
           apt-get install -y -qq --no-install-recommends \
             python3 python3-venv python3-dev git ca-certificates \
             build-essential libportaudio2 portaudio19-dev
+
+      # A container has no sound server, and sounddevice initialises PortAudio
+      # at IMPORT — so `import kenzy.node.client` dies before any check runs.
+      # Debian's portaudio finds an ALSA fallback; Ubuntu's reaches for
+      # PulseAudio and there is nothing to connect to. A null ALSA default gives
+      # it a host API to open. This is an environment gap: a real node has a
+      # sound stack, and the node's own audio init is separately non-fatal.
+      - name: Null audio device
+        run: |
+          apt-get install -y -qq --no-install-recommends libasound2-plugins || true
+          printf 'pcm.!default { type null }\nctl.!default { type null }\n' > /etc/asound.conf
+
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with: {name: wheel, path: dist}

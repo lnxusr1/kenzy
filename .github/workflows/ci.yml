@@ -36,14 +36,24 @@ jobs:
         run: sudo apt-get update -qq && sudo apt-get install -y -qq libportaudio2 portaudio19-dev
 
       - name: Install
-        # Deliberately no `kokoro`: it publishes nothing for 3.13+, and the
-        # suite never imports it — the three tests that mention it mock it. The
-        # kokoro-bearing environment is the mypy job's problem, not this one.
+        # This must reproduce the environment the gate is RUN in locally, or it
+        # reports on a different program than the developer does. Three separate
+        # CI failures came from that gap, each found one missing dependency at a
+        # time — openwakeword included, which two tests import directly.
+        #
+        # `kokoro` is the one deliberate omission: it publishes nothing for
+        # 3.13+, and no test imports it (the three that mention it mock it).
+        # The kokoro-bearing environment belongs to the mypy job, which pins
+        # itself to 3.11 for exactly that reason.
         run: |
           # CPU torch first: the speaker extra pulls it, and the CUDA build is
           # ~2.7 GB of runtime no hosted runner can use.
           pip install --index-url https://download.pytorch.org/whl/cpu torch torchaudio
           pip install -e ".[server,stt,tts,llm,speaker,node,mediakeys,sound,mqtt,dev]"
+          # The wake-word engine without its tflite dependency (no wheel past
+          # cp311), so this works identically on every version in the matrix.
+          pip install --no-deps openwakeword
+          pip install onnxruntime tqdm scipy scikit-learn requests
 
       - name: ruff
         run: ruff check src/ tests/
