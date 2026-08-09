@@ -38,6 +38,11 @@ REPO = Path(__file__).resolve().parent.parent
 INSTALLER = REPO / "install.sh"          # moved in-repo so CI can reach it too
 SMOKE = REPO / "scripts" / "ci_smoke.py"
 
+
+def _repo_version() -> str:
+    import tomllib
+    return str(tomllib.loads((REPO / "pyproject.toml").read_text())["project"]["version"])
+
 VENV = ".local/share/kenzy/venv"       # install.sh's default
 KHOME = ".config/kenzy"                # kenzy_home() default
 SSH = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=8"]
@@ -242,6 +247,19 @@ def _install_one(h: str, wheel: Path, token: str) -> bool:
         return record(h, "install.sh", False, "; ".join(tail)[:300])
     record(h, "install.sh", True)
 
+    # install.sh uses `systemctl --user enable --now`, which starts a stopped
+    # unit and leaves a RUNNING one alone. That is right for an installer — the
+    # documented upgrade paths are the dashboard buttons and `kenzy-deploy
+    # upgrade`, both of which restart. But it means re-installing over a live
+    # lab host leaves the old process serving the old code, so the run would
+    # test the package on disk and the processes from an hour ago.
+    units = ssh(h, "systemctl --user list-units --plain --no-legend 'kenzy-*' 2>/dev/null "
+                   "| awk '{print $1}' | tr '\\n' ' '", timeout=60).stdout.strip()
+    if units:
+        r = ssh(h, f"systemctl --user restart {units}", timeout=300)
+        record(h, f"restart {len(units.split())} unit(s)", r.returncode == 0,
+               r.stderr.strip()[:200])
+
     if host.pin_localhost:
         # An all-in-one box already has its server locally; pointing at it
         # directly keeps a neighbour's broadcast from claiming the node.
@@ -388,8 +406,13 @@ def stage_fleet(hosts: list[str]) -> bool:
         # room defaults to the hostname until the dashboard renames it
         ok &= record(SERVER, f"{n} joined", n in rooms,
                      f"roster rooms: {sorted(r for r in rooms if r)}")
+    # Agreement is not correctness: every node reporting the same STALE version
+    # passed this check while the freshly-installed package sat unused on disk.
+    # Assert against the version actually being built.
+    want = _repo_version()
     versions = {v for v in rooms.values() if v}
-    ok &= record(SERVER, f"all nodes report one version {sorted(versions)}", len(versions) <= 1)
+    ok &= record(SERVER, f"all nodes run the built version ({want})",
+                 versions == {want}, f"roster reports {sorted(versions)}")
     flush()
     return ok
 
