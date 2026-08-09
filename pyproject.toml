@@ -39,19 +39,25 @@ classifiers = [
 dependencies = [
     "websockets>=12.0",
     "PyYAML>=6.0",
-    # No upper bound. There was one — `<2.0` — carried since v3.0.0, and it
-    # cost three separate failures before anyone wrote down why it existed:
-    # a GTX 1080 old enough to need an ancient CUDA, hence an ancient torch,
-    # hence numpy 1.x. That is a constraint of ONE DEPLOYMENT's hardware, not
-    # of this package, and pinning it here imposed it on every user who has no
-    # such card — while current scipy requires numpy>=2 at runtime and dies on
-    # np.long without it.
+    # Split at 3.12, and BOTH sides are forced — neither is a preference.
     #
-    # Operator pins belong in the config home's `constraints.txt`, which is
-    # honoured on install AND on every auto-upgrade precisely so a deployment
-    # can hold a dependency back without the project doing it globally. The
-    # packaged example file uses `numpy<2.0` as its illustration.
-    "numpy>=1.26",
+    # <=3.11 must stay on numpy 1.x because that is where the tflite wake-word
+    # path lives, and `tflite-runtime` is a C extension compiled against NumPy
+    # 1.x that has never been rebuilt for 2.x. Under numpy 2 it does not warn,
+    # it fails the model load outright ("a module compiled using NumPy 1.x
+    # cannot be run in NumPy 2.x"). That is the majority of the fleet.
+    #
+    # >=3.12 must be on numpy 2.x because tflite-runtime publishes no wheel
+    # past cp311, so those hosts take the ONNX path — and current scipy, which
+    # openwakeword needs, REQUIRES numpy>=2 at runtime and dies on np.long
+    # without it.
+    #
+    # The ceiling carried no rationale from v3.0.0 until 2026-08-09, which cost
+    # several rounds of chasing: it was believed to be one deployment's ancient
+    # CUDA chain (true, and separately pinned in that host's constraints.txt),
+    # and removing it on that basis immediately broke every tflite host.
+    "numpy>=1.26,<2.0; python_version < '3.12'",
+    "numpy>=2.1; python_version >= '3.12'",
 ]
 
 [project.optional-dependencies]

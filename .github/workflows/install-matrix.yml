@@ -94,14 +94,23 @@ jobs:
 
       # A container has no sound server, and sounddevice initialises PortAudio
       # at IMPORT — so `import kenzy.node.client` dies before any check runs.
-      # Debian's portaudio finds an ALSA fallback; Ubuntu's reaches for
-      # PulseAudio and there is nothing to connect to. A null ALSA default gives
-      # it a host API to open. This is an environment gap: a real node has a
-      # sound stack, and the node's own audio init is separately non-fatal.
-      - name: Null audio device
+      # Debian's portaudio finds an ALSA fallback and is fine; Ubuntu's reaches
+      # for PulseAudio, finds nothing, and Pa_Initialize fails outright
+      # (paNotInitialized, -10000 — no host API came up at all). A null ALSA
+      # default alone did not satisfy it, so give it a real daemon too.
+      #
+      # Every part of this is tolerated: it is scaffolding for an environment a
+      # real node always has, and it must never be the reason a packaging row
+      # goes red.
+      - name: Sound stack for a headless container
+        continue-on-error: true
         run: |
-          apt-get install -y -qq --no-install-recommends libasound2-plugins || true
           printf 'pcm.!default { type null }\nctl.!default { type null }\n' > /etc/asound.conf
+          apt-get install -y -qq --no-install-recommends \
+            libasound2-plugins pulseaudio-utils pulseaudio || true
+          # --system is the supported way to run as root in a container.
+          pulseaudio --system --daemonize --exit-idle-time=-1 --disallow-exit >/dev/null 2>&1 || true
+          pactl info >/dev/null 2>&1 && echo "pulseaudio up" || echo "no pulseaudio — row may fail on import"
 
       - uses: actions/checkout@v4
 
@@ -192,14 +201,23 @@ jobs:
 
       # A container has no sound server, and sounddevice initialises PortAudio
       # at IMPORT — so `import kenzy.node.client` dies before any check runs.
-      # Debian's portaudio finds an ALSA fallback; Ubuntu's reaches for
-      # PulseAudio and there is nothing to connect to. A null ALSA default gives
-      # it a host API to open. This is an environment gap: a real node has a
-      # sound stack, and the node's own audio init is separately non-fatal.
-      - name: Null audio device
+      # Debian's portaudio finds an ALSA fallback and is fine; Ubuntu's reaches
+      # for PulseAudio, finds nothing, and Pa_Initialize fails outright
+      # (paNotInitialized, -10000 — no host API came up at all). A null ALSA
+      # default alone did not satisfy it, so give it a real daemon too.
+      #
+      # Every part of this is tolerated: it is scaffolding for an environment a
+      # real node always has, and it must never be the reason a packaging row
+      # goes red.
+      - name: Sound stack for a headless container
+        continue-on-error: true
         run: |
-          apt-get install -y -qq --no-install-recommends libasound2-plugins || true
           printf 'pcm.!default { type null }\nctl.!default { type null }\n' > /etc/asound.conf
+          apt-get install -y -qq --no-install-recommends \
+            libasound2-plugins pulseaudio-utils pulseaudio || true
+          # --system is the supported way to run as root in a container.
+          pulseaudio --system --daemonize --exit-idle-time=-1 --disallow-exit >/dev/null 2>&1 || true
+          pactl info >/dev/null 2>&1 && echo "pulseaudio up" || echo "no pulseaudio — row may fail on import"
 
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
