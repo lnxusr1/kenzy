@@ -144,7 +144,14 @@ sound = [
     "av>=10.0",  # MP3/OGG/FLAC decode for the sound system (server-side)
 ]
 kokoro = [
-    "kokoro>=0.9.0",
+    # Kokoro publishes nothing for 3.13+, and a hard requirement here fails the
+    # ENTIRE install for anyone picking the local voice on a current distro —
+    # Debian 13 ships 3.13. The marker lets the extra resolve; both kokoro
+    # imports are already lazy behind ImportError, so the tts service falls
+    # back to its cloud provider instead of the host failing to install.
+    # install.sh says so out loud at install time: silently not installing the
+    # thing someone asked for would be worse than the failure it replaces.
+    "kokoro>=0.9.0; python_version < '3.13'",
     "torch>=2.0.0",
 ]
 

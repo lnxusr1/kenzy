@@ -202,8 +202,12 @@ def test_the_installers_nodeps_list_matches_openwakeword_upstream():
             continue  # the one we deliberately omit
         upstream.add(req.name)
 
-    root = pathlib.Path(setup.__file__).resolve().parents[3]
-    sh = (root / "kenzy-www/src/install.sh").read_text()
+    # install.sh lives in this repo now. It used to sit in the (private)
+    # kenzy-www, which made this check silently dependent on the developer's
+    # workspace layout: it passed here and failed the first time CI ran it with
+    # only this repo checked out. An in-repo path is deterministic everywhere.
+    root = pathlib.Path(setup.__file__).resolve().parents[2]
+    sh = (root / "install.sh").read_text()
     m = re.search(r'WAKEWORD_DEPS="([^"]+)"', sh)
     assert m, "WAKEWORD_DEPS not found in install.sh"
     ours = set(m.group(1).split())

@@ -16,7 +16,7 @@ concurrency:
 
 jobs:
   gates:
-    name: gates (py${{ matrix.python }})
+    name: ruff + pytest (py${{ matrix.python }})
     runs-on: ubuntu-latest
     strategy:
       # Report every version independently. 3.12 and 3.13 have never run this
@@ -33,37 +33,60 @@ jobs:
           cache: pip
 
       - name: System packages
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq libportaudio2 portaudio19-dev espeak-ng
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq libportaudio2 portaudio19-dev
 
       - name: Install
-        # The gate needs EVERY optional dependency present. mypy reads the same
-        # source whether or not an extra is installed, and the narrow
-        # `# type: ignore[import-untyped]` comments do not cover a module that
-        # is missing outright — that is `import-not-found`. The dev venv here
-        # happens to have them all, which is exactly why this passed locally and
-        # failed on the runner.
+        # Deliberately no `kokoro`: it publishes nothing for 3.13+, and the
+        # suite never imports it — the three tests that mention it mock it. The
+        # kokoro-bearing environment is the mypy job's problem, not this one.
         run: |
-          # CPU torch first: speaker and kokoro both pull it, and the CUDA build
-          # is ~2.7 GB of runtime no hosted runner can use.
+          # CPU torch first: the speaker extra pulls it, and the CUDA build is
+          # ~2.7 GB of runtime no hosted runner can use.
           pip install --index-url https://download.pytorch.org/whl/cpu torch torchaudio
-          pip install -e ".[server,stt,tts,llm,speaker,node,mediakeys,sound,kokoro,mqtt,dev]"
-          # The wake-word engine without its declared tflite dependency, which
-          # has no wheel past cp311. This is NOT a claim about which backend a
-          # real install would choose — that is the install matrix's question.
-          # The gate only needs the module to exist so mypy can see it.
-          pip install --no-deps openwakeword
-          pip install onnxruntime tqdm scipy scikit-learn requests
+          pip install -e ".[server,stt,tts,llm,speaker,node,mediakeys,sound,mqtt,dev]"
 
       - name: ruff
         run: ruff check src/ tests/
 
-      - name: mypy
-        run: mypy src/
-
       - name: pytest
         run: pytest
+
+  types:
+    name: mypy
+    runs-on: ubuntu-latest
+    # Runs ONCE, on 3.11, for two reasons.
+    #
+    # It gains nothing from repetition: `python_version = "3.11"` is pinned in
+    # pyproject, so mypy analyses the same source against the same target
+    # whatever interpreter it runs under.
+    #
+    # And it needs the optional modules to EXIST — the narrow
+    # `# type: ignore[import-untyped]` comments don't cover a module that is
+    # absent (`import-not-found`). 3.11 is the only version where every extra
+    # installs, because kokoro has no 3.13 build. Running mypy on 3.13 would
+    # therefore report missing modules rather than type errors, which is noise
+    # about the environment rather than a fact about the code.
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: System packages
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libportaudio2 portaudio19-dev espeak-ng
+      - name: Install (every optional dependency)
+        run: |
+          pip install --index-url https://download.pytorch.org/whl/cpu torch torchaudio
+          pip install -e ".[server,stt,tts,llm,speaker,node,mediakeys,sound,kokoro,mqtt,dev]"
+          # The wake-word engine without its declared tflite dependency, which
+          # has no wheel past cp311. Not a claim about which backend a real
+          # install picks — that is the install matrix's question. mypy only
+          # needs the module to be there.
+          pip install --no-deps openwakeword
+          pip install onnxruntime tqdm scipy scikit-learn requests
+      - run: mypy src/
 
 # `mkdocs build --strict` deliberately stays OFF CI: the docs are built and
 # published from the workstation by publish.sh, so the strict build already

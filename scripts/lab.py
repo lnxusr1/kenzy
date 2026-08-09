@@ -34,7 +34,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-INSTALLER = REPO.parent / "kenzy-www" / "src" / "install.sh"
+INSTALLER = REPO / "install.sh"          # moved in-repo so CI can reach it too
 SMOKE = REPO / "scripts" / "ci_smoke.py"
 
 VENV = ".local/share/kenzy/venv"       # install.sh's default

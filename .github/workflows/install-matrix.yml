@@ -4,8 +4,12 @@ name: Install matrix
 # merely resolve? Four of 5.0.7's six bugs lived on this axis and none were
 # reachable from the unit suite.
 #
-# These jobs run the ACTUAL installer from kenzy-www, against a wheel built
-# from this commit. That matters: install.sh owns the profile->extras mapping
+# These jobs run the ACTUAL installer, against a wheel built from this commit.
+# The installer lives in THIS repo (it used to sit in kenzy-www, which is
+# private — so the default GITHUB_TOKEN 404'd on the cross-repo checkout and
+# every job died before it began).
+#
+# Running the real installer matters: install.sh owns the profile->extras mapping
 # and the wake-word strategy choice (it adds the `wakeword` extra only on
 # <=3.11, and falls back to installing openwakeword without its tflite
 # dependency above that). An earlier draft of this file ran the pip commands
@@ -89,11 +93,6 @@ jobs:
         run: apt-get update -qq && apt-get install -y -qq --no-install-recommends ca-certificates git
 
       - uses: actions/checkout@v4
-      - name: Check out the installer (it lives in the website repo)
-        uses: actions/checkout@v4
-        with:
-          repository: lnxusr1/kenzy-www
-          path: www
 
       - uses: actions/download-artifact@v4
         with: {name: wheel, path: dist}
@@ -102,8 +101,7 @@ jobs:
         # No --no-service: letting it reach the systemd branch tests that it
         # warns and degrades instead of failing where systemd isn't available.
         run: |
-          chmod +x www/src/install.sh
-          www/src/install.sh --profile node --package "$(ls dist/*.whl)" --yes
+          ./install.sh --profile node --package "$(ls dist/*.whl)" --yes
 
       - name: Smoke
         run: |
@@ -116,18 +114,13 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/checkout@v4
-        with:
-          repository: lnxusr1/kenzy-www
-          path: www
       - uses: actions/download-artifact@v4
         with: {name: wheel, path: dist}
       # What a Mac user is actually told to do: there's no apt, so PortAudio
       # comes from Homebrew and the installer is run with --no-apt.
       - run: brew install portaudio
       - run: |
-          chmod +x www/src/install.sh
-          www/src/install.sh --profile node --package "$(ls dist/*.whl)" --no-apt --yes
+          ./install.sh --profile node --package "$(ls dist/*.whl)" --no-apt --yes
       # The documented macOS promise is precisely this: a platform marker keeps
       # tflite-runtime out, so the ONNX copy is selected automatically.
       # Asserting the SELECTED FORMAT and a real inference is what 5.0.7's
@@ -149,16 +142,11 @@ jobs:
       - name: Bootstrap
         run: apt-get update -qq && apt-get install -y -qq --no-install-recommends ca-certificates git
       - uses: actions/checkout@v4
-      - uses: actions/checkout@v4
-        with:
-          repository: lnxusr1/kenzy-www
-          path: www
       - uses: actions/download-artifact@v4
         with: {name: wheel, path: dist}
       - name: Run the real installer
         run: |
-          chmod +x www/src/install.sh
-          www/src/install.sh --profile server --package "$(ls dist/*.whl)" --yes
+          ./install.sh --profile server --package "$(ls dist/*.whl)" --yes
       - name: Smoke
         run: |
           export PATH="$HOME/$KENZY_VENV_DEFAULT/bin:$PATH"
@@ -191,16 +179,11 @@ jobs:
             python3 python3-venv python3-dev git ca-certificates \
             build-essential libportaudio2 portaudio19-dev
       - uses: actions/checkout@v4
-      - uses: actions/checkout@v4
-        with:
-          repository: lnxusr1/kenzy-www
-          path: www
       - uses: actions/download-artifact@v4
         with: {name: wheel, path: dist}
       - name: Run the real installer
         run: |
-          chmod +x www/src/install.sh
-          www/src/install.sh --profile all --package "$(ls dist/*.whl)" --yes
+          ./install.sh --profile all --package "$(ls dist/*.whl)" --yes
       - name: Smoke
         run: |
           export PATH="$HOME/$KENZY_VENV_DEFAULT/bin:$PATH"
