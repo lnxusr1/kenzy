@@ -1,0 +1,235 @@
+name: Install matrix
+
+# Does a real install on a given OS/Python/architecture actually WORK — not
+# merely resolve? Four of 5.0.7's six bugs lived on this axis and none were
+# reachable from the unit suite.
+#
+# These jobs run the ACTUAL installer from kenzy-www, against a wheel built
+# from this commit. That matters: install.sh owns the profile->extras mapping
+# and the wake-word strategy choice (it adds the `wakeword` extra only on
+# <=3.11, and falls back to installing openwakeword without its tflite
+# dependency above that). An earlier draft of this file ran the pip commands
+# directly and hardcoded that choice per row — which tested a REIMPLEMENTATION
+# of the decision instead of the decision, and would have stayed green through
+# an installer that picked wrong. The matrix now declares only the expected
+# OUTCOME; how the host gets there is the code under test.
+#
+# Every row is a hosted runner: x86, arm64 and macOS are all free with
+# unlimited minutes while this repo is public. Nothing here needs owned
+# hardware. (If the repo ever goes private, macOS bills at a 10x multiplier —
+# the only cost cliff in this file.)
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    # Weekly, because this class of breakage arrives from UPSTREAM rather than
+    # from a commit here: 5.0.7's wake-word trap was a wheel that stopped being
+    # published. Nothing in the repo would have changed on the day it broke.
+    - cron: "0 6 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: install-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # install.sh's default location. Referenced rather than overridden with
+  # --venv so that a change to the default breaks this loudly — the systemd
+  # units and the docs both hard-code it.
+  KENZY_VENV_DEFAULT: .local/share/kenzy/venv
+
+jobs:
+  build:
+    name: build wheel
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install build && python -m build --wheel
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheel
+          path: dist/*.whl
+
+  node:
+    name: node ${{ matrix.label }}
+    needs: build
+    runs-on: ${{ matrix.runner }}
+    container: ${{ matrix.image }}
+    continue-on-error: ${{ matrix.canary || false }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # `expect` is an assertion about what install.sh CHOOSES on this
+          # host, not an instruction to it.
+          - {label: "debian12-x86 (py3.11)",  runner: ubuntu-latest,    image: "debian:12",    expect: tflite}
+          - {label: "ubuntu2404-x86 (py3.12)", runner: ubuntu-latest,   image: "ubuntu:24.04", expect: onnx}
+          - {label: "debian13-x86 (py3.13)",  runner: ubuntu-latest,    image: "debian:13",    expect: onnx}
+          - {label: "debian12-arm64 (py3.11)", runner: ubuntu-24.04-arm, image: "debian:12",   expect: tflite}
+          - {label: "debian13-arm64 (py3.13)", runner: ubuntu-24.04-arm, image: "debian:13",   expect: onnx}
+          # Newest Ubuntu, newest Python. This was written as a non-blocking
+          # canary on the assumption that the scientific stack wouldn't support
+          # 3.14 yet — then the lab installed it cleanly on Ubuntu 26.04 with
+          # every service running, so the assumption was simply wrong and the
+          # row is blocking like any other. (`canary: true` still works on a
+          # row that genuinely needs it.)
+          - {label: "ubuntu2604-x86 (py3.14)", runner: ubuntu-latest,   image: "ubuntu:26.04", expect: onnx}
+    steps:
+      # Only what's needed to RUN the installer. python3, python3-venv,
+      # portaudio and openssl are deliberately left out so that install.sh's
+      # own APT_PKGS list is what gets tested.
+      - name: Bootstrap
+        run: apt-get update -qq && apt-get install -y -qq --no-install-recommends ca-certificates git
+
+      - uses: actions/checkout@v4
+      - name: Check out the installer (it lives in the website repo)
+        uses: actions/checkout@v4
+        with:
+          repository: lnxusr1/kenzy-www
+          path: www
+
+      - uses: actions/download-artifact@v4
+        with: {name: wheel, path: dist}
+
+      - name: Run the real installer
+        # No --no-service: letting it reach the systemd branch tests that it
+        # warns and degrades instead of failing where systemd isn't available.
+        run: |
+          chmod +x www/src/install.sh
+          www/src/install.sh --profile node --package "$(ls dist/*.whl)" --yes
+
+      - name: Smoke
+        run: |
+          export PATH="$HOME/$KENZY_VENV_DEFAULT/bin:$PATH"
+          python scripts/ci_smoke.py --profile node --expect-model ${{ matrix.expect }}
+
+  node-macos:
+    name: node macos-latest
+    needs: build
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: lnxusr1/kenzy-www
+          path: www
+      - uses: actions/download-artifact@v4
+        with: {name: wheel, path: dist}
+      # What a Mac user is actually told to do: there's no apt, so PortAudio
+      # comes from Homebrew and the installer is run with --no-apt.
+      - run: brew install portaudio
+      - run: |
+          chmod +x www/src/install.sh
+          www/src/install.sh --profile node --package "$(ls dist/*.whl)" --no-apt --yes
+      # The documented macOS promise is precisely this: a platform marker keeps
+      # tflite-runtime out, so the ONNX copy is selected automatically.
+      # Asserting the SELECTED FORMAT and a real inference is what 5.0.7's
+      # macOS bug would have failed — pip exited 0 throughout.
+      - run: |
+          export PATH="$HOME/$KENZY_VENV_DEFAULT/bin:$PATH"
+          python scripts/ci_smoke.py --profile node --expect-model onnx
+
+  server:
+    name: server ${{ matrix.image }}
+    needs: build
+    runs-on: ubuntu-latest
+    container: ${{ matrix.image }}
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ["debian:12", "debian:13", "ubuntu:24.04"]
+    steps:
+      - name: Bootstrap
+        run: apt-get update -qq && apt-get install -y -qq --no-install-recommends ca-certificates git
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: lnxusr1/kenzy-www
+          path: www
+      - uses: actions/download-artifact@v4
+        with: {name: wheel, path: dist}
+      - name: Run the real installer
+        run: |
+          chmod +x www/src/install.sh
+          www/src/install.sh --profile server --package "$(ls dist/*.whl)" --yes
+      - name: Smoke
+        run: |
+          export PATH="$HOME/$KENZY_VENV_DEFAULT/bin:$PATH"
+          python scripts/ci_smoke.py --profile server
+
+  all-in-one:
+    name: all-in-one ${{ matrix.image }}
+    needs: build
+    runs-on: ubuntu-latest
+    container: ${{ matrix.image }}
+    # `all` is what a single-box user installs, and until now nothing tested it
+    # automatically — the node and server rows each cover half a machine that
+    # nobody actually runs. It is also the only hosted row that exercises the
+    # CPU-only torch path, since that fires just for the speaker/kokoro extras.
+    #
+    # What it CANNOT show: whether the node joins the co-located server. That
+    # needs systemd and a running service, so it belongs to the lab, where an
+    # all-in-one host asserts its own node appears in its own roster.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {image: "debian:12", expect: tflite}    # py3.11 — the common single-box case
+          - {image: "debian:13", expect: onnx}      # py3.13 — where that case goes next
+    steps:
+      - name: Bootstrap
+        run: |
+          apt-get update -qq
+          apt-get install -y -qq --no-install-recommends \
+            python3 python3-venv python3-dev git ca-certificates \
+            build-essential libportaudio2 portaudio19-dev
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: lnxusr1/kenzy-www
+          path: www
+      - uses: actions/download-artifact@v4
+        with: {name: wheel, path: dist}
+      - name: Run the real installer
+        run: |
+          chmod +x www/src/install.sh
+          www/src/install.sh --profile all --package "$(ls dist/*.whl)" --yes
+      - name: Smoke
+        run: |
+          export PATH="$HOME/$KENZY_VENV_DEFAULT/bin:$PATH"
+          python scripts/ci_smoke.py --profile all --expect-model ${{ matrix.expect }}
+      - name: No CUDA on a runner with no GPU
+        # The CPU-only torch step should have kept the ~2.7 GB nvidia-* tree out
+        # entirely. Asserting its ABSENCE is the check — a smaller venv could be
+        # smaller for any number of reasons, but nvidia/ existing is unambiguous.
+        run: |
+          SP="$HOME/$KENZY_VENV_DEFAULT/lib"
+          if find "$SP" -maxdepth 3 -type d -name nvidia | grep -q .; then
+            echo "CUDA runtime present on a GPU-less host — the CPU torch path did not take"
+            exit 1
+          fi
+          echo "no nvidia/ tree — CPU-only torch confirmed"
+
+  speaker-setup:
+    name: kenzy-setup tolerates absent extras
+    runs-on: ubuntu-latest
+    # Deliberately pip-direct rather than via install.sh: this reproduces the
+    # DOCUMENTED manual path (`pip install kenzy[speaker]`), which is how
+    # 5.0.7 bug #1 was actually hit. The speaker extra ships sounddevice, so
+    # the node client imported cleanly while the openwakeword call inside it
+    # raised — and that step runs before the SpeechBrain download, so this
+    # exact command aborted without fetching the model it was run for.
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11", cache: pip}
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq libportaudio2
+      - run: pip install -e ".[speaker]"
+      - run: python scripts/ci_smoke.py --profile speaker-setup-only

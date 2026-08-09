@@ -29,6 +29,8 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Home Automation",
     "Topic :: Multimedia :: Sound/Audio :: Speech",
 ]
@@ -37,7 +39,16 @@ classifiers = [
 dependencies = [
     "websockets>=12.0",
     "PyYAML>=6.0",
-    "numpy>=1.26,<2.0",
+    # numpy is version-split on purpose, and the ceiling is load-bearing: numpy 2
+    # broke the stack on the 3.11 hosts, which is what prod runs, so <=3.12 keeps
+    # the pin exactly as it was. 3.13+ cannot honour it — numpy 1.26 publishes no
+    # cp313 wheel, and the scipy that does have one is built against numpy 2 and
+    # references np.long — so those hosts get numpy 2 because there is no
+    # alternative, not because it was chosen. Found by the test lab: the older
+    # single pin let a node install cleanly on 3.13 and then fail to load a wake
+    # word at all.
+    "numpy>=1.26,<2.0; python_version < '3.13'",
+    "numpy>=2.1; python_version >= '3.13'",
 ]
 
 [project.optional-dependencies]

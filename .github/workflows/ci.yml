@@ -1,0 +1,53 @@
+name: CI
+
+# The gates from CLAUDE.md, run by machine instead of by memory. Until this
+# existed, publishing to PyPI was the only automated step in the project.
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gates:
+    name: gates (py${{ matrix.python }})
+    runs-on: ubuntu-latest
+    strategy:
+      # Report every version independently. 3.12 and 3.13 have never run this
+      # suite anywhere — a failure on one shouldn't hide the result on another.
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+
+      - name: System packages
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq libportaudio2 portaudio19-dev
+
+      - name: Install
+        run: pip install -e ".[server,stt,tts,llm,speaker,node,dev]"
+
+      - name: ruff
+        run: ruff check src/ tests/
+
+      - name: mypy
+        run: mypy src/
+
+      - name: pytest
+        run: pytest
+
+# `mkdocs build --strict` deliberately stays OFF CI: the docs are built and
+# published from the workstation by publish.sh, so the strict build already
+# runs at the moment it matters. A second copy here would be a second source of
+# truth about whether the docs are valid, free to drift from the one that ships.
