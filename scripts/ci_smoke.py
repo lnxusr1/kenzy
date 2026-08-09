@@ -59,8 +59,20 @@ PROFILES: dict[str, dict[str, list[str]]] = {
     "speaker-setup-only": {"daemons": [], "tools": ["kenzy-setup"]},
 }
 
+# Tools that enumerate real sound hardware. On a host whose audio stack is
+# synthetic — a container with a daemon bolted on for CI — PortAudio's teardown
+# is unreliable and these exit non-zero for reasons that say nothing about the
+# package. Skipped only when explicitly told to, and the skip is printed.
+AUDIO_TOOLS = {"kenzy-devices"}
+
 _failures: list[str] = []
+_skipped: list[str] = []
 _checks = 0
+
+
+def skip(label: str, why: str) -> None:
+    _skipped.append(label)
+    print(f"  skip  {label}  — {why}")
 
 
 def check(label: str, ok: bool, detail: str = "") -> None:
@@ -71,6 +83,9 @@ def check(label: str, ok: bool, detail: str = "") -> None:
     else:
         print(f"  FAIL  {label}{'  — ' + detail if detail else ''}")
         _failures.append(label)
+
+
+_synthetic_audio = False
 
 
 def check_entry_points(profile: str) -> None:
@@ -87,6 +102,9 @@ def check_entry_points(profile: str) -> None:
             check(f"{module} imports", False, f"{type(exc).__name__}: {exc}")
 
     for ep in spec["tools"]:
+        if ep in AUDIO_TOOLS and _synthetic_audio:
+            skip(f"{ep} --help", "host has no real sound hardware")
+            continue
         try:
             r = subprocess.run([ep, "--help"], capture_output=True, timeout=120)
             check(f"{ep} --help", r.returncode == 0, r.stderr.decode()[-300:])
@@ -152,7 +170,13 @@ def main() -> int:
     ap.add_argument("--profile", required=True, choices=sorted(PROFILES))
     ap.add_argument("--expect-model", default="none", choices=["tflite", "onnx", "any", "none"],
                     help="Model format this host should have selected")
+    ap.add_argument("--synthetic-audio", action="store_true",
+                    help="This host has no real sound hardware. Skips tools that enumerate "
+                         "devices; every other check still runs, and the skip is printed.")
     args = ap.parse_args()
+
+    global _synthetic_audio
+    _synthetic_audio = args.synthetic_audio
 
     print(f"kenzy smoke test — profile={args.profile} python={sys.version.split()[0]}")
     check_entry_points(args.profile)
@@ -160,7 +184,10 @@ def main() -> int:
     if args.expect_model != "none":
         check_wakeword(args.expect_model)
 
-    print(f"\n{_checks - len(_failures)}/{_checks} checks passed")
+    print(f"\n{_checks - len(_failures)}/{_checks} checks passed"
+          + (f", {len(_skipped)} skipped" if _skipped else ""))
+    if _skipped:
+        print("skipped: " + ", ".join(_skipped))
     if _failures:
         print("failed: " + ", ".join(_failures))
         return 1
