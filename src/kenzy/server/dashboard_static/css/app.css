@@ -65,6 +65,14 @@ button { font: inherit; cursor: pointer; }
 }
 .nav a[aria-disabled="true"] { opacity: .4; pointer-events: none; }
 .nav .ico { width: 18px; text-align: center; color: var(--accent); }
+/* 5.1: heading for the installed-plugins band (rendered only when non-empty) */
+.nav .nav-band {
+  margin-top: var(--s3); padding: var(--s2) var(--s3) 2px;
+  font-size: 11px; font-weight: 700; letter-spacing: .08em;
+  text-transform: uppercase; color: var(--text-dim); opacity: .7;
+}
+/* An installed add-on the load gate refused — leads to the Settings card. */
+.nav a.nav-fault, .nav a.nav-fault .ico { color: var(--led-busy); }
 
 .sidebar .foot { border-top: var(--border-w) solid var(--border); padding-top: var(--s4); display: grid; gap: var(--s3); }
 .userline { display: flex; align-items: center; gap: var(--s3); min-width: 0; }

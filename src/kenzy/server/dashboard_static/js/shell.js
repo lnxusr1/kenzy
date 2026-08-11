@@ -1,5 +1,6 @@
 import { html, useState, useEffect } from "./html.js";
 import { useFleet, useToasts, dismiss } from "./store.js";
+import { AddonView } from "./addons.js";
 import { FleetView } from "./views/fleet.js";
 import { ConfigView } from "./views/config.js";
 import { ServicesView } from "./views/services.js";
@@ -105,13 +106,24 @@ export function Shell({ user, onLogout }) {
   // point of the page is that "she's been silent for months" is visible, so
   // hiding it when disabled would hide the very thing worth seeing.
   const proactiveOn = !data || !data.flags || data.flags.proactive_active !== false;
+  // 5.1 add-ons: installed plugins that ship a panel. Empty list ⇒ no band,
+  // no routes, no cost — nothing here is hand-wired per feature.
+  const addons = (data && data.flags && data.flags.addons) || [];
+  // Installed-but-refused plugins still surface here: "I installed it and
+  // nothing appeared" is exactly the moment someone scans the nav, so a
+  // fault-only state must not render nothing. The entry leads to Settings,
+  // where the Add-ons card states the reason and the fix.
+  const addonFaults = (data && data.flags && data.flags.addon_faults) || [];
   const [view, setView] = useState("fleet");
   const [node, setNode] = useState(null);
   const [svc, setSvc] = useState(null);
   const [personSel, setPersonSel] = useState(null);
   const [navOpen, setNavOpen] = useState(false);
+  const activeAddon = view.startsWith("addon:")
+    ? addons.find((a) => "addon:" + a.id === view)
+    : null;
   const active = NAV.find((n) => n.id === view) || NAV[0];
-  const title = view === "config" ? "Node config" : active.label;
+  const title = view === "config" ? "Node config" : activeAddon ? activeAddon.label : active.label;
 
   const go = (id) => {
     if (id === "people") setPersonSel(null); // likewise People: nav = back to the list
@@ -152,6 +164,31 @@ export function Shell({ user, onLogout }) {
               </a>
             `;
           })}
+          ${addons.length || addonFaults.length
+            ? html`<div class="nav-band">Add-ons</div>
+                ${addons.map(
+                  (a) => html`
+                    <a key=${"addon:" + a.id} href="#"
+                       class=${"addon:" + a.id === view ? "active" : ""}
+                       onClick=${(e) => {
+                         e.preventDefault();
+                         go("addon:" + a.id);
+                       }}>
+                      <span class="ico">${a.ico || "◈"}</span>${a.label}
+                    </a>
+                  `,
+                )}
+                ${addonFaults.length
+                  ? html`<a href="#" class="nav-fault"
+                       title="An installed add-on could not be loaded — details in Settings"
+                       onClick=${(e) => {
+                         e.preventDefault();
+                         go("settings");
+                       }}>
+                      <span class="ico">⚠</span>${addonFaults.length}${" "}not loaded
+                    </a>`
+                  : null}`
+            : null}
         </nav>
         <div class="foot">
           <div class="userline">
@@ -173,7 +210,9 @@ export function Shell({ user, onLogout }) {
           <${ConnPill} />
         </header>
         <main class="content">
-          ${view === "config"
+          ${activeAddon
+            ? html`<${AddonView} addon=${activeAddon} />`
+          : view === "config"
             ? html`<${ConfigView} node=${node} onBack=${() => go("fleet")} />`
             : view === "services"
               ? html`<${ServicesView} selected=${svc}

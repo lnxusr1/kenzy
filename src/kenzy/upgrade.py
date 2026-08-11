@@ -28,10 +28,37 @@ def valid_version(version: str | None) -> bool:
     return version is None or bool(_VERSION_RE.fullmatch(version))
 
 
-def pip_upgrade_command(extra: str, version: str | None) -> list[str]:
-    """Build the ``pip install -U kenzy[extra]`` argv (constraints + version pin)."""
+def pip_upgrade_command(
+    extra: str, version: str | None, plugins: list[str] | None = None
+) -> list[str]:
+    """Build the ``pip install -U kenzy[extra]`` argv (constraints + version pin).
+
+    ``plugins`` (default: auto-enumerated) are the installed ``kenzy.plugins``
+    distributions, included so the resolver solves core + plugins **jointly**:
+    a plugin that caps core holds the upgrade back (or, with an explicit
+    ``version`` the set can't satisfy, fails it BEFORE anything changes) instead
+    of pip stranding an incompatible pair with a warning nobody reads. 5.1.
+    """
+    if plugins is None:
+        from kenzy.plugins import installed_plugin_dists
+
+        plugins = installed_plugin_dists()
     spec = f"kenzy[{extra}]" + (f"=={version}" if version else ">=3.0.0")
-    return [sys.executable, "-m", "pip", "install", "-U", *pip_constraint_args(), spec]
+    return [sys.executable, "-m", "pip", "install", "-U", *pip_constraint_args(), spec, *plugins]
+
+
+def joint_failure_note(text: str, plugins: list[str]) -> str:
+    """When a joint upgrade fails on dependency resolution, say what that means
+    — pip's conflict dump names the packages but not the way out."""
+    lowered = text.lower()
+    if plugins and ("resolutionimpossible" in lowered or "conflicting dependencies" in lowered):
+        return (
+            text + "\nNothing was changed. An installed add-on ("
+            + ", ".join(plugins)
+            + ") likely caps the kenzy version it supports — upgrade or remove the add-on, "
+            "then retry."
+        )
+    return text
 
 
 def pip_fill_command(extra: str) -> list[str]:
@@ -64,8 +91,14 @@ async def run_pip_upgrade(extra: str, version: str | None = None) -> tuple[bool,
     """
     if not valid_version(version):
         return False, f"invalid version: {version!r}"
-    cmd = pip_upgrade_command(extra, version)
-    log.warning("Upgrade: %s", " ".join(cmd))
+    from kenzy.plugins import installed_plugin_dists
+
+    plugins = installed_plugin_dists()
+    cmd = pip_upgrade_command(extra, version, plugins)
+    if plugins:
+        log.warning("Upgrade (jointly with add-ons %s): %s", ", ".join(plugins), " ".join(cmd))
+    else:
+        log.warning("Upgrade: %s", " ".join(cmd))
     try:
         proc = await asyncio.create_subprocess_exec(
             *cmd,
@@ -78,4 +111,6 @@ async def run_pip_upgrade(extra: str, version: str | None = None) -> tuple[bool,
     text = out.decode("utf-8", "replace") if out else ""
     ok = proc.returncode == 0
     log.info("Upgrade %s (exit %s)", "ok" if ok else "FAILED", proc.returncode)
+    if not ok:
+        text = joint_failure_note(text, plugins)
     return ok, text[-1500:].strip()

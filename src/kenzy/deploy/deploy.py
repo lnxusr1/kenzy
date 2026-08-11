@@ -48,6 +48,7 @@ values back. Pull-mode services need ``KENZY_SERVICE_TOKEN`` (+ mDNS or
 from __future__ import annotations
 
 import argparse
+import re
 import shlex
 import subprocess
 import sys
@@ -625,7 +626,12 @@ def _pip_extras(host: HostConfig, local_path: Path) -> str:
 
 
 def _pip_target(
-    host: HostConfig, extras: str, *, upgrade: bool, constraints: str | None = None
+    host: HostConfig,
+    extras: str,
+    *,
+    upgrade: bool,
+    constraints: str | None = None,
+    plugins: tuple[str, ...] = (),
 ) -> str:
     """Build the pip install target for this host's install mode.
 
@@ -635,12 +641,18 @@ def _pip_target(
 
     ``constraints`` is the remote path to a pip constraints file; when set it's passed
     with ``-c`` so operator pins are honored on install and upgrade (both modes).
+
+    ``plugins`` are the host's installed kenzy add-on distributions (5.1),
+    included in the SAME invocation so the resolver moves core + plugins as one
+    set: a plugin that caps core holds the sweep back on that host with a real
+    error, instead of pip stranding an incompatible pair with a warning.
     """
     c = f"-c '{constraints}' " if constraints else ""
+    p = "".join(f" '{name}'" for name in plugins)
     if host.install_mode == "pypi":
         spec = f"kenzy[{extras}]" + (f"=={host.version}" if host.version else ">=3.0.0")
-        return f"{c}{'-U ' if upgrade else ''}'{spec}'"
-    return f"{c}-e '{host.install_path}[{extras}]'"
+        return f"{c}{'-U ' if upgrade else ''}'{spec}'{p}"
+    return f"{c}-e '{host.install_path}[{extras}]'{p}"
 
 
 def _sync_tree(host: HostConfig, local_path: Path, *, reseed: bool = False) -> bool:
@@ -690,6 +702,32 @@ def _resolve_constraints(host: HostConfig, local_path: Path) -> Path | None:
     return cfile if cfile.is_file() else None
 
 
+def _remote_plugin_dists(host: HostConfig) -> tuple[str, ...]:
+    """The kenzy add-on distributions installed in the HOST's venv (5.1).
+
+    Asked of the remote interpreter itself — the deploy box can't know what a
+    host carries. An older remote (no ``kenzy.plugins`` module), a fresh venv,
+    or any error at all → empty, and the sweep behaves exactly as it always
+    has. Names are re-validated here before they ride a remote shell command.
+    """
+    cmd = (
+        f"{shlex.quote(host.venv_path)}/bin/python -c "
+        '"from kenzy.plugins import installed_plugin_dists as f;'
+        " print('\\n'.join(f()))\""
+    )
+    r = _ssh(host, cmd, check=False)
+    if r.returncode != 0:
+        return ()
+    names = tuple(
+        line.strip()
+        for line in (r.stdout or "").splitlines()
+        if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,62}", line.strip())
+    )
+    if names:
+        _info(f"add-ons on host (upgraded jointly): {', '.join(names)}")
+    return names
+
+
 def _provision(host: HostConfig, local_path: Path, *, upgrade: bool, reseed: bool = False) -> bool:
     """Shared install/upgrade body: sync, venv, pip, host pip packages."""
     if not _sync_tree(host, local_path, reseed=reseed):
@@ -711,20 +749,37 @@ def _provision(host: HostConfig, local_path: Path, *, upgrade: bool, reseed: boo
             return False
         _info(f"constraints: {cfile.name}")
 
-    target = _pip_target(host, extras, upgrade=upgrade, constraints=constraints_remote)
+    # 5.1: core + installed add-ons move as ONE resolver set. Enumerated on
+    # upgrades only — a fresh install has nothing to hold together, and an old
+    # remote answers empty either way.
+    plugins = _remote_plugin_dists(host) if upgrade else ()
+    target = _pip_target(
+        host, extras, upgrade=upgrade, constraints=constraints_remote, plugins=plugins
+    )
     _info(f"pip install {target}…")
     r = _ssh(host, f"{shlex.quote(host.venv_path)}/bin/pip install -q {target}")
     if r.returncode != 0:
         _err("pip install failed")
+        if plugins and "ResolutionImpossible" in ((r.stderr or "") + (r.stdout or "")):
+            _err(
+                f"  nothing was changed — an installed add-on ({', '.join(plugins)}) likely "
+                "caps the kenzy version it supports; upgrade or remove it, then retry"
+            )
         return False
     _ok("packages updated" if upgrade else "packages installed")
 
-    _install_media_keys(host, upgrade=upgrade, constraints=constraints_remote)
+    _install_media_keys(host, upgrade=upgrade, constraints=constraints_remote, plugins=plugins)
     _apply_pip_packages(host)
     return True
 
 
-def _install_media_keys(host: HostConfig, *, upgrade: bool, constraints: str | None) -> None:
+def _install_media_keys(
+    host: HostConfig,
+    *,
+    upgrade: bool,
+    constraints: str | None,
+    plugins: tuple[str, ...] = (),
+) -> None:
     """Install the volume-button extra, tolerating a build failure.
 
     evdev ships source-only on PyPI (no wheels, any platform), so this is the one
@@ -736,7 +791,10 @@ def _install_media_keys(host: HostConfig, *, upgrade: bool, constraints: str | N
     """
     if _MK_EXTRA not in host.extras:
         return
-    target = _pip_target(host, _MK_EXTRA, upgrade=upgrade, constraints=constraints)
+    # The add-on set rides here too: this second `-U kenzy[...]` would otherwise
+    # re-resolve core alone and could move it right past the cap the main
+    # invocation just honored.
+    target = _pip_target(host, _MK_EXTRA, upgrade=upgrade, constraints=constraints, plugins=plugins)
     r = _ssh(host, f"{shlex.quote(host.venv_path)}/bin/pip install -q {target}")
     if r.returncode == 0:
         _ok("volume-button support installed")

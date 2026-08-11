@@ -271,8 +271,36 @@ def stage_voice(hosts: list[str], cases: list[str] | None) -> bool:
     # RESULT_TIMEOUT is raised from the default: the lab server is one VM on a
     # mini-PC running STT, the LLM, TTS and speaker ID together, so a patience
     # tuned for prod reads as a failure here.
+    # The ROOM is server-owned and set from the dashboard — it is NOT the SSH
+    # host name. Passing "pi-a" made presence lookups miss and left Kenzy
+    # answering "I don't have a device mapped to pi-a", because room-scoped
+    # device resolution had no such room. Ask the server what the room is
+    # called, keyed by the node's own id.
+    nid = _host_node_id(listener)
+    room = listener
+    state = _server_state()
+    if state and nid:
+        for n in state.get("nodes") or []:
+            if n.get("node_id") == nid and n.get("room"):
+                room = str(n["room"])
+                break
+    record(listener, f"room resolved to {room!r}", room != listener or not nid,
+           "fell back to the host name — is the node registered?")
+
+    # The probe verifies HA entity state itself, so it needs its own read
+    # access — without it every device assertion fails as
+    # "Illegal header value b'Bearer '", which reads like a broken device and
+    # is really an empty key. Passed per invocation rather than written to the
+    # board: this is a test rig that gets wiped and reverted, and a credential
+    # at rest there outlives the run that needed it.
+    ha_key = os.environ.get("HA_API_KEY", "")
+    if not ha_key:
+        record("local", "HA_API_KEY available for state checks", False,
+               "device assertions will fail on an empty Bearer token; "
+               "source your .env before running")
     env = (f"PROBE_DASHBOARD=https://{HOSTS[SERVER].fqdn}:8770 "
-           f"PROBE_ROOM={listener} PROBE_RESULT_TIMEOUT=90 PROBE_SETTLE=6")
+           f"PROBE_ROOM={room} PROBE_RESULT_TIMEOUT=90 PROBE_SETTLE=6 "
+           f"HA_API_KEY={shlex.quote(ha_key)}")
     sel = " --case " + " ".join(cases) if cases else ""
     # Streamed, not captured: a full battery runs for minutes and the per-case
     # lines are the point of watching it.
@@ -500,14 +528,36 @@ def _server_state() -> dict | None:
         return None
 
 
+def _host_node_id(h: str) -> str:
+    """A lab host's stable node_id, read from its own node.yaml ("" unknown).
+
+    The server keys everything on node_id; the ROOM is server-owned and
+    dashboard-renamable — pi-a's room is 'office', and two fleet checks that
+    matched by room==hostname called a perfectly healthy node absent. Identity
+    is the id, never the name.
+    """
+    r = ssh(h, f"~/{VENV}/bin/python -c \""
+               f"import yaml,pathlib;"
+               f"print((yaml.safe_load((pathlib.Path.home()/"
+               f"'{KHOME}/configs/node.yaml').read_text()) or {{}}).get('node_id',''))\"",
+            timeout=60)
+    return r.stdout.strip() if r.returncode == 0 else ""
+
+
 def audio_failures(state: dict, hosts: list[str]) -> list[str]:
-    """Hosts that carry a microphone but report it not working."""
-    by_room = {n.get("room"): n for n in (state.get("nodes") or [])}
+    """Hosts that carry a microphone but report it not working. Matched by
+    node_id (room falls back only when the id is unreadable)."""
+    nodes = state.get("nodes") or []
+    by_id = {n.get("node_id"): n for n in nodes}
+    by_room = {n.get("room"): n for n in nodes}
     bad = []
     for h in hosts:
         if not HOSTS[h].audio:
             continue
-        n = by_room.get(h)
+        nid = _host_node_id(h)
+        n = by_id.get(nid) if nid else None
+        if n is None:
+            n = by_room.get(h)
         if n is None or not n.get("audio_ok"):
             why = (n or {}).get("audio_error") or "not reported by the server"
             bad.append(f"{h}: {why}")
@@ -578,8 +628,12 @@ def stage_fleet(hosts: list[str]) -> bool:
 
     rooms = {e.get("room"): e.get("version") for e in entries.values() if isinstance(e, dict)}
     for n in NET1_NODES:
-        # room defaults to the hostname until the dashboard renames it
-        ok &= record(SERVER, f"{n} joined", n in rooms,
+        # Identity is the node_id (rooms are dashboard-renamable — pi-a is
+        # 'office'); the room==hostname match survives only as a fallback for
+        # a host whose config can't be read.
+        nid = _host_node_id(n)
+        joined = nid in entries if nid else n in rooms
+        ok &= record(SERVER, f"{n} joined", joined,
                      f"roster rooms: {sorted(r for r in rooms if r)}")
     # Agreement is not correctness: every node reporting the same STALE version
     # passed this check while the freshly-installed package sat unused on disk.

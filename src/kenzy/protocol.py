@@ -42,6 +42,7 @@ MSG_FOLLOWUP_TIMEOUT = "followup_timeout"  # node→server: held-floor reply win
 MSG_CALL_RINGING = "call_ringing"  # server→caller: play the ringback loop while the callee is rung
 MSG_END_DIALOG = "end_dialog"  # server→node: a multi-turn dialog ended — play the end cue
 # Intercom (live two-way call between two rooms; gated by the receiver's consent).
+MSG_PLUGIN_EVENT = "plugin_event"  # node↔server: a plugin's payload, routed by plugin id (5.1)
 MSG_CALL_REQUEST = "call_request"  # server→node: ring the receiver (no audio yet)
 MSG_CALL_CANCEL = "call_cancel"  # server→node: caller hung up before accept
 MSG_INTERCOM_START = "intercom_start"  # server→node: consent accepted, begin the call
@@ -313,6 +314,14 @@ def tts_start(
 
 def tts_end(session_id: str) -> str:
     return json.dumps({"type": MSG_TTS_END, "session_id": session_id})
+
+
+def plugin_event(plugin_id: str, payload: dict[str, Any]) -> str:
+    """A plugin's own traffic (5.1). ONE generic frame for every plugin, routed
+    by ``plugin_id`` to that plugin's other half — the core protocol never
+    grows per-plugin message types. The payload schema is the plugin's own
+    concern (and its own compatibility problem, versioned by the plugin API)."""
+    return json.dumps({"type": MSG_PLUGIN_EVENT, "plugin": plugin_id, "payload": payload})
 
 
 def call_request(from_room: str) -> str:

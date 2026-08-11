@@ -1,6 +1,6 @@
 # KENZY &middot; [![GitHub license](https://img.shields.io/github/license/lnxusr1/kenzy.svg)](https://github.com/lnxusr1/kenzy/blob/main/LICENSE) ![Python Versions](https://img.shields.io/pypi/pyversions/kenzy.svg) ![GitHub release (latest by date)](https://img.shields.io/github/v/release/lnxusr1/kenzy.svg)
 
-**[kenzy.ai](https://kenzy.ai)** &middot; [Documentation](https://docs.kenzy.ai/) &middot; [Install](https://kenzy.ai/install.sh)
+**[kenzy.ai](https://kenzy.ai)** &middot; [Documentation](https://docs.kenzy.ai/) &middot; [Install](https://docs.kenzy.ai/getting-started/)
 
 A distributed home voice assistant built as six independently deployable microservices. Kenzy runs wake-word detection locally on room nodes (Orange Pi Zero 3 / 3W or Raspberry Pi 3 / 4 / 5), streams audio to a central server for transcription, runs it through an LLM with tool-calling skills, and streams synthesized speech back to the room. It also keeps a live, per-room sense of where people are, built from your Home Assistant sensors and from who it last heard in each room.
 
@@ -171,8 +171,10 @@ It gives you one place to:
 - See everything she has said **on her own** — and, just as usefully, every time she decided *not* to, with the reason. Includes a "test an alert" button so safety announcements can be verified without setting off a real smoke detector
 - Watch **pipeline activity** (transcripts, latency, fast-path hit rate) and read server / service / node **logs**
 - Trigger / stop / restart nodes and send TTS **announcements** to every room
-- **Upgrade** the server, backend services, and nodes in place — one click, with an "update available" check against PyPI
+- **Upgrade** the server, backend services, and nodes in place — one click, with an "update available" check against PyPI (installed **add-ons** upgrade jointly, so a version pairing can never silently break)
 - Edit a safe subset of the server's own config and change the dashboard password
+
+**Add-ons** (5.1): optional capabilities ship as separate pip packages — install one into Kenzy's environment and it appears with its own dashboard pages under an *Add-ons* section; uninstalled, it costs nothing and shows nothing. The first is [kenzy-ld2450](https://github.com/lnxusr1/kenzy-ld2450), an in-node mmWave radar that gives each room true someone-is-here presence (including people sitting still), with a live sensor view, drag-to-draw ignore zones, and per-room Home Assistant occupancy entities over MQTT. An installed add-on that can't load says why on the Settings page instead of vanishing.
 
 The `install.sh` installer **enables TLS by default** (generating a self-signed pair into
 the config home; `--no-tls` opts out). A plain `pip install` starts plaintext — a

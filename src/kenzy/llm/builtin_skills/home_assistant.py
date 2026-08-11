@@ -616,6 +616,14 @@ class _DeviceIndex:
     music_only: set[str] = field(default_factory=set)
 
 
+# The words the media grammar accepts. Kept here as well as in the padacioso
+# template because the template uses a fixed alternation, which matches but
+# captures nothing — so the spoken word has to be recovered from the utterance
+# to resolve WHICH player was meant. Longest first: "television" must not be
+# shadowed by "tv".
+_MEDIA_WORDS = ("television", "movie", "music", "media", "show", "tv")
+
+
 def _norm(text: str) -> str:
     return re.sub(r"[^\w\s]", "", text).strip().lower()
 
@@ -1234,7 +1242,9 @@ def _resolve_vacuum(idx: _DeviceIndex, room: str | None) -> str | None:
     return all_codes[0] if len(all_codes) == 1 else None
 
 
-async def _resolve_media(idx: _DeviceIndex, room: str | None, want: tuple[str, ...]) -> str | None:
+async def _resolve_media(
+    idx: _DeviceIndex, room: str | None, want: tuple[str, ...], spoken: str = ""
+) -> str | None:
     """One media player for a transport verb.
 
     The scoped room's only player wins outright (pausing an idle TV is a
@@ -1243,6 +1253,23 @@ async def _resolve_media(idx: _DeviceIndex, room: str | None, want: tuple[str, .
     house-wide by state — "pause the music" from the kitchen stops the one
     thing playing anywhere. Still ambiguous ⇒ None (the LLM clarifies).
     """
+
+    # NAME FIRST. "Exact name beats group" is the rule every control verb
+    # already follows, and the media path was the one place it didn't: it read
+    # only the room and the LIVE STATE, so "mute the TV" in a room holding a TV
+    # and a music player resolved to nothing whenever neither was playing, and
+    # fell through to the LLM. A device the speaker named — by curated alias or
+    # by its own name — is not ambiguous, and naming it must not depend on
+    # something already being in a playing state.
+    if spoken:
+        codes = idx.rooms.get(room or "", {}).get("media", [])
+        phrase = _norm(spoken)
+        if codes and phrase:
+            hits = [c for c in (idx.aliases.get((room or "", phrase)) or []) if c in codes]
+            if not hits:
+                hits = [c for c in codes if _norm(idx.spoken.get(c, "")) == phrase]
+            if len(hits) == 1:
+                return hits[0]
 
     async def pick(codes: list[str], lone_wins: bool) -> str | None:
         if lone_wins and len(codes) == 1:
@@ -1388,7 +1415,11 @@ async def fast_home_control(utterance: str, room_id: str | None, speaker: str | 
         room = idx.room_phrases.get(spoken_room) if spoken_room else _room_key(origin)
         if spoken_room and not room:
             return FastResult.miss()  # named a room we don't know
-        code = await _resolve_media(idx, room, want)
+        norm_utt = _norm(utterance)
+        spoken_media = next(
+            (w for w in _MEDIA_WORDS if re.search(rf"\b{w}\b", norm_utt)), ""
+        )
+        code = await _resolve_media(idx, room, want, spoken_media)
         if not code:
             return FastResult.miss()
         await _apply_devices([{"id": code, "action": svc}], idx.device_map)

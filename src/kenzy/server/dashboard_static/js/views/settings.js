@@ -416,6 +416,55 @@ function UpdateCheck() {
       : null}`;
 }
 
+// 5.1: what each fault kind means for the operator, in actions rather than
+// taxonomy. The error text itself (from the load gate) already names the
+// specifics — these lines say what to DO about it.
+const FAULT_FIX = {
+  incompatible: "Upgrade kenzy or the add-on so their plugin APIs match, then restart the server.",
+  "import-error": "The add-on's code failed to load — reinstall or upgrade it, then restart.",
+  "bad-manifest": "The add-on declares itself incorrectly — report this to its author.",
+  duplicate: "Two installed add-ons claim the same id — uninstall one, then restart.",
+};
+
+function Addons({ addons }) {
+  const loaded = (addons && addons.loaded) || [];
+  const faults = (addons && addons.faults) || [];
+  if (!loaded.length && !faults.length) {
+    return html`<p class="micro">
+      No add-ons installed. An add-on is a pip package (e.g.
+      ${" "}<code class="mono">pip install kenzy-ld2450</code> in Kenzy's environment) — the
+      server finds it on its next restart.
+    </p>`;
+  }
+  return html`
+    ${faults.map(
+      (f) => html`<div class="banner warn" key=${f.dist}>
+        ⚠ <b>${f.dist}</b> <span class="mono">${f.version}</span> is installed but
+        <b> not loaded</b> — ${f.error}.<br />
+        <span class="micro">${FAULT_FIX[f.kind] || "Fix the cause, then restart the server."}</span>
+      </div>`,
+    )}
+    ${loaded.length
+      ? html`<dl class="kv">
+          ${loaded.map(
+            (p) => html`<dt>${p.label}</dt>
+              <dd>
+                <span class="mono">${p.dist} ${p.version}</span>
+                ${" · "}${(p.roles || []).join(" + ")}
+                ${p.panel ? " · panel" : ""}
+                ${" · "}<span class="micro">API v${p.api}</span>
+              </dd>`,
+          )}
+        </dl>`
+      : null}
+    <p class="micro" style="margin-top:var(--s3)">
+      Add-ons are discovered when the server starts — after a
+      ${" "}<code class="mono">pip install</code>/<code class="mono">uninstall</code>, restart the
+      server (Controls below). Updates move kenzy and installed add-ons together.
+    </p>
+  `;
+}
+
 function ChangePassword({ username, onChanged }) {
   const [cur, setCur] = useState("");
   const [next, setNext] = useState("");
@@ -745,6 +794,11 @@ export function SettingsView({ onLogout }) {
       <section class="section">
         <header><h2>Updates</h2><span class="rule"></span></header>
         <div class="card pad"><${UpdateCheck} /></div>
+      </section>
+
+      <section class="section">
+        <header><h2>Add-ons</h2><span class="rule"></span></header>
+        <div class="card pad"><${Addons} addons=${s.addons} /></div>
       </section>
 
       <section class="section">

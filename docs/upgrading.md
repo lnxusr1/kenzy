@@ -32,6 +32,13 @@ Upgrade the **server first**, then services, then nodes.
 
 Newest first. Anything not listed needs no manual steps.
 
+### 5.1.0
+
+Nothing required. Add-ons are new and entirely opt-in: an upgraded install
+behaves exactly as before until you deliberately install one (see the
+[kenzy-ld2450](https://github.com/lnxusr1/kenzy-ld2450) README for what that
+looks like — including the one-time hardware wiring an in-node sensor needs).
+
 ### 5.0.8 — an existing install keeps the PyTorch build it already has
 
 New installs on a Linux/x86 machine with no NVIDIA card now get the CPU-only

@@ -8,6 +8,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Most releases need nothing beyond the upgrade itself. When one does, it's noted
 here and spelled out in **[Upgrading](https://docs.kenzy.ai/upgrading/)**.
 
+## [5.1.0]
+
+### Added
+
+- **Add-ons: optional capabilities now ship as separate, installable packages.** Install one (`pip install kenzy-ld2450` into Kenzy's environment, then restart) and it simply appears — its pages under a new **Add-ons** section of the dashboard, its hardware support running on the nodes that need it. Don't install it, and nothing about your setup changes: no settings you can't use, no pages you don't need, no cost. The dashboard's Settings page shows every installed add-on — and if one *can't* load (wrong version pairing, broken install), it says so in plain terms with the fix, rather than silently vanishing; an amber "not loaded" marker in the navigation makes sure you notice.
+
+- **The first add-on: [kenzy-ld2450](https://github.com/lnxusr1/kenzy-ld2450), in-node room radar.** A small mmWave sensor wired to a room node gives that room real presence — someone sitting still is still *there*, where motion sensors give up after a timeout. It comes with a live top-down view of what the sensor sees, drag-to-draw zones for ignoring things like ceiling fans, and per-room settings applied live. Its readings feed Kenzy's own sense of who's where, and (with the MQTT integration on) appear in Home Assistant as an occupancy sensor per room, ready for automations.
+
+- **Add-ons can publish to Home Assistant.** The MQTT bridge now carries add-on sensors — announced only for nodes that actually have the hardware, attached to the node's existing HA device, and honestly *unavailable* (never "clear") when the node is offline.
+
+### Changed
+
+- **Upgrades move Kenzy and installed add-ons together.** Every Kenzy-driven upgrade — the dashboard's one-click, a node's self-upgrade, a `kenzy-deploy` sweep — now hands pip the whole set at once, so an add-on that needs an older Kenzy *holds the upgrade back with a stated reason* instead of pip leaving a silently broken pair behind. Nothing changes on a host with no add-ons.
+
+### Fixed
+
+- **"Mute the TV" now mutes the TV you named.** When a room had several media players, control words like mute/pause/volume guessed by *state* (whichever player was active) even when you said exactly which device you meant. Naming a device — by its name or an alias like "TV" — now wins outright, the same rule room devices have always followed.
+
 ## [5.0.8]
 
 ### Fixed

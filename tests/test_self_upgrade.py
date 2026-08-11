@@ -11,7 +11,7 @@ from kenzy.upgrade import pip_upgrade_command
 
 def test_pip_upgrade_cmd_basic(tmp_path, monkeypatch):
     monkeypatch.setenv("KENZY_HOME", str(tmp_path))  # no constraints file present
-    cmd = pip_upgrade_command("server", None)
+    cmd = pip_upgrade_command("server", None, plugins=[])
     assert cmd[1:5] == ["-m", "pip", "install", "-U"]
     assert cmd[-1] == "kenzy[server]>=3.0.0"  # floored, never the 2.x monolith
     assert "-c" not in cmd
@@ -20,7 +20,7 @@ def test_pip_upgrade_cmd_basic(tmp_path, monkeypatch):
 def test_pip_upgrade_cmd_version_and_constraints(tmp_path, monkeypatch):
     monkeypatch.setenv("KENZY_HOME", str(tmp_path))
     (tmp_path / "constraints.txt").write_text("transformers==4.30.0\n")
-    cmd = pip_upgrade_command("llm", "3.2.0")
+    cmd = pip_upgrade_command("llm", "3.2.0", plugins=[])
     assert "-c" in cmd  # operator pins honored on upgrade
     assert cmd[-1] == "kenzy[llm]==3.2.0"
 

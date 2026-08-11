@@ -78,3 +78,25 @@ def presence(*, node_id: str | None, room: str | None, speaker: str | None) -> d
     """Who was last heard, and where — the derived signal HA can't get elsewhere.
     Carries no transcript, so it's safe to publish regardless of text settings."""
     return _event("presence", node_id=node_id, room=room, speaker=speaker)
+
+
+def radar(
+    *,
+    node_id: str,
+    room: str | None,
+    present: bool,
+    targets: int = 0,
+    nearest_mm: int | None = None,
+) -> dict[str, Any]:
+    """A node's in-node radar reading (5.1, the ld2450 add-on) — the RAW
+    per-sensor signal, so HA automations can use each room's radar directly
+    rather than only Kenzy's fused belief. Additive event type: consumers
+    ignore types they don't know, so the schema version holds."""
+    return _event(
+        "radar",
+        node_id=node_id,
+        room=room,
+        present=present,
+        targets=targets,
+        nearest_mm=nearest_mm,
+    )

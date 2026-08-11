@@ -46,6 +46,13 @@ class IntegrationHub:
             except Exception:  # a transport must never break the pipeline
                 log.debug("integration subscriber error", exc_info=True)
 
+    def emit(self, event: dict[str, Any]) -> None:
+        """Publish a schema event from OUTSIDE the server's own listeners —
+        the plugin seam (5.1): an add-on's server half hands in events built
+        with :mod:`kenzy.integrations.schema` (e.g. ``schema.radar``) and the
+        transports fan them out like any other."""
+        self._emit(event)
+
     def on_node_state(self, snapshot: list[dict[str, Any]]) -> None:
         """Emit a ``node_state`` per connected node, plus an offline event for any
         node that has dropped out since the previous snapshot."""

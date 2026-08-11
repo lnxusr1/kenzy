@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "kenzy"
-version = "5.0.8"
+version = "5.1.0"
 description = "Distributed home voice-assistant: kenzy-node, kenzy-server, kenzy-stt, kenzy-tts, kenzy-llm, kenzy-speaker"
 requires-python = ">=3.11"
 readme = "README.md"
@@ -206,6 +206,9 @@ where = ["src"]
 "kenzy" = [
     "data/configs/*.yaml",
     "data/.env.example",
+    # Ships type information to plugin repos (kenzy-ld2450 mypy-checks against
+    # the real kenzy types; without this marker they see Any). 5.1.
+    "py.typed",
 ]
 "kenzy.node" = [
     "models/*.tflite",

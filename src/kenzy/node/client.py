@@ -57,6 +57,7 @@ from websockets.asyncio.client import ClientConnection
 from kenzy import kenzy_version, protocol
 from kenzy.features import probe_import
 from kenzy.logutil import TRACE
+from kenzy.plugins import PluginScan
 
 log = logging.getLogger(__name__)
 
@@ -1093,6 +1094,29 @@ class NodeClient:
         #: The (enabled, match, step, audio_device) tuple the running task was
         #: built from; _sync_mediakeys restarts the task only when it changes.
         self._mediakeys_built_from: tuple[Any, ...] | None = None
+        # 5.1 plugin seam: node-role plugins from installed kenzy-* distributions.
+        # Scanned once per process (install/uninstall is restart-to-apply); the
+        # scan is fail-closed per plugin and never raises, but a plugin must
+        # never take the node down, so belt-and-braces anyway.
+        self._plugin_scan: PluginScan | None
+        try:
+            from kenzy.plugins import scan_plugins
+
+            self._plugin_scan = scan_plugins()
+        except Exception as exc:  # pragma: no cover - scan_plugins is designed not to raise
+            log.error("Plugin scan failed entirely: %s", exc, exc_info=True)
+            self._plugin_scan = None
+        #: Per-plugin config (server-owned ``addons.<id>`` namespace).
+        self._addons_cfg: dict[str, Any] = {
+            k: dict(v) for k, v in (cfg.get("addons") or {}).items() if isinstance(v, dict)
+        }
+        self._plugin_tasks: dict[str, asyncio.Task[None]] = {}
+        #: Config each running plugin task was built from; _sync_plugins
+        #: restarts a task only when its slice changed (mediakeys pattern).
+        self._plugins_built_from: dict[str, dict[str, Any]] = {}
+        #: Live context per plugin — shared by the run task and inbound
+        #: server-half events, so both see the same config object.
+        self._plugin_ctxs: dict[str, Any] = {}
         _wd = cfg.get("watchdog") or {}
         self._watchdog_enabled: bool = bool(_wd.get("enabled", True))
         self._watchdog_warn_s: float = float(_wd.get("warn_minutes", 5)) * 60.0
@@ -2004,6 +2028,15 @@ class NodeClient:
             self._mk_step = max(1, min(20, int(patch["volume_button_step"])))
             applied.append("volume_button_step")
 
+        if isinstance(patch.get("addons"), dict):
+            # 5.1: per-plugin config namespace. The server merges this dict
+            # per-addon before pushing (never shallowly — the watchdog-dict
+            # trap), so here it can be adopted wholesale.
+            self._addons_cfg = {
+                k: dict(v) for k, v in patch["addons"].items() if isinstance(v, dict)
+            }
+            applied.append("addons")
+
         if isinstance(patch.get("watchdog"), dict):
             wd = patch["watchdog"]
             if "warn_minutes" in wd:
@@ -2083,6 +2116,9 @@ class NodeClient:
         # Media keys derive from the media_* keys AND audio_device — re-sync
         # after every apply; it's a no-op unless one of its inputs changed.
         self._sync_mediakeys()
+        # Same contract for plugin tasks: re-sync after every apply, no-op
+        # unless a plugin's config slice changed.
+        self._sync_plugins()
 
     async def _metrics_loop(self, ws: ClientConnection) -> None:
         """Report system metrics (cpu/ram/disk/temp) every ~30 s while connected.
@@ -2172,6 +2208,13 @@ class NodeClient:
                 # config read is skipped, so this is where registration lands.
                 self._mark_registered()
                 self._apply_pulled_config(msg.get("config") or {})
+
+            elif mtype == protocol.MSG_PLUGIN_EVENT:
+                # 5.1: a plugin's server half addressing its node half. Routed
+                # by plugin id to the module's on_server_event hook, as a task
+                # — a slow plugin must not stall the command loop, and a
+                # crashing one is its own failure alone.
+                self._dispatch_plugin_event(msg)
 
             elif mtype == protocol.MSG_TRIGGER and self._state == _STATE_IDLE:
                 sid = msg.get("session_id") or str(uuid.uuid4())
@@ -2712,6 +2755,103 @@ class NodeClient:
         )
         self._mediakeys_task = loop.create_task(watcher.run(), name="mediakeys")
 
+    # ------------------------------------------------------------------
+    # Plugins (5.1): node-role plugin tasks, run beside the node's loops
+    # ------------------------------------------------------------------
+
+    async def _plugin_send_event(self, plugin_id: str, payload: dict[str, Any]) -> None:
+        """A node plugin's only outlet — a ``plugin_event`` frame to its server
+        half. Registered connections only, best-effort: an event on an orphaned
+        node is dropped, not queued (stale sensor events arriving on reconnect
+        would be worse than lost ones)."""
+        ws = self._ws
+        if ws is None or not self._registered:
+            return
+        try:
+            await ws.send(protocol.plugin_event(plugin_id, payload))
+        except Exception as exc:
+            log.debug("plugin_event send failed for %s: %s", plugin_id, exc)
+
+    async def _run_plugin(self, plugin_id: str, run: Any, ctx: Any) -> None:
+        """Run one plugin's ``node_run`` task, non-fatally — the same philosophy
+        as ``_init_audio``: a plugin failing costs that plugin's capability,
+        never the node. The error names the plugin so the journal says which."""
+        try:
+            await run(ctx)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            log.error("Plugin '%s' task died: %s — node continues", plugin_id, exc, exc_info=True)
+
+    def _sync_plugins(self) -> None:
+        """Start/restart node-role plugin tasks to match config (the mediakeys
+        pattern): called after every config apply, a no-op unless a plugin's
+        config slice changed. Safe without a loop (sync tests) — then it only
+        records."""
+        if self._plugin_scan is None:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+
+        for plugin in self._plugin_scan.for_role("node"):
+            pid = plugin.manifest.id
+            want = dict(self._addons_cfg.get(pid) or {})
+            task = self._plugin_tasks.get(pid)
+            if task is not None and not task.done() and self._plugins_built_from.get(pid) == want:
+                continue
+            if task is not None:
+                task.cancel()
+                self._plugin_tasks.pop(pid, None)
+            self._plugins_built_from[pid] = want
+            ctx = self._node_plugin_ctx(pid, want)
+            run = plugin.hook("node_run")
+            if run is None:
+                continue  # a panel-only or server-only dist also installed here
+            self._plugin_tasks[pid] = loop.create_task(
+                self._run_plugin(pid, run, ctx), name=f"addon-{pid}"
+            )
+
+    def _node_plugin_ctx(self, pid: str, cfg: dict[str, Any]) -> Any:
+        """(Re)build and cache this plugin's context — shared by its run task
+        and inbound server-half events."""
+        from kenzy.plugins import NodePluginContext
+
+        def _send(payload: dict[str, Any], _pid: str = pid) -> Any:
+            return self._plugin_send_event(_pid, payload)
+
+        ctx = NodePluginContext(
+            node_id=self._node_id,
+            config=cfg,
+            send_event=_send,
+            log=logging.getLogger(f"kenzy.addon.{pid}"),
+        )
+        self._plugin_ctxs[pid] = ctx
+        return ctx
+
+    def _dispatch_plugin_event(self, msg: dict[str, Any]) -> None:
+        """An inbound ``plugin_event`` (server half → node half): route to the
+        plugin's ``on_server_event`` hook as a task, fail-closed per plugin."""
+        pid = str(msg.get("plugin") or "")
+        plugin = self._plugin_scan.get(pid) if self._plugin_scan is not None else None
+        hook = plugin.hook("on_server_event") if plugin is not None else None
+        if hook is None:
+            log.debug("plugin_event for absent node half (or no hook): %r", pid)
+            return
+        ctx = self._plugin_ctxs.get(pid)
+        if ctx is None:  # no run task built one (a hook-only node half): build now
+            ctx = self._node_plugin_ctx(pid, dict(self._addons_cfg.get(pid) or {}))
+        payload = msg.get("payload")
+
+        async def _run() -> None:
+            try:
+                await hook(ctx, payload if isinstance(payload, dict) else {})
+            except Exception as exc:
+                log.error("Plugin '%s' on_server_event failed: %s", pid, exc, exc_info=True)
+
+        asyncio.get_running_loop().create_task(_run(), name=f"addon-evt-{pid}")
+
     def _mark_disconnected(self) -> None:
         """A session ended — start the outage clock if we were actually joined.
 
@@ -3026,6 +3166,13 @@ class NodeClient:
             "playback_sample_rate": self._playback_rate,
             "devices": self._device_capabilities(),
             "unit": self._unit_info,
+            # 5.1: which plugin halves this node carries, with version + API so
+            # the server can flag a node whose half skews from its own (treated
+            # like an incompatible install: features off, reason in Fleet).
+            "plugins": [
+                {"id": p.manifest.id, "version": p.version, "api": p.manifest.api}
+                for p in (self._plugin_scan.for_role("node") if self._plugin_scan else ())
+            ],
         }
         # Prove possession of the join token by signature — the raw token never
         # rides the hello. (Requires a >=3.12 server.)
