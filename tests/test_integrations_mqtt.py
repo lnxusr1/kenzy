@@ -124,6 +124,46 @@ def test_presence_publishes_speaker_and_timestamp() -> None:
     assert by_topic["kenzy/kitchen/last_heard"].endswith("+00:00")  # ISO-8601 UTC
 
 
+def test_radar_announces_its_entities_once_then_publishes_states() -> None:
+    """The 5.1 radar (ld2450 add-on): first event from a node emits discovery
+    for occupancy/targets/nearest ON THE NODE'S EXISTING HA DEVICE (same
+    identifiers), keyed separately from the node announce — a node can exist
+    long before (or without) a sensor. Later events are state-only."""
+    import json as _json
+
+    announced = {"kitchen"}  # the node itself was announced long ago
+    ev = schema.radar(node_id="kitchen", room="Kitchen", present=True, targets=2, nearest_mm=1234)
+    first = _plan(ev, announced)
+    configs = [m for m in first if "/config" in m.topic]
+    assert {m.topic.split("/")[1] for m in configs} == {"binary_sensor", "sensor"}
+    assert len(configs) == 3 and all(m.retain for m in configs)
+    occ = _json.loads(next(m for m in configs if "binary_sensor" in m.topic).payload)
+    assert occ["device_class"] == "occupancy"
+    assert occ["device"]["identifiers"] == ["kenzy_kitchen"]  # merges onto the node's device
+    assert {a["topic"] for a in occ["availability"]} >= {"kenzy/kitchen/availability"}
+    by_topic = {m.topic: m.payload for m in first}
+    assert by_topic["kenzy/kitchen/radar"] == "ON"
+    assert by_topic["kenzy/kitchen/radar_targets"] == "2"
+    assert by_topic["kenzy/kitchen/radar_nearest"] == "1234"
+    assert announced == {"kitchen", "radar:kitchen"}
+
+    second = _plan(schema.radar(node_id="kitchen", room="Kitchen", present=False), announced)
+    assert not any("/config" in m.topic for m in second)
+    by_topic = {m.topic: m.payload for m in second}
+    assert by_topic["kenzy/kitchen/radar"] == "OFF"
+    assert by_topic["kenzy/kitchen/radar_nearest"] == ""  # clear room: no distance
+
+
+def test_hub_emit_fans_plugin_events_to_transports() -> None:
+    from kenzy.integrations import IntegrationHub
+
+    hub = IntegrationHub()
+    seen: list[dict] = []
+    hub.subscribe(seen.append)
+    hub.emit(schema.radar(node_id="n1", room="Office", present=True, targets=1))
+    assert len(seen) == 1 and seen[0]["type"] == "radar" and seen[0]["present"] is True
+
+
 def test_interaction_events_publish_nothing() -> None:
     # interaction carries only timing/metadata and is not surfaced to MQTT.
     ev = schema.interaction(node_id="kitchen", room="Kitchen", speaker="alice", fast=False,

@@ -61,6 +61,26 @@ jobs:
       - name: pytest
         run: pytest
 
+      - name: Plugin seam via REAL entry points
+        # The suite proves the seam with an injected scan; this proves the one
+        # thing injection can't — that a pip-installed distribution is found by
+        # the real entry-point walk (which silently matched NOTHING on 3.11
+        # until the SelectableGroups fix) and its panel resolves from installed
+        # package data. Assert the capability, not the install command.
+        run: |
+          pip install -q ./tests/sample_plugin
+          python - <<'EOF'
+          from pathlib import Path
+          from kenzy.plugins import scan_plugins
+          scan = scan_plugins()
+          plugin = scan.get("sample")
+          assert plugin is not None, f"sample plugin not discovered: {scan}"
+          assert not scan.faults, scan.faults
+          panel = Path(plugin.manifest.panel_dir) / plugin.manifest.panel_entry
+          assert panel.is_file(), f"panel entry missing from package data: {panel}"
+          print("plugin seam OK:", plugin.dist, plugin.version)
+          EOF
+
   types:
     name: mypy
     runs-on: ubuntu-latest

@@ -525,8 +525,45 @@ class Dashboard:
                 # is so "she's been silent for months" is visible rather than
                 # inferred. Hiding the tab when disabled would hide the fault.
                 "proactive_active": getattr(self._server, "_proactive", None) is not None,
+                # 5.1 plugins: installed panels feed the Addons nav band. Empty
+                # ⇒ no band — an install with no plugins carries zero UI.
+                "addons": self._addons_state(),
+                # Installed-but-not-loaded plugins, WITH their reasons — the
+                # failure must be visible ("installed · incompatible"), never
+                # a silent nothing.
+                "addon_faults": self._addon_faults_state(),
             },
         }
+
+    def _addons_state(self) -> list[dict[str, Any]]:
+        """Nav entries for loaded server-half plugins that ship a panel."""
+        scan = getattr(self._server, "_plugins", None)
+        if scan is None:
+            return []
+        out: list[dict[str, Any]] = []
+        for p in scan.for_role("server"):
+            m = p.manifest
+            if m.panel_dir is None:
+                continue
+            out.append(
+                {
+                    "id": m.id,
+                    "label": m.label,
+                    "ico": m.ico,
+                    "panel": f"/addons/{m.id}/{m.panel_entry}",
+                    "version": p.version,
+                }
+            )
+        return out
+
+    def _addon_faults_state(self) -> list[dict[str, Any]]:
+        scan = getattr(self._server, "_plugins", None)
+        if scan is None:
+            return []
+        return [
+            {"dist": f.dist, "version": f.version, "kind": f.kind, "error": f.error}
+            for f in scan.faults
+        ]
 
     # ------------------------------------------------------------------
     # Server self-config editor (safe subset; written to server.local.yaml)
@@ -730,6 +767,39 @@ class Dashboard:
             # Spoken-cue phrases + current sound-key values (the "Regenerate
             # spoken cues" card; phrases are edited via `cues:` in server.yaml).
             "cues": self._server.cue_texts_state(),
+            # 5.1: the Add-ons management card — everything installed on THIS
+            # host, loaded or refused-with-reason. Distinct from flags.addons
+            # (the nav band), which lists only panel-bearing server halves.
+            "addons": self._addons_settings_state(),
+        }
+
+    def _addons_settings_state(self) -> dict[str, Any]:
+        scan = getattr(self._server, "_plugins", None)
+        if scan is None:
+            return {"loaded": [], "faults": []}
+        return {
+            "loaded": [
+                {
+                    "id": p.manifest.id,
+                    "label": p.manifest.label,
+                    "dist": p.dist,
+                    "version": p.version,
+                    "api": p.manifest.api,
+                    "roles": list(p.manifest.roles),
+                    "panel": p.manifest.panel_dir is not None,
+                }
+                for p in scan.loaded
+            ],
+            "faults": [
+                {
+                    "dist": f.dist,
+                    "version": f.version,
+                    "kind": f.kind,
+                    "error": f.error,
+                    "api": f.api,
+                }
+                for f in scan.faults
+            ],
         }
 
     @staticmethod
@@ -812,10 +882,57 @@ class Dashboard:
             body = _experimental_favicon(body)
         return Response(200, "OK", headers, body)
 
+    def _addon_static(self, path: str) -> Response:
+        """Serve a plugin's panel files at ``/addons/<id>/…`` (5.1).
+
+        Files come ONLY from a loaded plugin's declared ``panel_dir`` — package
+        data of an installed distribution, never the config home, never a
+        config-specified path. The trust line is "what you pip install"; this
+        route must not widen it. Same containment as ``_static``.
+        """
+        headers = Headers()
+        headers["Content-Type"] = "text/plain"
+        parts = path[len("/addons/") :].split("/", 1)
+        scan = getattr(self._server, "_plugins", None)
+        plugin = scan.get(parts[0]) if scan is not None and len(parts) == 2 and parts[1] else None
+        panel_dir = plugin.manifest.panel_dir if plugin is not None else None
+        if panel_dir is None:
+            return Response(404, "Not Found", headers, b"not found")
+        root = Path(panel_dir).resolve()
+        target = (root / parts[1]).resolve()
+        if root not in target.parents or not target.is_file():
+            return Response(404, "Not Found", headers, b"not found")
+        headers = Headers()
+        headers["Content-Type"] = _CONTENT_TYPES.get(target.suffix, "application/octet-stream")
+        return Response(200, "OK", headers, target.read_bytes())
+
+    async def _addon_state(self, plugin_id: str, raw_path: str = "") -> Response:
+        """``GET /api/addons/<id>/state`` — whatever the plugin's ``panel_state``
+        hook returns, JSON-encoded. The hook receives ``(ctx, query)`` where
+        query is the flattened query string (last value wins). Faults are the
+        plugin's alone: a hook that throws answers 500 with the reason, and
+        the dashboard stays up."""
+        scan = getattr(self._server, "_plugins", None)
+        plugin = scan.get(plugin_id) if scan is not None else None
+        hook = plugin.hook("panel_state") if plugin is not None else None
+        if plugin is None or hook is None:
+            return self._json(404, {"error": "no such addon (or it has no panel_state)"})
+        query = {k: v[-1] for k, v in parse_qs(urlsplit(raw_path).query).items()}
+        try:
+            state = await hook(self._server._plugin_context(plugin), query)
+        except Exception as exc:
+            log.error("Addon '%s' panel_state failed: %s", plugin_id, exc, exc_info=True)
+            return self._json(500, {"error": str(exc)})
+        return self._json(200, state if isinstance(state, dict) else {"state": state})
+
     async def process_request(
         self, connection: ServerConnection, request: Request
     ) -> Response | None:
         path = request.path.split("?", 1)[0]
+
+        if path.startswith("/addons/"):
+            # Panel code (not data) — served like the core static assets.
+            return self._addon_static(path)
 
         if path == "/ws":
             # Live update + mutation channel. Reject cross-site / rebinding handshakes
@@ -844,6 +961,14 @@ class Dashboard:
 
         if path == "/api/state":
             return self._json(200, await self._state())
+
+        if path.startswith("/api/addons/") and path.endswith("/state"):
+            # 5.1: a panel's data path — the plugin's server half answers via
+            # its `panel_state` hook. Auth-gated with the rest of /api/*. The
+            # query string rides along so a panel can scope the answer (e.g.
+            # "stream only the node whose tab is open").
+            pid = path[len("/api/addons/") : -len("/state")]
+            return await self._addon_state(pid, request.path)
 
         if path == "/api/settings":
             return self._json(200, self._settings_state())
@@ -2115,6 +2240,21 @@ class Dashboard:
             await connection.send(
                 json.dumps({"type": "override_saved", "node": node, "applied_live": applied})
             )
+        elif mtype == "set_addon_node_config":
+            # 5.1: a panel saving its OWN addon's slice of a node's override
+            # (e.g. ld2450 ignore zones). Per-addon read-merge-write + live
+            # push happen server-side; other addons and grid keys survive.
+            if not self._dcfg.controls:
+                return await ack(False, "controls are disabled (set dashboard.controls: true)")
+            try:
+                await self._server.write_addon_node_config(
+                    str(msg.get("node", "")),
+                    str(msg.get("addon", "")),
+                    msg.get("config") or {},
+                )
+            except (ValueError, OSError) as exc:
+                return await ack(False, str(exc))
+            await ack(True)
         elif mtype == "set_room":
             if not self._dcfg.controls:
                 return await ack(False, "controls are disabled (set dashboard.controls: true)")

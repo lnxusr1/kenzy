@@ -166,6 +166,34 @@ _COMMAND_ENTITIES: list[tuple[str, str, str, dict[str, Any]]] = [
     ("button", "trigger", "Trigger", {"payload_press": "PRESS", "icon": "mdi:microphone-message"}),
     ("button", "stop", "Stop", {"payload_press": "PRESS", "icon": "mdi:stop"}),
 ]
+# Radar entities (5.1, the ld2450 add-on) — announced lazily on the FIRST radar
+# event from a node, so only sensor-bearing nodes grow them. They join the
+# node's existing HA device (same identifiers), and share its availability —
+# an offline node's radar honestly reads unavailable, not "clear".
+_RADAR_ENTITIES: list[tuple[str, str, str, dict[str, Any]]] = [
+    (
+        "binary_sensor",
+        "radar",
+        "Radar occupancy",
+        {"device_class": "occupancy", "payload_on": "ON", "payload_off": "OFF"},
+    ),
+    (
+        "sensor",
+        "radar_targets",
+        "Radar targets",
+        {"icon": "mdi:radar", "state_class": "measurement"},
+    ),
+    (
+        "sensor",
+        "radar_nearest",
+        "Radar nearest",
+        {
+            "device_class": "distance",
+            "unit_of_measurement": "mm",
+            "icon": "mdi:signal-distance-variant",
+        },
+    ),
+]
 
 
 def discovery_messages(
@@ -239,6 +267,45 @@ def discovery_messages(
     return out
 
 
+def radar_discovery_messages(
+    node_id: str, room: str | None, *, base_topic: str, discovery_prefix: str
+) -> list[Message]:
+    """Retained discovery configs for one node's radar entities. The device
+    block matches the node's (same identifiers), so HA merges these onto the
+    existing Kenzy device rather than inventing a second one."""
+    slug = _slug(node_id)
+    device = {
+        "identifiers": [f"kenzy_{slug}"],
+        "name": f"Kenzy {room or node_id}",
+        "manufacturer": "Kenzy",
+        "model": "node",
+    }
+    if room:
+        device["suggested_area"] = room
+    availability = [
+        {"topic": bridge_availability_topic(base_topic)},
+        {"topic": f"{base_topic}/{slug}/availability"},
+    ]
+    out: list[Message] = []
+    for component, key, name, extra in _RADAR_ENTITIES:
+        payload: dict[str, Any] = {
+            "name": name,
+            "unique_id": f"kenzy_{slug}_{key}",
+            "object_id": f"kenzy_{slug}_{key}",
+            "state_topic": f"{base_topic}/{slug}/{key}",
+            "availability": availability,
+            "availability_mode": "all",
+            "device": device,
+            **extra,
+        }
+        out.append(
+            Message(
+                f"{discovery_prefix}/{component}/kenzy_{slug}_{key}/config", json.dumps(payload)
+            )
+        )
+    return out
+
+
 def plan_messages(
     event: dict[str, Any],
     *,
@@ -281,6 +348,27 @@ def plan_messages(
     elif etype == "presence":
         out.append(Message(f"{base_topic}/{slug}/last_speaker", str(event.get("speaker") or "")))
         out.append(Message(f"{base_topic}/{slug}/last_heard", _iso(event.get("ts"))))
+
+    elif etype == "radar":
+        # 5.1: the in-node radar (ld2450 add-on). Discovery on first sight of
+        # THIS node's radar — keyed separately from the node announce, since a
+        # node can appear long before (or without) a sensor.
+        if f"radar:{node_id}" not in announced:
+            out += radar_discovery_messages(
+                str(node_id),
+                event.get("room"),
+                base_topic=base_topic,
+                discovery_prefix=discovery_prefix,
+            )
+            announced.add(f"radar:{node_id}")
+        out.append(Message(f"{base_topic}/{slug}/radar", "ON" if event.get("present") else "OFF"))
+        out.append(
+            Message(f"{base_topic}/{slug}/radar_targets", str(int(event.get("targets") or 0)))
+        )
+        nearest = event.get("nearest_mm")
+        out.append(
+            Message(f"{base_topic}/{slug}/radar_nearest", "" if nearest is None else str(nearest))
+        )
 
     # interaction events carry only timing/metadata and aren't surfaced to MQTT;
     # presence (above) provides the who/where/when. node text is never published.

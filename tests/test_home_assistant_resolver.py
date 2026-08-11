@@ -450,3 +450,50 @@ def test_thermo_clamp_reads_config(monkeypatch):
     reg.set_config({})  # falls back to the packaged defaults
     assert mod._thermo_min() == mod._THERMO_MIN
     assert mod._thermo_max() == mod._THERMO_MAX
+
+
+async def test_naming_a_media_player_beats_guessing_from_state(ha, monkeypatch):
+    """"Mute the TV" must hit the TV, even with a music player in the room and
+    nothing playing.
+
+    The media path used to read only the room and the players' LIVE STATE, so a
+    room holding a TV and a music player resolved to nothing unless one of them
+    was already playing — and "mute the TV" fell through to the LLM. That is the
+    opposite of the rule every control verb follows ("exact name beats group"),
+    and it made naming a device depend on that device already being in use.
+
+    Driven through the resolver rather than asserted on a helper: the point is
+    that the fast path RESOLVES, not that a lookup works in isolation.
+    """
+    tv = "media_player.office_office_tv"
+    music = "media_player.office_office_music_player"
+    idx = ha._DeviceIndex(
+        rooms={"office": {"media": [tv, music]}},
+        defaults={},
+        spoken={tv: "office tv", music: "office music player"},
+        aliases={("office", "tv"): [tv], ("office", "music"): [music]},
+        exclude=set(),
+        room_phrases={"office": "office"},
+        device_map={tv: tv, music: music},
+    )
+
+    # Both idle — exactly the state in which the old code gave up.
+    async def _state(code):
+        return {"state": "idle"}
+
+    monkeypatch.setattr(ha, "_ha_state", _state)
+
+    want = ha._MEDIA_INTENTS["media_mute"][1]
+    assert await ha._resolve_media(idx, "office", want, "tv") == tv
+    assert await ha._resolve_media(idx, "office", want, "music") == music
+
+    # A generic word names nothing, so ambiguity still defers to the LLM
+    # rather than muting whichever player happens to be listed first.
+    assert await ha._resolve_media(idx, "office", want, "media") is None
+
+    # And a room with a single player still wins on its own, named or not.
+    solo = ha._DeviceIndex(
+        rooms={"den": {"media": [tv]}}, defaults={}, spoken={tv: "den tv"},
+        aliases={}, exclude=set(), room_phrases={"den": "den"}, device_map={tv: tv},
+    )
+    assert await ha._resolve_media(solo, "den", want, "") == tv

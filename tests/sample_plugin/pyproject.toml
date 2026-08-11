@@ -1,0 +1,23 @@
+# The seam-pinning sample plugin. Installable on purpose: the install matrix
+# pip-installs it against a built kenzy wheel and asserts the CAPABILITY (the
+# panel is served, a frame round-trips) — not just that pip exited 0. The unit
+# suite imports the module directly, no install needed.
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kenzy-sample-plugin"
+version = "1.0.0"
+description = "Sample plugin pinning Kenzy's plugin contract (test fixture, never published)"
+requires-python = ">=3.11"
+dependencies = ["kenzy"]
+
+[project.entry-points."kenzy.plugins.v1"]
+sample = "kenzy_sample_plugin"
+
+[tool.setuptools.packages.find]
+include = ["kenzy_sample_plugin*"]
+
+[tool.setuptools.package-data]
+kenzy_sample_plugin = ["panel/*"]

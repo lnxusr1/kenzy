@@ -644,6 +644,26 @@ class AudioServer:
         #: safety rides its socket, so no HA means no hazard announcements.
         self._proactive: Any = None
         self._safety: Any = None
+        # 5.1 plugin seam: server-role plugins from installed kenzy-* dists.
+        # One scan per process (install/uninstall is restart-to-apply); the scan
+        # is fail-closed per plugin and never raises — belt-and-braces anyway,
+        # because a plugin must never take the server down.
+        try:
+            from kenzy.plugins import scan_plugins
+
+            self._plugins = scan_plugins()
+        except Exception as exc:  # pragma: no cover - scan_plugins is designed not to raise
+            from kenzy.plugins import PluginScan
+
+            log.error("Plugin scan failed entirely: %s", exc, exc_info=True)
+            self._plugins = PluginScan()
+        #: Per-plugin context, built at serve() (after main() wires occupancy /
+        #: integrations) and reused for every on_plugin_frame dispatch.
+        self._plugin_ctx: dict[str, Any] = {}
+        self._plugin_tasks: list[asyncio.Task[None]] = []
+        #: The integrations hub, when main() wired one (plugins publish to HA
+        #: through it). None ⇒ integrations off.
+        self._integrations: Any = None
         #: Every proactive decision, refusals included. Deliberately on the
         #: SERVER and not in the dashboard's Activity ring: Activity is gated on
         #: `dashboard.logs` because its records carry household transcripts,
@@ -913,6 +933,36 @@ class AudioServer:
                 )
             self._node_cfg_cache[node_id] = (mtime, data)
         effective: dict[str, Any] = {**self._node_defaults, **data}
+        # 5.1: the `addons` namespace merges PER-ADDON, never shallowly — a
+        # per-node override touching one addon key must not drop the defaults'
+        # other addons or that addon's sibling keys (the watchdog-dict trap,
+        # prevented rather than re-learned). Fresh dicts throughout: the cached
+        # override and node_defaults must never be mutated downstream.
+        addon_srcs = [
+            s
+            for s in (self._node_defaults.get("addons"), data.get("addons"))
+            if isinstance(s, dict)
+        ]
+        if addon_srcs:
+            merged_addons: dict[str, Any] = {}
+            for src in addon_srcs:
+                for aid, acfg in src.items():
+                    if isinstance(acfg, dict):
+                        merged_addons[aid] = {**merged_addons.get(aid, {}), **acfg}
+            # The secret-name invariant holds one level down too: an addon key
+            # named like a secret is stripped, not served.
+            for aid, acfg in merged_addons.items():
+                bad = [k for k in acfg if _SECRET_KEY_RE.search(k)]
+                for k in bad:
+                    del acfg[k]
+                if bad:
+                    log.warning(
+                        "[%s] dropped secret-like keys from served addon '%s' config: %s",
+                        node_id,
+                        aid,
+                        bad,
+                    )
+            effective["addons"] = merged_addons
         # Transient overlay (e.g. a temporary TRACE log boost): wins over stored
         # config but is never persisted.
         transient = self._transient_node_cfg.get(node_id)
@@ -928,6 +978,156 @@ class AudioServer:
         if self._capture_node_logs:
             effective["keep_logs"] = True
         return effective
+
+    # ------------------------------------------------------------------
+    # Plugins (5.1): server-role halves — config, startup, frame routing
+    # ------------------------------------------------------------------
+
+    def _addon_config(self, plugin: Any) -> dict[str, Any]:
+        """This plugin's server-half config: manifest defaults deep-merged with
+        ``configs/addons/<id>.yaml`` (its OWN file — a plugin config can never
+        wholesale-replace another surface's, the curation.yaml lesson)."""
+        import yaml
+
+        path = self._data_root / "configs" / "addons" / f"{plugin.manifest.id}.yaml"
+        data: dict[str, Any] = {}
+        try:
+            if path.exists():
+                loaded = yaml.safe_load(path.read_text()) or {}
+                if isinstance(loaded, dict):
+                    data = loaded
+        except Exception as exc:
+            log.warning("Addon config %s unreadable (%s) — using defaults", path, exc)
+        return _deep_merge(dict(plugin.manifest.config_defaults), data)
+
+    def _plugin_context(self, plugin: Any) -> Any:
+        """The (cached) context a server-half plugin runs against."""
+        pid = plugin.manifest.id
+        ctx = self._plugin_ctx.get(pid)
+        if ctx is None:
+            from kenzy.plugins import ServerPluginContext
+
+            async def _send(node_id: str, payload: dict[str, Any], _pid: str = pid) -> bool:
+                return await self._plugin_send_to_node(_pid, node_id, payload)
+
+            ctx = ServerPluginContext(
+                config=self._addon_config(plugin),
+                occupancy=self._occupancy,
+                integrations=self._integrations,
+                log=logging.getLogger(f"kenzy.addon.{pid}"),
+                room_of=self._room_of_node,
+                send_to_node=_send,
+            )
+            self._plugin_ctx[pid] = ctx
+        return ctx
+
+    async def _plugin_send_to_node(
+        self, plugin_id: str, node_id: str, payload: dict[str, Any]
+    ) -> bool:
+        """Server half → node half. False (never an exception) when the node is
+        disconnected, doesn't carry this plugin, or carries an API-skewed half
+        — the same refusal as the inbound gate, in the other direction."""
+        session = self._nodes.get(node_id)
+        if session is None:
+            return False
+        plugin = self._plugins.get(plugin_id)
+        if plugin is None:
+            return False
+        advert = next(
+            (
+                p
+                for p in (session.capabilities.get("plugins") or [])
+                if isinstance(p, dict) and p.get("id") == plugin_id
+            ),
+            None,
+        )
+        if advert is None or advert.get("api") != plugin.manifest.api:
+            return False
+        try:
+            await session.ws.send(protocol.plugin_event(plugin_id, payload))
+            return True
+        except Exception as exc:
+            log.debug("[%s] plugin '%s' send failed: %s", node_id, plugin_id, exc)
+            return False
+
+    def _room_of_node(self, node_id: str) -> str:
+        """The room name a CONNECTED node is in ("" otherwise) — the plugin
+        context's ``room_of``. Absent nodes answer "": they send no frames, and
+        an offline node's stored room is the roster's business, not evidence's."""
+        session = self._nodes.get(node_id)
+        return str(session.room_id or "") if session is not None else ""
+
+    def _start_plugins(self) -> None:
+        """Launch each server-half plugin's ``server_start`` as a task. Called
+        from serve(), after main() has wired occupancy/integrations, so the
+        context carries the real subsystems rather than always-None."""
+        for plugin in self._plugins.for_role("server"):
+            start = plugin.hook("server_start")
+            ctx = self._plugin_context(plugin)  # built even hookless: frames need it
+            if start is None:
+                continue
+            self._plugin_tasks.append(
+                asyncio.create_task(
+                    self._run_plugin_start(plugin.manifest.id, start, ctx),
+                    name=f"addon-{plugin.manifest.id}",
+                )
+            )
+
+    async def _run_plugin_start(self, pid: str, start: Any, ctx: Any) -> None:
+        """Non-fatal wrapper: a plugin dying costs that plugin's capability,
+        never the server. The error names the plugin so the journal says which."""
+        try:
+            await start(ctx)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            log.error(
+                "Plugin '%s' server task died: %s — server continues", pid, exc, exc_info=True
+            )
+
+    async def _on_plugin_event(self, session: NodeSession, msg: dict[str, Any]) -> None:
+        """Route a node's ``plugin_event`` frame to that plugin's server half.
+        Every refusal states its reason at the right level: an absent half is
+        debug (a node-only install is legitimate), API skew is a warning (the
+        operator must upgrade one side), a handler error is the plugin's alone."""
+        pid = str(msg.get("plugin") or "")
+        plugin = self._plugins.get(pid)
+        if plugin is None or "server" not in plugin.manifest.roles:
+            log.debug("[%s] plugin_event for absent server half: %r", session.node_id, pid)
+            return
+        # Skew gate: the node adverted its half's API version in hello. A
+        # mismatched half is treated like an incompatible install — the event
+        # is dropped, not half-understood.
+        advert = next(
+            (
+                p
+                for p in (session.capabilities.get("plugins") or [])
+                if isinstance(p, dict) and p.get("id") == pid
+            ),
+            None,
+        )
+        if advert is not None and advert.get("api") != plugin.manifest.api:
+            log.warning(
+                "[%s] plugin '%s' API skew (node v%s, server v%s) — event dropped; "
+                "upgrade the older half",
+                session.node_id,
+                pid,
+                advert.get("api"),
+                plugin.manifest.api,
+            )
+            return
+        hook = plugin.hook("on_plugin_frame")
+        if hook is None:
+            return
+        payload = msg.get("payload")
+        try:
+            await hook(
+                self._plugin_context(plugin),
+                session.node_id,
+                payload if isinstance(payload, dict) else {},
+            )
+        except Exception as exc:
+            log.error("Plugin '%s' frame handler failed: %s", pid, exc, exc_info=True)
 
     async def request_node_logs(
         self, node_id: str, level: str = "", limit: int = 200, timeout: float = 5.0
@@ -1023,6 +1223,41 @@ class AudioServer:
             log.info("[%s] wrote per-node override (%d keys)", node_id, len(merged))
         else:
             log.info("[%s] cleared per-node override", node_id)
+
+    async def write_addon_node_config(
+        self, node_id: str, addon_id: str, config: dict[str, Any]
+    ) -> None:
+        """Persist ONE addon's slice of a node's override (``addons.<addon_id>``)
+        and live-push. Everything else in the file — other addons included — is
+        preserved: read-merge-write per addon, never wholesale (the
+        save_curation lesson). The panel's save path.
+        """
+        if not isinstance(config, dict):
+            raise ValueError("addon config must be a mapping")
+        if self._plugins.get(addon_id) is None:
+            raise ValueError(f"no such addon: {addon_id}")
+        secretish = sorted(k for k in config if _SECRET_KEY_RE.search(k))
+        if secretish:
+            # Refused loudly at write time — served configs silently strip
+            # these names, so accepting one would create a key that can never
+            # reach the node (the volume_buttons trap, blocked at the door).
+            raise ValueError(
+                "key(s) would be stripped from served config (secret-like name): "
+                + ", ".join(secretish)
+            )
+        self._node_cfg_cache.pop(node_id, None)
+        existing = self.read_node_override(node_id)
+        addons = dict(existing.get("addons") or {})
+        if config:
+            addons[addon_id] = config
+        else:
+            addons.pop(addon_id, None)  # empty ⇒ clear this addon's slice
+        merged = {**existing, "addons": addons}
+        if not addons:
+            merged.pop("addons", None)
+        self._write_override_file(node_id, merged)
+        log.info("[%s] wrote addon '%s' node config (%d keys)", node_id, addon_id, len(config))
+        await self.push_config(node_id)  # live: the node re-syncs its plugin task
 
     def apply_node_defaults(self, patch: dict[str, Any]) -> None:
         """Live-update fleet-wide ``node_defaults`` (cue regeneration): the
@@ -1876,6 +2111,9 @@ class AudioServer:
                 await self.set_node_volume(session.node_id, delta=max(-20, min(20, delta)))
                 self._notify_state()
 
+        elif mtype == protocol.MSG_PLUGIN_EVENT:
+            await self._on_plugin_event(session, msg)
+
         elif mtype == protocol.MSG_FOLLOWUP_TIMEOUT:
             # A held-floor reply window expired silently on the node (which plays
             # its own end cue) — clear the dialog state server-side.
@@ -2304,6 +2542,9 @@ class AudioServer:
 
     async def serve(self) -> None:
         log.info("Kenzy server listening on %s:%d", self._host, self._port)
+        # 5.1: server-half plugin tasks start here — after main() wired
+        # occupancy/integrations, inside the running loop.
+        self._start_plugins()
         async with websockets.serve(
             self._handle,
             self._host,
@@ -5247,6 +5488,7 @@ def main() -> None:
         mqtt_transport = MqttTransport(_mcfg, dispatch=_dispatch)
         _hub.subscribe(mqtt_transport.submit)
         attach_to_server(_hub, server)
+        server._integrations = _hub  # plugins publish to HA through the hub (5.1)
 
     # v5 occupancy spine: the HA event socket + the tracker. Default ON, but
     # only ever starts when HA is actually configured — the server holds BOTH
