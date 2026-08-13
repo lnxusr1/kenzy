@@ -169,17 +169,21 @@ def status(
     audio_error: str | None = None,
     devices: list[dict[str, Any]] | None = None,
     media_keys: dict[str, Any] | None = None,
+    mic_volume: dict[str, Any] | None = None,
 ) -> str:
     """Node→server health update: sent when audio init fails (so the node can be
     fixed/restarted remotely while staying connected), when the audio-device
-    probe finishes (to deliver the device list for the dashboard picker), and
-    when the media-keys endpoint status changes (5.0.4 — present/absent/why,
-    for the node page's status line)."""
+    probe finishes (to deliver the device list for the dashboard picker), when
+    the media-keys endpoint status changes (5.0.4 — present/absent/why, for the
+    node page's status line), and when the managed capture gain is applied or
+    refused (mic_volume — applied/why-not, same status line)."""
     payload: dict[str, Any] = {"type": MSG_STATUS, "audio_ok": audio_ok, "audio_error": audio_error}
     if devices is not None:
         payload["devices"] = devices
     if media_keys is not None:
         payload["media_keys"] = media_keys
+    if mic_volume is not None:
+        payload["mic_volume"] = mic_volume
     return json.dumps(payload)
 
 

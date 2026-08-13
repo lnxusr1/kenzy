@@ -32,6 +32,13 @@ Upgrade the **server first**, then services, then nodes.
 
 Newest first. Anything not listed needs no manual steps.
 
+### 5.1.1
+
+Nothing required. `mic_volume` is unset by default, so an upgraded node's
+capture gain is exactly as it was until you deliberately set the new key.
+(Applying it needs `amixer` — part of `alsa-utils`, already present on any
+host with working sound; if it's somehow absent, the node's page says so.)
+
 ### 5.1.0
 
 Nothing required. Add-ons are new and entirely opt-in: an upgraded install

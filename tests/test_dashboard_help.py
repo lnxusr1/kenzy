@@ -195,6 +195,8 @@ def test_every_editable_node_key_shows_a_real_default():
     # could type: the audio device falls back to whatever the OS calls default,
     # and an empty wakeword list falls back to the bundled model paths. Naming
     # them here is deliberate — a silent gap is what this test exists to stop.
+    # (mic_volume is NOT here: its DEFAULTS entry is the display phrase
+    # "device default", which is the honest rendering of "untouched".)
     dynamic = {"audio_device", "wakeword_models"}
 
     missing = sorted(set(_ALLOWED_OVERRIDE_KEYS) - inherited - known - dynamic)

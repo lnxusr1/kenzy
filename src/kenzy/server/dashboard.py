@@ -1002,6 +1002,9 @@ class Dashboard:
                     # 5.0.4: media-keys endpoint status (present/absent/why) —
                     # the visibility half of the speakerphone-buttons feature.
                     "media_keys": session.capabilities.get("media_keys") if session else None,
+                    # Managed capture gain outcome (applied/why-not) — the
+                    # visibility half of mic_volume.
+                    "mic_volume": session.capabilities.get("mic_volume") if session else None,
                 },
             )
 

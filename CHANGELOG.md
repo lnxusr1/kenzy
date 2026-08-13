@@ -8,6 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Most releases need nothing beyond the upgrade itself. When one does, it's noted
 here and spelled out in **[Upgrading](https://docs.kenzy.ai/upgrading/)**.
 
+## [5.1.1]
+
+### Added
+
+- **Microphone volume is now a managed setting.** Playback volume has been server-owned since 5.0.4; capture gain was the missing half — tuning a node's mic meant SSH and `alsamixer`, the value lived in no config or backup, and hand-set mixer state could quietly reset on reboot. `mic_volume` (0–100) is now an ordinary node setting beside playback volume in the dashboard's node editor: applied live when you change it, and re-applied every time the node's audio starts, so it survives reboots, reinstalls, and upgrades like everything else.
+
+  **Unset means untouched** — by default Kenzy never writes to a device's capture gain, and clearing the setting stops managing it rather than pretending to restore a state it can't know. The editor shows exactly that: an input box whose placeholder reads *inherit (device default)*.
+
+  When it can't apply, it says why — on the node's page, in plain terms: the device's name carries no ALSA card (a Pulse/PipeWire alias), `amixer` isn't installed, or the device simply has **no capture-volume control**. That last one is real hardware, not a hypothetical: some speakerphones expose only a mute switch and set their own gain internally, and on those the setting reports itself honestly instead of sitting silently inert. Linux-only, like the volume buttons.
+
+  One detail that matters on popular hardware: some devices (the Anker S330 among them) expose a *combined* mixer control carrying playback **and** capture volume. Kenzy's write targets the capture side explicitly, so managing the mic can never nudge playback — there stays exactly one source of truth for each direction.
+
 ## [5.1.0]
 
 ### Added

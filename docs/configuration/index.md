@@ -83,3 +83,4 @@ resolve the conflict in this file, then upgrade again.
 - [TTS](tts.md) — text-to-speech (`configs/services/tts.yaml`)
 - [LLM](llm.md) — the language model + skills (`configs/services/llm.yaml`)
 - [Speaker ID](speaker.md) — voice identification (`configs/services/speaker.yaml`)
+- [Add-ons](addons.md) — separately installed extensions (`configs/addons/<id>.yaml` + the per-node `addons:` namespace)

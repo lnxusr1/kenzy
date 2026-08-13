@@ -202,6 +202,7 @@ export const NODE_HELP = {
   dialog_onset_vad_threshold: "Voice-detection strictness (0–1) for starting a reply. Higher = firmer.",
   hardware_aec: "Declare the speaker has echo cancellation. Off = strict turn-taking (no barge-in/intercom).",
   volume: "Playback volume 0–100. Persists.",
+  mic_volume: "Capture gain 0–100 via ALSA (Linux). Unset = the device's own gain, untouched; clearing stops managing it. Live — onboard AGC can absorb it, so verify with the calibration meter.",
   capture_sample_rate: "Mic rate; set to the device's native rate if 16 kHz is unsupported.",
   playback_sample_rate: "Speaker rate; set to native if 24 kHz is unsupported.",
   log_level: "Console log level.",
@@ -237,7 +238,7 @@ export const NODE_GROUPS = [
   ],
   ["Speakerphone volume buttons", ["volume_buttons", "volume_button_device", "volume_button_step"]],
   ["Sounds", ["sound_ready", "sound_waiting", "sound_connect", "sound_disconnect", "sound_ringback", "sound_dialog_end", "sound_offline", "sound_timer", "sound_alarm", "sound_error", "sound_thinking", "sound_working"]],
-  ["Playback", ["volume"]],
+  ["Volume", ["volume", "mic_volume"]],
   ["Logging", ["log_level", "log_capture_level", "verbose"]],
 ];
 

@@ -89,6 +89,9 @@ _ALLOWED_OVERRIDE_KEYS = frozenset(
         "log_level",
         "log_capture_level",
         "volume",
+        # Managed ALSA capture gain — flat, grid-editable, live. Unset =
+        # the device's own gain is never touched.
+        "mic_volume",
         # 5.0.4 speakerphone volume buttons — flat, grid-editable, live.
         "volume_buttons",
         "volume_button_device",
@@ -2078,6 +2081,9 @@ class AudioServer:
                 # 5.0.4: the media-keys endpoint status (present/absent/why) —
                 # capability data for the node page's status line.
                 session.capabilities = {**session.capabilities, "media_keys": msg["media_keys"]}
+            if msg.get("mic_volume") is not None:
+                # Managed capture gain: applied/why-not, for the same status line.
+                session.capabilities = {**session.capabilities, "mic_volume": msg["mic_volume"]}
             if not session.audio_ok:
                 log.warning(
                     "[%s] reports audio init FAILED: %s — fix device + restart",

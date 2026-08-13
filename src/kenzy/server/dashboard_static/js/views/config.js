@@ -71,6 +71,11 @@ const RANGES = { volume: { min: 0, max: 100, step: 1, default: 100 } };
 // and the server's cue fallbacks. An explicit "" means "off unless set" — the
 // honest placeholder for those is empty, not the word "default".
 const DEFAULTS = {
+  // Display-only for the placeholder: unset mic_volume means the device's own
+  // gain is never touched, so the honest "default" is a phrase, not a number.
+  // Deliberately NOT in RANGES — an input box, not a slider: it's almost
+  // always inherited, and a slider begs to be dragged (founder call).
+  mic_volume: "device default",
   log_level: "info",
   log_capture_level: "debug",
   capture_sample_rate: 16000,
@@ -390,6 +395,16 @@ export function ConfigView({ node, onBack }) {
             : html`<div class="banner">⚠ Volume buttons are on but not working —
                 ${mk.detail}. Set <code class="mono">volume_button_device</code> below
                 to one of the names listed.</div>`;
+        })()}
+        ${(() => {
+          // Same visibility rule as the volume buttons: a managed setting that
+          // silently isn't managing anything looks identical to one that is.
+          const mv = info.mic_volume;
+          if (!mv) return null;
+          return mv.applied
+            ? html`<p class="micro">Mic volume: ✓ ${mv.detail}</p>`
+            : html`<div class="banner">⚠ <code class="mono">mic_volume</code> is set but not
+                applied — ${mv.detail}</div>`;
         })()}
         <div class="cfg-grid">${grouped.map(groupBlock)}</div>
         <div class="cfg-actions">

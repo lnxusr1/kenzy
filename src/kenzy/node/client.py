@@ -197,6 +197,19 @@ def _volume_to_gain(value: Any) -> float:
     return max(0.0, min(1.0, pct / 100.0))
 
 
+def _parse_mic_volume(value: Any) -> int | None:
+    """mic_volume config → clamped int, or None for unset/garbage. Garbage maps
+    to None (unmanaged) rather than raising — a typo in one key must never cost
+    the whole config apply."""
+    if value in (None, ""):
+        return None
+    try:
+        return max(0, min(100, int(float(value))))
+    except (TypeError, ValueError):
+        log.warning("Ignoring invalid mic_volume %r (want 0-100 or unset)", value)
+        return None
+
+
 # --- Calibration suggestion heuristics: shared math in kenzy.calibration (one
 # source for the dashboard wizard's JS mirror, this CLI, and the server's
 # voice-guided flow). Thin aliases keep this module's call sites readable.
@@ -1087,6 +1100,11 @@ class NodeClient:
         self._mk_enabled: bool = bool(cfg.get("volume_buttons", False))
         self._mk_device: str = str(cfg.get("volume_button_device") or "auto")
         self._mk_step: int = max(1, min(20, int(cfg.get("volume_button_step", 5))))
+        # Capture gain (mic_volume): unset = never touch the device's own gain.
+        # The playback principle from 5.0.4, applied to the other direction —
+        # one truth, no ALSA side-channel, survives reboots via re-apply.
+        self._mic_volume: int | None = _parse_mic_volume(cfg.get("mic_volume"))
+        self._micvol_status: dict[str, Any] | None = None
         self._mediakeys_task: asyncio.Task[None] | None = None
         #: What the watcher last reported — re-sent to the server on reconnect
         #: so the dashboard's endpoint-status line survives a server restart.
@@ -2018,6 +2036,19 @@ class NodeClient:
 
         # Watchdog thresholds are read on every tick, so they tune live. (Whether
         # the loop exists at all is decided at startup — `enabled` needs a restart.)
+        if "mic_volume" in patch:
+            self._mic_volume = _parse_mic_volume(patch["mic_volume"])
+            applied.append("mic_volume")
+            # Live: an amixer set is instant and touches no stream. Clearing the
+            # key stops MANAGING the gain (the prior hardware state is unknowable
+            # — documented, not reverted).
+            if self._audio_ready and self._mic_volume is not None:
+                try:
+                    loop = asyncio.get_running_loop()
+                    loop.create_task(self._apply_mic_volume(), name="micvol")
+                except RuntimeError:
+                    pass  # sync tests: recorded, applied at next audio init
+
         if "volume_buttons" in patch:
             self._mk_enabled = bool(patch["volume_buttons"])
             applied.append("volume_buttons")
@@ -2852,6 +2883,63 @@ class NodeClient:
 
         asyncio.get_running_loop().create_task(_run(), name=f"addon-evt-{pid}")
 
+    # ------------------------------------------------------------------
+    # Mic volume: the managed ALSA capture gain (unset = untouched)
+    # ------------------------------------------------------------------
+
+    def _resolved_input_name(self) -> str:
+        """The actual input device's name (carries the hw:N the mixer needs),
+        resolved the same way the stream resolves it. "" when unknowable."""
+        try:
+            if self._audio_device not in (None, ""):
+                info = sd.query_devices(self._audio_device, "input")
+            else:
+                info = sd.query_devices(kind="input")
+            return str(dict(info).get("name", ""))
+        except Exception:
+            return ""
+
+    async def _apply_mic_volume(self) -> None:
+        """Write the managed capture gain and report the outcome. Failure costs
+        the setting, never the node — and the status says WHY (a device with no
+        hw:N, a missing amixer, a card with no capture control)."""
+        if self._mic_volume is None:
+            return
+        from kenzy.node.micvolume import set_capture_volume
+
+        name = self._resolved_input_name()
+        status = await asyncio.to_thread(set_capture_volume, name, self._mic_volume)
+        self._micvol_status = status
+        if status.get("applied"):
+            log.info("Mic volume applied: %s", status.get("detail"))
+        else:
+            log.warning("Mic volume NOT applied: %s", status.get("detail"))
+        self._push_micvol_status()
+
+    def _push_micvol_status(self) -> None:
+        """Best-effort status frame carrying the capture-gain outcome (the node
+        page's status line — same pattern as the volume-button endpoint)."""
+        ws = self._ws
+        if ws is None or self._micvol_status is None:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        frame = protocol.status(
+            audio_ok=not self._audio_failed,
+            audio_error=self._audio_error,
+            mic_volume=self._micvol_status,
+        )
+
+        async def _send() -> None:
+            try:
+                await ws.send(frame)
+            except Exception:
+                pass
+
+        loop.create_task(_send())
+
     def _mark_disconnected(self) -> None:
         """A session ended — start the outage clock if we were actually joined.
 
@@ -2970,6 +3058,11 @@ class NodeClient:
         self._audio_task = asyncio.create_task(self._audio_loop(), name="audio")
         self._audio_ready = True
         log.info("Audio initialized from server config — node is live")
+        # Re-apply the managed capture gain (if set) now that the device is
+        # known — this is what makes mic_volume survive reboots and reinstalls,
+        # unlike hand-set alsamixer state.
+        if self._mic_volume is not None:
+            await self._apply_mic_volume()
 
     def _teardown_audio(self) -> None:
         """Close any partially-initialized audio resources after a failed init."""
