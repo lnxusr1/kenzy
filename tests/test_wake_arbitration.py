@@ -184,3 +184,88 @@ async def test_loser_capture_is_never_transcribed(tmp_path, monkeypatch):
     monkeypatch.setattr(s, "_transcribe", _fake_transcribe)
     await s.on_session_end(sess, "server_stop")
     assert ran == []  # the winner answers; the loser's capture dies here
+
+
+async def test_loser_score_tail_rewake_is_suppressed(tmp_path, monkeypatch):
+    """The live 2026-08-15 failure: openwakeword's score tail re-fired a "wake"
+    on the loser 6 ms after its stop, and the re-wake — a solo candidate with a
+    silent pre-roll — chimed and answered anyway. A wake_pending from a node
+    stopped this recently is the tail, not a new utterance."""
+    import asyncio
+
+    s = _grouped_server(tmp_path, monkeypatch, {"near": "loft", "far": "loft"})
+    await s._handle_control(s._nodes["near"], _wp("sid-near", -21.0))
+    await s._handle_control(s._nodes["far"], _wp("sid-far", -28.0))
+    await asyncio.sleep(0.35)
+    assert _stops(s._nodes["far"]) == 1
+
+    # The tail re-wake: stopped immediately, marked a loser, no new window.
+    await s._handle_control(s._nodes["far"], _wp("sid-tail", -90.3, margin=0.0))
+    assert _stops(s._nodes["far"]) == 2
+    assert s._arb_is_loser("sid-tail")
+    assert "loft" not in s._arb_window  # no solo window was opened for it
+
+    # After BOTH guards expire (the per-node re-wake guard and the group dead
+    # zone), the same node arbitrates normally again.
+    import time as _time
+
+    s._arb_recent["far"] = _time.monotonic() - 1.0
+    s._arb_deadzone["loft"] = (_time.monotonic() - 1.0, "near")
+    await s._handle_control(s._nodes["far"], _wp("sid-later", -25.0))
+    assert not s._arb_is_loser("sid-later")
+    await asyncio.sleep(0.35)  # solo candidate → proceeds, no stop
+    assert _stops(s._nodes["far"]) == 2
+
+
+async def test_deadzone_ignores_stragglers(tmp_path, monkeypatch):
+    """One utterance gets ONE second of budget from its first wake: the 250 ms
+    window arbitrates; a wake landing in the remaining 750 ms is the same
+    phrase heard late (a slow device or model), not a new contender — by then
+    the winner has proceeded and can't be un-answered. Applies after solo AND
+    contested windows (the straggler is exactly what made a window solo)."""
+    import asyncio
+
+    # Solo window → straggler in the dead zone → actively stopped, no window.
+    s = _grouped_server(tmp_path, monkeypatch, {"fast": "loft", "slow": "loft"})
+    await s._handle_control(s._nodes["fast"], _wp("sid-fast", -22.0))
+    await asyncio.sleep(0.35)  # window closes solo; dead zone runs to t=1.0 s
+    assert _stops(s._nodes["fast"]) == 0
+    await s._handle_control(s._nodes["slow"], _wp("sid-slow", -20.0))  # louder, but late
+    assert _stops(s._nodes["slow"]) == 1
+    assert s._arb_is_loser("sid-slow")
+    assert "loft" not in s._arb_window  # no solo window opened for it
+
+    # After the budget expires, the same node is a fresh contender again.
+    await asyncio.sleep(0.8)  # past first-wake + 1.0 s
+    await s._handle_control(s._nodes["slow"], _wp("sid-new", -25.0))
+    await asyncio.sleep(0.35)
+    assert _stops(s._nodes["slow"]) == 1  # solo winner this time — no new stop
+
+    # Contested window → a THIRD node straggling in is ignored the same way.
+    s2 = _grouped_server(
+        tmp_path, monkeypatch, {"n1": "den", "n2": "den", "n3": "den"}
+    )
+    await s2._handle_control(s2._nodes["n1"], _wp("s1", -21.0))
+    await s2._handle_control(s2._nodes["n2"], _wp("s2", -28.0))
+    await asyncio.sleep(0.35)  # n1 wins, n2 stopped
+    await s2._handle_control(s2._nodes["n3"], _wp("s3", -19.0))
+    assert _stops(s2._nodes["n3"]) == 1
+    assert s2._arb_is_loser("s3")
+
+
+async def test_arbitration_timing_is_configurable_and_clamped(tmp_path, monkeypatch):
+    """window/deadzone are operator-tunable (slow-waking hardware widens the
+    window; a short custom wake phrase shortens the dead zone) with clamps: the
+    window stays inside sane bounds and the dead zone can never be shorter
+    than the window it contains. The guard TTLs stay code constants — race
+    mechanics, not tuning."""
+    monkeypatch.setenv("KENZY_HOME", str(tmp_path))
+    s = TranscribingServer({"arbitration": {"window_ms": 100, "deadzone_ms": 600}})
+    assert s._arb_window_s == 0.1 and s._arb_deadzone_s == 0.6
+
+    s2 = TranscribingServer({"arbitration": {"window_ms": 9999, "deadzone_ms": 10}})
+    assert s2._arb_window_s == 2.0
+    assert s2._arb_deadzone_s == 2.0  # floored at the window
+
+    s3 = TranscribingServer({})
+    assert s3._arb_window_s == 0.25 and s3._arb_deadzone_s == 1.0

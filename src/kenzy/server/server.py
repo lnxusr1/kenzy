@@ -229,7 +229,9 @@ _MAX_SESSION_PCM_BYTES = 16_000 * 2 * 120  # ~2 min of 16 kHz int16 (~3.8 MB) pe
 # node's wake fired (the nodes' buffers don't start at the same instant).
 _ONSET_SHORT_BYTES = 2560 * 4  # ~320 ms of 16 kHz int16 frames
 _ONSET_LONG_BYTES = 2560 * 12  # ~960 ms
-# Co-audible arbitration timing. The window must close, and the stop reach the
+# Co-audible arbitration timing — DEFAULTS; both are operator-tunable via
+# `arbitration.window_ms` / `arbitration.deadzone_ms` in server.yaml (read at
+# boot, clamped in __init__). The window must close, and the stop reach the
 # loser, before the wake gate expires and plays the chime (wake_onset_ms,
 # default 400 ms). Measured spread between co-audible nodes' wake_pending
 # arrivals: 23–146 ms — 250 ms holds them all with LAN round-trip to spare.
@@ -237,6 +239,21 @@ _ARB_WINDOW_S = 0.25
 # How long a stopped session_id stays on the loser list: long enough to catch
 # its audio_start racing the stop, and an already-open capture's audio_end.
 _ARB_LOSER_TTL_S = 10.0
+# A wake_pending from a node stopped this recently is the score TAIL of the
+# utterance it just lost, not a new wake — openwakeword stays above threshold
+# for a few frames after a phrase, and the stop drops the loser back to IDLE
+# while that tail is live. Seen 2026-08-15: a re-wake 6 ms after losing, with a
+# silent (-90 dBFS) pre-roll, that then answered as a solo candidate. New nodes
+# also suppress this locally (_ARB_REFRACTORY_S); this is the server-side
+# backstop that additionally covers older nodes.
+_ARB_REWAKE_S = 1.5
+# One utterance gets ONE second of arbitration budget, measured from the FIRST
+# wake_pending: the opening 250 ms is the window where candidates compete; the
+# remaining 750 ms is a dead zone where a straggler — a node whose wake fired
+# late on the same phrase — is ignored (actively stopped), because the winner
+# has already proceeded and can't be un-answered. A genuinely NEW utterance
+# can't start inside the dead zone: saying the wake phrase takes ~1 s itself.
+_ARB_DEADZONE_S = 1.0
 
 
 def _pcm_rms(pcm: bytes | bytearray) -> float:
@@ -350,6 +367,12 @@ _SERVER_EDITABLE: dict[str, str] = {
     # expected-downtime window granted when we ourselves take a node away.
     "fleet.offline_alert_minutes": "num",
     "fleet.restart_grace_minutes": "num",
+    # Co-audible wake arbitration timing (nodes opt in via `audio_group`).
+    # Window: how long the group collects contenders after its first wake;
+    # dead zone: the utterance's total budget — late wakes inside it are stood
+    # down. Restart to apply (read at boot, like the fleet keys).
+    "arbitration.window_ms": "num",
+    "arbitration.deadzone_ms": "num",
 }
 
 #: Endpoint path each backend service serves, appended to an announced base URL so
@@ -679,6 +702,9 @@ class AudioServer:
         self._arb_window: dict[str, dict[str, dict[str, Any]]] = {}  # group → node_id → cand
         self._arb_tasks: dict[str, asyncio.Task[None]] = {}  # group → decision task
         self._arb_losers: dict[str, float] = {}  # stopped session_id → expiry (monotonic)
+        self._arb_recent: dict[str, float] = {}  # recently-stopped node_id → expiry
+        self._arb_first: dict[str, float] = {}  # group → its open window's first-wake time
+        self._arb_deadzone: dict[str, tuple[float, str]] = {}  # group → (expiry, winner)
         # Per-source-IP connection timestamps for the registration rate limit (F-10).
         self._conn_log: dict[str, deque[float]] = {}
         # Observers notified when the node registry/state changes (the dashboard
@@ -783,6 +809,21 @@ class AudioServer:
         self._static_services: set[str] = set()
         # Durable roster of nodes that *exist*, so a disconnected one becomes absent
         # rather than nonexistent. Kept next to the other operational state.
+        # Co-audible arbitration timing — configurable because the right values
+        # depend on hardware the operator owns: a fleet with slow-waking mics
+        # (visible as dead-zone suppressions in the log) widens the window; a
+        # short custom wake phrase shortens the dead zone. Clamped to sane
+        # bounds, and the dead zone can never be shorter than the window it
+        # contains. The guard TTLs (loser list, re-wake, node refractory) stay
+        # code constants deliberately: they are race mechanics, not tuning.
+        arb_cfg: dict[str, Any] = cfg.get("arbitration") or {}
+        self._arb_window_s: float = min(
+            2.0, max(0.05, float(arb_cfg.get("window_ms", _ARB_WINDOW_S * 1000)) / 1000.0)
+        )
+        self._arb_deadzone_s: float = max(
+            self._arb_window_s,
+            min(5.0, float(arb_cfg.get("deadzone_ms", _ARB_DEADZONE_S * 1000)) / 1000.0),
+        )
         fleet_cfg: dict[str, Any] = cfg.get("fleet") or {}
         #: How long a node may be missing before it is a fault rather than a note.
         #: Comfortably longer than a restart, so ordinary churn stays quiet.
@@ -2098,6 +2139,47 @@ class AudioServer:
         )
         if group is None or not sid:
             return
+        now = time.monotonic()
+        recent = self._arb_recent.get(session.node_id)
+        if recent is not None and recent > now:
+            # The score tail of the utterance this node just lost — stop it
+            # again before it becomes a solo candidate in a fresh window.
+            log.info(
+                "[%s/%s] wake_pending suppressed (lost arbitration %.1f s ago)",
+                session.node_id,
+                sid[:8],
+                _ARB_REWAKE_S - (recent - now),
+            )
+            self._arb_losers[sid] = now + _ARB_LOSER_TTL_S
+            try:
+                await session.ws.send(protocol.stop())
+            except Exception:
+                pass
+            return
+        task = self._arb_tasks.get(group)
+        window_open = task is not None and not task.done()
+        if not window_open:
+            dz = self._arb_deadzone.get(group)
+            if dz is not None and dz[0] > now:
+                # Straggler: this group's window already closed for the current
+                # utterance and its winner has proceeded — a wake landing in
+                # the rest of the one-second budget is the SAME phrase heard
+                # late, not a new contender. Stop it before it becomes a solo
+                # candidate in a fresh window.
+                log.info(
+                    "[%s/%s] wake_pending ignored (dead zone, %d ms late; winner was %s)",
+                    session.node_id,
+                    sid[:8],
+                    int((now - (dz[0] - self._arb_deadzone_s)) * 1000),
+                    dz[1],
+                )
+                self._arb_losers[sid] = now + _ARB_LOSER_TTL_S
+                try:
+                    await session.ws.send(protocol.stop())
+                except Exception:
+                    pass
+                return
+            self._arb_deadzone.pop(group, None)  # expired
         window = self._arb_window.setdefault(group, {})
         window[session.node_id] = {  # a re-wake from the same node replaces its entry
             "node_id": session.node_id,
@@ -2106,8 +2188,8 @@ class AudioServer:
             "margin": margin,
             "score": score,
         }
-        task = self._arb_tasks.get(group)
-        if task is None or task.done():
+        if not window_open:
+            self._arb_first[group] = now  # the utterance's 1 s budget starts here
             self._arb_tasks[group] = asyncio.create_task(
                 self._arb_decide(group), name=f"arb-{group}"
             )
@@ -2115,10 +2197,19 @@ class AudioServer:
     async def _arb_decide(self, group: str) -> None:
         """Close the group's window and stop every candidate but the winner —
         while the losers' gates are still holding their chimes."""
-        await asyncio.sleep(_ARB_WINDOW_S)
+        await asyncio.sleep(self._arb_window_s)
         cands = list(self._arb_window.pop(group, {}).values())
         self._arb_tasks.pop(group, None)
+        first = self._arb_first.pop(group, time.monotonic() - self._arb_window_s)
+        if not cands:
+            return
+        # The dead zone opens for EVERY closed window — solo included: a solo
+        # winner proceeded just as surely, and the straggler it must be
+        # protected from is exactly the node that made the window solo.
+        # (The winner is cands[0] either way; the contested sort below only
+        # reorders when there is competition.)
         if len(cands) < 2:
+            self._arb_deadzone[group] = (first + self._arb_deadzone_s, cands[0]["node_id"])
             return  # one node heard it — nothing to arbitrate
         # Best-placed node: loudest phrase (dBFS), margin-over-floor as the
         # tiebreak, wake score last. Provisional metric — lab data (2026-08-14)
@@ -2136,6 +2227,7 @@ class AudioServer:
         )
         winner, losers = cands[0], cands[1:]
         now = time.monotonic()
+        self._arb_deadzone[group] = (first + self._arb_deadzone_s, winner["node_id"])
         self._arb_losers = {s: t for s, t in self._arb_losers.items() if t > now}
         log.info(
             "wake arbitration [%s]: %s wins (db=%s margin=%s score=%s) over %s",
@@ -2149,8 +2241,10 @@ class AudioServer:
                 for c in losers
             ),
         )
+        self._arb_recent = {n: t for n, t in self._arb_recent.items() if t > now}
         for cand in losers:
             self._arb_losers[cand["session_id"]] = now + _ARB_LOSER_TTL_S
+            self._arb_recent[cand["node_id"]] = now + _ARB_REWAKE_S
             loser = self._nodes.get(cand["node_id"])
             if loser is None:
                 continue

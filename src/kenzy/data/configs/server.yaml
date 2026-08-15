@@ -168,6 +168,16 @@ fleet:
   offline_alert_minutes: 5
   restart_grace_minutes: 10
 
+# Co-audible wake arbitration — only nodes that share an `audio_group` (a node
+# setting) use this. window_ms: how long the group collects contenders after
+# its first wake; must finish before the ready chime (node wake_onset_ms,
+# default 400). deadzone_ms: one utterance's total budget — a wake landing
+# after the window but inside it is the same phrase heard late and is stood
+# down. Restart to apply.
+arbitration:
+  window_ms: 250
+  deadzone_ms: 1000
+
 # kenzy-llm service — omit or set url to null to disable
 llm:
   url: "http://127.0.0.1:8766/process"

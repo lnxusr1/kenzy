@@ -120,6 +120,10 @@ _WATCHDOG_TICK_S = 30.0
 # openwakeword's detection lag, so a one-breath command loses nothing to the
 # hit firing late. The captured phrase is stripped server-side as TEXT.
 _WAKE_PREROLL_FRAMES = 13  # ~1.0s at 80ms frames
+# After losing co-audible arbitration, ignore wake hits this long: the score
+# tail of the phrase we just lost must not re-open a session (observed tail
+# ~300 ms; 0.8 s clears it while staying snappy for a genuine new wake).
+_ARB_REFRACTORY_S = 0.8
 
 #: Where the last-known-good server URL is cached. A cache, deliberately not
 #: config: `server_url` in node.yaml is an operator's authoritative choice, while
@@ -1040,6 +1044,10 @@ class NodeClient:
         # wake fired, consumed (once) by the session's audio_start — see
         # protocol.audio_start.
         self._wake_meta: tuple[float, float, float] | None = None
+        # Monotonic deadline before which wake hits are ignored — set when a
+        # wake gate is cancelled by server_stop (lost arbitration; see
+        # _ARB_REFRACTORY_S).
+        self._wake_refractory_until: float = 0.0
         self._dialog_vad: Any = None  # lazy standalone Silero VAD; False = unavailable
         # Barge-in (stage 2): listen while a floor-holding reply plays and yield
         # if the user answers early. Only when hardware_aec (echo-cancelled feed).
@@ -1621,6 +1629,15 @@ class NodeClient:
             # co-audible arbitration). Nothing was announced, nothing chimed:
             # end in total silence. The waiting bed would claim work is
             # happening on a session that never existed.
+            if reason == "server_stop":
+                # openwakeword's score stays above threshold for a few frames
+                # after the phrase ends. Dropping straight back to IDLE let
+                # that tail re-fire a "wake" 6 ms after losing arbitration —
+                # a solo candidate with a silent pre-roll (-90 dBFS), which
+                # then chimed and answered anyway (seen live 2026-08-15).
+                self._wake_refractory_until = (
+                    asyncio.get_running_loop().time() + _ARB_REFRACTORY_S
+                )
             return
         if was_followup:
             return  # dialog turns get a silent processing beat — never hold music
@@ -2494,6 +2511,12 @@ class NodeClient:
                             # it. Wake works again the instant playback ends.
                             log.debug("Wake hit ignored (no AEC, playback active)")
                             break
+                        if (
+                            self._state == _STATE_IDLE
+                            and loop.time() < self._wake_refractory_until
+                        ):
+                            log.debug("Wake hit ignored (post-arbitration refractory)")
+                            break
                         log.info("Wake word '%s' score=%.3f", name, score)
                         if self._state == _STATE_IDLE:
                             # Measure the phrase where it still exists: the
@@ -2572,11 +2595,35 @@ class NodeClient:
                         elif self._state == _STATE_TTS:
                             # Interrupt TTS: stop playback locally then start a
                             # new session.  on_session_start cancels the server
-                            # pipeline so no STOP round-trip is needed.
+                            # pipeline so no STOP round-trip is needed. Same
+                            # arbitration announcement as an idle wake — the
+                            # pre-roll is fed during playback exactly so this
+                            # path has phrase evidence. (The capture still
+                            # starts from the hit frame alone, as it always
+                            # has; the pre-roll is measurement, not audio.)
+                            self._wake_meta = (
+                                *_wake_phrase_levels([*self._idle_preroll, flat]),
+                                float(score),
+                            )
+                            sid = str(uuid.uuid4())
+                            if self._ws is not None:
+                                try:
+                                    await self._ws.send(
+                                        protocol.wake_pending(
+                                            sid,
+                                            name,
+                                            score,
+                                            self._wake_meta[0],
+                                            self._wake_meta[1],
+                                        )
+                                    )
+                                except Exception:
+                                    pass
                             await self._stop_tts_playback()
                             await self._begin_streaming(
-                                str(uuid.uuid4()), wake_gated=True, gate_preroll=[flat]
+                                sid, wake_gated=True, gate_preroll=[flat]
                             )
+                            self._idle_preroll.clear()
                             gate_armed_now = self._wake_gate
                         elif self._state == _STATE_INTERCOM:
                             # Wake word ends the call immediately (no command needed),
@@ -2608,6 +2655,15 @@ class NodeClient:
                     await self._end_intercom(reason="connection_error")
                 continue
 
+            if self._state == _STATE_TTS:
+                # Keep the rolling pre-roll fed during playback too: a wake
+                # spoken OVER a reply (the TTS-interrupt path) needs the same
+                # phrase evidence for co-audible arbitration as an idle wake —
+                # its peers hear that utterance in their idle paths and send
+                # wake_pending; without this, the interrupting node was
+                # invisible to the window and both nodes answered.
+                self._idle_preroll.append(flat)
+
             if (
                 self._state == _STATE_TTS
                 and self._capture_after_prompt  # a floor-holding reply is playing
@@ -2617,8 +2673,9 @@ class NodeClient:
                 continue
 
             if self._state == _STATE_IDLE:
-                # Rolling pre-roll for the wake gate (see _idle_preroll). Fed only
-                # while idle: the frames right before a hit are all it may carry.
+                # Rolling pre-roll for the wake gate (see _idle_preroll). Fed
+                # while idle and during TTS (see above): the frames right
+                # before a hit are all it may carry.
                 self._idle_preroll.append(flat)
                 continue
 

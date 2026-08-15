@@ -314,6 +314,8 @@ export const SERVER_HELP = {
   "proactive.safety.enabled": "Announce smoke, carbon monoxide, gas, water leaks, and a triggered alarm panel — in every room, immediately, including muted ones. Off by default because it will interrupt anything.",
   "proactive.safety.repeat_after": "Seconds before repeating a hazard that is still going. Silencing one by voice stops it until that sensor goes off and trips again.",
   "fleet.offline_alert_minutes": "How long a room may be unreachable before the Fleet page calls it a fault. An orphaned node still answers its wake word, so nobody in the room notices. 0 = never alert.",
+  "arbitration.window_ms": "How long co-audible nodes (same audio_group) compete after the first wake. Widen if the log shows dead-zone stragglers; must finish before the ready chime (wake_onset_ms). Restart to apply.",
+  "arbitration.deadzone_ms": "One utterance's total arbitration budget. A wake landing after the window but inside this is the same phrase heard late, and is stood down. Restart to apply.",
   "fleet.restart_grace_minutes": "Quiet period after you restart or upgrade a node, so expected downtime doesn't raise an alert. Nodes also announce a planned shutdown themselves, so an ordinary restart is silent either way.",
 };
 
