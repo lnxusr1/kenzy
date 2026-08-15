@@ -88,3 +88,28 @@ async def test_capture_buffer_cap():
     s._buffers["n"] = bytearray(10)
     await s.on_audio_frame(sess, b"\x00" * 256)
     assert len(s._buffers["n"]) == 266
+
+
+async def test_capture_onset_rms_logged_once(caplog):
+    """Each capture logs its opening-audio RMS when the buffer crosses ~1 s —
+    the pairing data for co-audible-node (louder-wins) arbitration work."""
+    import logging
+
+    from kenzy.server.server import _ONSET_LONG_BYTES, _pcm_rms
+
+    # A constant-amplitude int16 signal has RMS equal to that amplitude.
+    assert round(_pcm_rms(b"\xe8\x03" * 100)) == 1000  # 0x03e8 = 1000
+    assert _pcm_rms(b"") == 0.0
+
+    s = TranscribingServer({})
+    s._buffers["n"] = bytearray()
+    sess = NodeSession(ws=_StubWS(), node_id="n", room_id="office")
+    frame = b"\xe8\x03" * 1280  # one 2560-byte frame at amplitude 1000
+    with caplog.at_level(logging.INFO, logger="kenzy.server.server"):
+        for _ in range(_ONSET_LONG_BYTES // len(frame) + 3):
+            await s.on_audio_frame(sess, frame)
+    onset = [r.message for r in caplog.records if "capture onset rms" in r.message]
+    # Logged exactly once per session, at the crossing, with both windows.
+    assert len(onset) == 1
+    assert "320ms=1000" in onset[0] and "960ms=1000" in onset[0]
+    assert "office" in onset[0]

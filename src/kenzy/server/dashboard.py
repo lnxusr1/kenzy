@@ -877,6 +877,11 @@ class Dashboard:
             return Response(404, "Not Found", headers, b"not found")
         headers = Headers()
         headers["Content-Type"] = _CONTENT_TYPES.get(target.suffix, "application/octet-stream")
+        # Revalidate on every load: with no cache headers browsers cache
+        # heuristically, and an upgraded install then serves a stale UI out of
+        # the browser cache — a fixed wizard kept rendering its old bug. The
+        # files are small and the dashboard is LAN-only; refetching is free.
+        headers["Cache-Control"] = "no-cache"
         body = target.read_bytes()
         if name == "favicon.svg" and self._experimental:
             body = _experimental_favicon(body)
@@ -904,6 +909,7 @@ class Dashboard:
             return Response(404, "Not Found", headers, b"not found")
         headers = Headers()
         headers["Content-Type"] = _CONTENT_TYPES.get(target.suffix, "application/octet-stream")
+        headers["Cache-Control"] = "no-cache"  # same staleness trap as _static
         return Response(200, "OK", headers, target.read_bytes())
 
     async def _addon_state(self, plugin_id: str, raw_path: str = "") -> Response:

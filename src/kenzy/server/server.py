@@ -20,9 +20,11 @@ in without changing this file.
 
 from __future__ import annotations
 
+import array
 import asyncio
 import json
 import logging
+import math
 import os
 import random
 import re
@@ -89,6 +91,10 @@ _ALLOWED_OVERRIDE_KEYS = frozenset(
         "log_level",
         "log_capture_level",
         "volume",
+        # Co-audible arbitration group (5.1.x). Nodes sharing a non-empty value
+        # arbitrate their simultaneous wakes; unset (the default) = this node
+        # never waits on, and never loses to, anyone.
+        "audio_group",
         # Managed ALSA capture gain — flat, grid-editable, live. Unset =
         # the device's own gain is never touched.
         "mic_volume",
@@ -192,7 +198,9 @@ _CALIB_WAKE_EXTEND_S = 12.0  # one extension when the phase gate fails
 _CALIB_PROBE_LEAD_S = 0.4  # skip the probe's first moments (playback lags streaming)
 _CALIB_PROBE_TAIL_S = 0.3  # ...and its tail, so only mid-playback frames are tagged
 _CALIB_PROBE_MIN_S = 1.0  # a shorter probe signal than this can't be tagged reliably
-_CALIB_PROBE_BEEP_S = 2.0  # silent-mode probe: the beep is tiled to this length
+_CALIB_PROBE_BEEP_S = 3.0  # probe length; the verdict discards ~0.6 s of AEC
+# convergence warm-up (calibration.ECHO_WARMUP_FRAMES), so the tagged window
+# must leave MIN_ECHO_FRAMES after that — 2.0 s left exactly zero margin
 _CALIB_VOLUME_FLOOR = 20  # below this volume a silent speaker fakes perfect AEC
 _CALIB_VERIFY_S = 12.0  # how long Verify waits for a real wake before nudging
 _CALIB_MAX_NUDGES = 2  # bounded: then be honest instead of oscillating
@@ -213,6 +221,40 @@ _CHIME_DEFAULT = "doorbell.wav"
 # rate-limit new connections per source IP, so a hostile/buggy LAN peer can't exhaust
 # memory or hammer the listener.
 _MAX_SESSION_PCM_BYTES = 16_000 * 2 * 120  # ~2 min of 16 kHz int16 (~3.8 MB) per capture
+# Parallel-hearing groundwork: every capture logs the RMS of its opening audio,
+# so co-audible nodes' takes on the SAME utterance can be paired up from the
+# journal and compared — the empirical base for louder-wins arbitration. Two
+# windows: the fast-decision budget an arbiter could afford, and one long
+# enough to cover the whole wake phrase in the pre-roll regardless of when each
+# node's wake fired (the nodes' buffers don't start at the same instant).
+_ONSET_SHORT_BYTES = 2560 * 4  # ~320 ms of 16 kHz int16 frames
+_ONSET_LONG_BYTES = 2560 * 12  # ~960 ms
+# Co-audible arbitration timing. The window must close, and the stop reach the
+# loser, before the wake gate expires and plays the chime (wake_onset_ms,
+# default 400 ms). Measured spread between co-audible nodes' wake_pending
+# arrivals: 23–146 ms — 250 ms holds them all with LAN round-trip to spare.
+_ARB_WINDOW_S = 0.25
+# How long a stopped session_id stays on the loser list: long enough to catch
+# its audio_start racing the stop, and an already-open capture's audio_end.
+_ARB_LOSER_TTL_S = 10.0
+
+
+def _pcm_rms(pcm: bytes | bytearray) -> float:
+    """RMS of int16 mono PCM — stdlib only (the server carries no numpy)."""
+    usable = len(pcm) - (len(pcm) % 2)
+    if not usable:
+        return 0.0
+    samples = array.array("h")
+    samples.frombytes(bytes(pcm[:usable]))
+    return math.sqrt(sum(s * s for s in samples) / len(samples))
+
+
+def _as_float(value: Any) -> float | None:
+    """Tolerant wire-field read: a number or None, never an exception."""
+    try:
+        return float(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
 _MAX_WS_FRAME = 65_536  # node→server frames are tiny (2.5 KB audio / small JSON)
 _CONN_RATE_MAX = 30  # max new connections per source IP …
 _CONN_RATE_WINDOW = 60.0  # … within this many seconds
@@ -409,6 +451,13 @@ class NodeSession:
     # it can be fixed + restarted from the dashboard). Defaults True (healthy).
     audio_ok: bool = field(default=True)
     audio_error: str | None = field(default=None)
+    # Node-measured wake evidence from the CURRENT session's audio_start (None on
+    # triggered/legacy sessions): phrase level (dBFS), phrase-over-floor margin
+    # (dB — the gain-invariant one), peak wake score. The comparable inputs for
+    # co-audible (louder-wins) arbitration.
+    wake_db: float | None = field(default=None)
+    wake_margin_db: float | None = field(default=None)
+    wake_score: float | None = field(default=None)
     # Capabilities announced in `hello` (audio device + the device probe used by the
     # dashboard's device picker). Not persisted; refreshed on each connect.
     capabilities: dict[str, Any] = field(default_factory=dict)
@@ -622,6 +671,14 @@ class AudioServer:
         # node_id → NodeSession  (guarded by _lock)
         self._nodes: dict[str, NodeSession] = {}
         self._lock = asyncio.Lock()
+        # Co-audible wake arbitration (opt-in per node via `audio_group`).
+        # A wake_pending opens a short window for its group; when it closes the
+        # best-placed node proceeds and every other candidate is stopped —
+        # inside the one-breath gate's held-chime silence, so a loser never
+        # chimes, never captures, never runs a pipeline.
+        self._arb_window: dict[str, dict[str, dict[str, Any]]] = {}  # group → node_id → cand
+        self._arb_tasks: dict[str, asyncio.Task[None]] = {}  # group → decision task
+        self._arb_losers: dict[str, float] = {}  # stopped session_id → expiry (monotonic)
         # Per-source-IP connection timestamps for the registration rate limit (F-10).
         self._conn_log: dict[str, deque[float]] = {}
         # Observers notified when the node registry/state changes (the dashboard
@@ -2015,6 +2072,99 @@ class AudioServer:
     # Per-node message loop
     # ------------------------------------------------------------------
 
+    def _node_audio_group(self, node_id: str) -> str | None:
+        """The node's co-audible group, or None (the default: no arbitration)."""
+        raw = self._effective_node_config(node_id).get("audio_group")
+        group = str(raw).strip() if raw is not None else ""
+        return group or None
+
+    async def _on_wake_pending(self, session: NodeSession, msg: dict[str, Any]) -> None:
+        """A node's wake fired and its gate is holding the chime. Logged for
+        every node (per-wake evidence is diagnostic gold); arbitrated only when
+        the node opted into an ``audio_group``."""
+        sid = str(msg.get("session_id") or "")
+        wake_db = _as_float(msg.get("wake_db"))
+        margin = _as_float(msg.get("wake_margin_db"))
+        score = _as_float(msg.get("score"))
+        group = self._node_audio_group(session.node_id)
+        log.info(
+            "[%s/%s] wake_pending db=%s margin=%s score=%s group=%s",
+            session.node_id,
+            sid[:8] or "?",
+            wake_db,
+            margin,
+            score,
+            group,
+        )
+        if group is None or not sid:
+            return
+        window = self._arb_window.setdefault(group, {})
+        window[session.node_id] = {  # a re-wake from the same node replaces its entry
+            "node_id": session.node_id,
+            "session_id": sid,
+            "db": wake_db,
+            "margin": margin,
+            "score": score,
+        }
+        task = self._arb_tasks.get(group)
+        if task is None or task.done():
+            self._arb_tasks[group] = asyncio.create_task(
+                self._arb_decide(group), name=f"arb-{group}"
+            )
+
+    async def _arb_decide(self, group: str) -> None:
+        """Close the group's window and stop every candidate but the winner —
+        while the losers' gates are still holding their chimes."""
+        await asyncio.sleep(_ARB_WINDOW_S)
+        cands = list(self._arb_window.pop(group, {}).values())
+        self._arb_tasks.pop(group, None)
+        if len(cands) < 2:
+            return  # one node heard it — nothing to arbitrate
+        # Best-placed node: loudest phrase (dBFS), margin-over-floor as the
+        # tiebreak, wake score last. Provisional metric — lab data (2026-08-14)
+        # says raw dBFS separates cleanly in steady state but mismatched
+        # hardware carries a per-device offset; per-node baselines are the
+        # known follow-up, and every decision is logged to keep the evidence
+        # flowing.
+        cands.sort(
+            key=lambda c: (
+                c["db"] if c["db"] is not None else -999.0,
+                c["margin"] if c["margin"] is not None else -999.0,
+                c["score"] or 0.0,
+            ),
+            reverse=True,
+        )
+        winner, losers = cands[0], cands[1:]
+        now = time.monotonic()
+        self._arb_losers = {s: t for s, t in self._arb_losers.items() if t > now}
+        log.info(
+            "wake arbitration [%s]: %s wins (db=%s margin=%s score=%s) over %s",
+            group,
+            winner["node_id"],
+            winner["db"],
+            winner["margin"],
+            winner["score"],
+            ", ".join(
+                f"{c['node_id']} (db={c['db']} margin={c['margin']} score={c['score']})"
+                for c in losers
+            ),
+        )
+        for cand in losers:
+            self._arb_losers[cand["session_id"]] = now + _ARB_LOSER_TTL_S
+            loser = self._nodes.get(cand["node_id"])
+            if loser is None:
+                continue
+            try:
+                await loser.ws.send(protocol.stop())
+            except Exception as exc:
+                log.warning("arbitration stop to %s failed: %s", cand["node_id"], exc)
+
+    def _arb_is_loser(self, session_id: str | None) -> bool:
+        if not session_id:
+            return False
+        expiry = self._arb_losers.get(session_id)
+        return expiry is not None and expiry > time.monotonic()
+
     async def _node_loop(self, session: NodeSession) -> None:
         async for raw in session.ws:
             if isinstance(raw, bytes):
@@ -2032,13 +2182,45 @@ class AudioServer:
         mtype = msg.get("type")
 
         if mtype == protocol.MSG_AUDIO_START:
-            session.session_id = msg.get("session_id")
+            sid = msg.get("session_id")
+            if self._arb_is_loser(sid):
+                # This session lost co-audible arbitration but its audio_start
+                # crossed our stop in flight (e.g. the gate confirmed early).
+                # Refuse it: no on_session_start, streaming stays False so the
+                # frames are dropped, and the stop is re-sent.
+                log.info(
+                    "[%s/%s] audio_start from arbitration loser — stopped",
+                    session.node_id,
+                    (str(sid) or "?")[:8],
+                )
+                try:
+                    await session.ws.send(protocol.stop())
+                except Exception:
+                    pass
+                return
+            session.session_id = sid
             session.streaming = True
-            log.info(
-                "[%s/%s] audio_start",
-                session.node_id,
-                (session.session_id or "?")[:8],
-            )
+            # Node-measured wake evidence (absent on triggered/legacy sessions).
+            # Kept on the session for the co-audible arbitration work; logged so
+            # paired wakes can be compared straight from the journal.
+            session.wake_db = _as_float(msg.get("wake_db"))
+            session.wake_margin_db = _as_float(msg.get("wake_margin_db"))
+            session.wake_score = _as_float(msg.get("wake_score"))
+            if session.wake_db is not None or session.wake_score is not None:
+                log.info(
+                    "[%s/%s] audio_start (wake %s dBFS, +%s dB over floor, score %s)",
+                    session.node_id,
+                    (session.session_id or "?")[:8],
+                    session.wake_db,
+                    session.wake_margin_db,
+                    session.wake_score,
+                )
+            else:
+                log.info(
+                    "[%s/%s] audio_start",
+                    session.node_id,
+                    (session.session_id or "?")[:8],
+                )
             await self.on_session_start(session)
             await session.send_json({"type": protocol.MSG_ACK, "session_id": session.session_id})
             self._notify_state()
@@ -2067,6 +2249,9 @@ class AudioServer:
                 score,
             )
             await self.on_wakeword(session, model, score)
+
+        elif mtype == protocol.MSG_WAKE_PENDING:
+            await self._on_wake_pending(session, msg)
 
         elif mtype == protocol.MSG_INTERCOM_END:
             # Node-initiated end (e.g. its wake word fired during the call).
@@ -2917,11 +3102,32 @@ class TranscribingServer(AudioServer):
         # buggy/hostile node could stream without VAD — don't grow a buffer unbounded.
         if len(buf) >= _MAX_SESSION_PCM_BYTES:
             return
+        crossed_onset = len(buf) < _ONSET_LONG_BYTES <= len(buf) + len(data)
         buf += data
+        if crossed_onset:
+            log.info(
+                "[%s] capture onset rms: 320ms=%d 960ms=%d (room '%s')",
+                session.node_id,
+                round(_pcm_rms(buf[:_ONSET_SHORT_BYTES])),
+                round(_pcm_rms(buf[:_ONSET_LONG_BYTES])),
+                session.room_id,
+            )
 
     async def on_session_end(self, session: NodeSession, reason: str) -> None:
         pcm = bytes(self._buffers.pop(session.node_id, b""))
         if not pcm:
+            return
+        if self._arb_is_loser(session.session_id):
+            # An arbitration loser whose capture had already opened before the
+            # stop landed (one-breath confirm beats the window sometimes). The
+            # winner's pipeline is answering this utterance — running a second
+            # one is the duplicate-answer bug with extra steps.
+            log.info(
+                "[%s/%s] dropping capture from arbitration loser (%d bytes)",
+                session.node_id,
+                (session.session_id or "?")[:8],
+                len(pcm),
+            )
             return
         task = asyncio.create_task(
             self._transcribe(session.node_id, session.room_id, session.session_id, pcm),
@@ -5015,6 +5221,17 @@ class TranscribingServer(AudioServer):
                 # everything after run under the correct duplex semantics.
                 aec = calibration.aec_verdict(sess["quiet"], sess["echo"])
                 current_aec = bool(self._effective_node_config(node_id).get("hardware_aec", True))
+                # Every verdict is logged — a probe that silently decides (or
+                # silently declines to) is undebuggable from the journal, which
+                # is exactly how the M1A misdetection cost a day.
+                log.info(
+                    "[%s] AEC probe verdict: %s (current hardware_aec=%s, quiet=%d echo=%d frames)",
+                    node_id,
+                    aec,
+                    current_aec,
+                    len(sess["quiet"]),
+                    len(sess["echo"]),
+                )
                 if aec is not None and aec != current_aec:
                     self._calib_apply(node_id, {"hardware_aec": aec})
                     await self.push_config(node_id)
@@ -5032,6 +5249,10 @@ class TranscribingServer(AudioServer):
                         return
                 elif aec is not None:
                     self._calib_emit(node_id, sess, stage="aec", aec=aec, changed=False)
+                else:
+                    # Ambiguous probe: say so — the wizard showing nothing here
+                    # read as "detected absent" to the operator.
+                    self._calib_emit(node_id, sess, stage="aec", aec=None, changed=False)
 
                 # Phase 2: the wake word ×N doubles as the speech-level sample.
                 if not await say(
@@ -5056,6 +5277,22 @@ class TranscribingServer(AudioServer):
                 wk = calibration.suggest_wake(sess["wake"])
                 vd = calibration.suggest_vad(sess["vad"])
                 verdict = calibration.separation_verdict(sess["quiet"], speech)
+                if calibration.agc_suspected(sess["quiet"]):
+                    # The floor moved during the quiet phase — device AGC. Say
+                    # so: the operator seeing a lower-than-expected threshold
+                    # (or a skipped VAD gate) should know it was deliberate.
+                    log.info(
+                        "[%s] quiet floor drifted during calibration (device AGC "
+                        "suspected) — using conservative suggestions",
+                        node_id,
+                    )
+                    self._calib_emit(
+                        node_id,
+                        sess,
+                        stage="note",
+                        text="This microphone adjusts its own gain — using "
+                        "conservative thresholds.",
+                    )
                 patch: dict[str, Any] = {}
                 kept: list[str] = []
                 for key, value in (

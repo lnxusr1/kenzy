@@ -201,6 +201,7 @@ export const NODE_HELP = {
   dialog_onset_ms: "Milliseconds of speech needed to start a reply turn (rejects clinks).",
   dialog_onset_vad_threshold: "Voice-detection strictness (0–1) for starting a reply. Higher = firmer.",
   hardware_aec: "Declare the speaker has echo cancellation. Off = strict turn-taking (no barge-in/intercom).",
+  audio_group: "Nodes sharing a name arbitrate simultaneous wakes — the best-placed one answers, the rest stay silent. Unset = never arbitrates.",
   volume: "Playback volume 0–100. Persists.",
   mic_volume: "Capture gain 0–100 via ALSA (Linux). Unset = the device's own gain, untouched; clearing stops managing it. Live — onboard AGC can absorb it, so verify with the calibration meter.",
   capture_sample_rate: "Mic rate; set to the device's native rate if 16 kHz is unsupported.",
@@ -227,7 +228,7 @@ export const NODE_HELP = {
 // fall into "Other".
 export const NODE_GROUPS = [
   ["Audio device", ["audio_device", "capture_sample_rate", "playback_sample_rate"]],
-  ["Wake word", ["wakeword_models", "wakeword_threshold", "wakeword_vad_threshold", "wake_onset_ms"]],
+  ["Wake word", ["wakeword_models", "wakeword_threshold", "wakeword_vad_threshold", "wake_onset_ms", "audio_group"]],
   [
     "Capture / VAD",
     ["silence_rms_threshold", "vad_enabled", "silence_ms", "speech_min_ms", "no_speech_timeout_ms", "hard_cap_ms"],

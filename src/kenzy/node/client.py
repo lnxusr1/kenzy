@@ -214,6 +214,9 @@ def _parse_mic_volume(value: Any) -> int | None:
 # source for the dashboard wizard's JS mirror, this CLI, and the server's
 # voice-guided flow). Thin aliases keep this module's call sites readable.
 
+from kenzy.calibration import (  # noqa: E402
+    agc_suspected as _agc_suspected,
+)
 from kenzy.calibration import (  # noqa: E402  (grouped with the other kenzy imports)
     separation_verdict as _separation_verdict,
 )
@@ -317,6 +320,35 @@ def _resample(audio: np.ndarray[Any, Any], from_rate: int, to_rate: int) -> np.n
         np.arange(len(audio)),
         audio.astype(np.float64),
     ).astype(np.int16)
+
+
+def _wake_phrase_levels(frames: list[np.ndarray[Any, np.dtype[np.int16]]]) -> tuple[float, float]:
+    """``(phrase_dbfs, margin_db)`` for the wake pre-roll: the level of the
+    SPOKEN phrase, and its height above the same window's quiet floor.
+
+    Per-frame RMS across the ~1.1 s pre-roll; the phrase is the loud end (p90)
+    and the room floor the quiet end (p25 — the phrase fills the back of the
+    window, leaving a few genuinely quiet frames at the front). One number
+    each, in dB, because that is what co-audible arbitration can compare:
+    absolute level (dBFS) wanders with a device's AGC state — the same clip
+    measured 168 and ~1330 on the same M1A minutes apart — but gain multiplies
+    the phrase and the floor alike, so phrase-minus-floor survives wandering
+    gain. Whole-window RMS (the first cut of this) dilutes the phrase with
+    however much silence rode along; measuring the frames the wake actually
+    lived in is the point."""
+    if not frames:
+        return 0.0, 0.0
+    per_frame = [
+        float(np.sqrt(np.mean(f.astype(np.float64) ** 2))) for f in frames if f.size
+    ]
+    if not per_frame:
+        return 0.0, 0.0
+    per_frame.sort()
+    phrase = max(per_frame[int(0.9 * (len(per_frame) - 1))], 1.0)
+    floor = max(per_frame[int(0.25 * (len(per_frame) - 1))], 1.0)
+    phrase_dbfs = 20.0 * float(np.log10(phrase / 32768.0))
+    margin_db = 20.0 * float(np.log10(phrase / floor))
+    return round(phrase_dbfs, 1), round(margin_db, 1)
 
 
 # ---------------------------------------------------------------------------
@@ -1004,6 +1036,10 @@ class NodeClient:
         self._idle_preroll: collections.deque[np.ndarray[Any, np.dtype[np.int16]]] = (
             collections.deque(maxlen=_WAKE_PREROLL_FRAMES)
         )
+        # (wake_db, wake_margin_db, wake_score) measured at the moment an idle
+        # wake fired, consumed (once) by the session's audio_start — see
+        # protocol.audio_start.
+        self._wake_meta: tuple[float, float, float] | None = None
         self._dialog_vad: Any = None  # lazy standalone Silero VAD; False = unavailable
         # Barge-in (stage 2): listen while a floor-holding reply plays and yield
         # if the user answers early. Only when hardware_aec (echo-cancelled feed).
@@ -1302,7 +1338,7 @@ class NodeClient:
             sid = self._session_id or str(uuid.uuid4())
             self._session_id = sid
             try:
-                msg, _ = protocol.audio_start(sid, self._room_id)
+                msg, _ = protocol.audio_start(sid, self._room_id, *self._take_wake_meta())
                 if self._ws is None:
                     raise ConnectionError("no websocket")
                 await self._ws.send(msg)
@@ -1347,7 +1383,7 @@ class NodeClient:
                 sid = self._session_id or str(uuid.uuid4())
                 self._session_id = sid
                 try:
-                    msg, _ = protocol.audio_start(sid, self._room_id)
+                    msg, _ = protocol.audio_start(sid, self._room_id, *self._take_wake_meta())
                     if self._ws is None:
                         raise ConnectionError("no websocket")
                     await self._ws.send(msg)
@@ -1467,6 +1503,12 @@ class NodeClient:
             self._player.unduck()
         self._barge_ducked = False
 
+    def _take_wake_meta(self) -> tuple[float | None, float | None, float | None]:
+        """Consume-once wake evidence for the session's audio_start — a stale
+        value must never ride a later, unrelated session."""
+        meta, self._wake_meta = self._wake_meta, None
+        return meta if meta is not None else (None, None, None)
+
     async def _begin_streaming(
         self,
         session_id: str,
@@ -1482,6 +1524,8 @@ class NodeClient:
         user might be talking through. ``gate_preroll`` carries the frames
         around the wake hit so the command's first syllable survives whole.
         """
+        if not wake_gated:
+            self._wake_meta = None  # not a wake session — never attach stale wake evidence
         self._reset_barge()
         self._stop_ringback()
         if self._ws is None:
@@ -1542,7 +1586,7 @@ class NodeClient:
             self._onset_buf = []
             log.info("[%s] follow-up window open (onset-gated)", session_id[:8])
             return
-        msg, _ = protocol.audio_start(session_id, self._room_id)
+        msg, _ = protocol.audio_start(session_id, self._room_id, *self._take_wake_meta())
         await self._ws.send(msg)
         log.info("[%s] streaming started", session_id[:8])
 
@@ -1572,6 +1616,12 @@ class NodeClient:
             except Exception:
                 pass
         log.info("[%s] streaming ended (%s)", (sid or "?")[:8], reason)
+        if was_pending and was_wake_gate:
+            # A wake gate that never resolved — cancelled (e.g. this node lost
+            # co-audible arbitration). Nothing was announced, nothing chimed:
+            # end in total silence. The waiting bed would claim work is
+            # happening on a session that never existed.
+            return
         if was_followup:
             return  # dialog turns get a silent processing beat — never hold music
         # Only start the "processing" sound if we're still idle. On a fast reply the
@@ -2446,10 +2496,37 @@ class NodeClient:
                             break
                         log.info("Wake word '%s' score=%.3f", name, score)
                         if self._state == _STATE_IDLE:
+                            # Measure the phrase where it still exists: the
+                            # pre-roll. Whatever flow the session takes from
+                            # here (one-breath, classic pause), its audio_start
+                            # carries this so co-audible nodes can be compared.
+                            self._wake_meta = (
+                                *_wake_phrase_levels([*self._idle_preroll, flat]),
+                                float(score),
+                            )
+                            sid = str(uuid.uuid4())
+                            # Announce the wake NOW, while the one-breath gate
+                            # still holds the chime — the server's arbitration
+                            # window for co-audible nodes lives inside that
+                            # silence. Fire-and-forget: an old server ignores
+                            # the frame; an orphaned node has no ws and skips.
+                            if self._ws is not None:
+                                try:
+                                    await self._ws.send(
+                                        protocol.wake_pending(
+                                            sid,
+                                            name,
+                                            score,
+                                            self._wake_meta[0],
+                                            self._wake_meta[1],
+                                        )
+                                    )
+                                except Exception:
+                                    pass
                             # The hit frame (and one before it) ride along: the
                             # command's first syllable can start inside them.
                             await self._begin_streaming(
-                                str(uuid.uuid4()),
+                                sid,
                                 wake_gated=True,
                                 gate_preroll=[*self._idle_preroll, flat],
                             )
@@ -3767,6 +3844,10 @@ def run_calibration(cfg: dict[str, Any], node_id: str) -> None:
         if verdict == "poor":
             print("  This room/mic can't reliably tell speech from noise — try moving the")
             print("  mic closer to where people talk, then re-run.")
+    if _agc_suspected(rms1):
+        print("\n  NOTE: the mic level drifted during the quiet phase — this device")
+        print("  adjusts its own gain (AGC), so the suggestions above are")
+        print("  deliberately conservative.")
     print()
     print("These are server-owned (the node pulls its config). Apply them from the")
     print("dashboard's Calibration panel, or add them on the SERVER to one of:")

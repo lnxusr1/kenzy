@@ -280,3 +280,120 @@ async def test_dashboard_relays_only_to_subscriber():
     assert msg["type"] == "tune" and msg["node"] == "k"
     assert msg["sample"]["wake"] == 0.5
     assert other.sent == []  # node mismatch → not forwarded
+
+
+# ---------------------------------------------------------------------------
+# aec_verdict — the hardware-AEC probe judgment. Shipped untested, and the
+# EMEET M1A promptly proved why that mattered: its AGC and playback-gated mic
+# broke the probe's constant-gain assumption and produced a false "absent".
+# ---------------------------------------------------------------------------
+
+
+def _frames(value: float, n: int = 30) -> list[float]:
+    return [value] * n
+
+
+def test_aec_present_reads_true():
+    # S330-shaped: residual during the beep sits at the quiet floor.
+    from kenzy.calibration import aec_verdict
+
+    assert aec_verdict(_frames(40), _frames(45)) is True
+
+
+def test_aec_absent_reads_false_only_when_beep_loud():
+    # Y02-shaped (a plain speaker/mic, no AEC): the co-located beep is heard
+    # near clipping — thousands of RMS, nothing like ambient.
+    from kenzy.calibration import aec_verdict
+
+    assert aec_verdict(_frames(40), _frames(6000)) is False
+
+
+def test_m1a_agc_residual_is_ambiguous_never_absent():
+    """The 2026-08-14 regression, with the real numbers. The M1A's AGC lifts
+    ambient alone to ~1400 RMS in a quiet room, and its quiet baseline can sit
+    near zero (mic gated while nothing plays). The old relative-only bars read
+    that as "no AEC" and switched a full-duplex device to half-duplex — which
+    then ignored wake words during any playback. Elevated-but-not-beep-loud
+    must be AMBIGUOUS: the flag stays as it was."""
+    from kenzy.calibration import aec_verdict
+
+    # AGC-lifted ambient during the probe vs an ordinary quiet floor…
+    assert aec_verdict(_frames(60), _frames(1400)) is None
+    # …and vs a gated-mic near-zero baseline.
+    assert aec_verdict(_frames(2), _frames(900)) is None
+    # A real un-cancelled beep still reads absent even against a tiny baseline.
+    assert aec_verdict(_frames(2), _frames(6000)) is False
+
+
+def test_aec_convergence_warmup_is_discarded():
+    """Hardware AEC leaks for the first fraction of a second on a fresh echo
+    path. Those frames are warm-up, not evidence — a converging canceller
+    must still read as present."""
+    from kenzy.calibration import ECHO_WARMUP_FRAMES, aec_verdict
+
+    echo = _frames(3000, ECHO_WARMUP_FRAMES) + _frames(50, 20)
+    assert aec_verdict(_frames(40), echo) is True
+
+
+def test_aec_too_few_frames_is_no_verdict():
+    from kenzy.calibration import ECHO_WARMUP_FRAMES, aec_verdict
+
+    # Enough raw frames, but not after the warm-up discard.
+    assert aec_verdict(_frames(40), _frames(50, ECHO_WARMUP_FRAMES + 3)) is None
+    assert aec_verdict([], _frames(50)) is None
+
+
+# ---------------------------------------------------------------------------
+# AGC-aware suggestions — the M1A's second failure mode (2026-08-14): the wake
+# phase measures speech at fully recovered gain, but a real command is spoken
+# right after the ready chime with the gain clamped, so the voice-anchored
+# silence suggestion (151–175 on the M1A) killed every live capture. The
+# working value is ~60.
+# ---------------------------------------------------------------------------
+
+
+def _agc_quiet(n: int = 75) -> list[float]:
+    """A quiet phase right after the probe beep on an AGC device: the floor
+    climbs as the gain recovers."""
+    return [15.0 + i * (150.0 - 15.0) / (n - 1) for i in range(n)]
+
+
+def test_agc_suspected_on_rising_floor_only():
+    from kenzy.calibration import agc_suspected
+
+    assert agc_suspected(_agc_quiet()) is True
+    # A stationary floor — loud or near-zero (gated mic) — is not AGC drift.
+    assert agc_suspected([30.0] * 75) is False
+    assert agc_suspected([1.0] * 75) is False
+    # Too few frames isn't a trend.
+    assert agc_suspected(_agc_quiet(12)) is False
+
+
+def test_suggest_silence_caps_under_agc_drift():
+    from kenzy.calibration import agc_suspected, suggest_silence
+
+    quiet = _agc_quiet()
+    speech = [400.0] * 40  # measured at recovered gain — NOT the capture gain
+    assert agc_suspected(quiet) is True
+    sil = suggest_silence(quiet, speech)
+    # The voice anchor alone would say 0.4 × 400 = 160 — the value that broke
+    # live capture. The suggestion must sit near the early (post-playback,
+    # gain-clamped) floor instead.
+    assert sil is not None
+    assert 40 <= sil <= 90
+    # A flat floor keeps the classic voice-anchored suggestion untouched.
+    assert suggest_silence([10.0] * 90, [700.0] * 40) == 280
+
+
+def test_suggest_vad_distrusts_voicey_ambient_and_caps():
+    from kenzy.calibration import suggest_vad
+
+    # M1A shape: AGC pumps room noise into the speech band, ambient VAD ~0.7 —
+    # the old math suggested 0.82 and suppressed genuinely quiet wakes.
+    assert suggest_vad([0.7] * 90 + [1.0] * 10) is None
+    # Just-trustworthy ambient: the suggestion exists but is capped at 0.6.
+    v = suggest_vad([0.45] * 90 + [0.95] * 10)
+    assert v is not None and v <= 0.6
+    # An ordinary quiet room is unchanged.
+    v2 = suggest_vad([0.05] * 90 + [0.95] * 10)
+    assert v2 is not None and 0.0 < v2 < 0.5

@@ -63,6 +63,18 @@ def test_favicon_marks_experimental_mode():
     assert off._static("/favicon.svg").body == prod
 
 
+def test_static_assets_must_revalidate():
+    """Every static response says no-cache. Without it browsers cache the
+    no-build SPA heuristically, and an upgraded install keeps rendering the
+    OLD dashboard out of the browser cache — a fixed wizard shipped to the
+    lab and its bug stayed on screen (2026-08-14)."""
+    dash = Dashboard(AudioServer({}), {}, DashboardConfig())
+    for path in ("/", "/js/views/audio-wizard.js", "/css/app.css"):
+        resp = dash._static(path)
+        assert resp.status_code == 200, path
+        assert resp.headers["Cache-Control"] == "no-cache", path
+
+
 def test_mutation_auth_bearer_and_failclosed():
     server = AudioServer({})
     d = Dashboard(server, {}, DashboardConfig(auth_token="secret"))

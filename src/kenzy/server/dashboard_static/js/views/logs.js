@@ -11,12 +11,24 @@ export function LogsView() {
   const { data } = useFleet();
   const services = ((data && data.services) || []).map((s) => s.name);
   const nodes = (data && data.nodes) || [];
+  // Two nodes can legitimately share a room (co-audible pairs); identical
+  // labels in the picker read as ONE collapsed entry. Suffix the short node id
+  // only when rooms collide, so the common case stays clean.
+  const roomCount = {};
+  for (const n of nodes) {
+    const r = n.room || n.node_id;
+    roomCount[r] = (roomCount[r] || 0) + 1;
+  }
+  const nodeLabel = (n) => {
+    const r = n.room || n.node_id;
+    return roomCount[r] > 1 ? `node · ${r} · ${n.node_id.slice(0, 8)}` : `node · ${r}`;
+  };
   const sources = [
     { id: "server", label: "Server", url: "/api/logs" },
     ...services.map((n) => ({ id: `svc:${n}`, label: `service · ${n}`, url: `/api/services/${n}/logs` })),
     ...nodes.map((n) => ({
       id: `node:${n.node_id}`,
-      label: `node · ${n.room || n.node_id}`,
+      label: nodeLabel(n),
       url: `/api/nodes/${encodeURIComponent(n.node_id)}/logs`,
     })),
   ];

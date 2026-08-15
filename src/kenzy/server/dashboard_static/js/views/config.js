@@ -76,6 +76,8 @@ const DEFAULTS = {
   // Deliberately NOT in RANGES — an input box, not a slider: it's almost
   // always inherited, and a slider begs to be dragged (founder call).
   mic_volume: "device default",
+  // Same display-phrase treatment: unset means this node never arbitrates.
+  audio_group: "none (never arbitrates)",
   log_level: "info",
   log_capture_level: "debug",
   capture_sample_rate: 16000,

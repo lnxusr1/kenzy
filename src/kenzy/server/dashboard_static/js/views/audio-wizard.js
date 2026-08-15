@@ -242,10 +242,17 @@ export function AudioWizard({ node, info, onClose, onApplied }) {
               ([k, val]) => html`<dt class="mono">${k}</dt><dd class="mono">${val}</dd>`,
             )}</dl>`
           : null}
-        ${aec && aec.changed
-          ? html`<p class="micro">Echo cancellation detected as${" "}
-              <b>${aec.aec ? "present" : "absent"}</b> — <span class="mono">hardware_aec</span>${" "}
-              set to <span class="mono">${String(aec.aec)}</span>.</p>`
+        ${aec
+          ? html`<p class="micro">${
+              aec.aec == null
+                ? html`Echo check: <b>couldn't tell</b> — the probe was ambiguous, so${" "}
+                    <span class="mono">hardware_aec</span> was left as it was.`
+                : aec.changed
+                  ? html`Echo cancellation detected as <b>${aec.aec ? "present" : "absent"}</b> —${" "}
+                      <span class="mono">hardware_aec</span> set to${" "}
+                      <span class="mono">${String(aec.aec)}</span>.`
+                  : html`Echo cancellation: <b>${aec.aec ? "present" : "absent"}</b> (unchanged).`
+            }</p>`
           : null}
         ${result && (result.kept || []).length
           ? html`<p class="micro wiz-note">Couldn't auto-calibrate ${result.kept.join(", ")} —
@@ -275,26 +282,27 @@ export function AudioWizard({ node, info, onClose, onApplied }) {
     }
     const phaseUi =
       phase === "quiet"
-        ? html`<p class="wiz-hint">🤫 Stay quiet — measuring the room…
-            <span class="wiz-count mono">${count}</span></p>`
+        ? html`<p class="wiz-hint">🤫 Stay quiet — measuring the room…${" "}<span class="wiz-count mono">${count}</span></p>`
         : phase === "wake"
-          ? html`<p class="wiz-hint">🗣 Say <b>“Hey Kenzy”</b> — heard <b>${wakes.count}</b>
-              of ${wakes.target} <span class="wiz-count mono">${count}</span></p>`
+          ? html`<p class="wiz-hint">🗣 Say <b>“Hey Kenzy”</b> — heard${" "}<b>${wakes.count}</b> of ${wakes.target}${" "}<span class="wiz-count mono">${count}</span></p>`
           : phase === "restarting"
             ? html`<p class="wiz-hint">Restarting the node to apply… <span class="spinner"></span></p>`
             : phase === "verify"
-              ? html`<p class="wiz-hint">🗣 Say <b>“Hey Kenzy”</b>, then <b>“never mind”</b> —
-                  this time she's really listening.</p>`
+              ? html`<p class="wiz-hint">🗣 Say <b>“Hey Kenzy”</b>, then <b>“never mind”</b> — this time she's really listening.</p>`
               : html`<p class="wiz-hint">${prompt || "Starting…"}</p>`;
     return html`
       ${phaseUi}
       ${prompt && phase ? html`<p class="micro">${prompt}</p>` : null}
-      <${Meter} pct=${logPct(latest.rms)} marks=${[]} />
-      <p class="calib-read">level <span class="mono">${Math.round(latest.rms)}</span>
-        · wake score <span class="mono">${round2(latest.wake)}</span></p>
-      ${aec && aec.changed
-        ? html`<p class="micro">Echo cancellation: <b>${aec.aec ? "present" : "absent"}</b>
-            — updated.</p>`
+      ${phase === "verify" || phase === "restarting"
+        ? null // the tuning stream stops before verify — a frozen meter reads as a dead mic
+        : html`<${Meter} pct=${logPct(latest.rms)} marks=${[]} />
+            <p class="calib-read">level <span class="mono">${Math.round(latest.rms)}</span>${" "}· wake score <span class="mono">${round2(latest.wake)}</span></p>`}
+      ${aec
+        ? html`<p class="micro">${
+            aec.aec == null
+              ? "Echo check was ambiguous — echo-cancellation setting left as-is."
+              : html`Echo cancellation: <b>${aec.aec ? "present" : "absent"}</b>${aec.changed ? " — updated." : " (unchanged)."}`
+          }</p>`
         : null}
       ${notes.map((t) => html`<p class="micro wiz-note">${t}</p>`)}
       ${wizFooter(html`<button class="btn-ghost" onClick=${cancelCalibration}>Cancel</button>`)}`;

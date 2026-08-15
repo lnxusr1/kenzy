@@ -19,6 +19,7 @@ MSG_CONFIG = "config"
 MSG_AUDIO_START = "audio_start"
 MSG_AUDIO_END = "audio_end"
 MSG_WAKEWORD = "wakeword"
+MSG_WAKE_PENDING = "wake_pending"
 MSG_TRIGGER = "trigger"
 MSG_STOP = "stop"
 MSG_ACK = "ack"
@@ -99,12 +100,34 @@ def config(node_config: dict[str, Any]) -> str:
     return json.dumps({"type": MSG_CONFIG, "config": node_config})
 
 
-def audio_start(session_id: str | None = None, room_id: str | None = None) -> tuple[str, str]:
-    """Return (json_str, session_id)."""
+def audio_start(
+    session_id: str | None = None,
+    room_id: str | None = None,
+    wake_db: float | None = None,
+    wake_margin_db: float | None = None,
+    wake_score: float | None = None,
+) -> tuple[str, str]:
+    """Return (json_str, session_id).
+
+    The ``wake_*`` fields ride only on wake-opened sessions — measured AT THE
+    NODE, at wake time, from the pre-roll (the only audio that still contains
+    the spoken phrase). ``wake_db`` is the phrase level in dBFS;
+    ``wake_margin_db`` is the phrase's height above the same window's quiet
+    floor — the gain-invariant quantity, since a device AGC moves both ends
+    together; ``wake_score`` is the peak wake score. Together they are the
+    comparable evidence a louder-wins arbiter needs for co-audible nodes.
+    Server-side session audio can't provide any of this: a classic (paused)
+    session's capture starts at the chime, after the phrase is gone."""
     sid = session_id or str(uuid.uuid4())
     payload: dict[str, Any] = {"type": MSG_AUDIO_START, "session_id": sid}
     if room_id is not None:
         payload["room_id"] = room_id
+    if wake_db is not None:
+        payload["wake_db"] = round(float(wake_db), 1)
+    if wake_margin_db is not None:
+        payload["wake_margin_db"] = round(float(wake_margin_db), 1)
+    if wake_score is not None:
+        payload["wake_score"] = round(float(wake_score), 3)
     return json.dumps(payload), sid
 
 
@@ -121,6 +144,34 @@ def wakeword(session_id: str | None, model: str, score: float) -> str:
             "score": round(float(score), 4),
         }
     )
+
+
+def wake_pending(
+    session_id: str,
+    model: str,
+    score: float,
+    wake_db: float | None = None,
+    wake_margin_db: float | None = None,
+) -> str:
+    """Node→server, sent the instant an IDLE wake fires — while the one-breath
+    gate still holds the ready chime. This is the arbitration hook: co-audible
+    nodes all hear the phrase and all send this within ~150 ms; the server has
+    the rest of the gate window (~400 ms) to pick the best-placed node and
+    ``stop`` the losers BEFORE their chimes play or their pipelines run. The
+    session may still open (audio_start follows) or may never (stopped, or the
+    gate resolves otherwise) — this frame is evidence, not a session event.
+    Unknown to older servers, which ignore unrecognized frame types."""
+    payload: dict[str, Any] = {
+        "type": MSG_WAKE_PENDING,
+        "session_id": session_id,
+        "model": model,
+        "score": round(float(score), 4),
+    }
+    if wake_db is not None:
+        payload["wake_db"] = round(float(wake_db), 1)
+    if wake_margin_db is not None:
+        payload["wake_margin_db"] = round(float(wake_margin_db), 1)
+    return json.dumps(payload)
 
 
 def trigger(session_id: str | None = None) -> str:
