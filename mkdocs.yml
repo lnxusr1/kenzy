@@ -83,6 +83,7 @@ nav:
       - "Part 2 — People & Rooms": guides/part2-rooms-and-people.md
       - "Part 3 — Home Assistant Basics": guides/part3-home-assistant.md
       - "Part 4 — Home Assistant, the Works": guides/part4-ha-complete.md
+    - Choosing a Speakerphone: choosing-a-speakerphone.md
   - Using Kenzy:
     - Everyday use:
       - Talking to Kenzy: talking-to-kenzy.md
