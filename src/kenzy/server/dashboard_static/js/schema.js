@@ -201,7 +201,9 @@ export const NODE_HELP = {
   dialog_onset_ms: "Milliseconds of speech needed to start a reply turn (rejects clinks).",
   dialog_onset_vad_threshold: "Voice-detection strictness (0–1) for starting a reply. Higher = firmer.",
   hardware_aec: "Declare the speaker has echo cancellation. Off = strict turn-taking (no barge-in/intercom).",
+  audio_group: "Nodes sharing a name arbitrate simultaneous wakes — the best-placed one answers, the rest stay silent. Unset = never arbitrates.",
   volume: "Playback volume 0–100. Persists.",
+  mic_volume: "Capture gain 0–100 via ALSA (Linux). Unset = the device's own gain, untouched; clearing stops managing it. Live — onboard AGC can absorb it, so verify with the calibration meter.",
   capture_sample_rate: "Mic rate; set to the device's native rate if 16 kHz is unsupported.",
   playback_sample_rate: "Speaker rate; set to native if 24 kHz is unsupported.",
   log_level: "Console log level.",
@@ -226,7 +228,7 @@ export const NODE_HELP = {
 // fall into "Other".
 export const NODE_GROUPS = [
   ["Audio device", ["audio_device", "capture_sample_rate", "playback_sample_rate"]],
-  ["Wake word", ["wakeword_models", "wakeword_threshold", "wakeword_vad_threshold", "wake_onset_ms"]],
+  ["Wake word", ["wakeword_models", "wakeword_threshold", "wakeword_vad_threshold", "wake_onset_ms", "audio_group"]],
   [
     "Capture / VAD",
     ["silence_rms_threshold", "vad_enabled", "silence_ms", "speech_min_ms", "no_speech_timeout_ms", "hard_cap_ms"],
@@ -237,7 +239,7 @@ export const NODE_GROUPS = [
   ],
   ["Speakerphone volume buttons", ["volume_buttons", "volume_button_device", "volume_button_step"]],
   ["Sounds", ["sound_ready", "sound_waiting", "sound_connect", "sound_disconnect", "sound_ringback", "sound_dialog_end", "sound_offline", "sound_timer", "sound_alarm", "sound_error", "sound_thinking", "sound_working"]],
-  ["Playback", ["volume"]],
+  ["Volume", ["volume", "mic_volume"]],
   ["Logging", ["log_level", "log_capture_level", "verbose"]],
 ];
 
@@ -312,6 +314,8 @@ export const SERVER_HELP = {
   "proactive.safety.enabled": "Announce smoke, carbon monoxide, gas, water leaks, and a triggered alarm panel — in every room, immediately, including muted ones. Off by default because it will interrupt anything.",
   "proactive.safety.repeat_after": "Seconds before repeating a hazard that is still going. Silencing one by voice stops it until that sensor goes off and trips again.",
   "fleet.offline_alert_minutes": "How long a room may be unreachable before the Fleet page calls it a fault. An orphaned node still answers its wake word, so nobody in the room notices. 0 = never alert.",
+  "arbitration.window_ms": "How long co-audible nodes (same audio_group) compete after the first wake. Widen if the log shows dead-zone stragglers; must finish before the ready chime (wake_onset_ms). Restart to apply.",
+  "arbitration.deadzone_ms": "One utterance's total arbitration budget. A wake landing after the window but inside this is the same phrase heard late, and is stood down. Restart to apply.",
   "fleet.restart_grace_minutes": "Quiet period after you restart or upgrade a node, so expected downtime doesn't raise an alert. Nodes also announce a planned shutdown themselves, so an ordinary restart is silent either way.",
 };
 

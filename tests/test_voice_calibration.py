@@ -100,7 +100,9 @@ async def _run_flow(
     mode="spoken",
     quiet_rms=15.0,
     speech_rms=800.0,
-    echo_rms=None,  # mic level while the node plays the probe (None ⇒ quiet ⇒ AEC ok)
+    echo_rms=None,  # mic level while the node plays the probe (None ⇒ quiet ⇒ AEC ok).
+    # An "absent" fixture must be beep-loud (thousands): the M1A showed AGC
+    # ambient alone reaches ~1400, which must read AMBIGUOUS, never absent.
     wake_peaks=True,
     verify=True,  # a real wake arrives during Verify
     synth_seconds=0.3,
@@ -255,7 +257,7 @@ async def test_full_flow_applies_and_verifies(tmp_path, monkeypatch):
 async def test_aec_probe_flips_flag_and_announces(tmp_path, monkeypatch):
     # Loud mic during the node's own playback ⇒ no hardware AEC ⇒ flag flips
     # (default is true) and the consequence is spoken, all BEFORE the wake phase.
-    r = await _run_flow(tmp_path, monkeypatch, echo_rms=700.0)
+    r = await _run_flow(tmp_path, monkeypatch, echo_rms=6000.0)
     written = yaml.safe_load(r.ov_path.read_text())
     assert written["hardware_aec"] is False
     assert any("while i'm talking" in s.lower() for s in r.said)
@@ -268,7 +270,7 @@ async def test_aec_probe_flips_flag_and_announces(tmp_path, monkeypatch):
 async def test_silent_mode_never_synthesizes(tmp_path, monkeypatch):
     # Dashboard mode: prompts are events (browser renders them); the beep is the
     # probe. No TTS anywhere — works on a fully-local / TTS-down install.
-    r = await _run_flow(tmp_path, monkeypatch, mode="silent", echo_rms=700.0)
+    r = await _run_flow(tmp_path, monkeypatch, mode="silent", echo_rms=6000.0)
     assert r.said == []  # _synthesize never called
     written = yaml.safe_load(r.ov_path.read_text())
     assert written["hardware_aec"] is False

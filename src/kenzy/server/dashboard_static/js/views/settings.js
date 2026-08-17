@@ -30,6 +30,8 @@ const CODE_DEFAULTS = {
   "streaming.enabled": true,
   "occupancy.enabled": true,
   "fleet.offline_alert_minutes": 5,
+  "arbitration.window_ms": 250,
+  "arbitration.deadzone_ms": 1000,
   "fleet.restart_grace_minutes": 10,
   "proactive.enabled": true,
   "proactive.quiet_hours": "",

@@ -63,11 +63,13 @@ export function isAlerting(node, alertSeconds) {
   return now - (node.last_seen || 0) >= alertSeconds;
 }
 
-function NodeCard({ node, onConfigure, onForget, alerting }) {
+function NodeCard({ node, onConfigure, onForget, alerting, dup }) {
   const offline = !node.connected;
   const streaming = node.streaming;
   const audioFailed = node.audio_ok === false;
-  const title = node.room || node.node_id;
+  // Co-audible pairs share a room; identical titles make two cards read as a
+  // duplicate. Suffix the short id only when the room name collides.
+  const title = (node.room || node.node_id) + (dup ? ` · ${shortId(node.node_id)}` : "");
   const led = offline ? "down" : audioFailed ? "down" : streaming ? "busy" : "up";
   const status = offline
     ? `offline ${since(node.last_seen)}`
@@ -183,6 +185,7 @@ export function FleetView({ onConfigure, onConfigureService }) {
         ? html`<div class="grid">${nodes.map(
             (n) => html`<${NodeCard} key=${n.node_id} node=${n} onConfigure=${onConfigure}
                           alerting=${isAlerting(n, flags.offline_alert_s)}
+                          dup=${nodes.filter((m) => (m.room || m.node_id) === (n.room || n.node_id)).length > 1}
                           onForget=${flags.controls ? forget : null} />`,
           )}</div>`
         : html`<div class="empty">No nodes connected yet.</div>`}

@@ -32,6 +32,25 @@ Upgrade the **server first**, then services, then nodes.
 
 Newest first. Anything not listed needs no manual steps.
 
+### 5.1.1
+
+**Nothing is required**, and an upgraded install behaves exactly as before. Two
+new settings are worth knowing about, both opt-in:
+
+- **`mic_volume`** is unset by default, so a node's capture gain stays exactly as
+  it was until you deliberately set the new key. (Applying it needs `amixer` —
+  part of `alsa-utils`, already present on any host with working sound; if it's
+  somehow absent, the node's page says so.)
+- **`audio_group`** turns on co-audible wake arbitration, and it matters only if
+  you have **two or more nodes close enough to hear the same "Hey Kenzy"** — the
+  situation where they both wake and answer in unison. Give those nodes the same
+  `audio_group` name (any string) in their node settings and the server picks the
+  one that heard you best, silencing the rest — one chime, one answer. It's
+  live-applied (no restart), off until you set it, and works best when the
+  co-audible nodes are the **same model** of speakerphone (different models hear
+  the same voice at different levels, which can bias the pick). Nodes that stand
+  alone in a room need nothing.
+
 ### 5.1.0
 
 Nothing required. Add-ons are new and entirely opt-in: an upgraded install

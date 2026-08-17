@@ -190,6 +190,8 @@ published as a `node_state` event, so Home Assistant can notify you.
 | Key | Default | Description |
 |---|---|---|
 | `fleet.offline_alert_minutes` | `5` | How long a node may be missing before it is reported as a fault rather than merely absent. `0` = never raise the fault (nodes still show as absent). |
+| `arbitration.window_ms` | `250` | **Co-audible wake arbitration** (nodes opt in with `audio_group`): how long the group collects contenders after its first wake before picking a winner. Widen it if the server log shows "dead zone" suppressions — that means some hardware's wake fires later than the window. It must finish (plus a network round trip) before the ready chime plays (`wake_onset_ms`, default 400 ms), or a losing node chimes before it is stopped. Clamped to 50–2000; restart to apply. |
+| `arbitration.deadzone_ms` | `1000` | One utterance's total arbitration budget, measured from its first wake. A wake landing after the window but inside this budget is the *same phrase heard late* (the winner has already proceeded), so it is silently stood down instead of answering alone. Saying the wake phrase takes about a second, so a genuinely new utterance can't start inside it — shorten only for a much shorter custom wake phrase. Never less than the window; restart to apply. |
 | `fleet.restart_grace_minutes` | `10` | Expected-downtime window granted when *you* restart or upgrade a node from the dashboard, so routine churn doesn't raise an alert. An alert people learn to ignore is worth less than no alert at all. |
 
 The roster lives in `data/nodes.json` and rides the backup slice. A node you

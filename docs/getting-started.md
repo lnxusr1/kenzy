@@ -35,6 +35,8 @@ symptom.
   is the single best purchase for this project. Without echo cancellation,
   calibration detects it and Kenzy adapts honestly — intercom and alarm
   ring-loops turn off in that room, and everything else works normally.
+  [Choosing a Speakerphone](choosing-a-speakerphone.md) covers what to look for
+  and what we've tested.
 - **An API key, if you use cloud services.** The default [brain
   (language model)](configuration/llm.md) and default voice both use OpenAI,
   so the standard setup needs an OpenAI API key. You can instead choose another

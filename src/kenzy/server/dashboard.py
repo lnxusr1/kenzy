@@ -877,6 +877,11 @@ class Dashboard:
             return Response(404, "Not Found", headers, b"not found")
         headers = Headers()
         headers["Content-Type"] = _CONTENT_TYPES.get(target.suffix, "application/octet-stream")
+        # Revalidate on every load: with no cache headers browsers cache
+        # heuristically, and an upgraded install then serves a stale UI out of
+        # the browser cache — a fixed wizard kept rendering its old bug. The
+        # files are small and the dashboard is LAN-only; refetching is free.
+        headers["Cache-Control"] = "no-cache"
         body = target.read_bytes()
         if name == "favicon.svg" and self._experimental:
             body = _experimental_favicon(body)
@@ -904,6 +909,7 @@ class Dashboard:
             return Response(404, "Not Found", headers, b"not found")
         headers = Headers()
         headers["Content-Type"] = _CONTENT_TYPES.get(target.suffix, "application/octet-stream")
+        headers["Cache-Control"] = "no-cache"  # same staleness trap as _static
         return Response(200, "OK", headers, target.read_bytes())
 
     async def _addon_state(self, plugin_id: str, raw_path: str = "") -> Response:
@@ -1002,6 +1008,9 @@ class Dashboard:
                     # 5.0.4: media-keys endpoint status (present/absent/why) —
                     # the visibility half of the speakerphone-buttons feature.
                     "media_keys": session.capabilities.get("media_keys") if session else None,
+                    # Managed capture gain outcome (applied/why-not) — the
+                    # visibility half of mic_volume.
+                    "mic_volume": session.capabilities.get("mic_volume") if session else None,
                 },
             )
 

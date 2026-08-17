@@ -402,6 +402,29 @@ dependency is off, and modules with wider blast radius say what else they power
 (disabling `home_assistant` also idles the Home Assistant screen and lists).
 Without `controls`, the tab is read-only.
 
+## Add-ons
+
+Installed [add-ons](configuration/addons.md) appear as an **Add-ons** band at
+the bottom of the navigation — one entry per add-on that ships a panel, loaded
+on first visit. Nothing renders when nothing is installed; there is no
+add-ons UI to configure away.
+
+Each add-on brings its own page. The first, [kenzy-ld2450](https://github.com/lnxusr1/kenzy-ld2450)'s
+**Room radar**, shows a live top-down view of what each room's sensor sees
+(one tab per room on multi-sensor fleets), lets you drag **ignore zones**
+around false sources like ceiling fans, and edits the sensor's per-node
+settings — all saved through the server and applied live.
+
+Two honesty surfaces come with the mechanism:
+
+- **Settings → Add-ons** lists every installed add-on — including any that
+  could **not** be loaded, with the reason in plain terms and the fix (a
+  version pairing that needs an upgrade, a broken install). Installing or
+  removing an add-on is restart-to-apply, and the card says so.
+- An add-on that failed to load also puts an amber **"not loaded"** entry in
+  the navigation band, so the failure is visible from every screen rather
+  than only when you go looking.
+
 ## Logs
 
 With `dashboard.logs: true`, the **Logs** tab pulls a bounded in-memory buffer from a

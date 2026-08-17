@@ -8,6 +8,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Most releases need nothing beyond the upgrade itself. When one does, it's noted
 here and spelled out in **[Upgrading](https://docs.kenzy.ai/upgrading/)**.
 
+## [5.1.1]
+
+### Added
+
+- **Microphone volume is now a managed setting.** Playback volume has been server-owned since 5.0.4; capture gain was the missing half — tuning a node's mic meant SSH and `alsamixer`, the value lived in no config or backup, and hand-set mixer state could quietly reset on reboot. `mic_volume` (0–100) is now an ordinary node setting beside playback volume in the dashboard's node editor: applied live when you change it, and re-applied every time the node's audio starts, so it survives reboots, reinstalls, and upgrades like everything else.
+
+  **Unset means untouched** — by default Kenzy never writes to a device's capture gain, and clearing the setting stops managing it rather than pretending to restore a state it can't know. The editor shows exactly that: an input box whose placeholder reads *inherit (device default)*.
+
+  When it can't apply, it says why — on the node's page, in plain terms: the device's name carries no ALSA card (a Pulse/PipeWire alias), `amixer` isn't installed, or the device simply has **no capture-volume control**. That last one is real hardware, not a hypothetical: some speakerphones expose only a mute switch and set their own gain internally, and on those the setting reports itself honestly instead of sitting silently inert. Linux-only, like the volume buttons.
+
+  One detail that matters on popular hardware: some devices (the Anker S330 among them) expose a *combined* mixer control carrying playback **and** capture volume. Kenzy's write targets the capture side explicitly, so managing the mic can never nudge playback — there stays exactly one source of truth for each direction.
+
+- **Co-audible wake arbitration** (`audio_group`, opt-in per node). Two speakerphones close enough to hear the same "Hey Kenzy" both used to answer — in unison, like two butlers colliding in a doorway — and both ran a full pipeline (STT, speaker ID, the model, TTS) to produce one wanted answer and one duplicate. Now: give co-audible nodes the same `audio_group` name, and when several wake on one utterance the server picks the node that heard you best and silently stands the others down. One chime, one answer, one pipeline.
+
+  The evidence is measured where the phrase still exists: at wake time each node computes, from its pre-roll, the spoken phrase's level (dBFS) and its height above the same window's quiet floor (the gain-invariant number — a device AGC moves phrase and floor together), and announces them in a new `wake_pending` frame *while the one-breath gate is still holding the ready chime*. That timing is the design: the gate's ~400 ms of deliberate silence is the arbitration window (co-audible wakes arrive within ~150 ms of each other, measured), so a losing node is stopped **before its chime ever plays** — which also prevents the losers' chimes from landing inside the winner's capture. Late races are handled server-side: a loser's `audio_start` is refused and an already-open loser capture is dropped before transcription, so a duplicate answer can't sneak through. Unset — the default — means a node never waits on, and can never lose to, anyone; the wake evidence also rides each session's `audio_start` and the journal, so the picking metric can keep being tuned on real data. Old nodes and old servers interoperate: the new frame is simply ignored where unknown.
+
+  Coverage completeness, each guard live-verified or pinned by test: a wake spoken *over* a node's own answer (the interrupt path) announces and arbitrates like any other; a losing node ignores its own wake-score tail for 0.8 s so the phrase it just lost can't re-open a session; and one utterance gets exactly one second of arbitration budget — after the 250 ms window closes, a node whose wake fires late on the same phrase is silently stood down instead of answering alone, with the lateness logged so slow hardware is visible rather than mysterious.
+
+  The two timings that depend on hardware you own are settings, not constants: `arbitration.window_ms` (default 250 — widen it if the log shows dead-zone stragglers, meaning some device's wake fires later than the window) and `arbitration.deadzone_ms` (default 1000 — the per-utterance budget; shorten only for a much shorter custom wake phrase). Both editable from Settings, clamped to sane bounds, and the dead zone can never be shorter than the window it contains. The internal race-guard timings deliberately stay in code — they're correctness mechanics, not tuning.
+
+### Fixed
+
+- **Calibration no longer misreads speakerphones with onboard AGC.** Both fixes were found on real hardware (an EMEET M1A): a device that auto-adjusts its own microphone gain — and may gate the mic entirely while nothing plays — broke two of calibration's assumptions at once.
+
+  The **echo-cancellation probe** compared the mic level during the probe beep against the quiet floor, assuming both were measured at the same gain. On an AGC device they aren't, so real hardware AEC was detected as absent — which silently put the node in half-duplex mode, where wake words during playback are deliberately ignored. Declaring "no AEC" now additionally requires the residual to be as loud as an actually un-cancelled co-located beep, the first fraction of a second of the probe is discarded as canceller warm-up, and ambiguous evidence leaves the setting alone — with the wizard saying "couldn't tell" instead of showing nothing. Every verdict is logged.
+
+  The **threshold suggestions** measured your voice at fully recovered gain, but a real command is spoken right after the ready chime with the gain clamped — so the suggested silence threshold sat above your actual speech level and every capture died as silence. Calibration now recognizes the AGC signature (a quiet floor that climbs as the gain recovers from the probe) and anchors the silence suggestion to the post-playback floor instead — the state a command is actually captured in. A VAD-gate suggestion computed from AGC-pumped ambient (which would suppress genuinely quiet wakes) is withheld the same way. The wizard and the CLI both say when this happened.
+
+- The audio wizard's progress lines lost their spaces around counts ("heard 2of 4") — a rendering quirk of the no-build template engine trimming text at line breaks.
+
+- The wizard's level meter is hidden during the final verify step. The measuring stream it reads from deliberately stops before verify (that step exercises the node's real production listening path), so the meter froze in place — which read as a dead microphone right under a prompt saying to speak.
+
+- Two nodes sharing a room name looked like one entry in the dashboard: the Logs source picker listed both under the identical label "node · <room>", and the Fleet cards carried identical titles. Both now append the short node id — only when room names actually collide, so single-node rooms stay clean. (Sharing a room is now a supported arrangement, not an accident — it's the co-audible pair setup.)
+
+- Dashboard assets now tell the browser to revalidate (`Cache-Control: no-cache`). They previously shipped no cache headers at all, so browsers cached the UI heuristically and an upgraded install could keep rendering the old dashboard — including already-fixed bugs — until a hard refresh. The files are small and the dashboard is LAN-only, so refetching costs nothing.
+
 ## [5.1.0]
 
 ### Added
