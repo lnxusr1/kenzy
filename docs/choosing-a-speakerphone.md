@@ -60,7 +60,7 @@ lets you judge a device we've never seen, and it doesn't go out of stock.
 | | Speakerphone | Notes |
 |:---:|---|---|
 | ✅ | **Anker PowerConf S330** | **We run this** — our main device and the safe default. Echo cancellation, working volume buttons, and Kenzy can manage its mic gain directly. |
-| ✅ | **EMEET OfficeCore M1A** | **We run this.** USB-C, no Bluetooth. Sets its own mic gain automatically; calibration adapts. |
+| ✅ | **EMEET OfficeCore M1A** | We've run this. USB-C, no Bluetooth. Works well; sets its own mic gain automatically (calibration adapts), so the input level isn't yours to hand-tune. |
 | ✅ | **Kaysuda SP300U** | **We run this.** USB-A budget puck. Works — but ours has occasionally dropped off the USB connection and needed a reconnect, worth weighing for round-the-clock use. |
 | ✅ | **Dell Pro Desktop Speakerphone (SP3022)** | USB-A/C, no Bluetooth, names echo cancellation. Meets the criteria on the maker's spec; not tested by us. |
 | ✅ | **Dell Pro Wired Speakerphone (SP325)** | USB-A/C, no Bluetooth, full duplex. The larger sibling of the SP3022. Not tested by us. |
@@ -68,7 +68,7 @@ lets you judge a device we've never seen, and it doesn't go out of stock.
 | ✅ | **Poly Sync 10** | USB-A/C, no Bluetooth, full duplex. Not tested by us. |
 | ✅ | **Poly Calisto 3200** | USB-A or USB-C (two versions), no Bluetooth, names echo cancellation. Not tested by us. |
 | ✅ | **ClearOne CHAT 50** | USB, no Bluetooth. The strongest echo-cancellation pedigree on this list. Not tested by us. |
-| ✅ | **NUROUM A05U** | USB-C/A, no Bluetooth, names echo cancellation. Not tested by us. |
+| ✅ | **NUROUM A05U** | **We run this.** USB-C/A, no Bluetooth. Echo cancellation, and — unusually for a budget puck — it exposes a host mic-gain control Kenzy can manage. Calibrate it, as with any device. |
 | ✅ | **Anker PowerConf S360** | *Discontinued by Anker* — but it meets the criteria, so buy it if you find one, new or used. |
 | ✅ | **EMEET OfficeCore M0** (wired) | *Discontinued.* Meets the criteria; just confirm it's the wired M0, not the Bluetooth **M0 Plus** — they share a listing. |
 | ✅ | **Jabra Speak 410** | *Discontinued by Jabra* — but a solid wired unit (the predecessor to the Bluetooth 510). Buy it if you find one. |
