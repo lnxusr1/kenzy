@@ -1517,6 +1517,29 @@ class NodeClient:
         meta, self._wake_meta = self._wake_meta, None
         return meta if meta is not None else (None, None, None)
 
+    async def _announce_wake(self, session_id: str, model: str, score: float) -> None:
+        """Send ``wake_pending`` — the co-audible arbitration announcement —
+        with the outcome VISIBLE either way. A field report (2026-08-17) hinged
+        on whether a node had sent this frame at all, and the old silent
+        try/except made the node's own journal useless for answering that."""
+        if self._ws is None or self._wake_meta is None:
+            return
+        try:
+            await self._ws.send(
+                protocol.wake_pending(
+                    session_id, model, score, self._wake_meta[0], self._wake_meta[1]
+                )
+            )
+            log.info(
+                "[%s] announced wake (db=%.1f margin=%.1f score=%.3f)",
+                session_id[:8],
+                self._wake_meta[0],
+                self._wake_meta[1],
+                score,
+            )
+        except Exception as exc:
+            log.warning("[%s] wake announcement FAILED: %s", session_id[:8], exc)
+
     async def _begin_streaming(
         self,
         session_id: str,
@@ -2531,21 +2554,9 @@ class NodeClient:
                             # Announce the wake NOW, while the one-breath gate
                             # still holds the chime — the server's arbitration
                             # window for co-audible nodes lives inside that
-                            # silence. Fire-and-forget: an old server ignores
-                            # the frame; an orphaned node has no ws and skips.
-                            if self._ws is not None:
-                                try:
-                                    await self._ws.send(
-                                        protocol.wake_pending(
-                                            sid,
-                                            name,
-                                            score,
-                                            self._wake_meta[0],
-                                            self._wake_meta[1],
-                                        )
-                                    )
-                                except Exception:
-                                    pass
+                            # silence. (An old server ignores the frame; an
+                            # orphaned node has no ws and skips.)
+                            await self._announce_wake(sid, name, score)
                             # The hit frame (and one before it) ride along: the
                             # command's first syllable can start inside them.
                             await self._begin_streaming(
@@ -2568,7 +2579,22 @@ class NodeClient:
                             # Wake word instead of a follow-up answer: the user is
                             # starting over. Abandon the held floor (the server
                             # clears its turn counter) and open a fresh gated wake
-                            # session.
+                            # session. This is a WAKE, so it announces for
+                            # arbitration like any other — this was the last
+                            # wake-driven path with no wake_pending, and a
+                            # field report (2026-08-17) showed exactly what an
+                            # unannounced co-audible session costs: it can't be
+                            # stood down. Evidence comes from the reply
+                            # window's onset buffer (the pre-roll ring isn't
+                            # fed while streaming).
+                            self._wake_meta = (
+                                *_wake_phrase_levels(
+                                    [*self._onset_buf[-_WAKE_PREROLL_FRAMES:], flat]
+                                ),
+                                float(score),
+                            )
+                            sid = str(uuid.uuid4())
+                            await self._announce_wake(sid, name, score)
                             self._onset_pending = False
                             self._onset_buf = []
                             self._followup_active = False
@@ -2580,7 +2606,7 @@ class NodeClient:
                                 except Exception:
                                     pass
                             await self._begin_streaming(
-                                str(uuid.uuid4()), wake_gated=True, gate_preroll=[flat]
+                                sid, wake_gated=True, gate_preroll=[flat]
                             )
                             gate_armed_now = self._wake_gate
                         elif self._state == _STATE_STREAMING and self._ws is not None:
@@ -2606,19 +2632,7 @@ class NodeClient:
                                 float(score),
                             )
                             sid = str(uuid.uuid4())
-                            if self._ws is not None:
-                                try:
-                                    await self._ws.send(
-                                        protocol.wake_pending(
-                                            sid,
-                                            name,
-                                            score,
-                                            self._wake_meta[0],
-                                            self._wake_meta[1],
-                                        )
-                                    )
-                                except Exception:
-                                    pass
+                            await self._announce_wake(sid, name, score)
                             await self._stop_tts_playback()
                             await self._begin_streaming(
                                 sid, wake_gated=True, gate_preroll=[flat]

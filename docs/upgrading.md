@@ -32,6 +32,16 @@ Upgrade the **server first**, then services, then nodes.
 
 Newest first. Anything not listed needs no manual steps.
 
+### 5.1.2
+
+Nothing required — diagnostics and a fix for wake arbitration in mixed-version
+fleets. One reminder it exists to enforce: if you use `audio_group`, **upgrade
+the nodes, not just the server**, and note that a node upgraded on disk keeps
+running its old code until the process restarts (the dashboard's per-node
+Upgrade button handles both; a manual `pip install` does not). The server now
+warns at each join, and at the moment of a wake collision, when a grouped node
+can't take part — so if arbitration isn't working, the journal now says why.
+
 ### 5.1.1
 
 **Nothing is required**, and an upgraded install behaves exactly as before. Two
@@ -50,6 +60,14 @@ new settings are worth knowing about, both opt-in:
   co-audible nodes are the **same model** of speakerphone (different models hear
   the same voice at different levels, which can bias the pick). Nodes that stand
   alone in a room need nothing.
+
+    **Every node in the group must itself be on 5.1.1+** — arbitration is a
+    conversation between the nodes and the server, and an older node can't take
+    part: it never announces its wakes, so it keeps answering on its own no
+    matter what the others decide, which looks exactly like arbitration failing.
+    Upgrade the *nodes*, not just the server (the usual order: server, then
+    services, then nodes). The server logs a warning at each join naming any
+    grouped node that's too old.
 
 ### 5.1.0
 

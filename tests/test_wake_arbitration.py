@@ -269,3 +269,60 @@ async def test_arbitration_timing_is_configurable_and_clamped(tmp_path, monkeypa
 
     s3 = TranscribingServer({})
     assert s3._arb_window_s == 0.25 and s3._arb_deadzone_s == 1.0
+
+
+def test_supports_arbitration_version_gate():
+    """Field report 2026-08-17: a 5-node fleet upgraded its server to 5.1.1 but
+    two nodes kept older code — they never sent wake_pending, were invisible to
+    arbitration, and one answered a Whisper hallucination of another's TTS
+    bleed-through. The failure is silent by design (protocol compat), so the
+    VERSION GATE must be loud and tolerant: anything unparseable reads as too
+    old, and leading digits only ("1rc1" is 1, not 11)."""
+    from kenzy.server.server import _supports_arbitration
+
+    assert _supports_arbitration("5.1.1") is True
+    assert _supports_arbitration("5.1.2.dev0") is True
+    assert _supports_arbitration("5.2.0") is True
+    assert _supports_arbitration("6.0") is True
+    assert _supports_arbitration("5.1.1rc1") is True  # leading digits: 5.1.1
+    assert _supports_arbitration("5.1.0") is False
+    assert _supports_arbitration("5.0.8") is False
+    assert _supports_arbitration("5.1") is False  # shorter prefix < (5,1,1)
+    assert _supports_arbitration(None) is False
+    assert _supports_arbitration("") is False
+    assert _supports_arbitration("garbage") is False
+
+
+async def test_unannounced_grouped_session_is_named_loudly(tmp_path, monkeypatch, caplog):
+    """The mixed-fleet signature (field report 2026-08-17): a grouped node that
+    opens a session with NO wake evidence while its group is mid-arbitration
+    never announced — it can't be stood down and will answer alongside the
+    winner. The server can't fix that safely (it can't know how well the silent
+    node heard), but it must NAME it, or the operator sees a 3-way collision
+    with one node mysteriously 'skipping' arbitration."""
+    import asyncio
+    import logging
+
+    s = _grouped_server(tmp_path, monkeypatch, {"new": "house", "old": "house"})
+    await s._handle_control(s._nodes["new"], _wp("sid-new", -25.0))  # window opens
+    with caplog.at_level(logging.WARNING, logger="kenzy.server.server"):
+        await s._handle_control(
+            s._nodes["old"],
+            {"type": protocol.MSG_AUDIO_START, "session_id": "sid-old"},  # no evidence
+        )
+    assert any("UNANNOUNCED" in r.message for r in caplog.records)
+    # The unannounced session itself is NOT stopped — a duplicate answer beats
+    # standing down a node whose hearing we know nothing about.
+    assert _stops(s._nodes["old"]) == 0
+    await asyncio.sleep(0.35)  # let the window close
+
+    # Outside any arbitration activity, an evidence-less session from a grouped
+    # node is ordinary (triggers, follow-ups) — no warning.
+    await asyncio.sleep(0.8)  # past the dead zone
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="kenzy.server.server"):
+        await s._handle_control(
+            s._nodes["old"],
+            {"type": protocol.MSG_AUDIO_START, "session_id": "sid-later"},
+        )
+    assert not any("UNANNOUNCED" in r.message for r in caplog.records)

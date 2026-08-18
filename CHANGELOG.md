@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Most releases need nothing beyond the upgrade itself. When one does, it's noted
 here and spelled out in **[Upgrading](https://docs.kenzy.ai/upgrading/)**.
 
+## [5.1.2]
+
+### Fixed
+
+- **A mixed-version fleet no longer fails wake arbitration silently.** Arbitration (5.1.1) is a conversation between the nodes and the server, and a node still on older code can't take part — it never announces its wakes, keeps answering on its own regardless of its `audio_group`, and to the operator that looks exactly like arbitration being broken. Found in the field within a day of release: a five-node house hit a three-room wake collision in which two nodes never entered arbitration, and one of them ran a 15-second empty capture whose ambient bleed-through (another room's spoken answer) was then transcribed and answered, wrongly, minutes later. Two loud diagnostics now close the visibility gap: the server warns **at join** when a grouped node's running version predates arbitration (also catching the upgraded-on-disk-but-never-restarted process), and warns **at session-open** when a grouped node starts an *unannounced* session while its group is mid-arbitration — the exact signature, named in one line, with the likely causes. Deliberately *not* worked around by guessing at silent nodes' sessions: the server can't know how well an unannounced node heard you, and standing down the best-placed node in favor of a worse one would be a worse failure than a duplicate answer. The docs now say plainly: every node in a group needs 5.1.1+.
+
+- **The last wake path without an arbitration announcement is closed, and announcements are visible.** A wake spoken while a node was holding a reply window (a dialog's "start over" wake) opened a session that never sent `wake_pending` — a genuinely current node taking that path was indistinguishable from an old one, and un-arbitrable. It now announces with evidence like every other wake path. Every node also logs each announcement it sends ("announced wake…") and warns when a send fails, so a journal can answer "did this node announce?" directly instead of by inference; the server likewise logs a received `wake_pending` before anything that could fail. (The one remaining unannounced wake is ending an intercom call — deliberate, and on record.)
+
 ## [5.1.1]
 
 ### Added

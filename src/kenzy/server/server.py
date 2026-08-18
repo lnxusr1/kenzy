@@ -254,6 +254,31 @@ _ARB_REWAKE_S = 1.5
 # has already proceeded and can't be un-answered. A genuinely NEW utterance
 # can't start inside the dead zone: saying the wake phrase takes ~1 s itself.
 _ARB_DEADZONE_S = 1.0
+# The release that introduced wake_pending. A grouped node older than this
+# cannot arbitrate — it never announces its wakes — and the failure is silent,
+# so registration warns (see _register). Deliberately NOT worked around:
+# synthesizing candidates from old nodes' evidence-less audio_starts could let
+# the worst-placed protocol-speaking node stand down the best-placed old one.
+_ARB_MIN_NODE_VERSION = (5, 1, 1)
+
+
+def _supports_arbitration(version: str | None) -> bool:
+    """Tolerant version gate: unparseable/absent reads as too old (fail loud)."""
+    if not version:
+        return False
+    parts: list[int] = []
+    for piece in str(version).split(".")[:3]:
+        digits = ""
+        for ch in piece:
+            if not ch.isdigit():
+                break
+            digits += ch
+        if not digits:
+            break
+        parts.append(int(digits))
+    if not parts:
+        return False
+    return tuple(parts) >= _ARB_MIN_NODE_VERSION
 
 
 def _pcm_rms(pcm: bytes | bytearray) -> float:
@@ -2067,6 +2092,25 @@ class AudioServer:
             ws.remote_address,
             len(self._nodes),
         )
+        # A node can only be arbitrated if it SPEAKS the arbitration protocol
+        # (wake_pending, 5.1.1+). An older node in a group doesn't degrade
+        # loudly — it simply never announces its wakes, keeps answering on its
+        # own, and to the operator that looks exactly like arbitration failing
+        # (field report, 2026-08-17: a 3-node collision where two nodes ran
+        # pre-5.1.1 code — one answered correctly, one Whisper-hallucinated an
+        # answer from the first one's TTS bleed-through). Say so at every join,
+        # naming the node, the group, and the fix.
+        arb_group = self._node_audio_group(node_id)
+        if arb_group is not None and not _supports_arbitration(session.kenzy_version):
+            log.warning(
+                "[%s] room '%s' is in audio_group '%s' but the node runs kenzy %s — "
+                "wake arbitration needs the NODE on 5.1.1+, so this node will keep "
+                "answering on its own (and cannot be stood down) until it is upgraded.",
+                node_id,
+                room_id,
+                arb_group,
+                session.kenzy_version or "unknown (pre-5.0)",
+            )
         self._roster.touch(
             node_id,
             room=room_id,
@@ -2127,16 +2171,19 @@ class AudioServer:
         wake_db = _as_float(msg.get("wake_db"))
         margin = _as_float(msg.get("wake_margin_db"))
         score = _as_float(msg.get("score"))
-        group = self._node_audio_group(session.node_id)
+        # Log BEFORE anything that could raise (the group lookup reads config):
+        # a received-but-unlogged wake_pending is indistinguishable from one
+        # that was never sent, and a field investigation turned on exactly that
+        # distinction (2026-08-17).
         log.info(
-            "[%s/%s] wake_pending db=%s margin=%s score=%s group=%s",
+            "[%s/%s] wake_pending db=%s margin=%s score=%s",
             session.node_id,
             sid[:8] or "?",
             wake_db,
             margin,
             score,
-            group,
         )
+        group = self._node_audio_group(session.node_id)
         if group is None or not sid:
             return
         now = time.monotonic()
@@ -2300,6 +2347,36 @@ class AudioServer:
             session.wake_db = _as_float(msg.get("wake_db"))
             session.wake_margin_db = _as_float(msg.get("wake_margin_db"))
             session.wake_score = _as_float(msg.get("wake_score"))
+            if session.wake_db is None and session.wake_score is None:
+                # An evidence-less session from a GROUPED node while its group
+                # is mid-arbitration is the mixed-fleet signature (field
+                # report 2026-08-17): the node never announced, so it cannot
+                # be stood down and will answer alongside the winner. Name it
+                # loudly with the likely causes — this is the line that turns
+                # a "3-way collision, one node skipped arbitration" mystery
+                # into a one-look diagnosis.
+                arb_group = self._node_audio_group(session.node_id)
+                if arb_group is not None:
+                    task = self._arb_tasks.get(arb_group)
+                    dz = self._arb_deadzone.get(arb_group)
+                    mono = time.monotonic()
+                    arbitrating = (task is not None and not task.done()) or (
+                        dz is not None and dz[0] > mono
+                    )
+                    if arbitrating:
+                        log.warning(
+                            "[%s/%s] UNANNOUNCED session while group '%s' is "
+                            "arbitrating — this node sent no wake_pending, so it "
+                            "cannot be stood down and will answer on its own. "
+                            "Likely causes: the node runs pre-5.1.1 code, its "
+                            "process hasn't restarted since upgrading (version %s "
+                            "reported at join), or a non-wake session collided "
+                            "with the group's wake.",
+                            session.node_id,
+                            (str(sid) or "?")[:8],
+                            arb_group,
+                            session.kenzy_version or "unknown",
+                        )
             if session.wake_db is not None or session.wake_score is not None:
                 log.info(
                     "[%s/%s] audio_start (wake %s dBFS, +%s dB over floor, score %s)",
