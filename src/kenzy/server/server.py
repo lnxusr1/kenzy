@@ -262,10 +262,36 @@ _ARB_DEADZONE_S = 1.0
 _ARB_MIN_NODE_VERSION = (5, 1, 1)
 
 
-def _supports_arbitration(version: str | None) -> bool:
-    """Tolerant version gate: unparseable/absent reads as too old (fail loud)."""
+@dataclass
+class GroupEngagement:
+    """One audio_group's CURRENT conversation (Layer 1 of stateful groups).
+
+    The group is one virtual node: it holds at most one conversation, owned by
+    the node that won the opening turn's arbitration. Phases follow the
+    exchange — ``capturing`` → ``thinking`` → ``speaking`` → ``reply-window`` —
+    and the record exists for three reasons: a NEW wake anywhere in the group
+    cancels the engagement (the single-node "wake always cancels" contract at
+    group scope), a wake landing during ``speaking`` is suspect-by-construction
+    (TTS bleed — an accepted risk, but a visible one), and a collision reads as
+    one record instead of journal archaeology."""
+
+    group: str
+    owner: str  # node_id
+    session_id: str | None
+    phase: str  # capturing | thinking | speaking | reply-window
+    since: float  # monotonic, when the engagement began
+
+
+# An engagement this old is presumed stale (a completion path we failed to see);
+# a group cancel still clears it but no longer sends a stop for it — stopping a
+# long-idle node could abort unrelated audio (an alert) for nothing.
+_ENGAGEMENT_STALE_S = 600.0
+
+
+def _version_tuple(version: str | None) -> tuple[int, ...] | None:
+    """Tolerant parse: leading digits per dotted piece; None when unparseable."""
     if not version:
-        return False
+        return None
     parts: list[int] = []
     for piece in str(version).split(".")[:3]:
         digits = ""
@@ -276,9 +302,24 @@ def _supports_arbitration(version: str | None) -> bool:
         if not digits:
             break
         parts.append(int(digits))
-    if not parts:
-        return False
-    return tuple(parts) >= _ARB_MIN_NODE_VERSION
+    return tuple(parts) if parts else None
+
+
+def _supports_arbitration(version: str | None) -> bool:
+    """Tolerant version gate: unparseable/absent reads as too old (fail loud)."""
+    vt = _version_tuple(version)
+    return vt is not None and vt >= _ARB_MIN_NODE_VERSION
+
+
+# The release that added tts_done (playback-complete). Engagements of older
+# nodes clear at reply DISPATCH (the pre-tts_done behavior) instead of waiting
+# for a frame that will never come and sticking in `speaking` forever.
+_TTS_DONE_MIN_NODE_VERSION = (5, 1, 3)
+
+
+def _supports_tts_done(version: str | None) -> bool:
+    vt = _version_tuple(version)
+    return vt is not None and vt >= _TTS_DONE_MIN_NODE_VERSION
 
 
 def _pcm_rms(pcm: bytes | bytearray) -> float:
@@ -499,6 +540,13 @@ class NodeSession:
     # it can be fixed + restarted from the dashboard). Defaults True (healthy).
     audio_ok: bool = field(default=True)
     audio_error: str | None = field(default=None)
+    # Operator switch (runtime-only, test/ops): the server DISREGARDS this
+    # node's audio — wake announcements and sessions are refused — so live
+    # audio tests can force "only node B hears" situations without config
+    # writes or restarts. Deliberately NOT persisted and cleared by any
+    # reconnect: a muted-for-testing node must fail open to normal behavior,
+    # never be quietly forgotten.
+    ignore_audio: bool = field(default=False)
     # Node-measured wake evidence from the CURRENT session's audio_start (None on
     # triggered/legacy sessions): phrase level (dBFS), phrase-over-floor margin
     # (dB — the gain-invariant one), peak wake score. The comparable inputs for
@@ -730,6 +778,9 @@ class AudioServer:
         self._arb_recent: dict[str, float] = {}  # recently-stopped node_id → expiry
         self._arb_first: dict[str, float] = {}  # group → its open window's first-wake time
         self._arb_deadzone: dict[str, tuple[float, str]] = {}  # group → (expiry, winner)
+        # Layer 1 stateful groups: each group's current conversation (at most
+        # one — the group is one virtual node). See GroupEngagement.
+        self._engagements: dict[str, GroupEngagement] = {}
         # Per-source-IP connection timestamps for the registration rate limit (F-10).
         self._conn_log: dict[str, deque[float]] = {}
         # Observers notified when the node registry/state changes (the dashboard
@@ -2138,6 +2189,9 @@ class AudioServer:
         if peer_id:
             await self.end_intercom(peer_id, reason="peer_disconnected")
         self._cleanup_on_disconnect(session.node_id)
+        # A node vanishing mid-conversation must not leave its group's
+        # engagement claimed — the next wake would "cancel" a ghost.
+        self._engagement_clear(session.node_id, "node disconnected")
         # Stamp the sighting before announcing the drop: the roster keeps the node
         # visible (as absent, with a last-seen) instead of letting it vanish. Any
         # expected-downtime grace survives — it exists precisely to cover this.
@@ -2168,6 +2222,17 @@ class AudioServer:
         every node (per-wake evidence is diagnostic gold); arbitrated only when
         the node opted into an ``audio_group``."""
         sid = str(msg.get("session_id") or "")
+        if session.ignore_audio:
+            # Operator input-mute (test/ops): this wake never happened as far
+            # as arbitration and the group are concerned — no candidacy, no
+            # conversation cancel. The node's own gate resolves on its own and
+            # its audio_start is refused below.
+            log.info(
+                "[%s/%s] wake_pending disregarded (audio ignored by operator)",
+                session.node_id,
+                sid[:8] or "?",
+            )
+            return
         wake_db = _as_float(msg.get("wake_db"))
         margin = _as_float(msg.get("wake_margin_db"))
         score = _as_float(msg.get("score"))
@@ -2186,6 +2251,20 @@ class AudioServer:
         group = self._node_audio_group(session.node_id)
         if group is None or not sid:
             return
+        eng = self._engagements.get(group)
+        if eng is not None and eng.phase == "speaking" and eng.owner != session.node_id:
+            # The accepted risk (founder, 2026-08-18), kept visible: a wake
+            # landing while the group's own reply is playing may be Kenzy's
+            # TTS waking a sibling. It proceeds — and cancels the conversation
+            # — by design; this line is what makes the trade auditable.
+            log.info(
+                "[%s/%s] wake during group '%s' speaking phase (owner %s) — "
+                "possible TTS bleed; proceeding (accepted risk)",
+                session.node_id,
+                sid[:8],
+                group,
+                eng.owner,
+            )
         now = time.monotonic()
         recent = self._arb_recent.get(session.node_id)
         if recent is not None and recent > now:
@@ -2255,6 +2334,11 @@ class AudioServer:
         # protected from is exactly the node that made the window solo.
         # (The winner is cands[0] either way; the contested sort below only
         # reorders when there is competition.)
+        # The one-virtual-node rule fires on EVERY closed window, solo included:
+        # a wake heard by any member ends the group's current conversation, and
+        # a solo wake is the canonical case (user woke her at node B while node
+        # A was mid-answer across the room).
+        await self._group_cancel(group, spare={c["node_id"] for c in cands})
         if len(cands) < 2:
             self._arb_deadzone[group] = (first + self._arb_deadzone_s, cands[0]["node_id"])
             return  # one node heard it — nothing to arbitrate
@@ -2306,6 +2390,134 @@ class AudioServer:
         expiry = self._arb_losers.get(session_id)
         return expiry is not None and expiry > time.monotonic()
 
+    # -- Layer 1 stateful groups: the engagement record + the group cancel ----
+
+    async def _engagement_claim(self, node_id: str, session_id: str | None) -> None:
+        """A new capture claims the group's engagement — and if that means
+        taking it over another node's live conversation, the CLAIM performs
+        the cancel. This cannot be left to the arbitration window's close:
+        a one-breath confirm sends audio_start in ~200 ms, BEFORE the 250 ms
+        window closes, and the claim used to silently destroy the old
+        engagement record — leaving the old owner's still-playing answer with
+        no handle to stop it (found live 2026-08-18, by forcing exactly this
+        ordering with the test tools). Whoever claims, cancels; the window
+        close remains the backstop for candidates that never open sessions."""
+        group = self._node_audio_group(node_id)
+        if group is None:
+            return
+        eng = self._engagements.get(group)
+        if (
+            eng is not None
+            and eng.owner != node_id
+            and time.monotonic() - eng.since <= _ENGAGEMENT_STALE_S
+        ):
+            self._cancel_pipeline(eng.owner)
+            old = self._nodes.get(eng.owner)
+            if old is not None:
+                try:
+                    await old.ws.send(protocol.stop())
+                except Exception:
+                    pass
+            log.info(
+                "group '%s': conversation on %s cancelled (%s) — %s claimed the group",
+                group,
+                eng.owner,
+                f"phase={eng.phase}",
+                node_id,
+            )
+        self._engagement_update(node_id, session_id, "capturing")
+
+    def _engagement_update(self, node_id: str, session_id: str | None, phase: str) -> None:
+        """Advance the node's group engagement. ``capturing`` CLAIMS the
+        engagement for this node (a new turn); other phases only advance an
+        engagement this node already owns."""
+        group = self._node_audio_group(node_id)
+        if group is None:
+            return
+        eng = self._engagements.get(group)
+        if phase == "capturing":
+            self._engagements[group] = GroupEngagement(
+                group, node_id, session_id, phase, time.monotonic()
+            )
+            log.info("group '%s': engagement -> %s (capturing)", group, node_id)
+        elif eng is not None and eng.owner == node_id:
+            eng.phase = phase
+            if session_id:
+                eng.session_id = session_id
+            log.info("group '%s': engagement %s -> %s", group, node_id, phase)
+
+    def _engagement_clear(self, node_id: str, reason: str) -> None:
+        """The exchange ended (reply done and no floor, window expired, empty
+        capture). Only the owner may clear its group's engagement."""
+        group = self._node_audio_group(node_id)
+        if group is None:
+            return
+        eng = self._engagements.get(group)
+        if eng is not None and eng.owner == node_id:
+            del self._engagements[group]
+            log.info("group '%s': engagement ended (%s)", group, reason)
+
+    def _has_pipeline(self, node_id: str) -> bool:
+        """Subclass hook: is a pipeline (STT→LLM→TTS) in flight for this node?"""
+        return False
+
+    def _cancel_pipeline(self, node_id: str) -> None:
+        """Subclass hook: cancel that in-flight pipeline."""
+
+    async def _group_cancel(self, group: str, spare: set[str]) -> None:
+        """The one-virtual-node rule: a wake heard by ANY member ends the
+        group's current conversation, so the collective only ever holds one.
+        Called at window close; ``spare`` is this utterance's candidates —
+        their NEW gates must survive (a stop would cancel their candidacy),
+        though their old pipelines are cancelled like everyone else's (a
+        candidate's previous reply is part of the conversation being ended).
+        Ships with an accepted risk, named when it was accepted (founder,
+        2026-08-18): Kenzy's own TTS waking a sibling can end a conversation
+        unintentionally. Also on purpose: an in-progress calibration or
+        enrollment session in the group yields to a wake — "the wake word
+        always cancels" is the standing contract this extends."""
+        eng = self._engagements.pop(group, None)
+        now = time.monotonic()
+        targets: dict[str, str] = {}
+        if eng is not None and eng.owner not in spare:
+            if now - eng.since <= _ENGAGEMENT_STALE_S:
+                targets[eng.owner] = f"phase={eng.phase}"
+            else:
+                log.info(
+                    "group '%s': stale engagement on %s discarded (no stop sent)",
+                    group,
+                    eng.owner,
+                )
+        for nid, sess in list(self._nodes.items()):
+            if nid in spare or nid in targets:
+                continue
+            if not (sess.streaming or self._has_pipeline(nid)):
+                continue
+            if self._node_audio_group(nid) != group:
+                continue
+            targets[nid] = "streaming" if sess.streaming else "pipeline"
+        # Old pipelines die for EVERYONE, spared candidates included — their
+        # new session's on_session_start would cancel it anyway; earlier is
+        # cleaner (a cancelled reply must not keep streaming at a node whose
+        # gate is deciding).
+        for nid in list(self._nodes):
+            if self._node_audio_group(nid) == group and self._has_pipeline(nid):
+                self._cancel_pipeline(nid)
+        for nid, why in targets.items():
+            self._cancel_pipeline(nid)
+            sess2 = self._nodes.get(nid)
+            if sess2 is not None:
+                try:
+                    await sess2.ws.send(protocol.stop())
+                except Exception:
+                    pass
+            log.info(
+                "group '%s': conversation on %s cancelled (%s) — a new wake owns the group",
+                group,
+                nid,
+                why,
+            )
+
     async def _node_loop(self, session: NodeSession) -> None:
         async for raw in session.ws:
             if isinstance(raw, bytes):
@@ -2324,6 +2536,20 @@ class AudioServer:
 
         if mtype == protocol.MSG_AUDIO_START:
             sid = msg.get("session_id")
+            if session.ignore_audio:
+                # Operator input-mute (test/ops): refuse the session exactly
+                # like an arbitration loser — nothing opens, frames drop, the
+                # node is told to stand down. See set_node_ignore_audio.
+                log.info(
+                    "[%s/%s] audio_start disregarded (audio ignored by operator)",
+                    session.node_id,
+                    (str(sid) or "?")[:8],
+                )
+                try:
+                    await session.ws.send(protocol.stop())
+                except Exception:
+                    pass
+                return
             if self._arb_is_loser(sid):
                 # This session lost co-audible arbitration but its audio_start
                 # crossed our stop in flight (e.g. the gate confirmed early).
@@ -2480,6 +2706,26 @@ class AudioServer:
             # A held-floor reply window expired silently on the node (which plays
             # its own end cue) — clear the dialog state server-side.
             self._followup_timed_out(session.node_id)
+
+        elif mtype == protocol.MSG_TTS_DONE:
+            # The reply finished PLAYING (not just arriving). If the exchange
+            # was already over and the engagement was only being held open for
+            # the delivery, it ends now; a held floor (reply-window) is NOT
+            # cleared — the conversation is still live. The sid guard keeps a
+            # CUE's completion from ending the engagement while the reply is
+            # still queued/playing: replies ride the capture's session id, cues
+            # get fresh ones.
+            group = self._node_audio_group(session.node_id)
+            if group is not None:
+                eng = self._engagements.get(group)
+                done_sid = str(msg.get("session_id") or "")
+                if (
+                    eng is not None
+                    and eng.owner == session.node_id
+                    and eng.phase == "speaking"
+                    and (not eng.session_id or not done_sid or done_sid == eng.session_id)
+                ):
+                    self._engagement_clear(session.node_id, "playback complete")
 
         elif mtype == protocol.MSG_METRICS:
             session.metrics = {
@@ -2720,6 +2966,44 @@ class AudioServer:
         await self.push_config(node_id)
         log.info("[%s] %s", node_id, "muted" if muted else "unmuted")
         self._notify_state()  # surface the change to observers (dashboard, integrations)
+        return True
+
+    async def force_wake_node(self, node_id: str) -> bool:
+        """Test/ops: make a node run its REAL wake path right now — pre-roll
+        evidence, arbitration announcement, one-breath gate — as if the wake
+        word had fired there. With `set_node_ignore_audio` this gives scripted
+        live tests full who-woke-where control (force-hear + force-deaf)
+        without staging acoustics. The node ignores it unless idle."""
+        async with self._lock:
+            session = self._nodes.get(node_id)
+        if session is None:
+            log.warning("force_wake_node: %s is not connected", node_id)
+            return False
+        try:
+            await session.ws.send(protocol.force_wake())
+        except websockets.exceptions.ConnectionClosed:
+            return False
+        log.info("[%s] force-wake sent (test)", node_id)
+        return True
+
+    def set_node_ignore_audio(self, node_id: str, ignore: bool) -> bool:
+        """Server-side input mute (test/ops): while set, this node's wake
+        announcements and sessions are disregarded — as if the room were
+        silent — so live tests can force who-hears-what without touching
+        config or restarting anything. Runtime-only by design: any reconnect
+        or server restart clears it (fail open, never quietly forgotten), and
+        the state is badged on the Fleet card while active. The node itself is
+        untouched — it still wakes and streams; the server declines to act."""
+        session = self._nodes.get(node_id)
+        if session is None:
+            return False
+        session.ignore_audio = bool(ignore)
+        log.info(
+            "[%s] audio %s by operator (server-side, runtime-only)",
+            node_id,
+            "DISREGARDED" if ignore else "heeded again",
+        )
+        self._notify_state()
         return True
 
     async def set_room(self, node_id: str, room_name: str) -> bool:
@@ -3252,6 +3536,11 @@ class TranscribingServer(AudioServer):
         self._cancel_stt(session.node_id)
         self._tts_active.discard(session.node_id)
         self._buffers[session.node_id] = bytearray()
+        # Layer 1: a new capture claims the group's engagement for this node —
+        # and cancels the previous owner's conversation if one is live (the
+        # claim can arrive before the arbitration window closes; see
+        # _engagement_claim).
+        await self._engagement_claim(session.node_id, session.session_id)
         self._calib_saw_wake(session.node_id)  # an idle wake opens a session
         # Live safety alerts count as heard too — same reasoning, same hook.
         self._acknowledge_proactive("a new session")
@@ -3287,6 +3576,7 @@ class TranscribingServer(AudioServer):
     async def on_session_end(self, session: NodeSession, reason: str) -> None:
         pcm = bytes(self._buffers.pop(session.node_id, b""))
         if not pcm:
+            self._engagement_clear(session.node_id, "empty capture")
             return
         if self._arb_is_loser(session.session_id):
             # An arbitration loser whose capture had already opened before the
@@ -3299,7 +3589,31 @@ class TranscribingServer(AudioServer):
                 (session.session_id or "?")[:8],
                 len(pcm),
             )
+            # No-op when the winner already re-claimed the engagement (the
+            # usual order); real when this loser's early capture had claimed it.
+            self._engagement_clear(session.node_id, "stood down")
             return
+        # Reply-level instrument (parallel-hearing research): the phrase level
+        # of the WHOLE capture, not just its opening — the opening of a gated
+        # session can be pre-roll silence (measured 2026-08-18: a forced wake's
+        # onset window read 0-4 RMS while STT heard the sentence perfectly).
+        # p90 of per-frame RMS = the speech; p25 = the floor; both in dB so
+        # co-audible nodes' takes on the same utterance compare directly.
+        frame_levels = sorted(
+            _pcm_rms(pcm[i : i + 2560]) for i in range(0, len(pcm) - 2560, 2560)
+        )
+        if len(frame_levels) >= 4:
+            p90 = max(frame_levels[int(0.9 * (len(frame_levels) - 1))], 1.0)
+            p25 = max(frame_levels[int(0.25 * (len(frame_levels) - 1))], 1.0)
+            log.info(
+                "[%s/%s] capture level: p90=%.1f dBFS margin=%.1f dB (%d frames)",
+                session.node_id,
+                (session.session_id or "?")[:8],
+                20.0 * math.log10(p90 / 32768.0),
+                20.0 * math.log10(p90 / p25),
+                len(frame_levels),
+            )
+        self._engagement_update(session.node_id, session.session_id, "thinking")
         task = asyncio.create_task(
             self._transcribe(session.node_id, session.room_id, session.session_id, pcm),
             name=f"stt-{session.node_id}",
@@ -3509,6 +3823,11 @@ class TranscribingServer(AudioServer):
                 protocol.tts_start(session_id, sample_rate, channels, alert, stream, cue)
             )
             self._tts_active.add(node_id)
+            if not alert and not cue:
+                # The engagement enters `speaking` only for conversational
+                # audio to its OWNER (alerts and cue acknowledgements aren't
+                # the conversation; _engagement_update ignores non-owners).
+                self._engagement_update(node_id, session_id, "speaking")
             return True
         except websockets.exceptions.ConnectionClosed:
             return False
@@ -3548,6 +3867,15 @@ class TranscribingServer(AudioServer):
         if task and not task.done():
             task.cancel()
             log.info("[%s] STT cancelled", node_id)
+
+    # Layer 1 stateful-group hooks (see AudioServer._group_cancel): the base
+    # class arbitrates; only this subclass knows what a pipeline is.
+    def _has_pipeline(self, node_id: str) -> bool:
+        task = self._stt_tasks.get(node_id)
+        return task is not None and not task.done()
+
+    def _cancel_pipeline(self, node_id: str) -> None:
+        self._cancel_stt(node_id)
 
     async def _transcribe(
         self, node_id: str, room_name: str, session_id: str | None, pcm: bytes
@@ -3810,6 +4138,20 @@ class TranscribingServer(AudioServer):
             await self._play_error_cue(node_id)
         finally:
             self._stt_tasks.pop(node_id, None)
+            # A pipeline that ends without ever dispatching speech (empty
+            # reply, TTS down, error, cancellation) must not leave the group
+            # engagement claimed in `capturing`/`thinking` — nothing will ever
+            # send the tts_done that a `speaking` engagement ends on. (A
+            # cancelled pipeline usually finds the engagement already gone:
+            # the group cancel or the new winner's claim beat it here.)
+            group = self._node_audio_group(node_id)
+            if group is not None:
+                eng = self._engagements.get(group)
+                if eng is not None and eng.owner == node_id and eng.phase in (
+                    "capturing",
+                    "thinking",
+                ):
+                    self._engagement_clear(node_id, "pipeline finished without speech")
 
     async def _play_error_cue(self, node_id: str) -> None:
         """Stream the pre-recorded failure cue (``sound_error``, read live like
@@ -3974,6 +4316,7 @@ class TranscribingServer(AudioServer):
                     # the chime — the tone does real work there.
                     await node.ws.send(protocol.expect_utterance(cue=cue))
                     self._followup_turns[node_id] = turns + 1
+                    self._engagement_update(node_id, None, "reply-window")
                     log.info("[%s] holding floor for follow-up (turn %d)", node_id, turns + 1)
                     return True
                 except Exception as exc:
@@ -4011,6 +4354,36 @@ class TranscribingServer(AudioServer):
         """
         if self._followup_turns.pop(node_id, None):
             log.info("[%s] multi-turn dialog ended", node_id)
+        # Every exchange-over path funnels through here (the audio-ask retry
+        # deliberately doesn't — its conversation continues). The group
+        # engagement ends here too — UNLESS the reply is still audibly playing
+        # (`speaking`): then it lives until the node's tts_done, so a wake
+        # elsewhere in the group can still stop the playback tail. (Measured
+        # 2026-08-18: dispatch-time clearing left a ~2 s deaf window between
+        # "exchange over" and the audio actually ending at the speaker.)
+        group = self._node_audio_group(node_id)
+        eng = self._engagements.get(group) if group is not None else None
+        node = self._nodes.get(node_id)
+        if (
+            eng is not None
+            and eng.owner == node_id
+            and node is not None
+            and _supports_tts_done(node.kenzy_version)
+            and (
+                eng.phase == "speaking"  # audio already dispatched, still playing
+                # Fast path: the floor decision lands when the reply is
+                # COMPUTED, before TTS even dispatches (measured 2026-08-18:
+                # "exchange over" at reply time, playback 7–10 s later) — so a
+                # still-running pipeline in `thinking` also holds the
+                # engagement; send_tts_start advances it to `speaking` and
+                # tts_done ends it. A pipeline that never speaks clears in
+                # _transcribe's finally.
+                or (eng.phase == "thinking" and self._has_pipeline(node_id))
+            )
+        ):
+            log.info("group '%s': exchange over — engagement held for reply delivery", group)
+            return
+        self._engagement_clear(node_id, "exchange over")
 
     async def _http_assist(self, request: Request) -> Response:
         """``GET /assist?text=…&ha_user=…`` — the HA Assist channel (F3).

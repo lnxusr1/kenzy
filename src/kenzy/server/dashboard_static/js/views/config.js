@@ -419,6 +419,9 @@ export function ConfigView({ node, onBack }) {
         <header><h2>Controls</h2><span class="rule"></span></header>
         <div class="ctl-row">
           <button class="btn-ghost" disabled=${!info.controls} onClick=${() => ctl("trigger")}>Trigger</button>
+          <button class="btn-ghost" disabled=${!info.controls || !info.connected}
+                  title="Testing: run the node's REAL wake path — pre-roll evidence, arbitration, the one-breath gate — as if the wake word fired here. Trigger bypasses all of that."
+                  onClick=${() => ctl("force_wake")}>Force wake</button>
           <button class="btn-ghost" disabled=${!info.controls} onClick=${() => ctl("stop")}>Stop</button>
           <button class="btn-ghost" disabled=${!info.controls || !info.connected}
                   title=${info.connected ? "" : "Node must be connected"}

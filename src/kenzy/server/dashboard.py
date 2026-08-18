@@ -428,6 +428,9 @@ class Dashboard:
                     "session_id": session.session_id,
                     "audio_ok": bool(session.audio_ok),
                     "audio_error": session.audio_error,
+                    # Operator input-mute (runtime-only test/ops switch) — badged
+                    # on the Fleet card so a disregarded node is never invisible.
+                    "ignore_audio": bool(session.ignore_audio),
                     "version": session.kenzy_version,
                     # Declared hardware capability: false ⇒ half-duplex room
                     # (no voice-interrupt during playback; intercom/alarms off).
@@ -2285,6 +2288,14 @@ class Dashboard:
             }[mtype]
             ok = await action(node)
             await ack(ok, None if ok else "node not connected")
+        elif mtype == "force_wake":
+            # Test/ops: the node runs its REAL wake path (evidence, arbitration,
+            # gate) as if the wake word fired — unlike `trigger`, which opens a
+            # session bypassing all of it. See force_wake_node.
+            if not self._dcfg.controls:
+                return await ack(False, "controls are disabled (set dashboard.controls: true)")
+            ok = await self._server.force_wake_node(str(msg.get("node", "")))
+            await ack(ok, None if ok else "node not connected")
         elif mtype == "forget_node":
             # Decommission: drop an absent node from the roster so it stops being
             # reported missing. Refused while it is connected — the roster would
@@ -2302,6 +2313,18 @@ class Dashboard:
             if not self._dcfg.controls:
                 return await ack(False, "controls are disabled (set dashboard.controls: true)")
             ok = await self._server.set_node_muted(str(msg.get("node", "")), bool(msg.get("muted")))
+            await ack(ok, None if ok else "node not connected")
+            if ok:
+                await self._broadcast_state()
+        elif mtype == "set_ignore_audio":
+            # The input-side sibling of set_muted: the server disregards this
+            # node's wakes/sessions (test/ops — force who-hears-what in live
+            # audio tests). Runtime-only; any reconnect clears it.
+            if not self._dcfg.controls:
+                return await ack(False, "controls are disabled (set dashboard.controls: true)")
+            ok = self._server.set_node_ignore_audio(
+                str(msg.get("node", "")), bool(msg.get("ignore"))
+            )
             await ack(ok, None if ok else "node not connected")
             if ok:
                 await self._broadcast_state()

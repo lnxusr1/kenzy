@@ -1857,6 +1857,7 @@ class NodeClient:
         """
         completed = False
         was_stream = self._tts_stream
+        tts_sid = self._session_id  # captured now — the finally below clears it
         try:
             if pre_delay > 0:
                 await asyncio.sleep(pre_delay)  # let the cue finish its last word
@@ -1889,6 +1890,18 @@ class NodeClient:
             self._session_id = None
             self._tts_task = None
             log.info("TTS playback complete")
+        if completed and self._ws is not None:
+            # Tell the server the audio actually FINISHED PLAYING (tts_end only
+            # marked the last frame arriving; buffered audio plays on after it).
+            # The server's group engagement stays in `speaking` until this
+            # lands, so a wake elsewhere in the audio_group can still stop a
+            # reply during its playback tail. Old servers ignore the frame; a
+            # cancelled playback sends nothing (the interrupting wake already
+            # owns the state).
+            try:
+                await self._ws.send(protocol.tts_done(tts_sid or ""))
+            except Exception:
+                pass
         # If a prompt asked us to capture one utterance (intercom consent or voice
         # enrollment), start capturing now that the prompt has finished playing.
         if completed and self._ringback_after_tts:
@@ -2341,6 +2354,35 @@ class NodeClient:
                 sid = msg.get("session_id") or str(uuid.uuid4())
                 log.info("Server trigger → session %s", sid[:8])
                 await self._begin_streaming(sid)
+
+            elif mtype == protocol.MSG_FORCE_WAKE:
+                # Test/ops: behave as if openwakeword fired THIS INSTANT — the
+                # real idle-wake path with real evidence (the pre-roll ring
+                # holds this room's actual last second of audio), a real
+                # arbitration announcement, and the real one-breath gate.
+                # `trigger` bypasses all of that; this exercises it. Idle-only:
+                # a forced wake mid-anything would be testing a synthetic state
+                # no real wake can reach.
+                if self._state == _STATE_IDLE and self._oww is not None:
+                    log.info("Force-wake from server (test) — running the wake path")
+                    self._wake_meta = (
+                        *_wake_phrase_levels(list(self._idle_preroll)),
+                        1.0,  # synthetic score, distinct in logs via model name
+                    )
+                    sid = str(uuid.uuid4())
+                    await self._announce_wake(sid, "forced", 1.0)
+                    await self._begin_streaming(
+                        sid,
+                        wake_gated=True,
+                        gate_preroll=list(self._idle_preroll),
+                    )
+                    self._idle_preroll.clear()
+                else:
+                    log.info(
+                        "Force-wake ignored (state=%s, audio_ready=%s)",
+                        self._state,
+                        self._oww is not None,
+                    )
 
             elif mtype == protocol.MSG_STOP:
                 if self._state == _STATE_STREAMING:

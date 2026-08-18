@@ -63,7 +63,7 @@ export function isAlerting(node, alertSeconds) {
   return now - (node.last_seen || 0) >= alertSeconds;
 }
 
-function NodeCard({ node, onConfigure, onForget, alerting, dup }) {
+function NodeCard({ node, onConfigure, onForget, onIgnore, alerting, dup }) {
   const offline = !node.connected;
   const streaming = node.streaming;
   const audioFailed = node.audio_ok === false;
@@ -108,7 +108,17 @@ function NodeCard({ node, onConfigure, onForget, alerting, dup }) {
         ? html`<div class="unclaimed" title=${node.audio_error || ""}>⚠ audio failed — check the device, then Restart</div>`
         : null}
       ${!node.configured ? html`<div class="unclaimed">⚑ unconfigured</div>` : null}
+      ${node.ignore_audio
+        ? html`<div class="unclaimed" title="The server is disregarding this node's wake words and sessions (a testing switch — runtime-only, cleared by any reconnect). Un-ignore it below.">🔇 audio disregarded (testing)</div>`
+        : null}
       <button class="btn-ghost card-cfg" onClick=${() => onConfigure(node.node_id)}>Configure</button>
+      ${!offline && onIgnore
+        ? html`<button class="btn-ghost card-cfg"
+            title=${node.ignore_audio
+              ? "Resume acting on this node's wake words and sessions."
+              : "Testing switch: the server ignores this node's wake words and sessions (as if its room were silent). Runtime-only — cleared by any reconnect or restart."}
+            onClick=${() => onIgnore(node)}>${node.ignore_audio ? "Un-ignore audio" : "Ignore audio"}</button>`
+        : null}
       ${offline && onForget
         ? html`<button class="btn-ghost card-cfg" title="Remove this node from the fleet roster. Use when it has been decommissioned — otherwise it stays listed as missing." onClick=${() => onForget(node)}>Forget</button>`
         : null}
@@ -158,6 +168,16 @@ export function FleetView({ onConfigure, onConfigureService }) {
            res.ok ? "ok" : "err");
   }
 
+  async function ignoreAudio(node) {
+    const name = node.room || node.node_id;
+    const next = !node.ignore_audio;
+    const res = await send("set_ignore_audio", { node: node.node_id, ignore: next });
+    notify(res.ok
+      ? (next ? `Disregarding audio from ${name} (testing — cleared by any reconnect).`
+              : `Acting on audio from ${name} again.`)
+      : res.error || "Could not change that.", res.ok ? "ok" : "err");
+  }
+
   return html`
     <div class="stats">
       <div class="tile"><div class="micro">Nodes online</div>
@@ -186,6 +206,7 @@ export function FleetView({ onConfigure, onConfigureService }) {
             (n) => html`<${NodeCard} key=${n.node_id} node=${n} onConfigure=${onConfigure}
                           alerting=${isAlerting(n, flags.offline_alert_s)}
                           dup=${nodes.filter((m) => (m.room || m.node_id) === (n.room || n.node_id)).length > 1}
+                          onIgnore=${flags.controls ? ignoreAudio : null}
                           onForget=${flags.controls ? forget : null} />`,
           )}</div>`
         : html`<div class="empty">No nodes connected yet.</div>`}

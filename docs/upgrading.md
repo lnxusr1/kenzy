@@ -32,6 +32,17 @@ Upgrade the **server first**, then services, then nodes.
 
 Newest first. Anything not listed needs no manual steps.
 
+### 5.1.3
+
+Nothing required. Stateful audio groups change behavior **only for nodes that
+share an `audio_group`**: the group now holds one conversation at a time — a
+wake word heard by any member ends whatever the group was doing, the same way
+a wake has always interrupted a single node. As with 5.1.1's arbitration,
+**upgrade the nodes too**: the full behavior (including stopping an answer
+that's still playing in another room) needs the nodes on 5.1.3; older grouped
+nodes fall back to slightly coarser timing rather than breaking. Ungrouped
+nodes are untouched.
+
 ### 5.1.2
 
 Nothing required — diagnostics and a fix for wake arbitration in mixed-version
@@ -56,10 +67,11 @@ new settings are worth knowing about, both opt-in:
   situation where they both wake and answer in unison. Give those nodes the same
   `audio_group` name (any string) in their node settings and the server picks the
   one that heard you best, silencing the rest — one chime, one answer. It's
-  live-applied (no restart), off until you set it, and works best when the
-  co-audible nodes are the **same model** of speakerphone (different models hear
-  the same voice at different levels, which can bias the pick). Nodes that stand
-  alone in a room need nothing.
+  live-applied (no restart), off until you set it, and we **strongly recommend
+  the same model** of speakerphone for every node in a group — not required,
+  but different models' automatic gain control judges the same voice at
+  different levels (measured gaps of several dB), which can bias the pick
+  toward the wrong node. Nodes that stand alone in a room need nothing.
 
     **Every node in the group must itself be on 5.1.1+** — arbitration is a
     conversation between the nodes and the server, and an older node can't take

@@ -40,6 +40,8 @@ MSG_TUNE_STOP = "tune_stop"  # server→node: end calibration early
 MSG_TUNE_SAMPLE = "tune_sample"  # node→server: one calibration sample (rms/wake/vad)
 MSG_EXPECT_UTTERANCE = "expect_utterance"  # server→node: capture one utterance after the next TTS
 MSG_FOLLOWUP_TIMEOUT = "followup_timeout"  # node→server: held-floor reply window expired silently
+MSG_TTS_DONE = "tts_done"  # node→server: TTS audio finished PLAYING (tts_end = finished arriving)
+MSG_FORCE_WAKE = "force_wake"  # server→node (test/ops): behave as if the wake word fired NOW
 MSG_CALL_RINGING = "call_ringing"  # server→caller: play the ringback loop while the callee is rung
 MSG_END_DIALOG = "end_dialog"  # server→node: a multi-turn dialog ended — play the end cue
 # Intercom (live two-way call between two rooms; gated by the receiver's consent).
@@ -182,6 +184,17 @@ def stop() -> str:
     return json.dumps({"type": MSG_STOP})
 
 
+def force_wake() -> str:
+    """Server→node (test/ops): run the REAL idle-wake path as if openwakeword
+    just fired — measure the actual pre-roll (true room audio at this node),
+    announce it for arbitration with that genuine evidence, open the gate, and
+    proceed. Unlike ``trigger`` (which opens a session *bypassing* the wake
+    machinery), this exercises everything a real wake does, so scripted tests
+    can force collisions and who-woke-where scenarios without staging
+    acoustics. Ignored unless the node is idle with working audio."""
+    return json.dumps({"type": MSG_FORCE_WAKE})
+
+
 def restart() -> str:
     return json.dumps({"type": MSG_RESTART})
 
@@ -299,6 +312,17 @@ def followup_timeout() -> str:
     dialog is over (the server clears its turn counter). The node plays its own
     end-of-dialog cue locally ("I stopped waiting")."""
     return json.dumps({"type": MSG_FOLLOWUP_TIMEOUT})
+
+
+def tts_done(session_id: str) -> str:
+    """Node→server: playback of a reply has actually finished at the speaker.
+    ``tts_end`` (server→node) only bounds the audio *stream*; buffered audio
+    keeps playing after it. Stateful audio groups (Layer 1) hold the group's
+    engagement in ``speaking`` until this arrives, so a wake elsewhere in the
+    group can stop a reply during its playback tail. Additive: old servers
+    ignore it, old nodes never send it (their engagements clear at dispatch —
+    the pre-5.1.3 behavior)."""
+    return json.dumps({"type": MSG_TTS_DONE, "session_id": session_id})
 
 
 def call_ringing() -> str:

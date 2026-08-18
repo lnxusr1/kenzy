@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Most releases need nothing beyond the upgrade itself. When one does, it's noted
 here and spelled out in **[Upgrading](https://docs.kenzy.ai/upgrading/)**.
 
+## [5.1.3]
+
+### Added
+
+- **Stateful audio groups (Layer 1): the group is one virtual node.** Co-audible nodes sharing an `audio_group` now hold **one conversation at a time, collectively** — a wake word heard by *any* member ends whatever the group was doing (a capture in one room, an answer still playing in another, a held reply window) exactly the way a wake has always interrupted a single node. The server keeps a per-group *engagement* record — which node owns the current exchange and what phase it's in (capturing → thinking → speaking → awaiting your reply) — visible in the journal, so a room collision reads as one record instead of cross-referenced timestamps. Response routing is turn-scoped: the node that won a turn's arbitration is the node that answers it. One accepted trade, made deliberately and kept visible: Kenzy's own voice waking a sibling node can end a conversation unintentionally — such wakes are logged as "possible TTS bleed" and allowed through. Nodes without an `audio_group` are untouched.
+
+- **Two testing switches for scripting who-hears-what.** Forcing multi-room scenarios used to mean rearranging hardware or editing thresholds and restarting. Now: **Ignore audio** (Fleet card) makes the server disregard a node's wake words and sessions entirely — as if its room were silent — runtime-only, badged while active, every disregarded event logged, cleared by any reconnect so a test-muted node can't be quietly forgotten. And **Force wake** (node page) makes a node run its *real* wake path on command — pre-roll evidence from the actual room, arbitration announcement, the one-breath gate — unlike Trigger, which bypasses the wake machinery. Together they make any scenario scriptable: force one room deaf, wake another, flip mid-answer, watch the group rules fire. Building them promptly paid for itself: a scripted flip-mid-answer exposed (and fixed) an ordering bug where a fast one-breath confirm could claim the group before arbitration closed, leaving the previous answer unstoppable — the claim itself now cancels the conversation it takes over.
+
+  Getting "an answer still playing" right took a new protocol frame, because the server genuinely didn't know: `tts_end` only marks the last audio *arriving* at a node, and on the fast path the exchange was considered over the moment the reply was *computed* — measured live, the entire 7–10 seconds of a spoken answer fell outside the engagement. Nodes now send **`tts_done`** when playback actually finishes at the speaker, and the engagement covers the whole audible life of a reply: held through synthesis and dispatch, `speaking` while the room hears it, ended by `tts_done` (a processing cue's completion can't end it — session ids distinguish them). Additive as always: old servers ignore the frame; a node older than 5.1.3 gets the old dispatch-time behavior rather than a stuck engagement.
+
 ## [5.1.2]
 
 ### Fixed

@@ -326,3 +326,279 @@ async def test_unannounced_grouped_session_is_named_loudly(tmp_path, monkeypatch
             {"type": protocol.MSG_AUDIO_START, "session_id": "sid-later"},
         )
     assert not any("UNANNOUNCED" in r.message for r in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# Layer 1 stateful groups: the engagement record + the one-virtual-node rule.
+# ---------------------------------------------------------------------------
+
+
+async def test_group_is_one_virtual_node(tmp_path, monkeypatch):
+    """A wake heard by ANY member ends the group's current conversation: node A
+    is mid-exchange (streaming + pipeline in flight) when node B's wake wins a
+    window — A is stopped, its pipeline dies, and B owns the new engagement."""
+    import asyncio
+
+    s = _grouped_server(tmp_path, monkeypatch, {"a": "loft", "b": "loft"})
+    sess_a = s._nodes["a"]
+    sess_a.session_id = "sid-a-old"
+    await s.on_session_start(sess_a)  # A claims the engagement (capturing)
+    assert s._engagements["loft"].owner == "a"
+    sess_a.streaming = True
+    s._stt_tasks["a"] = asyncio.create_task(asyncio.sleep(30))
+
+    await s._handle_control(s._nodes["b"], _wp("sid-b", -22.0))
+    await asyncio.sleep(0.35)  # window closes (solo B) → group cancel fires
+    await asyncio.sleep(0)  # let the cancellation propagate
+    assert _stops(s._nodes["a"]) == 1  # A's conversation stopped
+    assert _stops(s._nodes["b"]) == 0  # the new wake is never stopped
+    assert "a" not in s._stt_tasks  # A's pipeline cancelled
+    assert "loft" not in s._engagements  # old engagement gone
+
+    await s._handle_control(
+        s._nodes["b"], {"type": protocol.MSG_AUDIO_START, "session_id": "sid-b"}
+    )
+    assert s._engagements["loft"].owner == "b"  # B owns the new conversation
+
+
+async def test_candidates_spared_but_their_old_pipelines_die(tmp_path, monkeypatch):
+    """A node that hears the new wake is a candidate — its NEW gate must never
+    be stopped by the group cancel (only by losing arbitration) — but its OLD
+    pipeline belongs to the conversation being ended and dies with it."""
+    import asyncio
+
+    s = _grouped_server(tmp_path, monkeypatch, {"a": "loft", "b": "loft"})
+    s._stt_tasks["a"] = asyncio.create_task(asyncio.sleep(30))
+    old_task = s._stt_tasks["a"]
+
+    # A hears the new wake LOUDER (it wins); B also hears it and loses.
+    await s._handle_control(s._nodes["a"], _wp("sid-a-new", -20.0))
+    await s._handle_control(s._nodes["b"], _wp("sid-b-new", -28.0))
+    await asyncio.sleep(0.35)
+    await asyncio.sleep(0)
+    assert _stops(s._nodes["a"]) == 0  # winner: no stop of any kind
+    assert _stops(s._nodes["b"]) == 1  # loser: exactly the arbitration stop
+    assert old_task.cancelled()  # but A's previous reply is dead
+
+
+async def test_wake_during_speaking_phase_logs_bleed_suspect(
+    tmp_path, monkeypatch, caplog
+):
+    """The accepted risk stays visible: a wake from a non-owner while the
+    group's reply is playing is possible TTS bleed — logged, then processed
+    normally (it cancels the conversation by design)."""
+    import logging
+    import time as _time
+
+    from kenzy.server.server import GroupEngagement
+
+    s = _grouped_server(tmp_path, monkeypatch, {"a": "loft", "b": "loft"})
+    s._engagements["loft"] = GroupEngagement(
+        "loft", "a", "sid-a", "speaking", _time.monotonic()
+    )
+    with caplog.at_level(logging.INFO, logger="kenzy.server.server"):
+        await s._handle_control(s._nodes["b"], _wp("sid-b", -25.0))
+    assert any("possible TTS bleed" in r.message for r in caplog.records)
+
+
+async def test_engagement_lifecycle(tmp_path, monkeypatch):
+    """capturing → thinking → reply-window → cleared; and an empty capture
+    clears rather than leaving a stale claim."""
+    import asyncio
+
+    s = _grouped_server(tmp_path, monkeypatch, {"a": "loft"})
+    sess = s._nodes["a"]
+    sess.session_id = "sid-1"
+
+    async def _fake_transcribe(*args, **kwargs):  # noqa: ANN002, ANN003
+        await asyncio.sleep(0.01)
+
+    monkeypatch.setattr(s, "_transcribe", _fake_transcribe)
+
+    await s.on_session_start(sess)
+    assert s._engagements["loft"].phase == "capturing"
+    s._buffers["a"] = bytearray(b"\x00\x01" * 2000)
+    await s.on_session_end(sess, "silence")
+    assert s._engagements["loft"].phase == "thinking"
+
+    s._followup_turns["a"] = 0
+    s._engagement_update("a", None, "reply-window")
+    assert s._engagements["loft"].phase == "reply-window"
+    s._end_followup_dialog("a")
+    assert "loft" not in s._engagements  # exchange over
+
+    # Empty capture: claim, then nothing arrives — the engagement must not
+    # linger as a stale conversation.
+    await s.on_session_start(sess)
+    assert s._engagements["loft"].phase == "capturing"
+    await s.on_session_end(sess, "no_speech")  # buffer was reset by start
+    assert "loft" not in s._engagements
+
+
+async def test_engagement_survives_playback_tail(tmp_path, monkeypatch):
+    """Measured live 2026-08-18: clearing the engagement at reply DISPATCH left
+    a ~2 s deaf window while the audio still played at the speaker — a wake
+    heard only elsewhere in the group couldn't stop the tail. The engagement
+    now holds `speaking` until the node's tts_done (playback truly finished);
+    nodes too old to send tts_done keep the old clear-at-dispatch behavior."""
+    import time as _time
+
+    from kenzy.server.server import GroupEngagement
+
+    s = _grouped_server(tmp_path, monkeypatch, {"a": "loft"})
+    s._nodes["a"].kenzy_version = "5.1.3"
+    s._engagements["loft"] = GroupEngagement(
+        "loft", "a", "sid-a", "speaking", _time.monotonic()
+    )
+    s._end_followup_dialog("a")  # exchange over — but audio still playing
+    assert s._engagements["loft"].phase == "speaking"  # held for the tail
+
+    await s._handle_control(
+        s._nodes["a"], {"type": protocol.MSG_TTS_DONE, "session_id": "sid-a"}
+    )
+    assert "loft" not in s._engagements  # cleared when playback truly ended
+
+    # A held floor is NOT cleared by tts_done — the conversation is live.
+    s._engagements["loft"] = GroupEngagement(
+        "loft", "a", "sid-a", "reply-window", _time.monotonic()
+    )
+    await s._handle_control(
+        s._nodes["a"], {"type": protocol.MSG_TTS_DONE, "session_id": "sid-a"}
+    )
+    assert s._engagements["loft"].phase == "reply-window"
+
+    # An old node (no tts_done) clears at dispatch — never sticks in speaking.
+    s._nodes["a"].kenzy_version = "5.1.2"
+    s._engagements["loft"] = GroupEngagement(
+        "loft", "a", "sid-a", "speaking", _time.monotonic()
+    )
+    s._end_followup_dialog("a")
+    assert "loft" not in s._engagements
+
+
+async def test_disconnect_clears_engagement(tmp_path, monkeypatch):
+    import time as _time
+
+    from kenzy.server.server import GroupEngagement
+
+    s = _grouped_server(tmp_path, monkeypatch, {"a": "loft"})
+    s._engagements["loft"] = GroupEngagement(
+        "loft", "a", "sid-a", "speaking", _time.monotonic()
+    )
+    s._engagement_clear("a", "node disconnected")  # the disconnect path's call
+    assert "loft" not in s._engagements
+
+
+async def test_fast_path_engagement_covers_delivery(tmp_path, monkeypatch):
+    """Measured live 2026-08-18 (second smoke): the FAST path decides the floor
+    when the reply is computed — 7–10 s before its audio finishes playing — and
+    the engagement died in `thinking`, leaving the whole delivery uncovered. A
+    still-running pipeline now holds the engagement through the gap; dispatch
+    advances it to `speaking`; the reply's tts_done (matching the capture sid —
+    cues ride fresh sids and must not end it) closes it."""
+    import asyncio
+    import time as _time
+
+    from kenzy.server.server import GroupEngagement
+
+    s = _grouped_server(tmp_path, monkeypatch, {"a": "loft"})
+    s._nodes["a"].kenzy_version = "5.1.3"
+    s._engagements["loft"] = GroupEngagement(
+        "loft", "a", "sid-cap", "thinking", _time.monotonic()
+    )
+    s._stt_tasks["a"] = asyncio.create_task(asyncio.sleep(30))  # pipeline in flight
+    try:
+        s._end_followup_dialog("a")  # fast path: floor decided pre-dispatch
+        assert s._engagements["loft"].phase == "thinking"  # held, not cleared
+
+        await s.send_tts_start("a", "sid-cap", stream=True)  # dispatch begins
+        assert s._engagements["loft"].phase == "speaking"
+
+        # The processing cue finishing (fresh sid) must not end the engagement.
+        await s._handle_control(
+            s._nodes["a"], {"type": protocol.MSG_TTS_DONE, "session_id": "sid-cue"}
+        )
+        assert s._engagements["loft"].phase == "speaking"
+
+        # The reply's own completion (capture sid) ends it.
+        await s._handle_control(
+            s._nodes["a"], {"type": protocol.MSG_TTS_DONE, "session_id": "sid-cap"}
+        )
+        assert "loft" not in s._engagements
+    finally:
+        s._stt_tasks.pop("a", None).cancel()
+
+
+async def test_operator_ignore_audio(tmp_path, monkeypatch):
+    """The test/ops input-mute (founder, 2026-08-18): the server disregards a
+    node's audio so live tests can force who-hears-what without config writes
+    or restarts. An ignored node's wake never enters arbitration (and never
+    cancels the group's conversation); its sessions are refused like a loser's.
+    Runtime-only: the flag lives on the connection and dies with it."""
+    import asyncio
+
+    s = _grouped_server(tmp_path, monkeypatch, {"near": "loft", "far": "loft"})
+    assert s.set_node_ignore_audio("near", True) is True
+    assert s.set_node_ignore_audio("ghost", True) is False  # unknown node
+
+    # Ignored node's wake: no candidacy — the OTHER node wins solo, unstopped.
+    await s._handle_control(s._nodes["near"], _wp("sid-near", -20.0))  # louder!
+    await s._handle_control(s._nodes["far"], _wp("sid-far", -30.0))
+    await asyncio.sleep(0.35)
+    assert _stops(s._nodes["far"]) == 0  # solo winner — nobody to lose to
+    assert "loft" not in s._arb_window
+
+    # Ignored node's session: refused, stop sent, nothing opens.
+    await s._handle_control(
+        s._nodes["near"], {"type": protocol.MSG_AUDIO_START, "session_id": "sid-near"}
+    )
+    assert s._nodes["near"].streaming is False
+    assert _stops(s._nodes["near"]) == 1
+
+    # Un-ignore: back to normal — its wake arbitrates again.
+    assert s.set_node_ignore_audio("near", False) is True
+    await asyncio.sleep(0.8)  # clear the dead zone from the solo win above
+    await s._handle_control(s._nodes["near"], _wp("sid-n2", -20.0))
+    await s._handle_control(s._nodes["far"], _wp("sid-f2", -30.0))
+    await asyncio.sleep(0.35)
+    assert _stops(s._nodes["far"]) == 1  # far loses to the un-ignored near
+
+
+async def test_force_wake_sends_frame(tmp_path, monkeypatch):
+    """force_wake (founder, 2026-08-18): scripted live tests need to make a
+    specific node run its REAL wake path — evidence, announcement, gate — so
+    collisions can be forced programmatically instead of by staging acoustics.
+    (`trigger` deliberately bypasses the wake machinery; this exercises it.)"""
+    s = _grouped_server(tmp_path, monkeypatch, {"a": "loft"})
+    assert await s.force_wake_node("a") is True
+    frames = [json.loads(m) for m in s._nodes["a"].ws.sent]
+    assert any(f.get("type") == protocol.MSG_FORCE_WAKE for f in frames)
+    assert await s.force_wake_node("ghost") is False
+
+
+async def test_claim_over_live_conversation_cancels_it(tmp_path, monkeypatch):
+    """Found live 2026-08-18 by FORCING the ordering with the test tools: a
+    one-breath confirm sends audio_start ~200 ms after the wake — BEFORE the
+    250 ms arbitration window closes — and the new claim used to silently
+    destroy the old engagement, leaving the old owner's still-playing answer
+    unstoppable. Now the claim itself cancels: whoever claims, cancels."""
+    import asyncio
+    import time as _time
+
+    from kenzy.server.server import GroupEngagement
+
+    s = _grouped_server(tmp_path, monkeypatch, {"a": "loft", "b": "loft"})
+    # B is mid-answer: engagement speaking, pipeline still alive.
+    s._engagements["loft"] = GroupEngagement(
+        "loft", "b", "sid-b", "speaking", _time.monotonic()
+    )
+    s._stt_tasks["b"] = asyncio.create_task(asyncio.sleep(30))
+
+    # A's audio_start arrives (early one-breath confirm) — no window has closed.
+    sess_a = s._nodes["a"]
+    sess_a.session_id = "sid-a"
+    await s.on_session_start(sess_a)
+    await asyncio.sleep(0)
+    assert _stops(s._nodes["b"]) == 1  # B's answer stopped BY THE CLAIM
+    assert "b" not in s._stt_tasks  # B's pipeline dead
+    assert s._engagements["loft"].owner == "a"  # A owns the group now

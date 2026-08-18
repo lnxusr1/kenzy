@@ -100,7 +100,10 @@ Open a node's **Configure** page to:
   immediately on save; hardware keys are applied on the node's next boot or via the
   Restart button. Options with a fixed set of values (log levels, on/off, etc.) are
   dropdown choosers; numeric fields are number inputs.
-- **Control the node** — **Trigger** (start a session), **Stop**, **Restart** (the
+- **Control the node** — **Trigger** (start a session), **Force wake** (a testing
+  control: the node runs its *real* wake path — pre-roll evidence, arbitration,
+  the one-breath gate — as if the wake word fired there; Trigger bypasses all of
+  that), **Stop**, **Restart** (the
   node re-execs itself, with or without systemd), **Upgrade** (the node pip-upgrades
   `kenzy[node]`, honoring `constraints.txt`, and reconnects on the new version — watch the
   version on its fleet card to confirm), or **Disable node** (systemd installs only —
@@ -108,6 +111,13 @@ Open a node's **Configure** page to:
   `systemctl --user enable --now kenzy-node.service` on the node's host, which the
   confirmation shows first). Nodes report their unit state on connect, so Disable only
   appears where it actually works.
+- **Ignore audio** (on the Fleet card, connected nodes) — a **testing switch**: the
+  server disregards that node's wake words and sessions entirely, as if its room
+  were silent, so you can force who-hears-what in live audio tests (arbitration,
+  co-audible groups). Runtime-only on purpose: the card wears a "🔇 audio
+  disregarded" badge while it's set, and any node reconnect or server restart
+  clears it — a node muted for a test can't be quietly forgotten. This is the
+  input-side sibling of the mute toggle, which silences a node's *output*.
 
 Secrets (API keys) are never served to a node and never editable here.
 

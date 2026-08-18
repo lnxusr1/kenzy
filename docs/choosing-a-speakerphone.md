@@ -24,6 +24,18 @@ lets you judge a device we've never seen, and it doesn't go out of stock.
 - **A fixed, desktop puck.** It's an appliance that lives on a shelf, not a
   gadget you carry to meetings.
 
+**Buying for multiple rooms?** If any two rooms are close enough that both
+devices could hear the same "Hey Kenzy" — an open floor plan, large rooms with
+two nodes — we **strongly recommend using the same model for all of them**. Not
+a hard requirement, but the difference is real: when co-audible nodes share an
+[`audio_group`](configuration/node.md), Kenzy picks the device that heard you
+best, and different models judge loudness differently — each has its own
+automatic gain control, and we've measured gaps of several dB between models
+hearing the same voice. Mixed hardware can make the farther device "sound"
+closer and win the pick. Identical devices judge alike, and the whole
+experience gets noticeably better. (Nodes that stand alone, out of earshot of
+each other, can be anything — this only matters within earshot.)
+
 **Avoid:**
 
 - **Bluetooth or battery-powered speakerphones.** They sleep to save power, and
