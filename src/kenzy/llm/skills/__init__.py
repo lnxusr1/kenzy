@@ -708,6 +708,17 @@ def get_tools() -> list[dict[str, Any]]:
     ]
 
 
+def tool_policy() -> dict[str, str]:
+    """The household's per-tool tier policy for active tools — the v6 gate's
+    ``ToolRule`` source (the ``/tools`` door serves it alongside the schemas,
+    so the server-side gate enforces the same tiers this registry does)."""
+    return {
+        name: _MIN_TIER.get(name, "unknown")
+        for name in _REGISTRY
+        if not _inactive(name)
+    }
+
+
 def _coerce_arguments(schema: dict[str, Any], arguments: dict[str, Any]) -> dict[str, Any]:
     """Repair known model deviations from the tool schema before calling the skill.
 

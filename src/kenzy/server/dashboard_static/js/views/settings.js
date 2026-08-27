@@ -28,6 +28,9 @@ const CODE_DEFAULTS = {
   "integrations.mqtt.discovery_prefix": "homeassistant",
   "integrations.mqtt.commands": true,
   "streaming.enabled": true,
+  "s2s.enabled": false,
+  "s2s.url": "ws://127.0.0.1:8771/v1/realtime",
+  "s2s.hard_cap_s": 900,
   "occupancy.enabled": true,
   "fleet.offline_alert_minutes": 5,
   "arbitration.window_ms": 250,
@@ -136,7 +139,14 @@ function ServerSettings() {
   const row = (f) => {
     const v = vals[f.key];
     const isSet = v !== null && v !== undefined && v !== "";
-    const inh = f.inherited !== null && f.inherited !== undefined ? f.inherited : CODE_DEFAULTS[f.key];
+    // An empty-string inherit falls through to the display default too:
+    // s2s.url's packaged default is "" (meaning: found via the service
+    // registry) — "unset" would be both wrong and inconsistent with the
+    // other service urls, which show their real defaults.
+    const inh =
+      f.inherited !== null && f.inherited !== undefined && f.inherited !== ""
+        ? f.inherited
+        : CODE_DEFAULTS[f.key];
     let input;
     if (f.type === "bool")
       input = html`<select onChange=${(e) => set(f.key, e.target.value === "" ? null : e.target.value === "true")}>

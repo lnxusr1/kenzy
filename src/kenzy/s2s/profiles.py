@@ -44,6 +44,9 @@ class EngineProfile:
     #: Used when the canonical voice has no mapping — never pass an unmapped
     #: name through (measured: unknown voices 404 inside engines).
     default_voice: str = ""
+    #: True: the engine shares Kenzy's own voice namespace (kenzy-s2s — its TTS
+    #: IS kenzy-tts, decision 8), so the canonical name passes through intact.
+    passthrough_voice: bool = False
     #: "bearer" sends Authorization from the api key; "none" for local servers.
     auth: str = "bearer"
     #: Where the GATE's transcript comes from (the invariant — transcript on
@@ -59,6 +62,8 @@ class EngineProfile:
 
     def map_voice(self, canonical: str) -> str:
         """Resolve the configured voice identity to this engine's namespace."""
+        if self.passthrough_voice and canonical:
+            return canonical
         return self.voice_map.get(canonical, self.default_voice)
 
 
@@ -80,6 +85,19 @@ HF_LOCAL = EngineProfile(
     url="ws://127.0.0.1:8765/v1/realtime",
     requires_response_create=False,
     voice_map={"marin": "bm_fable"},
+    default_voice="bm_fable",
+    auth="none",
+)
+
+KENZY_S2S = EngineProfile(
+    name="kenzy-s2s",
+    url="ws://127.0.0.1:8771/v1/realtime",
+    # Our own engine is GA-conformant BY CHOICE: commit does not auto-respond
+    # (the seam's north-star shape), and the transcript is emitted before any
+    # output exists — the qualifying bar met by construction, not adaptation.
+    requires_response_create=True,
+    engine_transcription=True,
+    passthrough_voice=True,
     default_voice="bm_fable",
     auth="none",
 )

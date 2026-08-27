@@ -150,6 +150,21 @@ Web fleet manager served by `kenzy-server`. **On by default in the shipped confi
 | `llm.url` | — | URL of the kenzy-llm `/process` endpoint. Omit to disable LLM processing. |
 | `llm.timeout` | `30.0` | HTTP timeout in seconds |
 
+### Follow-up mode (experimental)
+
+Routes captures on echo-cancelling (`hardware_aec`) nodes through the
+[kenzy-s2s conversation engine](s2s.md): after Kenzy answers, she keeps
+listening ~8 seconds so you can reply without the wake word, until you say
+you're done ("end conversation", "that's all") or the window lapses. Rooms
+without echo cancellation — and every engine failure — stay on the classic
+pipeline automatically.
+
+| Key | Default | Description |
+|---|---|---|
+| `s2s.enabled` | `false` | The follow-up toggle. Off = the classic pipeline everywhere. Restart to apply. |
+| `s2s.url` | *(empty)* | The engine's WebSocket address (`ws://host:8771/v1/realtime`). Empty = find a co-registered kenzy-s2s automatically. |
+| `s2s.hard_cap_s` | `900` | The longest one conversation may run, in seconds — stuck-open protection. |
+
 ### TTS service
 
 | Key | Default | Description |

@@ -75,6 +75,10 @@ def _texts(ws: _WS) -> list[dict[str, Any]]:
 
 
 FRAME = np.zeros(1280, dtype=np.int16)
+# A frame with real acoustic energy: barge-in now requires shape AND level
+# (Silero alone confirmed Kenzy's own AEC residual and cut her off — found
+# live 2026-08-26), so intended-speech fixtures must carry level too.
+LOUD = np.full(1280, 3000, dtype=np.int16)
 
 
 # ---------------------------------------------------------------------------
@@ -483,13 +487,13 @@ async def test_barge_ducks_on_suspicion_then_stops_on_confirm(monkeypatch):
     monkeypatch.setattr(c, "_dialog_vad_score", lambda flat: 0.9)  # speech
 
     # First frame → duck (the "go ahead" dip), not yet a session.
-    await c._handle_barge_frame(FRAME)
+    await c._handle_barge_frame(LOUD)
     assert p.duck_factor < 1.0
     assert c._state == _STATE_TTS
 
     # Sustained → confirm: reply cut, answer session opened, pre-roll flushed.
     for _ in range(c._dialog_onset_frames):
-        await c._handle_barge_frame(FRAME)
+        await c._handle_barge_frame(LOUD)
     assert p.aborted is True
     assert c._state == _STATE_STREAMING
     starts = [m for m in _texts(ws) if m.get("type") == protocol.MSG_AUDIO_START]
@@ -504,7 +508,7 @@ async def test_barge_false_alarm_unducks_and_keeps_playing(monkeypatch):
     scores = iter([0.9, 0.0, 0.0, 0.0])  # one blip, then quiet (a clink)
     monkeypatch.setattr(c, "_dialog_vad_score", lambda flat: next(scores, 0.0))
 
-    await c._handle_barge_frame(FRAME)  # blip → duck
+    await c._handle_barge_frame(LOUD)  # blip → duck
     assert p.duck_factor < 1.0
     for _ in range(3):
         await c._handle_barge_frame(FRAME)  # silence → un-duck, keep playing
@@ -546,7 +550,7 @@ async def test_barge_confirms_after_grace_window(monkeypatch):
     monkeypatch.setattr(c, "_dialog_vad_score", lambda flat: 0.9)
 
     for _ in range(c._dialog_onset_frames + 1):
-        await c._handle_barge_frame(FRAME)
+        await c._handle_barge_frame(LOUD)
     assert p.aborted is True
     assert c._state == _STATE_STREAMING
 

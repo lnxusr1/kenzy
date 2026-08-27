@@ -1016,6 +1016,10 @@ class NodeClient:
         # The current capture session is a dialog follow-up: opened silently,
         # onset-gated, 8s window, no waiting sound between turns.
         self._followup_active: bool = False
+        # v6 follow-up: the pending onset window is the THINKING GAP — no
+        # expiry. It lasts until speech consumes it or the reply's TTS
+        # supersedes it, so an interjection lands while the server is thinking.
+        self._followup_unbounded: bool = False
         # Onset gating (follow-ups only): buffer mic frames and send nothing until
         # ~dialog_onset_ms of SUSTAINED speech — a clink or cough must not start a
         # turn, and a silent window must expire without ever bothering the server.
@@ -1317,6 +1321,14 @@ class NodeClient:
                 speech = rms >= self._silence_rms
             else:
                 speech = score >= self._dialog_onset_vad
+                if speech and self._followup_unbounded:
+                    # The thinking-gap window demands real acoustic energy TOO:
+                    # a cold-state VAD blip on a suppressed mic's near-silent
+                    # DSP floor must not phantom-barge the very turn this
+                    # window serves (found live: a -90 dBFS "answer" confirmed
+                    # 240 ms after opening, cancelling the real reply).
+                    rms = float(np.sqrt(np.mean(flat.astype(np.float32) ** 2)))
+                    speech = rms >= self._silence_rms
         if speech:
             self._onset_run += 1
             self._onset_burst = max(self._onset_burst, self._onset_run)
@@ -1333,7 +1345,13 @@ class NodeClient:
         #     shorter than the onset window — found live on a knock-knock punchline.
         min_burst = max(2, self._dialog_onset_frames // 2)
         confirmed = self._onset_run >= self._dialog_onset_frames or (
-            self._onset_burst >= min_burst and self._onset_gap >= 2
+            # The short-complete-utterance route ("Boo") is for post-reply
+            # answers; the thinking-gap window takes the sustained path only —
+            # an interjection there is a sentence, and the shortcut is exactly
+            # where a two-frame transient sneaks through.
+            not self._followup_unbounded
+            and self._onset_burst >= min_burst
+            and self._onset_gap >= 2
         )
         if confirmed:
             # The user answered (follow-up) or kept talking through the wake
@@ -1343,6 +1361,10 @@ class NodeClient:
             was_wake_gate = self._wake_gate
             self._wake_gate = False
             self._onset_pending = False
+            if self._followup_unbounded and self._player is not None:
+                # A real interjection during the thinking gap: NOW the waiting
+                # bed dies (the arm deliberately left it playing).
+                self._player.abort()
             sid = self._session_id or str(uuid.uuid4())
             self._session_id = sid
             try:
@@ -1406,6 +1428,8 @@ class NodeClient:
                 log.info("[%s] wake gate silent — chime, normal session", sid[:8])
             return
 
+        if self._followup_unbounded:
+            return  # the thinking-gap window: no expiry — superseded or consumed
         if self._onset_elapsed >= self._dialog_no_speech_frames:
             # Window expired in silence: the dialog is over. The server never saw
             # a session; it just needs its floor state cleared.
@@ -1450,11 +1474,20 @@ class NodeClient:
             return
 
         score = self._dialog_vad_score(flat)
+        rms = float(np.sqrt(np.mean(flat.astype(np.float32) ** 2)))
         if score is None:  # no VAD model → raised-energy fallback
-            rms = float(np.sqrt(np.mean(flat.astype(np.float32) ** 2)))
             speech = rms >= self._silence_rms * _BARGE_RMS_FACTOR
         else:
-            speech = score >= self._dialog_onset_vad
+            # Silero AND raised energy. The AEC residual of Kenzy's own reply
+            # is speech-SHAPED — Silero alone confirms it and cuts her off
+            # mid-sentence (found live: three replies truncated in one session
+            # with the room silent) — but the residual is QUIET; a real
+            # interjection over her voice carries real level. Same
+            # shape-plus-level rule as the thinking-gap onset gate.
+            speech = (
+                score >= self._dialog_onset_vad
+                and rms >= self._silence_rms * _BARGE_RMS_FACTOR
+            )
         if speech:
             self._barge_run += 1
         else:
@@ -1546,6 +1579,7 @@ class NodeClient:
         followup: bool = False,
         wake_gated: bool = False,
         gate_preroll: list[np.ndarray[Any, np.dtype[np.int16]]] | None = None,
+        keep_player: bool = False,
     ) -> None:
         """Open a capture session.
 
@@ -1579,7 +1613,12 @@ class NodeClient:
             return
         gate = wake_gated and not followup and self._wake_onset_frames > 0
         if self._player:
-            self._player.abort()  # stop waiting sound if still playing
+            # The thinking-gap window (keep_player) opens as a silent onset
+            # gate while the waiting bed covers processing — the bed keeps
+            # playing; it dies at onset CONFIRM (a real interjection) or when
+            # the reply's TTS supersedes it, never at arm time.
+            if not keep_player:
+                self._player.abort()  # stop waiting sound if still playing
             if not gate and (not followup or self._capture_cue):
                 self._player.play()  # wake sessions + record-after-the-tone flows chime
         self._end_dialog_after_tts = False  # a new turn began; drop any stale end cue
@@ -1746,6 +1785,14 @@ class NodeClient:
         await self._cancel_tts_task(keep_audio=self._cue_grace_s > 0.0)
         self._stop_ringback()  # a spoken reply (decline/timeout) supersedes ringing
         self._reset_barge()
+        # A silent thinking-gap window is superseded by the reply: nothing was
+        # ever sent for it, so stand it down quietly before playback starts.
+        if self._followup_unbounded and self._onset_pending:
+            self._onset_pending = False
+            self._onset_buf = []
+            self._followup_active = False
+            self._session_id = None
+        self._followup_unbounded = False
         # Deliberately NO queue drain here: _recv_loop enqueues binary frames the
         # instant they arrive, so this session's own head frames may already be in
         # _tts_q before the cmd loop processes tts_start — draining now would eat
@@ -2521,10 +2568,36 @@ class NodeClient:
                 # where the prompt itself is the cue). Absent = legacy chime.
                 self._capture_after_prompt = True
                 self._capture_cue = bool(msg.get("cue", True))
+                # v6 follow-up (immediate): open the window NOW — the user may
+                # interject while the server is still thinking. Onset-gated and
+                # silent, with no expiry (superseded by the reply's TTS or
+                # consumed by speech). _capture_after_prompt stays set so the
+                # eventual reply is still floor-holding as usual.
+                if bool(msg.get("immediate")) and self._state == _STATE_IDLE:
+                    await self._begin_streaming(
+                        str(uuid.uuid4()), followup=True, keep_player=True
+                    )
+                    self._followup_unbounded = True
 
             elif mtype == protocol.MSG_END_DIALOG:
-                # A multi-turn dialog ended. Play the end cue after any in-progress TTS
-                # (the final reply) finishes, so it never clips the last line.
+                # A multi-turn dialog ended. The conversation is OVER: nothing
+                # may re-open the mic — clear the pending arm (set by any
+                # expect_utterance this conversation sent, including the
+                # thinking-gap ones) and stand down an open silent window, or
+                # the farewell's own playback re-opens a window on a closed
+                # conversation (found live: "are you still listening?" — yes,
+                # embarrassingly, she was).
+                self._capture_after_prompt = False
+                self._followup_unbounded = False
+                if self._onset_pending:
+                    self._onset_pending = False
+                    self._onset_buf = []
+                    self._followup_active = False
+                    self._session_id = None
+                    if self._state == _STATE_STREAMING:
+                        self._state = _STATE_IDLE
+                # Play the end cue after any in-progress TTS (the final reply)
+                # finishes, so it never clips the last line.
                 if self._dialog_end_audio is None:
                     pass
                 elif self._state == _STATE_TTS:
@@ -3026,6 +3099,15 @@ class NodeClient:
                 task.cancel()
                 self._plugin_tasks.pop(pid, None)
             self._plugins_built_from[pid] = want
+            if not want.get("enabled", True):
+                # The operator switched this add-on off for THIS node
+                # (addons.<id>.enabled: false): no task, no device open, no
+                # retry loop — without uninstalling the distribution. Generic
+                # for every plugin; visible, once per config apply. Flipping it
+                # back on live-applies the same way (this method runs after
+                # every apply).
+                log.info("Add-on '%s' disabled by config — node half not started", pid)
+                continue
             ctx = self._node_plugin_ctx(pid, want)
             run = plugin.hook("node_run")
             if run is None:

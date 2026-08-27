@@ -119,6 +119,14 @@ tts = [
     "wyoming>=1.6.0",
 ]
 
+# Install on the S2S conversation-engine host (the v6 Realtime-shaped engine;
+# websockets rides the core deps — these are the stage-adapter + boot extras)
+s2s = [
+    "httpx>=0.27.0",
+    "python-dotenv>=1.0.0",
+    "zeroconf>=0.130",
+]
+
 # Install on the speaker identification host
 speaker = [
     "fastapi>=0.100.0",
@@ -186,6 +194,7 @@ kenzy-server  = "kenzy.server.server:main"
 kenzy-stt     = "kenzy.stt.stt:main"
 kenzy-tts     = "kenzy.tts.tts:main"
 kenzy-llm     = "kenzy.llm.llm:main"
+kenzy-s2s     = "kenzy.s2s.service:main"
 kenzy-ha-devices = "kenzy.llm.ha_devices:main"
 kenzy-speaker = "kenzy.speaker.speaker:main"
 kenzy-enroll  = "kenzy.speaker.enroll:main"

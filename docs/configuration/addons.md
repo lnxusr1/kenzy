@@ -57,6 +57,22 @@ Two properties worth knowing:
   config immediately; the add-on's node half restarts itself with the new
   values — no node restart.
 
+### Switching an add-on off per node
+
+Every add-on honors one universal key: `enabled` (default `true`). Set it
+`false` and that node's half of the add-on simply doesn't run — no device is
+opened, no retry loop, no evidence reported — without uninstalling the
+distribution. Unplugged a sensor? Switch its add-on off on that node (the
+radar panel has the toggle) instead of living with the fault retries:
+
+```yaml
+addons:
+  ld2450:
+    enabled: false
+```
+
+Like every add-on key it applies live, in both directions.
+
 ## Naming rule for add-on keys
 
 Key names matching the server's secret filter (`key`, `token`, `secret`,

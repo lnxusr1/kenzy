@@ -35,6 +35,7 @@ Assistant's WebSocket API, feeding the room-presence model described under
 | **tts** | `kenzy-tts` | 8769 | Text-to-speech via OpenAI or local Kokoro |
 | **llm** | `kenzy-llm` | 8766 | LLM + skill tool-calling via LiteLLM |
 | **speaker** | `kenzy-speaker` | 8768 | Speaker identification via SpeechBrain |
+| **s2s** | `kenzy-s2s` | 8771 | Conversation engine (experimental follow-up mode — off by default) |
 
 ## Requirements
 

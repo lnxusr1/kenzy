@@ -298,6 +298,9 @@ export const SERVER_HELP = {
   "alarm.ring_repeats": "How many times a firing alarm re-rings before giving up. A wake word stops it sooner.",
   "alarm.ring_interval": "Seconds between alarm re-rings.",
   "streaming.enabled": "Start speaking the first sentence while the rest is still being written — noticeably faster replies. Off = wait for the whole answer first.",
+  "s2s.enabled": "Follow-up mode (experimental): she keeps listening ~8s after answering, so you can reply without the wake word. Needs kenzy-s2s + echo-cancelling speakers; other rooms stay classic. Restart to apply.",
+  "s2s.url": "The conversation engine's address (ws://host:8771/v1/realtime). Leave empty to find a co-registered kenzy-s2s automatically.",
+  "s2s.hard_cap_s": "The longest a single follow-up conversation may run, in seconds, before it ends on its own — stuck-open protection.",
   "discovery.enabled": "Announce this server on the network so nodes find it without being told an address.",
   "discovery.instance": "The name this server announces itself under. Only matters if you run more than one.",
   "integrations.mqtt.enabled": "Publish room state to an MQTT broker so Home Assistant sees your nodes as devices.",
@@ -343,7 +346,7 @@ export const SERVICE_SECTIONS = {
 export const SERVER_SECTIONS = [
   ["Server", (k) => !k.includes(".")], // top-level keys (experimental, …)
   ["Dashboard", (k) => k.startsWith("dashboard.")],
-  ["Backend services", (k) => ["stt.", "tts.", "llm.", "speaker."].some((p) => k.startsWith(p))],
+  ["Backend services", (k) => ["stt.", "tts.", "llm.", "speaker.", "s2s."].some((p) => k.startsWith(p))],
   ["Dialog & alarms", (k) => k.startsWith("dialog.") || k.startsWith("alarm.")],
   ["Discovery", (k) => k.startsWith("discovery.")],
   ["Integrations", (k) => k.startsWith("integrations.")],

@@ -610,6 +610,13 @@ class Dashboard:
         for key, typ in _SERVER_EDITABLE.items():
             ov = _dotted_get(override, key)
             inherited = _dotted_get(base, key)
+            if key == "s2s.url" and (inherited is _MISSING or not inherited):
+                # The other service urls inherit concrete defaults from
+                # server.yaml; s2s.url's default is empty (resolved via the
+                # service registry). Show the RESOLVED address as the inherit —
+                # the same concrete-url shape the siblings show, and truer.
+                resolved = getattr(self._server, "_s2s_engine_url", lambda: "")()
+                inherited = resolved or "ws://127.0.0.1:8771/v1/realtime"
             fields.append(
                 {
                     "key": key,

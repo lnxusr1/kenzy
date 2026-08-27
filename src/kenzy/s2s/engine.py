@@ -139,7 +139,16 @@ class EngineClient:
         headers: dict[str, str] = {}
         if self._profile.auth == "bearer" and self._api_key:
             headers["Authorization"] = f"Bearer {self._api_key}"
-        self._ws = await websockets.connect(url, additional_headers=headers, max_size=1 << 24)
+        ssl_ctx = None
+        if url.startswith("wss://"):
+            # Mesh TLS: the house posture is encrypted-unverified self-signed
+            # (KENZY_TLS_VERIFY/KENZY_TLS_CA harden it) — same as every service.
+            from kenzy import tlsutil
+
+            ssl_ctx = tlsutil.client_context_from_env()
+        self._ws = await websockets.connect(
+            url, additional_headers=headers, max_size=1 << 24, ssl=ssl_ctx
+        )
 
     async def aclose(self) -> None:
         if self._ws is not None:

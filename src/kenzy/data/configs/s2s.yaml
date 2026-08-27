@@ -1,0 +1,49 @@
+# Kenzy S2S service configuration — the Realtime-shaped conversation engine
+# (design: kenzy-design/app/s2s-design.md, decision 8). An orchestration layer
+# over the services Kenzy already runs: audio in -> kenzy-stt -> the model
+# provider -> kenzy-tts -> audio out, behind the OpenAI-Realtime protocol shape.
+
+host: "127.0.0.1"
+port: 8771
+log_level: "info"
+
+# ---------------------------------------------------------------------------
+# The generation stage's model provider
+# ---------------------------------------------------------------------------
+# The engine is a DIRECT client of an OpenAI-compatible chat-completions
+# provider — it never routes through kenzy-llm (that service is the classic
+# pipeline's skill loop, not the model; the weights live in the provider).
+# This model may deliberately differ from the classic pipeline's — pick for
+# realtime latency (the GPU benchmark's guidance: a small-active-parameter
+# model with prefix caching).
+provider:
+  # OpenAI-compatible base URL. Empty = api.openai.com; a local vLLM /
+  # llama.cpp / LiteLLM proxy goes here (e.g. "http://127.0.0.1:8000/v1").
+  base_url: ""
+
+  model: "gpt-5.1"
+
+  # Which environment variable holds the API key. Use CUSTOM_LLM_API_KEY for a
+  # custom base_url — OPENAI_API_KEY is never sent to a non-OpenAI endpoint.
+  # (Named auth_env, not api_key_env: the server's secret filter strips any
+  # served key whose NAME contains key/token/secret — the 5.0.4 trap.)
+  auth_env: "OPENAI_API_KEY"
+
+  # null = the provider's default. OpenAI's newer model families reject any
+  # explicit temperature; set 0.0 for deterministic local serving (vLLM etc.).
+  temperature: null
+  # Reply-length ceiling per turn, in tokens. (Named max_output for the same
+  # secret-filter reason: "token" in a key name gets it stripped.)
+  max_output: 512
+  timeout: 60.0
+
+# ---------------------------------------------------------------------------
+# Stage services
+# ---------------------------------------------------------------------------
+# The stt/tts URLs are auto-wired from the server's service registry when the
+# services are co-registered (leave unset). An explicit url here wins — the
+# multi-host escape hatch.
+stt:
+  timeout: 30.0
+tts:
+  timeout: 30.0

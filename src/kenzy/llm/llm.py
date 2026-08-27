@@ -472,6 +472,69 @@ async def set_skills(body: SkillToggle) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# Skill-host doors (v6, s2s-design decision 8 as clarified 2026-08-26): the
+# conversation engine calls the model provider directly, but the SKILLS still
+# live here — so the v6 conversation layer needs exactly two things from this
+# service: the tool schemas to hand the engine's session, and a way to execute
+# ONE gate-approved call. No model, no skill loop, no judgment — the gate
+# already ruled; execute() below re-checks tier as defense-in-depth (F1.3).
+# ---------------------------------------------------------------------------
+
+
+@app.get("/tools")
+async def list_tools(tier: str = "unknown") -> dict[str, Any]:
+    """Tool schemas visible at ``tier``, plus the per-tool tier policy the
+    server-side gate enforces (the same policy this registry enforces)."""
+    skill_registry.begin_request({"speaker_tier": tier})
+    return {"tools": skill_registry.get_tools(), "policy": skill_registry.tool_policy()}
+
+
+class ToolExecBody(BaseModel):
+    """One gate-approved tool call, with the request context skills read.
+
+    The context mirrors ``/process``'s injection (rooms, people, occupancy…)
+    so a skill behaves identically on either path — a tool must never work on
+    the classic pipeline and silently fail closed on the v6 one.
+    """
+
+    name: str
+    arguments: dict[str, Any] = {}
+    room_id: str | None = None
+    person_id: str | None = None
+    speaker: str | None = None
+    speaker_tier: str = "unknown"
+    confidence: float = 0.0
+    channel: str = "voice"
+    rooms: list[str] = []
+    no_aec_rooms: list[str] = []
+    people: list[dict[str, Any]] = []
+    schedules: list[dict[str, Any]] = []
+    occupancy: dict[str, Any] = {}
+
+
+@app.post("/tool")
+async def execute_tool(body: ToolExecBody) -> dict[str, Any]:
+    """Execute one skill and return its result plus any queued server actions."""
+    skill_registry.begin_actions()
+    skill_registry.begin_request(
+        {
+            "rooms": body.rooms,
+            "schedules": body.schedules,
+            "room_id": body.room_id,
+            "no_aec_rooms": body.no_aec_rooms,
+            "person_id": body.person_id,
+            "speaker_tier": body.speaker_tier or "unknown",
+            "confidence": body.confidence,
+            "channel": body.channel or "voice",
+            "people": body.people,
+            "occupancy": body.occupancy,
+        }
+    )
+    result = await skill_registry.execute(body.name, body.arguments)
+    return {"result": result, "actions": skill_registry.take_actions()}
+
+
+# ---------------------------------------------------------------------------
 # Memory (F2) — the token-gated wire contract over the fact ledger. The
 # dashboard proxies these; the voice path uses the skills directly. Tiers gate
 # *voices* — these endpoints are a credentialed admin/service surface (behind
