@@ -400,6 +400,14 @@ class S2SBridge:
         if conv is not None:
             conv.session.on_wake()
 
+    async def close(self, node_id: str, reason: str) -> None:
+        """End and tear down one node's conversation (the group-claim path:
+        a sibling's wake is the law for the whole group)."""
+        conv = self._convs.get(node_id)
+        if conv is not None:
+            conv.session.on_wake()
+        await self._close(node_id, reason)
+
     async def close_all(self, reason: str) -> None:
         for node_id in list(self._convs):
             await self._close(node_id, reason)

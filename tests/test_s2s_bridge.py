@@ -315,3 +315,25 @@ def test_near_silence_scans_the_whole_capture() -> None:
 
     assert _near_silence(b"\x00" * 64000)  # true silence, any length
     assert not _near_silence(b"\x00" * 64000 + b"\x00\x40" * 8)  # speech after 2s of quiet
+
+
+async def test_group_claim_closes_the_old_owners_conversation() -> None:
+    """Layer 1 meets the follow-up feature: a sibling node winning the wake
+    ends the old owner's conversation — engine closed, floor cleared, its
+    turn never re-arms a mic in a room the group has left. (Found by asking
+    whether the two-butlers problem still resolves under s2s: it didn't —
+    the old conversation lingered.)"""
+    rig = _Rig()
+    task = asyncio.get_running_loop().create_task(
+        rig.bridge.take_turn(NODE, ROOM, "sid1", _PCM)
+    )
+    await _settle()
+    engine = rig.engine
+    engine.script.append(InputTranscript("hello", late=False))
+    await _settle()  # the turn now hangs mid-generation — a sibling wakes
+    await rig.bridge.close(NODE, "group claimed by sibling")
+    assert not rig.bridge.active(NODE) and engine.closed
+    engine.script.append(ResponseDone("cancelled", 0, 0))
+    await task  # the dying turn drains without re-arming
+    assert rig.holds == 0  # the floor was never re-opened over the sibling
+    assert rig.floor_ends >= 1  # and the node's dialog surface was cleared

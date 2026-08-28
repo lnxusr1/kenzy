@@ -8,6 +8,86 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Most releases need nothing beyond the upgrade itself. When one does, it's noted
 here and spelled out in **[Upgrading](https://docs.kenzy.ai/upgrading/)**.
 
+## [Unreleased]
+
+### Added
+
+- **Follow-up mode (experimental, off by default) — the v6.0 conversation
+  engine, end to end.** With `s2s.enabled` on, a wake word on an
+  echo-cancelling (`hardware_aec`) node opens a *conversation*, not a single
+  command: Kenzy keeps listening ~8 seconds after each answer (no wake word to
+  reply), listens **while she is thinking** (say "wait, I mean turn it off"
+  mid-processing and it becomes the next turn), and can be interrupted over
+  her own voice. The conversation ends only when you say so ("end the
+  conversation", "that's all", "goodbye" — the model calls a gated
+  `end_conversation` tool and says a short farewell), when the follow-up
+  window lapses, or at a hard time cap. Rooms without echo cancellation — and
+  every engine failure — stay on the classic pipeline automatically; with the
+  toggle off, nothing changes at all. Live-tested on the dev rig 2026-08-26:
+  multi-turn conversations, mid-reply corrections, device control through the
+  gate, and verbal closes all working.
+
+  Under the hood, the release-in-progress adds: the **`kenzy-s2s` service**
+  (port 8771) — a Realtime-shaped session engine that composes the existing
+  services (kenzy-stt, an OpenAI-compatible model provider called directly,
+  kenzy-tts), so no model loads twice; the **interaction seam**
+  (`kenzy.s2s`) — engine client, authority gate (transcript-before-action,
+  tier checks, per-tool policy, audit), session identity (monotonic-add
+  speaker set; authorization always binds to the current speaker), the
+  conversation lifecycle, and a persisted task ledger; the server's
+  **follow-up bridge** routing captures through the engine with the classic
+  pipeline as fallback; **skill-host doors on kenzy-llm** (`GET /tools`,
+  `POST /tool`) so the engine's model calls real skills through the gate; a
+  **`get_datetime` skill** (the first tool twin from the fast-intent coverage
+  audit); and one additive protocol nicety — `expect_utterance` gained an
+  `immediate` flag (opens the capture window during processing; older nodes
+  ignore it and arm post-reply only). Dashboard: the toggle lives under
+  Settings → Backend services; a new Conversation Engine reference page in
+  the docs.
+
+- **Add-ons gained a universal per-node off switch.** `addons.<id>.enabled:
+  false` (or the toggle on the add-on's panel) stops that node's half of an
+  add-on — no device opened, no retry loop, no evidence reported — without
+  uninstalling the distribution. Applies live in both directions. Born of a
+  real annoyance: an unplugged radar's only previous off switch was `pip
+  uninstall`.
+
+### Changed
+
+- **The s2s service card actually explains itself.** It shipped (within this
+  unreleased cycle) with no help strings at all — bare dotted key names, a
+  scary-looking `OPENAI_API_KEY` placeholder with nothing saying it's an env
+  var *name* rather than a key, and the literal words "blank"/"null" sitting
+  in empty fields where values would go. Every s2s field now carries the
+  same one-line help as the other service cards, `log_level` is a proper
+  dropdown, and across ALL service cards a blank/null default now shows a
+  blank placeholder (the help line says what blank means). The coverage test
+  that should have caught this iterated a hand-listed service tuple that
+  predated kenzy-s2s — it now derives from the real service registry, so the
+  next service can't dodge it.
+
+- **The node editor's device keys are pickers now, not text fields.**
+  `audio_device` and `volume_button_device` offer what the node's own probe
+  reported — the same lists the audio wizard draws from, saving the same
+  stable device names the wizard writes — instead of asking the operator to
+  hand-type a name with no hint of what a valid value looks like.
+  `audio_device`'s inherit hint also says what unset actually means ("OS
+  default device") instead of the bare word "default", while `audio_group`
+  and `mic_volume` go the other way — their placeholders are blank now,
+  because unset genuinely IS blank (no group, gain untouched) and the old
+  phrases read like values someone had set; the help line under each field
+  says what blank means. The free-text field remains only where it's honest:
+  an offline node, or one whose probe reported nothing usable for that key.
+
+### Fixed
+
+- **Barge-in no longer confirms on speech-*shaped* silence.** The
+  interrupt-over-a-reply detector required only a VAD (Silero) match, and the
+  AEC residual of Kenzy's own voice is speech-shaped — on some hardware she
+  could cut herself off mid-sentence with the room silent. Confirmation now
+  requires shape AND level (VAD plus raised energy over the calibrated
+  floor). The honest trade: a whispered interruption may need normal volume.
+
 ## [5.1.3]
 
 ### Added

@@ -49,6 +49,7 @@ export const SERVICE_ENUMS = {
     log_capture_level: CAPTURE_LEVELS,
   },
   speaker: { log_level: LOG_LEVELS, log_capture_level: CAPTURE_LEVELS },
+  s2s: { log_level: LOG_LEVELS },
 };
 
 // One-line help shown under each field. Keyed by dotted path (services) or key
@@ -158,6 +159,23 @@ export const SERVICE_HELP = {
     enroll_prompts: "Sentences read aloud during voice enrollment (one per sample).",
     log_level: LOG_HELP,
     log_capture_level: CAPTURE_HELP,
+    "tls.cert": TLS_CERT_HELP,
+    "tls.key": TLS_KEY_HELP,
+  },
+  s2s: {
+    host: "Bind address for the conversation engine (follow-up mode).",
+    port: "WebSocket port — the server's s2s.url points here.",
+    "provider.base_url": "OpenAI-compatible endpoint for the conversation model. Blank = api.openai.com; a local vLLM / llama.cpp / LiteLLM proxy goes here.",
+    "provider.model": "Chat-completions model for follow-up conversations. May differ from the classic pipeline's — pick for realtime latency.",
+    "provider.auth_env": "Name of the environment variable holding the provider's API key — never the key itself. CUSTOM_LLM_API_KEY for a custom base_url; OPENAI_API_KEY is never sent to a non-OpenAI endpoint.",
+    "provider.temperature": "Sampling temperature. Blank = the provider's default (OpenAI's newest models reject an explicit one); set 0.0 for deterministic local serving.",
+    "provider.max_output": "Reply-length ceiling per turn, in tokens.",
+    "provider.timeout": "Model request timeout (seconds).",
+    "stt.url": "Transcription service the engine composes (auto-wired from the server; set for multi-host).",
+    "stt.timeout": "Transcription request timeout (seconds).",
+    "tts.url": "Speech service the engine composes (auto-wired from the server; set for multi-host).",
+    "tts.timeout": "Synthesis request timeout (seconds).",
+    log_level: LOG_HELP,
     "tls.cert": TLS_CERT_HELP,
     "tls.key": TLS_KEY_HELP,
   },

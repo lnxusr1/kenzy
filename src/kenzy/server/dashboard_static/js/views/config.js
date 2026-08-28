@@ -70,14 +70,16 @@ const RANGES = { volume: { min: 0, max: 100, step: 1, default: 100 } };
 // placeholder instead of a bare "default". Keep in sync with node/client.py
 // and the server's cue fallbacks. An explicit "" means "off unless set" — the
 // honest placeholder for those is empty, not the word "default".
+// Keys whose unset state genuinely IS blank — no group, gain untouched — so a
+// placeholder phrase there reads like a value someone set (founder call
+// 2026-08-28). The help line under the field carries the meaning instead.
+// (mic_volume is also deliberately NOT in RANGES — an input box, not a
+// slider: it's almost always inherited, and a slider begs to be dragged.)
+const BLANK_UNSET = new Set(["audio_group", "mic_volume"]);
+
 const DEFAULTS = {
-  // Display-only for the placeholder: unset mic_volume means the device's own
-  // gain is never touched, so the honest "default" is a phrase, not a number.
-  // Deliberately NOT in RANGES — an input box, not a slider: it's almost
-  // always inherited, and a slider begs to be dragged (founder call).
-  mic_volume: "device default",
-  // Same display-phrase treatment: unset means this node never arbitrates.
-  audio_group: "none (never arbitrates)",
+  // Display phrase: unset falls back to whatever the OS calls default.
+  audio_device: "OS default device",
   log_level: "info",
   log_capture_level: "debug",
   capture_sample_rate: 16000,
@@ -266,8 +268,38 @@ export function ConfigView({ node, onBack }) {
     const cur = over[k];
     const set = cur !== undefined;
     const opts = nodeEnum(k);
+    // Device keys: offer what the node's own probe reported as a dropdown —
+    // the audio wizard already draws from the same data, so a raw text field
+    // here was an unguided path to the same setting. Values match what the
+    // wizard writes exactly: audio_device gets the suggested stable short
+    // name (never an "(hw:N,0)" fragment, which shifts across boots), and
+    // volume_button_device gets the volume-key HID endpoint's device NAME
+    // (never an eventN path). Falls back to the text input on offline nodes
+    // and nodes whose probe reported nothing usable; an already-set value
+    // the probe doesn't know stays selectable so the select renders it
+    // honestly.
+    const probeOpts = (() => {
+      const devs = info.devices || [];
+      if (k === "volume_button_device")
+        return [
+          ...new Set(devs.filter((d) => d.volume_keys && d.volume_key_device)
+            .map((d) => d.volume_key_device)),
+        ];
+      if (k === "audio_device")
+        return [...new Set(devs.filter((d) => d.suggested).map((d) => d.suggested.audio_device))];
+      return null;
+    })();
     let input;
-    if (opts) {
+    if (probeOpts && probeOpts.length) {
+      input = html`<select disabled=${!info.controls}
+        onChange=${(e) => setKey(k, e.target.value === "" ? undefined : e.target.value)}>
+        <option value="" selected=${!set}>inherit (${fmt(effDefault)})</option>
+        ${probeOpts.map((v) => html`<option value=${v} selected=${cur === v}>${v}</option>`)}
+        ${set && !probeOpts.includes(cur)
+          ? html`<option value=${cur} selected>${cur} (custom)</option>`
+          : null}
+      </select>`;
+    } else if (opts) {
       input = html`<select disabled=${!info.controls}
         onChange=${(e) => setKey(k, e.target.value === "" ? undefined : e.target.value)}>
         <option value="" selected=${!set}>inherit (${fmt(effDefault)})</option>
@@ -312,11 +344,11 @@ export function ConfigView({ node, onBack }) {
       // Keep the raw string while typing — coercing to Number() per keystroke turns
       // "0." into 0 and snaps the field back, making decimals impossible to enter.
       input = html`<input type="number" step="any" inputmode="decimal" disabled=${!info.controls}
-        value=${set ? cur : ""} placeholder=${effDefault ?? "default"}
+        value=${set ? cur : ""} placeholder=${BLANK_UNSET.has(k) ? "" : (effDefault ?? "default")}
         onInput=${(e) => setKey(k, e.target.value === "" ? undefined : e.target.value)} />`;
     } else {
       input = html`<input disabled=${!info.controls} value=${set ? cur : ""}
-        placeholder=${effDefault ?? "default"}
+        placeholder=${BLANK_UNSET.has(k) ? "" : (effDefault ?? "default")}
         onInput=${(e) => setKey(k, e.target.value === "" ? undefined : e.target.value)} />`;
     }
     const restart = RESTART_KEYS.has(k);
@@ -395,8 +427,8 @@ export function ConfigView({ node, onBack }) {
           return mk.present
             ? html`<p class="micro">Volume buttons: ✓ ${mk.detail}</p>`
             : html`<div class="banner">⚠ Volume buttons are on but not working —
-                ${mk.detail}. Set <code class="mono">volume_button_device</code> below
-                to one of the names listed.</div>`;
+                ${mk.detail}. Pick the right endpoint from
+                <code class="mono">volume_button_device</code> below.</div>`;
         })()}
         ${(() => {
           // Same visibility rule as the volume buttons: a managed setting that

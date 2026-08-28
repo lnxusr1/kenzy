@@ -2430,6 +2430,19 @@ class AudioServer:
             and time.monotonic() - eng.since <= _ENGAGEMENT_STALE_S
         ):
             self._cancel_pipeline(eng.owner)
+            # v6 follow-up: the claim ends the old owner's CONVERSATION too —
+            # engine session closed, floor cleared. s2s turn tasks are
+            # deliberately not in _stt_tasks (a barge must not hard-kill a
+            # turn), so _cancel_pipeline can't reach them; without this, the
+            # old conversation's in-flight turn would finish, speak into the
+            # stopped room, and re-arm its mic — the two-butlers problem
+            # reborn one layer up (found by the founder asking exactly this).
+            bridge = getattr(self, "_s2s_bridge", None)  # TranscribingServer state
+            if bridge is not None and bridge.active(eng.owner):
+                asyncio.create_task(
+                    bridge.close(eng.owner, "group claimed by sibling"),
+                    name=f"s2s-groupclose-{eng.owner}",
+                )
             old = self._nodes.get(eng.owner)
             if old is not None:
                 try:

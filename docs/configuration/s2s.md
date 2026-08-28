@@ -3,13 +3,15 @@
 **File:** `configs/s2s.yaml`  
 **Command:** `kenzy-s2s [config_path]`
 
-!!! warning "In development — not yet part of the voice pipeline"
-    This service is the foundation of Kenzy's next-generation conversation
-    mode (the *follow-up* feature): a realtime speech engine that keeps
-    listening after she answers, so you can talk back and forth without
-    repeating the wake word. It ships now so the pieces can be exercised, but
-    **the server does not route conversations through it yet** — installing
-    or configuring it today changes nothing about how Kenzy answers.
+!!! warning "Experimental — off by default"
+    This service powers Kenzy's next-generation conversation mode (the
+    *follow-up* feature): a realtime speech engine that keeps listening after
+    she answers — and while she thinks — so you can talk back and forth
+    without repeating the wake word. The server routes conversations through
+    it **only when `s2s.enabled` is switched on** (see the
+    [server's follow-up section](server.md#follow-up-mode-experimental)) and
+    only on nodes with echo-cancelling speakers; everywhere else, and with
+    the toggle off, the classic pipeline runs exactly as before.
 
 ## What it is
 
