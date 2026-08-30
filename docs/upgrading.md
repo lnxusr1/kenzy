@@ -32,6 +32,13 @@ Upgrade the **server first**, then services, then nodes.
 
 Newest first. Anything not listed needs no manual steps.
 
+### 6.0.1
+
+Nothing required. This fixes voice-activity (`wakeword_vad_threshold`)
+calibration, which previously never suggested a value. If you'd like a VAD gate
+on a node, re-run calibration (dashboard → the node's *Calibrate* wizard, or
+`kenzy-node --calibrate`) — it now produces one.
+
 ### 6.0.0
 
 One new service, one manual step for existing **server** installs.

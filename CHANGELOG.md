@@ -10,6 +10,20 @@ here and spelled out in **[Upgrading](https://docs.kenzy.ai/upgrading/)**.
 
 ## [Unreleased]
 
+## [6.0.1]
+
+### Fixed
+
+- **Voice-activity calibration (`wakeword_vad_threshold`) never suggested a
+  value on a normal capture.** It estimated the ambient floor from the
+  wake-word phase — which is roughly half speech — so on a device with
+  aggressive AGC the "floor" read as voice-like and the suggestion was always
+  skipped, silently keeping the current setting. Calibration now anchors the
+  floor on the *quiet* phase (the same two-phase approach the silence threshold
+  already uses), so the VAD gate calibrates reliably. Calibration also now
+  reports the VAD score distribution and the exact reason whenever it can't
+  suggest a value, so a skipped gate is never a mystery.
+
 ## [6.0.0]
 
 **The conversation era.** Kenzy talks *with* you now, not just *at* you — the
