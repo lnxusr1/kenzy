@@ -105,26 +105,70 @@ def suggest_wake(wake: list[float]) -> float | None:
 
 # An ambient VAD floor that already reads voice-like means the measurement is
 # untrustworthy (AGC pumping room noise into the speech band — the EMEET M1A's
-# wake phase read ambient VAD ~0.74 and suggested a 0.82 gate, which then
-# suppressed genuinely quiet wakes). And no gate above 0.6 is worth having:
+# quiet phase read ambient VAD ~0.74). And no gate above 0.6 is worth having:
 # past that it costs more real wakes than it filters.
 _VAD_AMBIENT_TRUST = 0.5
 _VAD_SUGGEST_CAP = 0.6
+# The spoken wake word's VAD must clear the quiet floor by at least this, or
+# there was no clean speech spike to anchor a gate to. Named (not an inline
+# literal) so suggest_vad and vad_diagnostics can never disagree on the bar.
+_VAD_MIN_GAP = 0.15
+# The non-speech floor is the quiet phase's VAD CEILING (p90, robust to a stray
+# blip), and the speech level is the wake phase's VAD p90. Two phases, like
+# suggest_silence: estimating both modes from the wake phase alone fails, because
+# a real wake capture is ~half speech, so its p75 lands IN the speech band and
+# the voice-like-floor guard then rejects every honest calibration (2026-08-30).
+_VAD_FLOOR_Q = 0.90
+_VAD_SPEECH_Q = 0.90
 
 
-def suggest_vad(vad: list[float]) -> float | None:
-    """``wakeword_vad_threshold`` below speech VAD, above the silence floor;
-    ``None`` when the ambient floor is itself voice-like (keep the current
-    setting rather than gate out quiet wakes)."""
-    if not vad:
+def suggest_vad(quiet_vad: list[float], speech_vad: list[float]) -> float | None:
+    """``wakeword_vad_threshold`` between the quiet-phase VAD floor and the
+    wake-phase speech level — the gate sits above non-speech, below speech.
+
+    ``None`` when either phase is empty, when the quiet floor is itself
+    voice-like (untrustworthy — keep the current setting), or when speech does
+    not clear the floor by ``_VAD_MIN_GAP`` (no separation to anchor a gate)."""
+    if not quiet_vad or not speech_vad:
         return None
-    ambient = percentile(vad, 0.75)
+    ambient = percentile(quiet_vad, _VAD_FLOOR_Q)
     if ambient >= _VAD_AMBIENT_TRUST:
         return None
-    gap = max(vad) - ambient
-    if gap < 0.15:
+    speech = percentile(speech_vad, _VAD_SPEECH_Q)
+    gap = speech - ambient
+    if gap < _VAD_MIN_GAP:
         return None
     return round(max(0.0, min(_VAD_SUGGEST_CAP, ambient + gap * 0.3)), 2)
+
+
+def vad_diagnostics(quiet_vad: list[float], speech_vad: list[float]) -> str:
+    """One line explaining why ``suggest_vad`` did or didn't produce a value.
+
+    Mirrors ``suggest_vad``'s branches exactly (shares its constants), so a
+    "couldn't calibrate the VAD" outcome is never a silent mystery again
+    (2026-08-30): it reports both phases' distributions and the specific reason.
+    Both calibration entry points emit it — the dashboard/voice flow logs it
+    server-side, ``kenzy-node --calibrate`` prints it."""
+    nq, ns = len(quiet_vad), len(speech_vad)
+    if not quiet_vad or not speech_vad:
+        return (
+            f"quiet_n={nq} speech_n={ns} — no VAD samples in one phase "
+            "(VAD unavailable, or a phase captured no frames)"
+        )
+    ambient = percentile(quiet_vad, _VAD_FLOOR_Q)
+    speech = percentile(speech_vad, _VAD_SPEECH_Q)
+    gap = speech - ambient
+    stats = (
+        f"quiet_n={nq} quiet_p90={ambient:.3f} | speech_n={ns} "
+        f"speech_p50={percentile(speech_vad, 0.50):.3f} speech_p90={speech:.3f} "
+        f"speech_max={max(speech_vad):.3f} gap={gap:.3f}"
+    )
+    if ambient >= _VAD_AMBIENT_TRUST:
+        return f"{stats} — SKIP: voice-like quiet floor (quiet_p90>={_VAD_AMBIENT_TRUST}); kept"
+    if gap < _VAD_MIN_GAP:
+        return f"{stats} — SKIP: speech doesn't clear the floor (gap<{_VAD_MIN_GAP}); kept"
+    val = round(max(0.0, min(_VAD_SUGGEST_CAP, ambient + gap * 0.3)), 2)
+    return f"{stats} — OK: suggest wakeword_vad_threshold={val}"
 
 
 MIN_ECHO_FRAMES = 8  # fewer probe frames than this (after warm-up) ⇒ no AEC verdict

@@ -81,10 +81,36 @@ def test_calibration_suggestions():
     assert w is not None and 0.02 < w < 0.9
     assert _suggest_wake_threshold([0.01] * 50) is None  # no utterance heard → no guess
 
-    # VAD: same gap logic, clamped to [0, 0.9].
-    v = _suggest_vad_threshold([0.05] * 90 + [0.95] * 10)
+    # VAD: two-phase — quiet floor + wake-phase speech, gate placed between.
+    v = _suggest_vad_threshold([0.05] * 30, [0.05] * 50 + [0.95] * 40)
     assert v is not None and 0.0 <= v <= 0.9
-    assert _suggest_vad_threshold([0.0] * 30) is None
+    assert _suggest_vad_threshold([], [0.95] * 30) is None  # no quiet floor
+    assert _suggest_vad_threshold([0.05] * 30, []) is None  # no speech phase
+
+
+def test_vad_diagnostics_explains_every_outcome():
+    from kenzy.calibration import vad_diagnostics
+
+    # A phase with no samples — named, not a crash.
+    assert "no VAD samples" in vad_diagnostics([], [])
+    assert "no VAD samples" in vad_diagnostics([0.05] * 30, [])
+
+    # A clean quiet floor + real speech spikes: diagnostics agrees with the
+    # suggestion (both share the constants, so they can never disagree).
+    quiet = [0.05] * 30
+    speech = [0.05] * 50 + [0.95] * 40
+    d = vad_diagnostics(quiet, speech)
+    assert "OK: suggest" in d and str(_suggest_vad_threshold(quiet, speech)) in d
+
+    # Speech never cleared the quiet floor → the exact reason, not silence.
+    flat_speech = [0.05] * 100
+    assert _suggest_vad_threshold(quiet, flat_speech) is None
+    assert "gap<" in vad_diagnostics(quiet, flat_speech)
+
+    # The quiet floor itself is voice-like → the other skip reason.
+    voiced_floor = [0.7] * 30
+    assert _suggest_vad_threshold(voiced_floor, speech) is None
+    assert "voice-like" in vad_diagnostics(voiced_floor, speech)
 
 
 # ---------------------------------------------------------------------------
@@ -388,12 +414,22 @@ def test_suggest_silence_caps_under_agc_drift():
 def test_suggest_vad_distrusts_voicey_ambient_and_caps():
     from kenzy.calibration import suggest_vad
 
-    # M1A shape: AGC pumps room noise into the speech band, ambient VAD ~0.7 —
-    # the old math suggested 0.82 and suppressed genuinely quiet wakes.
-    assert suggest_vad([0.7] * 90 + [1.0] * 10) is None
-    # Just-trustworthy ambient: the suggestion exists but is capped at 0.6.
-    v = suggest_vad([0.45] * 90 + [0.95] * 10)
+    speech = [0.05] * 50 + [0.95] * 40
+    # M1A shape: AGC pumps room noise into the speech band, so the QUIET floor
+    # itself reads ~0.7 — untrustworthy, keep current rather than gate quiet wakes.
+    assert suggest_vad([0.7] * 30, speech) is None
+    # Just-trustworthy floor + a big gap: the suggestion exists but is capped at 0.6.
+    v = suggest_vad([0.45] * 30, [1.0] * 40)
     assert v is not None and v <= 0.6
-    # An ordinary quiet room is unchanged.
-    v2 = suggest_vad([0.05] * 90 + [0.95] * 10)
+    # An ordinary quiet room gives a sensible mid gate.
+    v2 = suggest_vad([0.05] * 30, speech)
     assert v2 is not None and 0.0 < v2 < 0.5
+
+    # Regression — the 2026-08-30 field bug. A real wake capture is ~half speech,
+    # so its own p75 lands in the speech band (here p75≈0.85, matching the live
+    # NUROUM run). The old single-phase estimator read that as a "voice-like
+    # floor" and refused EVERY honest calibration. Anchored on the quiet phase,
+    # it now succeeds — the gate near ~0.3, where pi-b's real 0.36 once sat.
+    half_speech = [0.24] * 72 + [0.9] * 79  # ~52% voiced, p75≈0.85
+    v3 = suggest_vad([0.05] * 60, half_speech)
+    assert v3 is not None and 0.2 < v3 < 0.45

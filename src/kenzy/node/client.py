@@ -233,6 +233,9 @@ from kenzy.calibration import (  # noqa: E402
 from kenzy.calibration import (  # noqa: E402
     suggest_wake as _suggest_wake_threshold,
 )
+from kenzy.calibration import (  # noqa: E402
+    vad_diagnostics as _vad_diagnostics,
+)
 
 
 def _set_yaml_scalar(text: str, key: str, value: str) -> str:
@@ -3990,9 +3993,10 @@ def run_calibration(cfg: dict[str, Any], node_id: str) -> None:
         from kenzy.calibration import MIN_SPEECH_FRAMES, quiet_phase_bursty, speech_gate
 
         rms1: list[float] = []
+        quiet_vad: list[float] = []
         for attempt in (1, 2):
             _countdown("Phase 1/2 — stay QUIET to measure the room's noise floor (5s).")
-            rms1, _, _ = _collect(5.0)
+            rms1, _, quiet_vad = _collect(5.0)
             if quiet_phase_bursty(rms1) and attempt == 1:
                 print("  heard a noise — restarting the quiet phase…")
                 continue
@@ -4017,7 +4021,7 @@ def run_calibration(cfg: dict[str, Any], node_id: str) -> None:
         sil = _suggest_silence_rms(rms1, speech)
         verdict = _separation_verdict(rms1, speech)
         wk = _suggest_wake_threshold(wake_all)
-        vd = _suggest_vad_threshold(vad_all)
+        vd = _suggest_vad_threshold(quiet_vad, vad_all)
     finally:
         try:
             stream.abort()
@@ -4038,6 +4042,12 @@ def run_calibration(cfg: dict[str, Any], node_id: str) -> None:
         print("  wakeword_threshold:     (no clear wake word heard — re-run and speak up)")
     if vd is not None:
         print(f"  wakeword_vad_threshold: {vd}   # needs a node restart to apply")
+    elif oww is not None:
+        print("  wakeword_vad_threshold: (kept — see VAD detail below)")
+    if oww is not None:
+        # Always explain the VAD outcome. A silent "kept" made this look broken
+        # (2026-08-30): now the distribution and the exact reason are visible.
+        print(f"  VAD detail: {_vad_diagnostics(quiet_vad, vad_all)}")
     if verdict is not None:
         print(f"\n  noise-to-speech separation: {verdict}")
         if verdict == "poor":

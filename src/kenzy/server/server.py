@@ -6142,6 +6142,9 @@ class TranscribingServer(AudioServer):
             sess["echo"].append(rms)
         elif phase == "quiet":
             sess["quiet"].append(rms)
+            # The quiet phase's VAD is the true non-speech floor for the gate —
+            # the wake phase is ~half speech and can't supply it (2026-08-30).
+            sess["quiet_vad"].append(float(sample.get("vad") or 0.0))
         elif phase == "wake":
             wake = float(sample.get("wake") or 0.0)
             sess["wake"].append(wake)
@@ -6183,6 +6186,7 @@ class TranscribingServer(AudioServer):
             return "enrollment in progress on this node"
         sess: dict[str, Any] = {
             "quiet": [],
+            "quiet_vad": [],
             "wake": [],
             "vad": [],
             "speech": [],
@@ -6465,7 +6469,15 @@ class TranscribingServer(AudioServer):
                 speech = sess["speech"] if enough else []
                 sil = calibration.suggest_silence(sess["quiet"], speech)
                 wk = calibration.suggest_wake(sess["wake"])
-                vd = calibration.suggest_vad(sess["vad"])
+                vd = calibration.suggest_vad(sess["quiet_vad"], sess["vad"])
+                # Always record WHY the VAD threshold was or wasn't suggested —
+                # a silent "kept current" is what made this look broken
+                # (2026-08-30). The distribution + reason land in the journal.
+                log.info(
+                    "[%s] VAD calibration: %s",
+                    node_id,
+                    calibration.vad_diagnostics(sess["quiet_vad"], sess["vad"]),
+                )
                 verdict = calibration.separation_verdict(sess["quiet"], speech)
                 if calibration.agc_suspected(sess["quiet"]):
                     # The floor moved during the quiet phase — device AGC. Say
