@@ -34,6 +34,7 @@ that fails the turn closed (the gate held every action; nothing ran).
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
@@ -59,6 +60,8 @@ EndReason = Literal["verbal", "silence", "walk_away", "hard_cap", "wake", "error
 #: here. Gated like any tool — but ending is always safe, so its rule admits
 #: any tier (the fail-closed direction is to END, not to keep the mic hot).
 END_CONVERSATION = "end_conversation"
+
+log = logging.getLogger(__name__)
 
 END_CONVERSATION_TOOL: dict[str, Any] = {
     "type": "function",
@@ -103,6 +106,10 @@ class WindowPolicy:
     #: Local engines may hold the session warm after the end for cheap re-wake;
     #: cloud closes immediately. Config, not architecture.
     linger_s: float = 30.0
+    #: The working->deferred promotion threshold (the async tool contract):
+    #: an inline tool still running after this long is adopted into the task
+    #: executor and the turn gets its hand-off string — one rung, never two.
+    working_promote_s: float = 20.0
 
 
 class ConversationSession:
@@ -215,7 +222,9 @@ class _EngineLike(Protocol):
 
     def events(self) -> AsyncIterator[EngineEvent]: ...
 
-    async def submit_tool_result(self, call_id: str, output: str) -> None: ...
+    async def submit_tool_result(
+        self, call_id: str, output: str, *, respond: bool = True
+    ) -> None: ...
 
     async def cancel(self) -> None: ...
 
@@ -230,6 +239,12 @@ class TurnResult:
     results_submitted: int
     session_ended: bool
     transcript: str = ""  # what the user said (the Activity record's spine)
+    #: Allowed verdicts actually RESOLVED (executor invoked, or the end tool).
+    #: Distinct from results_submitted — execution happens at resolve time,
+    #: submission only after response.done, so an errored turn can have acted
+    #: without submitting. The bridge's replay-classic guard reads THIS: a
+    #: replay is only safe when the turn provably did nothing.
+    actions_resolved: int = 0
 
 
 class TurnRunner:
@@ -261,12 +276,14 @@ class TurnRunner:
         self._detach = detach
         self._transcript_timeout_s = transcript_timeout_s
         self._transcript = ""
+        self._resolved = 0
 
     async def run(self) -> TurnResult:
         events = aiter(self._engine.events())
-        pending: list[tuple[str, str]] = []
+        pending: list[tuple[str, str, bool]] = []  # (call_id, output, is_detach_handoff)
         reply: list[str] = []
         submitted = 0
+        self._resolved = 0
         awaiting_late_transcript = False
         self._transcript = ""
 
@@ -307,40 +324,62 @@ class TurnRunner:
             elif isinstance(evt, ResponseDone):
                 if pending:
                     # Divergence 4: results submit only after response.done —
-                    # the submit opens a follow-on response; the turn continues.
+                    # the submit opens a follow-on response and the turn
+                    # continues. Every result (a detach hand-off included) gets
+                    # the follow-on so it's spoken about — a detached tool must
+                    # never start silently (founder ruling 2026-08-29). The
+                    # occasional "already acknowledged" double-say is prevented
+                    # by the hand-off wording ("if you already said it's
+                    # started, add nothing"), not by suppressing the response.
                     submitted += await self._flush(pending)
                 elif self._gate.cleared:
                     return self._result("ok", reply, submitted)
                 else:
                     awaiting_late_transcript = True
             elif isinstance(evt, EngineError):
+                # SAY WHY (the 5.0.4 rule): this status sends the capture to
+                # the classic fallback — without the engine's own message, a
+                # misconfigured cloud session reads as "streaming just doesn't
+                # work" (lived 2026-08-29: a tool-schema rejection was
+                # invisible for exactly this reason).
+                log.warning("s2s: engine error ends the turn — %s", evt.message)
                 return self._result("error", reply, submitted)
             # SessionReady / ResponseStarted: nothing for the runner to do.
 
     # -------------------------------------------------------------- internals
 
-    async def _resolve(self, verdict: ToolVerdict) -> tuple[str, str]:
+    async def _resolve(self, verdict: ToolVerdict) -> tuple[str, str, bool]:
         """Turn a gate verdict into the result string the model will hear.
 
         Denials are reported honestly (the model must not claim success);
         executor exceptions become results too — honest failure is a delivery.
+        The third element marks a DETACH hand-off (status, not information).
         """
         call = verdict.call
         if not verdict.allowed:
-            return (call.call_id, f"denied: {verdict.reason}")
+            return (call.call_id, f"denied: {verdict.reason}", False)
+        self._resolved += 1
         if call.name == END_CONVERSATION:
             self._session.end("verbal")
-            return (call.call_id, "conversation ended — you may speak one short farewell")
-        runner = self._detach if (verdict.detach and self._detach is not None) else self._execute
+            return (call.call_id, "conversation ended — you may speak one short farewell", False)
+        detached = verdict.detach and self._detach is not None
+        runner = self._detach if detached else self._execute
+        assert runner is not None
         try:
-            return (call.call_id, await runner(call))
+            return (call.call_id, await runner(call), detached)
         except Exception as exc:  # noqa: BLE001 — the model is told, never lied to
-            return (call.call_id, f"error: {exc}")
+            return (call.call_id, f"error: {exc}", False)
 
-    async def _flush(self, pending: list[tuple[str, str]]) -> int:
+    async def _flush(self, pending: list[tuple[str, str, bool]]) -> int:
+        """Submit held results and request one follow-on response to speak
+        about them. The follow-on is always requested (a detached tool must
+        not start silently); the response.create rides only the LAST result
+        so N results open exactly one response, not N."""
         count = len(pending)
-        for call_id, output in pending:
-            await self._engine.submit_tool_result(call_id, output)
+        if not count:
+            return 0
+        for i, (call_id, output, _is_detach) in enumerate(pending):
+            await self._engine.submit_tool_result(call_id, output, respond=i == count - 1)
         pending.clear()
         return count
 
@@ -351,6 +390,7 @@ class TurnRunner:
             results_submitted=submitted,
             session_ended=self._session.ended,
             transcript=self._transcript,
+            actions_resolved=self._resolved,
         )
 
 

@@ -132,10 +132,13 @@ class _FakeEngine:
             else:
                 return
 
-    async def submit_tool_result(self, call_id: str, output: str) -> None:
+    async def submit_tool_result(
+        self, call_id: str, output: str, *, respond: bool = True
+    ) -> None:
         self.submitted.append((call_id, output))
-        self.log.append(f"submit:{call_id}")
-        self._events.extend(self._on_submit)
+        self.log.append(f"submit:{call_id}" + ("" if respond else ":norespond"))
+        if respond:
+            self._events.extend(self._on_submit)
         self._on_submit = []
 
     async def cancel(self) -> None:

@@ -124,3 +124,85 @@ async def test_provider_generate_without_tools_omits_the_fields() -> None:
     sent = json.loads(seen[0].content)
     assert "tools" not in sent and "tool_choice" not in sent
     assert [m["role"] for m in sent["messages"]] == ["user"]  # no empty system message
+
+
+def test_chat_messages_flatten_realtime_message_items() -> None:
+    """A Realtime-shaped message item (the seam's add_context — identity and
+    other out-of-band context) flattens to an ordinary chat message, so ONE
+    client item shape serves our engine and OpenAI's alike."""
+    from kenzy.s2s.stages import GenRequest, _chat_messages
+
+    req = GenRequest(
+        "be brief",
+        [],
+        [
+            {"role": "user", "content": "hello"},
+            {
+                "type": "message",
+                "role": "system",
+                "content": [{"type": "input_text", "text": "The current speaker is Alex."}],
+            },
+            {"type": "message", "role": "system", "content": []},  # empty ⇒ dropped
+        ],
+    )
+    msgs = _chat_messages(req)
+    assert msgs[0] == {"role": "system", "content": "be brief"}
+    assert msgs[1] == {"role": "user", "content": "hello"}
+    assert msgs[2] == {"role": "system", "content": "The current speaker is Alex."}
+    assert len(msgs) == 3
+
+
+def test_chat_messages_normalize_call_output_adjacency() -> None:
+    """The live 2026-08-30 shape: speak-while-calling records the reply text
+    BETWEEN a function_call and its output. Chat completions requires the
+    pair adjacent — the translation reorders, and never ships half a pair."""
+    from kenzy.s2s.stages import GenRequest, _chat_messages
+
+    req = GenRequest(
+        "be kenzy",
+        [],
+        [
+            {"role": "user", "content": "search the web"},
+            {"type": "function_call", "call_id": "c1", "name": "web_search",
+             "arguments": "{}"},
+            {"role": "assistant", "content": "I'll look that up now."},
+            {"type": "function_call_output", "call_id": "c1", "output": "Started."},
+            {"type": "function_call", "call_id": "c-inflight", "name": "x",
+             "arguments": "{}"},  # no output yet: must not ship
+        ],
+    )
+    msgs = _chat_messages(req)
+    roles = [(m["role"], bool(m.get("tool_calls"))) for m in msgs]
+    assert roles == [
+        ("system", False),
+        ("user", False),
+        ("assistant", True),   # the call...
+        ("tool", False),       # ...immediately followed by its output
+        ("assistant", False),  # the spoken acknowledgment, displaced after
+    ]
+    assert msgs[3]["tool_call_id"] == "c1"
+    assert all("c-inflight" not in str(m) for m in msgs)
+
+
+async def test_provider_generate_terminates_on_finish_reason_without_done(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A stream that sends finish_reason but NO "[DONE]" sentinel (measured
+    live 2026-08-29: gpt-5.1 keeps the connection open) must still terminate —
+    or aiter_lines blocks until the read timeout, a deterministic stall that
+    errored every task delivery turn."""
+    from kenzy.s2s.stages import ProviderConfig, provider_generate
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    # Deliberately NO "data: [DONE]" line — just content then finish_reason.
+    body = (
+        b'data: {"choices": [{"delta": {"content": "Here are the results."}}]}\n'
+        b'data: {"choices": [{"delta": {}, "finish_reason": "stop"}]}\n'
+    )
+    seen: list[httpx.Request] = []
+    transport = _capture(httpx.Response(200, content=body), seen)
+    gen = provider_generate(ProviderConfig(model="gpt-5.1"), transport=transport)
+
+    events = [e async for e in gen(GenRequest("be brief", [], []))]
+    # It terminated (didn't hang) and yielded the content.
+    assert any(isinstance(e, GenText) and "results" in e.text for e in events)

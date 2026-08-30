@@ -46,6 +46,7 @@ from websockets.datastructures import Headers
 from websockets.http11 import Request, Response
 
 from kenzy import calibration, kenzy_version, protocol, redact, serviceauth, tlsutil
+from kenzy import sentences as sentences_mod
 from kenzy.config import SERVICES
 from kenzy.server import occupancy as occupancy_mod
 from kenzy.server.people import (
@@ -420,6 +421,13 @@ _SERVER_EDITABLE: dict[str, str] = {
     "s2s.enabled": "bool",
     "s2s.url": "str",
     "s2s.hard_cap_s": "num",
+    # Which engine sits behind the seam: "kenzy" (local, the default) or
+    # "openai-realtime" (cloud opt-in — the docs carry its audio-egress
+    # caveat). s2s.model rides the connection's ?model= query; empty = the
+    # profile's own default. ("profile"/"model" chosen to clear the
+    # secret-name filter — the 5.0.4 trap.)
+    "s2s.profile": "str",
+    "s2s.model": "str",
     "discovery.enabled": "bool",
     "discovery.instance": "str",
     # Home Assistant / MQTT integration (no secrets — broker creds are env-only).
@@ -438,6 +446,10 @@ _SERVER_EDITABLE: dict[str, str] = {
     "proactive.rate_window": "num",
     "proactive.safety.enabled": "bool",
     "proactive.safety.repeat_after": "num",
+    # Task-result announcements (the async tool contract) — the first
+    # NON-EXEMPT proactive category: quiet hours, DND rooms, and the rate
+    # limit all apply to it. Off = results wait for your next conversation.
+    "proactive.tasks.enabled": "bool",
     # v5 occupancy spine. Default ON: 5.0 is watch-only (nothing speaks, no
     # delivery changes), so the risk of leaving it on is nil and the soak only
     # gathers data if it is actually running — the 4.4 streaming lesson, where
@@ -636,24 +648,11 @@ class LlmReply:
     ask_busy_cues: bool = True
 
 
-# Sentence boundary for the 4.4 streaming aggregator: terminator (+ closing
-# quotes/brackets) followed by whitespace. Decimals ("93.5") never match — no
-# whitespace after the dot.
-_SENT_END_RE = re.compile(r"[.!?…]+[\"'”’)\]]*\s+")
-
-
-def _split_sentences(buf: str) -> tuple[list[str], str]:
-    """Split complete raw sentence slices off the front of ``buf``.
-
-    Slices keep their trailing whitespace so ``"".join(slices) + remainder ==
-    buf`` EXACTLY — the spoken-prefix bookkeeping relies on byte equality with
-    the authoritative end-event text."""
-    out: list[str] = []
-    start = 0
-    for m in _SENT_END_RE.finditer(buf):
-        out.append(buf[start : m.end()])
-        start = m.end()
-    return out, buf[start:]
+# Sentence boundary — moved to kenzy.sentences (shared with the s2s engine's
+# sentence-streamed synthesis; one splitter so the paths can't disagree).
+# Local aliases keep this module's references and existing test imports.
+_SENT_END_RE = sentences_mod.SENT_END_RE
+_split_sentences = sentences_mod.split_sentences
 
 
 class _StreamSpeech:
@@ -2746,10 +2745,24 @@ class AudioServer:
             # CUE's completion from ending the engagement while the reply is
             # still queued/playing: replies ride the capture's session id, cues
             # get fresh ones.
+            done_sid = str(msg.get("session_id") or "")
+            bridge = getattr(self, "_s2s_bridge", None)
+            if bridge is not None:
+                # The follow-up bridge's audible-idle anchor: a task delivery
+                # waits for this before speaking (audio sent mid-playback is
+                # discarded by the node's player). Guard on the session id the
+                # SAME way the engagement code below does — the s2s reply rides
+                # `_s2s_sid[node_id]`, while a cue/timer/announce plays under a
+                # fresh sid; without this guard a cue completing mid-reply
+                # would release the anchor early and the delivery would speak
+                # over the still-playing reply (the 2026-08-29 "logged ok,
+                # never heard" symptom, through the unguarded path).
+                reply_sid = getattr(self, "_s2s_sid", {}).get(session.node_id, "")
+                if not reply_sid or not done_sid or done_sid == reply_sid:
+                    bridge.on_tts_done(session.node_id)
             group = self._node_audio_group(session.node_id)
             if group is not None:
                 eng = self._engagements.get(group)
-                done_sid = str(msg.get("session_id") or "")
                 if (
                     eng is not None
                     and eng.owner == session.node_id
@@ -3503,13 +3516,20 @@ class TranscribingServer(AudioServer):
         self._s2s_enabled: bool = bool(s2s_cfg.get("enabled", False))
         self._s2s_url: str = str(s2s_cfg.get("url", "") or "")
         self._s2s_hard_cap_s: float = float(s2s_cfg.get("hard_cap_s", 900.0))
+        # Which engine sits behind the seam ("kenzy" default, "openai-realtime"
+        # the cloud opt-in) and an optional ?model= override for it.
+        self._s2s_profile_name: str = str(s2s_cfg.get("profile", "") or "kenzy")
+        self._s2s_model: str = str(s2s_cfg.get("model", "") or "")
         self._s2s_bridge: Any | None = None  # built lazily on first eligible capture
         self._s2s_sid: dict[str, str] = {}  # node -> current capture session id
         self._s2s_person: dict[str, str] = {}  # display name -> person id (tool context)
         if self._s2s_enabled:
             log.info(
-                "Follow-up mode ENABLED (s2s.enabled) — engine: %s",
-                self._s2s_url or "auto (service registry)",
+                "Follow-up mode ENABLED (s2s.enabled) — profile: %s, engine: %s",
+                self._s2s_profile_name,
+                self._s2s_url or ("auto (service registry)"
+                                  if self._s2s_profile_name == "kenzy"
+                                  else "profile default"),
             )
 
         # Remember which service URLs came from static config; auto-registration
@@ -3521,6 +3541,7 @@ class TranscribingServer(AudioServer):
                 ("tts", self._tts_url),
                 ("llm", self._llm_url),
                 ("speaker", self._speaker_url),
+                ("s2s", self._s2s_url),
             )
             if url
         }
@@ -3790,6 +3811,42 @@ class TranscribingServer(AudioServer):
             log.error("Could not persist proactive setting: %s", exc)
             return False
 
+    def set_s2s_enabled(self, enabled: bool) -> bool:
+        """The spoken follow-up-mode switch (v6.0). Applies live AND persists —
+        the set_proactive_enabled pattern: a feature switched off by voice
+        must not come back after an upgrade or power cut, and the dashboard
+        shows the state so off-and-visible never becomes off-and-silent.
+
+        Live means the NEXT wake: the bridge reads the flag per capture, so
+        an in-flight conversation finishes normally rather than being cut
+        mid-reply. Returns False when the change could not be persisted.
+        """
+        self._s2s_enabled = bool(enabled)
+        log.info("Follow-up mode %s by voice", "enabled" if enabled else "DISABLED")
+        if self._config_path is None:
+            log.warning("Follow-up change not persisted — server config path unknown")
+            return False
+        try:
+            import yaml
+
+            path = _server_override_path(self._config_path)
+            data: dict[str, Any] = {}
+            if path.is_file():
+                loaded = yaml.safe_load(path.read_text()) or {}
+                if isinstance(loaded, dict):
+                    data = loaded
+            block = data.get("s2s")
+            if not isinstance(block, dict):
+                block = {}
+            block["enabled"] = bool(enabled)
+            data["s2s"] = block
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(yaml.safe_dump(data, sort_keys=False))
+            return True
+        except Exception as exc:
+            log.error("Could not persist follow-up setting: %s", exc)
+            return False
+
     async def test_proactive_alert(self) -> dict[str, Any]:
         """Fire a synthetic hazard through the REAL path, for verification.
 
@@ -3991,6 +4048,10 @@ class TranscribingServer(AudioServer):
                     classic=self._transcribe,
                     instructions=self._s2s_instructions,
                     audit=self._s2s_audit,
+                    detach=self._s2s_detach_tool,
+                    pickup=self._task_pickup,
+                    pickup_delivered=self._task_delivered,
+                    playback_signal=self._s2s_playback_signal,
                     policy=WindowPolicy(hard_cap_s=self._s2s_hard_cap_s),
                 )
             )
@@ -4004,6 +4065,15 @@ class TranscribingServer(AudioServer):
         both a hand-configured ws:// and a registered https:// resolve.
         """
         url = self._s2s_url
+        profile = self._s2s_profile()
+        if profile.name != "kenzy-s2s" and "s2s" not in self._static_services:
+            # A remote profile carries its own endpoint. Only an EXPLICITLY
+            # CONFIGURED s2s.url may override it — a registry-filled _s2s_url
+            # is just a co-running local engine announcing itself, and it must
+            # not hijack a cloud selection (lived 2026-08-29: the dev stack's
+            # kenzy-s2s captured the route and the "cloud" conversation ran
+            # locally, in the wrong voice, with no diagnostic).
+            url = profile.url
         if not url:
             announced = self._announced_services.get("s2s")
             base = str((announced or {}).get("base") or "")
@@ -4012,22 +4082,62 @@ class TranscribingServer(AudioServer):
             url = base.rstrip("/") + "/v1/realtime"
         return url.replace("https://", "wss://", 1).replace("http://", "ws://", 1)
 
+    def _s2s_profile(self) -> Any:
+        """Resolve `s2s.profile` to an EngineProfile. Unknown names warn ONCE
+        and fall back to the local engine — loud enough to diagnose, without
+        a per-capture log flood."""
+        from kenzy.s2s.profiles import KENZY_S2S, PROFILES
+
+        prof = PROFILES.get(self._s2s_profile_name)
+        if prof is None:
+            if not getattr(self, "_s2s_profile_warned", False):
+                self._s2s_profile_warned = True
+                log.warning(
+                    "Unknown s2s.profile %r (known: %s) — using the local kenzy engine",
+                    self._s2s_profile_name,
+                    ", ".join(sorted(PROFILES)),
+                )
+            return KENZY_S2S
+        return prof
+
     async def _s2s_engine_factory(self, url: str) -> Any:
         from kenzy.s2s.engine import EngineClient
-        from kenzy.s2s.profiles import KENZY_S2S
 
-        client = EngineClient(KENZY_S2S, url=url)
+        profile = self._s2s_profile()
+        api_key = ""
+        if profile.auth == "bearer":
+            # The endpoint-kwargs seam rule: OPENAI_API_KEY goes only to
+            # OpenAI's own host; any other bearer endpoint gets the custom
+            # credential, never the OpenAI key. Match the HOSTNAME exactly, not
+            # a substring — a hostile or careless URL with "api.openai.com" in
+            # a PATH (wss://relay.example/api.openai.com/v1) must NOT be handed
+            # the OpenAI key.
+            from urllib.parse import urlparse
+
+            target = url or profile.url
+            host = urlparse(target).hostname or ""
+            env = "OPENAI_API_KEY" if host == "api.openai.com" else "CUSTOM_LLM_API_KEY"
+            api_key = os.environ.get(env, "")
+            if not api_key:
+                log.warning("s2s profile %s needs %s and it is not set", profile.name, env)
+        model = self._s2s_model
+        if not model and profile.name == "openai-realtime":
+            model = "gpt-realtime"
+        client = EngineClient(profile, url=url, api_key=api_key, model=model)
         await client.connect()
         return client
 
     def _s2s_llm_base(self) -> str | None:
         return self._llm_url.rsplit("/", 1)[0] if self._llm_url else None
 
-    async def _s2s_fetch_tools(self, tier: str) -> tuple[list[dict[str, Any]], dict[str, str]]:
-        """The llm service's skill-host door: schemas + the tier policy."""
+    async def _s2s_fetch_tools(
+        self, tier: str
+    ) -> tuple[list[dict[str, Any]], dict[str, str], dict[str, str]]:
+        """The llm service's skill-host door: schemas, tier policy, and the
+        per-tool pace class (the async contract — deferred tools detach)."""
         base = self._s2s_llm_base()
         if not base:
-            return [], {}
+            return [], {}, {}
         import httpx
 
         url = f"{base}/tools"
@@ -4040,7 +4150,11 @@ class TranscribingServer(AudioServer):
             )
             resp.raise_for_status()
         data = resp.json()
-        return list(data.get("tools") or []), dict(data.get("policy") or {})
+        return (
+            list(data.get("tools") or []),
+            dict(data.get("policy") or {}),
+            dict(data.get("pace") or {}),
+        )
 
     async def _s2s_identify(self, pcm: bytes, room: str) -> tuple[Any, float]:
         """Speaker-ID one capture and feed occupancy — the classic path's
@@ -4064,6 +4178,158 @@ class TranscribingServer(AudioServer):
             self._s2s_person[identity.display] = identity.person_id or ""
             return GateSpeaker(identity.display, identity.tier), float(identity.confidence)
         return GateSpeaker("", "unknown"), float(identity.confidence)
+
+    # ---------------------------------------------- background tasks (v6.0)
+
+    def _tasks(self) -> Any:
+        """The task executor (lazy) — the async tool contract's engine room.
+        Ledger at data/tasks.json in the config home, beside the schedules."""
+        if getattr(self, "_task_executor", None) is None:
+            from kenzy.config import kenzy_data_root
+            from kenzy.s2s.ledger import TaskLedger
+            from kenzy.server.tasks import TaskExecutor
+
+            ledger = TaskLedger(kenzy_data_root() / "data" / "tasks.json")
+            self._task_executor = TaskExecutor(ledger, self._deliver_task_result)
+        return self._task_executor
+
+    async def _s2s_detach_tool(
+        self, call: Any, node_id: str, room: str, speaker: Any, work: Any | None
+    ) -> str:
+        """BridgeDeps.detach: hand a tool call to the executor — fresh (a
+        deferred-class verdict) or already running (the working->deferred
+        promotion). Returns the in-progress hand-off the model hears."""
+        from kenzy.server.tasks import handoff_text
+
+        title = str(call.name).replace("_", " ")
+        owner = str(getattr(speaker, "name", "") or "")
+        if work is None:
+            work = self._s2s_execute_tool(call, node_id, room, speaker)
+        task = self._tasks().start(
+            owner=owner, title=title, origin_room=room, origin_node=node_id, work=work
+        )
+        log.info("[%s] tool %s detached as task %s", node_id, call.name, task.id)
+        return handoff_text(title)
+
+    async def _deliver_task_result(self, task: Any) -> bool:
+        """Speak a finished task's result: into the live conversation (a
+        delivery turn) when one is open on the origin node; otherwise through
+        the proactive gate's `tasks` category (the first NON-EXEMPT category —
+        quiet hours, DND, and the rate limit are real here). Denied is never
+        dropped: False leaves it for the next-conversation pickup."""
+        from kenzy.server.tasks import ANNOUNCE_WINDOW_S, completion_text
+
+        text = completion_text(task)
+        # The announce window (founder, 2026-08-29): only a completion that
+        # lands while the asker is still visibly waiting may speak
+        # unprompted. Older results demote — staged to ride the next
+        # exchange in a live conversation, or parked for pickup — never an
+        # interruption, never dropped.
+        fresh = (time.time() - task.created_at) <= ANNOUNCE_WINDOW_S
+        bridge = self._s2s_bridge
+        if bridge is not None and task.origin_session and bridge.active(task.origin_session):
+            try:
+                if fresh:
+                    # A delivery turn PLAYS the result — delivered only when
+                    # actually heard (deliver_completion returns that).
+                    if await bridge.deliver_completion(task.origin_session, text):
+                        return True
+                elif await bridge.stage_completion(task.origin_session, text):
+                    # Staging is a best-effort nicety (rides the model's next
+                    # reply), NOT a confirmed delivery: it stays PENDING so the
+                    # durable pickup path still surfaces it if the conversation
+                    # ends before the model mentions it (never dropped).
+                    log.info(
+                        "Task %s finished late (%.0fs) — staged to ride the next reply "
+                        "(stays pending until confirmed)",
+                        task.id,
+                        time.time() - task.created_at,
+                    )
+            except Exception:  # noqa: BLE001 — fall through to the gate path
+                log.exception("Task %s: delivery turn failed", task.id)
+        gate = self._proactive
+        if gate is not None and fresh and task.origin_room:
+            from kenzy.server.proactive import TASKS
+
+            decision = gate.evaluate(TASKS, f"task:{task.id}", (task.origin_room,))
+            if decision.allowed:
+                targets = [
+                    nid
+                    for nid, s in self._nodes.items()
+                    if s.room_id.lower() == task.origin_room.lower()
+                ]
+                if targets:
+                    # Delivered means HEARD: announce() returns 0 when TTS is
+                    # down (no PCM), so only commit + mark delivered when it
+                    # actually spoke; else leave it pending for pickup.
+                    spoken = await self.announce(text, targets)
+                    if spoken:
+                        gate.commit(f"task:{task.id}")
+                        log.info("Task %s result announced in %s", task.id, task.origin_room)
+                        return True
+                    log.warning(
+                        "Task %s announce reached 0 nodes (TTS down?) — stays pending", task.id
+                    )
+            else:
+                log.info(
+                    "Task %s delivery withheld (%s) — waits for %s's next conversation",
+                    task.id,
+                    decision.reason,
+                    task.owner or "?",
+                )
+        return False
+
+    def _s2s_playback_signal(self, node_id: str) -> bool:
+        """Does this node report playback completion (tts_done)? Gates the
+        delivery turn's audible-idle wait."""
+        node = self._nodes.get(node_id)
+        return node is not None and _supports_tts_done(node.kenzy_version)
+
+    def _task_pickup(self, owner: str) -> list[tuple[str, str]]:
+        """BridgeDeps.pickup: undelivered results for this owner as
+        (task_id, line) pairs. Does NOT mark delivered — the bridge confirms
+        each via _task_delivered only after it injects, so a mid-pickup engine
+        failure can't lose the rest."""
+        if not owner:
+            return []
+        from kenzy.server.tasks import completion_text
+
+        return [(t.id, completion_text(t)) for t in self._tasks().pending_for(owner)[:3]]
+
+    def _task_delivered(self, task_id: str) -> None:
+        """BridgeDeps.pickup_delivered: one picked-up result reached the model."""
+        self._tasks().mark_delivered(task_id)
+
+    def _task_context(self, identity: Any) -> dict[str, Any]:
+        """Background-task context for the CLASSIC /process request of a
+        recognized speaker: finished-but-undelivered results (owner-private),
+        and in-flight task titles so "how's that going?" is answerable. Empty
+        for unknown-tier or no tasks — the common case, so it stays cheap."""
+        if getattr(self, "_task_executor", None) is None:
+            return {}
+        owner = str(getattr(identity, "display", "") or "")
+        tier = str(getattr(identity, "tier", "") or "")
+        if not owner or tier == "unknown":
+            return {}
+        from kenzy.server.tasks import completion_text
+
+        ex = self._tasks()
+        pending = [{"id": t.id, "line": completion_text(t)} for t in ex.pending_for(owner)[:3]]
+        running = [t.title for t in ex.for_owner(owner) if t.state == "running"][:5]
+        if not pending and not running:
+            return {}
+        return {"pending": pending, "running": running}
+
+    def _confirm_task_updates(self, payload: dict[str, Any]) -> None:
+        """Mark the results injected into a classic request delivered — called
+        ONLY after a successful reply, so a failed POST leaves them pending
+        (never marked-before-heard). Marks exactly the ids injected (carried
+        in the payload), so a task that completed mid-call can't be caught."""
+        updates = payload.get("task_updates") or {}
+        for item in updates.get("pending", []) or []:
+            tid = str(item.get("id") or "")
+            if tid:
+                self._tasks().mark_delivered(tid)
 
     async def _s2s_execute_tool(
         self, call: Any, node_id: str, room: str, speaker: Any
@@ -5163,6 +5429,14 @@ class TranscribingServer(AudioServer):
             # nothing reads it until 5.0.1, and when a skill does it must
             # tier-gate ("who's home" is household information, like presence).
             "occupancy": self._occupancy_payload(),
+            # Background-task pickup on the CLASSIC pipeline (the parallel to
+            # the s2s bridge's context injection): a recognized speaker's
+            # finished results that had no live conversation to land in ride
+            # here so the model mentions them, and their in-flight tasks so
+            # "how's that going?" can be answered. Marked delivered by the
+            # caller only after a successful reply (_confirm_task_updates) —
+            # never dropped, never marked-before-heard.
+            "task_updates": self._task_context(identity),
             # Which front door (F3): node-bound skills refuse on nodeless channels.
             "channel": channel,
             # Lockbox spoken-recall gate (founder decision 2026-07-18): a secret
@@ -5222,6 +5496,9 @@ class TranscribingServer(AudioServer):
             )
             resp.raise_for_status()
             data = resp.json()
+        # Injected task results reached the model: mark them delivered (only
+        # after the successful reply — a failed POST leaves them pending).
+        self._confirm_task_updates(payload)
         return _llm_reply_from(data)
 
     async def _call_llm_stream(
@@ -5360,6 +5637,9 @@ class TranscribingServer(AudioServer):
                 reply = LlmReply(text=speech.spoken, voice_prompt=speech.voice_prompt)
             else:
                 raise RuntimeError("llm stream ended without a reply")
+        # Injected task results reached the model (a reply was produced): mark
+        # them delivered — the streaming path's parallel to the buffered call.
+        self._confirm_task_updates(payload)
         return reply, speech
 
     async def _dispatch_actions(
@@ -5439,6 +5719,41 @@ class TranscribingServer(AudioServer):
                 # The spoken off-switch. Not node-bound: it is a house-wide
                 # setting, so it works from any room and on the assist channel.
                 self.set_proactive_enabled(bool(action.get("enabled", True)))
+            elif atype == "task_detach":
+                # A deferred-class tool on the classic pipeline: the llm host
+                # already returned the hand-off string to the model; actions
+                # are the llm->server channel, so the real run starts here —
+                # same executor, same ledger, same delivery as the v6 path.
+                name = str(action.get("name", ""))
+                if name:
+                    from kenzy.s2s.engine import ToolCall as _DetachCall
+                    from kenzy.s2s.gate import Speaker as _DetachSpeaker
+
+                    owner = str(action.get("owner", "") or "")
+                    call = _DetachCall(
+                        call_id=f"detach-{name}",
+                        name=name,
+                        arguments_json=json.dumps(action.get("arguments") or {}),
+                    )
+                    # Carry the REAL tier the llm resolved — never fabricate
+                    # "recognized" from the presence of a name (F1.3: a name is
+                    # not a voiceprint). The llm already enforced the gate
+                    # before queuing this; the tier rides through so the /tool
+                    # door's defense-in-depth check sees the truth.
+                    tier = str(action.get("speaker_tier") or "unknown")
+                    spk = _DetachSpeaker(owner, tier)
+                    self._tasks().start(
+                        owner=owner,
+                        title=name.replace("_", " "),
+                        origin_room=source_room,
+                        origin_node=source_node_id,
+                        work=self._s2s_execute_tool(call, source_node_id, source_room, spk),
+                    )
+            elif atype == "set_s2s":
+                # Follow-up mode by voice (v6.0). House-wide like set_proactive;
+                # applies from the next wake so an in-flight conversation
+                # finishes normally.
+                self.set_s2s_enabled(bool(action.get("enabled", True)))
             elif atype == "set_volume":
                 # Volume/mute change targeting the asking node (room context the
                 # server already holds — no room resolution needed).

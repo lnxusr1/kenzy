@@ -275,3 +275,70 @@ async def test_cancel_never_kills_the_transcript() -> None:
     assert transcript_at < done_at  # the record landed first
     done = next(e for e in pipe.sent if e["type"] == "response.done")
     assert done["response"]["status"] == "cancelled"
+
+
+async def test_synthesis_streams_per_sentence_while_generation_runs() -> None:
+    """Sentence-streamed synthesis: the first sentence's AUDIO is emitted
+    before the provider has finished the reply — time-to-first-audio is one
+    sentence, not the whole text. Engine-internal plumbing (decision 8 guard
+    b): same delta events on the wire, just sooner."""
+    pipe = _Pipe()
+    gate = asyncio.Event()
+
+    async def generate(_req: GenRequest) -> AsyncIterator[GenEventT]:
+        yield GenText("One done. ")
+        await gate.wait()  # the provider is mid-generation...
+        yield GenText("Two done.")
+
+    task = _rig(pipe, generate)
+    pipe.push({"type": "input_audio_buffer.append", "audio": _b64(b"\x00\x00")})
+    pipe.push({"type": "input_audio_buffer.commit"})
+    pipe.push({"type": "response.create"})
+
+    # Sentence one's audio arrives while the provider is still parked.
+    await pipe.wait_for("response.audio.delta")
+    assert not gate.is_set()
+    types_before = pipe.types()
+    assert types_before.index("response.audio.delta") < len(types_before)
+
+    gate.set()
+    await pipe.wait_for("response.done")
+    # The tail ("Two done." — no trailing space, never a "complete" sentence)
+    # is spoken after generation ends: one audio delta per segment here.
+    assert pipe.types().count("response.audio.delta") == 2
+    # And the transcript deltas still carry the full text in order.
+    text = "".join(
+        e["delta"] for e in pipe.sent if e["type"] == "response.output_audio_transcript.delta"
+    )
+    assert text == "One done. Two done."
+    pipe.close()
+    await task
+
+
+async def test_spoken_text_is_recorded_in_history_on_cancel() -> None:
+    """A barge cancels a sentence-streamed reply mid-stream. Whatever was
+    already SPOKEN (emitted to the node) must be recorded in history, or the
+    next turn's model has no record it spoke and re-answers/contradicts."""
+    gate = asyncio.Event()
+
+    async def generate(_req: GenRequest) -> AsyncIterator[GenEventT]:
+        yield GenText("The garage is open. ")  # a complete sentence — spoken
+        await gate.wait()  # parked; the cancel lands here
+        yield GenText("I'll close it.")
+
+    async def synthesize(_text: str, voice: str) -> AsyncIterator[bytes]:
+        yield b"\x01"
+
+    session = RealtimeSession(
+        _p := _Pipe(), transcribe=_transcribe, generate=generate, synthesize=synthesize
+    )
+    task = asyncio.get_running_loop().create_task(session.run())
+    _p.push({"type": "response.create"})
+    await _p.wait_for("response.audio.delta")  # sentence one was synthesized + spoken
+    _p.push({"type": "response.cancel"})
+    await _p.wait_for("response.done")
+    _p.close()
+    await task
+
+    assistant = [h for h in session._history if h.get("role") == "assistant"]
+    assert assistant and "garage is open" in assistant[-1]["content"]

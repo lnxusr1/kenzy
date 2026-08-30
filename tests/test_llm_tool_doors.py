@@ -40,3 +40,22 @@ async def test_tool_door_refuses_below_tier_as_defense_in_depth() -> None:
     data = await execute_tool(ToolExecBody(name="_door_probe", speaker_tier="unknown"))
     assert "Refused" in data["result"]  # the registry's own guard, behind the gate's
     assert data["actions"] == []
+
+
+@sk.skill(min_tier="recognized", pace="deferred")
+async def _deferred_gated_probe(spec: str = "") -> str:
+    """A deferred, tier-gated probe — for the withholding test."""
+    return f"built:{spec}"
+
+
+async def test_a_deferred_gated_skill_is_withheld_below_tier() -> None:
+    """The tier-gate fix's first layer: a deferred min_tier skill is withheld
+    from get_tools() at unknown tier, so the model never sees it — and its
+    pace hint never leaks it either."""
+    hidden = await list_tools(tier="unknown")
+    shown = await list_tools(tier="recognized")
+    names = lambda d: {t["function"]["name"] for t in d["tools"]}  # noqa: E731
+    assert "_deferred_gated_probe" not in names(hidden)
+    assert "_deferred_gated_probe" in names(shown)
+    # pace is served for the ones that ARE visible
+    assert shown["pace"]["_deferred_gated_probe"] == "deferred"

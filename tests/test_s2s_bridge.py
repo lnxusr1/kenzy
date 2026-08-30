@@ -59,9 +59,18 @@ class _FakeEngine:
     async def cancel(self) -> None:
         self.log.append("cancel")
 
-    async def submit_tool_result(self, call_id: str, output: str) -> None:
-        self.log.append(f"submit:{call_id}")
-        self.script.append(ResponseDone("done", 0, 0))
+    async def submit_tool_result(
+        self, call_id: str, output: str, *, respond: bool = True
+    ) -> None:
+        self.log.append(f"submit:{call_id}" + ("" if respond else ":norespond"))
+        if respond:
+            self.script.append(ResponseDone("done", 0, 0))
+
+    async def add_context(self, text: str) -> None:
+        self.log.append(f"context:{text}")
+
+    async def respond(self) -> None:
+        self.log.append("respond")
 
     async def aclose(self) -> None:
         self.closed = True
@@ -77,6 +86,12 @@ class _Rig:
         self.url = url
         self.open_fails = open_fails
         self.speaker = speaker if speaker is not None else Speaker("Alex", "recognized")
+        self.pace: dict[str, str] = {"set_light": "instant"}
+        self.detached: list[tuple[str, bool]] = []  # (tool name, had running work)
+        self.pickup_lines: list[str] = []
+        self.pickup_delivered_ids: list[str] = []
+        self.exec_gate: asyncio.Event | None = None  # set = execute_tool blocks on it
+        self.playback_signal = False  # node reports tts_done (>=5.1.3)
         self.engines: list[_FakeEngine] = []
         self.classic: list[tuple[str, str, str | None, int]] = []
         self.frames: list[bytes] = []
@@ -96,18 +111,38 @@ class _Rig:
             self.engines.append(engine)
             return engine
 
-        async def fetch_tools(_tier: str) -> tuple[list[dict[str, Any]], dict[str, str]]:
+        async def fetch_tools(
+            _tier: str,
+        ) -> tuple[list[dict[str, Any]], dict[str, str], dict[str, str]]:
             return (
                 [{"type": "function", "name": "set_light", "parameters": {}}],
                 {"set_light": "recognized"},
+                dict(self.pace),
             )
 
         async def identify(_pcm: bytes, _room: str) -> tuple[Speaker, float]:
             return self.speaker, 0.9
 
         async def execute_tool(call: ToolCall, _n: str, _r: str, _s: Speaker) -> str:
+            if self.exec_gate is not None:
+                await self.exec_gate.wait()
             self.executed.append(call.name)
             return "done"
+
+        async def detach(
+            call: ToolCall, _n: str, _r: str, _s: Speaker, work: asyncio.Task[str] | None
+        ) -> str:
+            self.detached.append((call.name, work is not None))
+            if work is not None:
+                work.cancel()
+            return f"Started in the background: {call.name}."
+
+        def pickup(owner: str) -> list[tuple[str, str]]:
+            lines, self.pickup_lines = list(self.pickup_lines), []
+            return [(f"t{i}", ln) for i, ln in enumerate(lines)]
+
+        def pickup_delivered(task_id: str) -> None:
+            self.pickup_delivered_ids.append(task_id)
 
         async def deliver_start(_n: str) -> None:
             self.starts += 1
@@ -150,6 +185,10 @@ class _Rig:
             classic=classic,
             instructions=lambda room: f"be kenzy in the {room}",
             audit=lambda _r: None,
+            detach=detach,
+            pickup=pickup,
+            pickup_delivered=pickup_delivered,
+            playback_signal=lambda _n: self.playback_signal,
             policy=policy or WindowPolicy(),
         ))
 
@@ -281,8 +320,15 @@ async def test_barge_in_cancels_in_engine_and_skips_the_rearm() -> None:
     await _settle()  # the reply now hangs mid-generation (script drained)
     await rig.bridge.on_capture_start(NODE)  # the user spoke over the reply
     assert "cancel" in engine.log
+    # The engine's buffered tail arrives AFTER the cancel (measured live on
+    # the cloud engine: seconds of speech land instantly post-cancel). The
+    # runner consumes it so the socket stays clean — but none of it may
+    # reach the room the user just interrupted.
+    frames_at_barge = list(rig.frames)
+    engine.script.append(AudioDelta(b"\x99"))
     engine.script.append(ResponseDone("cancelled", 0, 0))
     await task
+    assert rig.frames == frames_at_barge  # stale tail never delivered
     assert rig.holds == 0  # the new capture owns the floor — no re-arm over it
     assert rig.bridge.active(NODE)  # the conversation (and history) survives
 
@@ -337,3 +383,260 @@ async def test_group_claim_closes_the_old_owners_conversation() -> None:
     await task  # the dying turn drains without re-arming
     assert rig.holds == 0  # the floor was never re-opened over the sibling
     assert rig.floor_ends >= 1  # and the node's dialog surface was cleared
+
+
+async def test_identity_answer_is_fed_to_the_model_once() -> None:
+    """OQ3 slice 1: the resolved speaker lands as session context (so the
+    model can address people and shape actions), injected on CHANGE only —
+    a second turn by the same speaker adds no duplicate item."""
+    rig = _Rig()
+    for sid in ("sid1", "sid2"):
+        task = asyncio.get_running_loop().create_task(
+            rig.bridge.take_turn(NODE, ROOM, sid, _PCM)
+        )
+        await _settle()
+        rig.engine.script.extend(_turn_ok())
+        await task
+    injected = [e for e in rig.engine.log if e.startswith("context:")]
+    assert len(injected) == 1
+    assert "Alex" in injected[0] and "recognized" in injected[0]
+
+
+async def test_a_stranger_injects_no_identity_context() -> None:
+    rig = _Rig(speaker=Speaker("", "unknown"))
+    task = asyncio.get_running_loop().create_task(
+        rig.bridge.take_turn(NODE, ROOM, "sid1", _PCM)
+    )
+    await _settle()
+    rig.engine.script.extend(_turn_ok())
+    await task
+    assert not any(e.startswith("context:") for e in rig.engine.log)
+
+
+async def test_an_errored_turn_replays_classic_when_nothing_happened() -> None:
+    """A session rejection (bad config, auth) errors the turn before anything
+    runs — the utterance must still get an answer, not dead air (lived
+    2026-08-29 against the cloud engine)."""
+    from kenzy.s2s.engine import EngineError
+
+    rig = _Rig()
+    task = asyncio.get_running_loop().create_task(
+        rig.bridge.take_turn(NODE, ROOM, "sid1", _PCM)
+    )
+    await _settle()
+    rig.engine.script.append(EngineError("session.update rejected: bad tool shape"))
+    await task
+    assert not rig.bridge.active(NODE)  # the conversation closed honestly
+    assert rig.classic == [(NODE, ROOM, "sid1", len(_PCM))]  # replayed, answered
+
+
+async def test_an_errored_turn_with_a_submitted_tool_never_replays() -> None:
+    """If a tool result was already submitted before the engine died, a
+    classic replay would run the same command twice. Dead air is the lesser
+    harm — the conversation still closes with the reason logged."""
+    from kenzy.s2s.engine import EngineError
+
+    rig = _Rig()
+    task = asyncio.get_running_loop().create_task(
+        rig.bridge.take_turn(NODE, ROOM, "sid1", _PCM)
+    )
+    await _settle()
+    rig.engine.script.extend([
+        InputTranscript("turn on the light", late=False),
+        ToolCall("c1", "set_light", "{}"),
+        EngineError("engine died mid-turn"),
+    ])
+    await task
+    assert rig.executed == ["set_light"]
+    assert rig.classic == []  # no replay — the action already ran
+    assert not rig.bridge.active(NODE)
+
+
+# ------------------------------------------------ the async tool contract
+
+
+async def test_a_deferred_tool_detaches_instead_of_executing() -> None:
+    """pace=deferred -> the gate's detach verdict -> the executor, never the
+    inline path. The model hears the hand-off string."""
+    rig = _Rig()
+    rig.pace = {"set_light": "deferred"}
+    task = asyncio.get_running_loop().create_task(
+        rig.bridge.take_turn(NODE, ROOM, "sid1", _PCM)
+    )
+    await _settle()
+    rig.engine.script.extend([
+        InputTranscript("do the thing", late=False),
+        ToolCall("c1", "set_light", "{}"),
+        ResponseDone("done", 0, 0),
+    ])
+    await task
+    assert rig.detached == [("set_light", False)]  # fresh detach, no inline run
+    assert rig.executed == []
+    assert "submit:c1" in rig.engine.log  # the hand-off went back to the model
+
+
+async def test_a_stalling_working_tool_promotes_one_rung() -> None:
+    """A working-class tool past the promotion threshold is ADOPTED: the
+    in-flight work moves to the executor and the turn gets the hand-off."""
+    rig = _Rig(policy=WindowPolicy(working_promote_s=0.05))
+    rig.exec_gate = asyncio.Event()  # never set: the tool hangs
+    task = asyncio.get_running_loop().create_task(
+        rig.bridge.take_turn(NODE, ROOM, "sid1", _PCM)
+    )
+    await _settle()
+    rig.engine.script.extend([
+        InputTranscript("slow thing", late=False),
+        ToolCall("c1", "set_light", "{}"),
+        ResponseDone("done", 0, 0),
+    ])
+    await task
+    assert rig.detached == [("set_light", True)]  # adopted mid-flight
+    assert "submit:c1" in rig.engine.log
+
+
+async def test_a_barge_over_a_working_tool_is_a_downgrade_request() -> None:
+    """The user speaking over the wait promotes the tool immediately — the
+    ruled barge-as-downgrade, no separate mechanism."""
+    rig = _Rig(policy=WindowPolicy(working_promote_s=30.0))  # only the barge ends it
+    rig.exec_gate = asyncio.Event()
+    task = asyncio.get_running_loop().create_task(
+        rig.bridge.take_turn(NODE, ROOM, "sid1", _PCM)
+    )
+    await _settle()
+    rig.engine.script.extend([
+        InputTranscript("slow thing", late=False),
+        ToolCall("c1", "set_light", "{}"),
+    ])
+    await _settle()
+    await rig.bridge.on_capture_start(NODE)  # the barge
+    await _settle()
+    rig.engine.script.append(ResponseDone("cancelled", 0, 0))
+    await task
+    assert rig.detached == [("set_light", True)]
+
+
+async def test_delivery_turn_speaks_a_completion_into_the_live_conversation() -> None:
+    """A finished task's result becomes a DELIVERY TURN: context item +
+    respond, audio delivered, the follow-up window re-armed."""
+    rig = _Rig()
+    task = asyncio.get_running_loop().create_task(
+        rig.bridge.take_turn(NODE, ROOM, "sid1", _PCM)
+    )
+    await _settle()
+    rig.engine.script.extend(_turn_ok())
+    await task
+    frames_before = len(rig.frames)
+    dtask = asyncio.get_running_loop().create_task(
+        rig.bridge.deliver_completion(NODE, "the app build finished")
+    )
+    await _settle()
+    rig.engine.script.extend([AudioDelta(b"\x07"), ResponseDone("done", 0, 0)])
+    assert any(e.startswith("context:A background task update") for e in rig.engine.log)
+    assert "respond" in rig.engine.log
+    assert await dtask is True
+    assert len(rig.frames) == frames_before + 1  # the completion reached the room
+    assert rig.holds == 2  # window re-armed after the delivery turn
+    assert rig.bridge.active(NODE)
+
+
+async def test_delivery_needs_a_live_conversation() -> None:
+    rig = _Rig()
+    assert await rig.bridge.deliver_completion(NODE, "x") is False
+
+
+async def test_pickup_lines_ride_the_identity_injection() -> None:
+    """Results the gate declined earlier land as session context the moment
+    the owner's next conversation knows who they are."""
+    rig = _Rig()
+    rig.pickup_lines = ["'build the app' is finished. It went well."]
+    task = asyncio.get_running_loop().create_task(
+        rig.bridge.take_turn(NODE, ROOM, "sid1", _PCM)
+    )
+    await _settle()
+    rig.engine.script.extend(_turn_ok())
+    await task
+    picked = [e for e in rig.engine.log if "background task finished" in e]
+    assert len(picked) == 1 and "build the app" in picked[0]
+
+
+async def test_delivery_waits_for_the_previous_reply_to_finish_playing() -> None:
+    """The audible-idle anchor: audio sent while the node still plays the
+    prior reply is DISCARDED by its player — lived 2026-08-29 as a delivery
+    that logged ok and was never heard. On a tts_done-capable node the
+    delivery turn holds until playback completes."""
+    rig = _Rig()
+    rig.playback_signal = True
+    task = asyncio.get_running_loop().create_task(
+        rig.bridge.take_turn(NODE, ROOM, "sid1", _PCM)
+    )
+    await _settle()
+    rig.engine.script.extend(_turn_ok())
+    await task  # reply DISPATCHED — but the node is still playing it
+
+    dtask = asyncio.get_running_loop().create_task(
+        rig.bridge.deliver_completion(NODE, "the search finished")
+    )
+    await _settle()
+    # Still audibly busy: the delivery turn must not have started speaking.
+    assert not any(e.startswith("context:A background task update") for e in rig.engine.log)
+
+    rig.bridge.on_tts_done(NODE)  # the node reports playback complete
+    await _settle()
+    rig.engine.script.extend([AudioDelta(b"\x07"), ResponseDone("done", 0, 0)])
+    assert await dtask is True
+    assert any(e.startswith("context:A background task update") for e in rig.engine.log)
+
+
+async def test_a_detach_always_gets_a_followon_response() -> None:
+    """Founder ruling 2026-08-29: a detached tool must never start silently,
+    so its hand-off ALWAYS gets a follow-on response to be spoken about —
+    even when the calling response already said something else. The occasional
+    "already acknowledged" double-say is prevented by the hand-off WORDING,
+    not by suppressing the response (which lost the acknowledgment when the
+    turn answered a different sub-request)."""
+    from kenzy.s2s.engine import ReplyTranscriptDelta
+
+    rig = _Rig()
+    rig.pace = {"set_light": "deferred"}
+    task = asyncio.get_running_loop().create_task(
+        rig.bridge.take_turn(NODE, ROOM, "sid1", _PCM)
+    )
+    await _settle()
+    rig.engine.script.extend([
+        InputTranscript("what time is it and go do the thing", late=False),
+        ReplyTranscriptDelta("It's three o'clock."),  # answered something ELSE
+        AudioDelta(b"\x01"),
+        ToolCall("c1", "set_light", "{}"),
+        ResponseDone("done", 0, 0),
+    ])
+    await task
+    # respond=True on the submit (no :norespond suffix) — a follow-on is
+    # requested so the detach gets acknowledged.
+    assert "submit:c1" in rig.engine.log
+    assert "submit:c1:norespond" not in rig.engine.log
+    assert rig.detached == [("set_light", False)]
+    assert rig.holds == 1  # the turn completed normally and re-armed
+
+
+async def test_a_dead_cached_engine_falls_back_to_classic_and_closes() -> None:
+    """A cached conversation whose engine socket died between turns raises at
+    the append/commit handoff — before a TurnRunner exists. The utterance must
+    still be answered (classic replay) and the dead conversation closed, never
+    dead air + a stuck conv (the fire-and-forget task would swallow the raise)."""
+    rig = _Rig()
+    # Open a conversation with a first good turn.
+    task = asyncio.get_running_loop().create_task(rig.bridge.take_turn(NODE, ROOM, "sid1", _PCM))
+    await _settle()
+    rig.engine.script.extend(_turn_ok())
+    await task
+    assert rig.bridge.active(NODE)
+
+    # Now the engine's socket is dead: append raises.
+    async def dead_append(pcm: bytes) -> None:
+        raise ConnectionError("socket closed")
+
+    rig.engine.append = dead_append  # type: ignore[assignment]
+    rig.classic.clear()
+    await rig.bridge.take_turn(NODE, ROOM, "sid2", _PCM)
+    assert rig.classic == [(NODE, ROOM, "sid2", len(_PCM))]  # answered, not dead air
+    assert not rig.bridge.active(NODE)  # the dead conversation was closed

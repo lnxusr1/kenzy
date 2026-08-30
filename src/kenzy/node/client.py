@@ -1321,12 +1321,16 @@ class NodeClient:
                 speech = rms >= self._silence_rms
             else:
                 speech = score >= self._dialog_onset_vad
-                if speech and self._followup_unbounded:
-                    # The thinking-gap window demands real acoustic energy TOO:
-                    # a cold-state VAD blip on a suppressed mic's near-silent
-                    # DSP floor must not phantom-barge the very turn this
-                    # window serves (found live: a -90 dBFS "answer" confirmed
-                    # 240 ms after opening, cancelling the real reply).
+                if speech:
+                    # Shape AND level, on EVERY dialog-window onset — the
+                    # 2026-08-26 rule, finished: a cold-state VAD blip on a
+                    # suppressed mic's near-silent DSP floor must not phantom
+                    # a turn. First lived in the thinking-gap window (a
+                    # -90 dBFS "answer" cancelling the real reply); lived
+                    # AGAIN 2026-08-29 in the post-reply window, where an
+                    # rms=3 phantom "answer" barged a task delivery to death
+                    # 0.8 s in. Any real answer that would endpoint as speech
+                    # clears the calibrated floor by definition.
                     rms = float(np.sqrt(np.mean(flat.astype(np.float32) ** 2)))
                     speech = rms >= self._silence_rms
         if speech:

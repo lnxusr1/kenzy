@@ -269,3 +269,27 @@ def test_device_keys_render_as_pickers():
             f"{key}'s picker options must come from the probe's {source} — "
             "the same value the audio wizard writes"
         )
+
+
+def test_server_enum_s2s_profile_matches_the_python_vocabulary():
+    """SERVER_ENUMS is a hand-maintained JS copy of the Python PROFILES map
+    (kenzy.s2s.profiles) — the 5.0.6 keep-in-sync trap. Pin it so a profile
+    added in Python can't silently never appear in the Settings dropdown.
+    'hf' is deliberately operator-hidden (a dev-only probe target).
+    """
+    import re
+
+    from kenzy.s2s.profiles import PROFILES
+
+    src = _SCHEMA.read_text()
+    block = re.search(r'"s2s\.profile":\s*\[([^\]]*)\]', src)
+    assert block, "SERVER_ENUMS is missing an s2s.profile entry"
+    js_profiles = set(re.findall(r'"([^"]+)"', block.group(1)))
+
+    _HIDDEN = {"hf"}  # dev probe target — never offered in the dashboard
+    expected = set(PROFILES) - _HIDDEN
+    assert js_profiles == expected, (
+        "SERVER_ENUMS['s2s.profile'] drifted from kenzy.s2s.profiles.PROFILES: "
+        f"JS has {sorted(js_profiles)}, expected {sorted(expected)} "
+        f"(hidden: {sorted(_HIDDEN)}). Update schema.js or _HIDDEN deliberately."
+    )

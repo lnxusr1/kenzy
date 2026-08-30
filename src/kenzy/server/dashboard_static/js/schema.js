@@ -316,9 +316,12 @@ export const SERVER_HELP = {
   "alarm.ring_repeats": "How many times a firing alarm re-rings before giving up. A wake word stops it sooner.",
   "alarm.ring_interval": "Seconds between alarm re-rings.",
   "streaming.enabled": "Start speaking the first sentence while the rest is still being written — noticeably faster replies. Off = wait for the whole answer first.",
+  "proactive.tasks.enabled": "Announce finished background tasks in the room they started from. Quiet hours, DND rooms, and the rate limit all apply. Off = results wait for your next conversation.",
   "s2s.enabled": "Follow-up mode (experimental): she keeps listening ~8s after answering, so you can reply without the wake word. Needs kenzy-s2s + echo-cancelling speakers; other rooms stay classic. Restart to apply.",
   "s2s.url": "The conversation engine's address (ws://host:8771/v1/realtime). Leave empty to find a co-registered kenzy-s2s automatically.",
   "s2s.hard_cap_s": "The longest a single follow-up conversation may run, in seconds, before it ends on its own — stuck-open protection.",
+  "s2s.profile": "Which conversation engine to use: kenzy (local, the default) or openai-realtime (cloud — ALL room audio streams to OpenAI while a conversation runs; see the docs). Restart to apply.",
+  "s2s.model": "Model name sent to the engine's ?model= query. Blank = the profile's default (openai-realtime: gpt-realtime; the local engine configures its model in s2s.yaml).",
   "discovery.enabled": "Announce this server on the network so nodes find it without being told an address.",
   "discovery.instance": "The name this server announces itself under. Only matters if you run more than one.",
   "integrations.mqtt.enabled": "Publish room state to an MQTT broker so Home Assistant sees your nodes as devices.",
@@ -342,6 +345,16 @@ export const SERVER_HELP = {
 
 export function serverHelp(key) {
   return SERVER_HELP[key] || null;
+}
+
+// Server settings whose value is a fixed vocabulary — rendered as a select in
+// the Settings grid (same idea as NODE_ENUMS/SERVICE_ENUMS).
+export const SERVER_ENUMS = {
+  "s2s.profile": ["kenzy", "openai-realtime"],
+};
+
+export function serverEnum(key) {
+  return SERVER_ENUMS[key] || null;
 }
 
 // Semantic sections for editors whose keys don't group cleanly by dotted parent

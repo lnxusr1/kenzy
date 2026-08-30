@@ -82,6 +82,10 @@ class ProcessRequest(BaseModel):
     # 5.0.0, read by nothing until 5.0.3 — and a skill that reads it must
     # tier-gate, since "who's home" is household information (see presence.py).
     occupancy: dict[str, Any] = {}
+    # Background-task pickup (v6 async contract): finished-but-undelivered
+    # results + in-flight titles for a recognized speaker, so the classic
+    # pipeline mentions completions and can answer "how's that going?".
+    task_updates: dict[str, Any] = {}
     # Identity core (F1): the resolved person id (None = no record / unknown), the
     # confidence tier ("unknown"/"recognized"), and the raw voiceprint confidence.
     # Skills read these via get_request to gate on who's asking.
@@ -486,7 +490,14 @@ async def list_tools(tier: str = "unknown") -> dict[str, Any]:
     """Tool schemas visible at ``tier``, plus the per-tool tier policy the
     server-side gate enforces (the same policy this registry enforces)."""
     skill_registry.begin_request({"speaker_tier": tier})
-    return {"tools": skill_registry.get_tools(), "policy": skill_registry.tool_policy()}
+    return {
+        "tools": skill_registry.get_tools(),
+        "policy": skill_registry.tool_policy(),
+        # The async contract (2026-08-29): per-tool pace class — instant /
+        # working / deferred — so the gate detaches deferred tools without
+        # this registry and the server ever disagreeing.
+        "pace": skill_registry.tool_pace(),
+    }
 
 
 class ToolExecBody(BaseModel):
@@ -1129,6 +1140,7 @@ async def _process_impl(
             "person_id": req.person_id,
             "speaker_tier": req.speaker_tier or "unknown",
             "confidence": req.confidence,
+            "task_updates": req.task_updates or {},
             "channel": req.channel or "voice",
             "memory_opt_out": bool(req.memory_opt_out),
             "memory_capture": req.memory_capture or "explicit",
@@ -1483,6 +1495,24 @@ async def _run_llm(
             "talk or transient states, and never more than once per exchange."
         )
 
+    task_updates = skill_registry.get_request("task_updates") or {}
+    tu_pending = task_updates.get("pending") or []
+    tu_running = task_updates.get("running") or []
+    if tu_pending or tu_running:
+        parts = []
+        if tu_pending:
+            parts.append(
+                "Background task(s) this speaker started have FINISHED — mention "
+                "each briefly and naturally in your reply: "
+                + " | ".join(str(p.get("line", "")) for p in tu_pending)
+            )
+        if tu_running:
+            parts.append(
+                "Still running in the background (say so if they ask how it's "
+                "going): " + ", ".join(str(t) for t in tu_running)
+            )
+        dynamic_parts.append(" ".join(parts))
+
     messages: list[dict[str, Any]] = [
         _system_message(static_head, "\n".join(dynamic_parts)),
         *history_messages,
@@ -1576,7 +1606,37 @@ async def _run_llm(
             if sink is not None:
                 await sink({"event": "tool", "name": tc.function.name})
             _t = time.monotonic()
-            result = await skill_registry.execute(tc.function.name, args)
+            if skill_registry.tool_pace().get(tc.function.name) == "deferred":
+                # The async tool contract: a deferred-class tool never runs
+                # inline. The model gets the hand-off NOW; the real run rides
+                # a task_detach action to the server (actions are the
+                # llm->server channel), which executes it through the same
+                # /tool door and delivers the result when it lands.
+                #
+                # The tier gate is enforced HERE, not skipped: detaching a
+                # deferred tool must not become a hole around execute()'s
+                # F1.3 defense-in-depth. A below-tier speaker is refused
+                # immediately (same wording as execute), and the REAL tier
+                # rides the action — never a tier fabricated server-side from
+                # the presence of a name.
+                if not skill_registry.tier_allows(tc.function.name):
+                    result = skill_registry.tier_refusal(tc.function.name)
+                else:
+                    skill_registry.add_action(
+                        {
+                            "type": "task_detach",
+                            "name": tc.function.name,
+                            "arguments": args,
+                            "owner": skill_registry.get_request("speaker") or "",
+                            "speaker_tier": skill_registry.current_tier(),
+                            "person_id": skill_registry.get_request("person_id") or "",
+                        }
+                    )
+                    result = skill_registry.handoff_text(
+                        tc.function.name.replace("_", " ")
+                    )
+            else:
+                result = await skill_registry.execute(tc.function.name, args)
             if spans is not None:
                 spans.append(
                     {

@@ -52,6 +52,13 @@ log = logging.getLogger(__name__)
 _SILENCE_PEAK = 500
 
 
+def _idle_event() -> asyncio.Event:
+    """An Event born SET — a fresh conversation's node is audibly idle."""
+    evt = asyncio.Event()
+    evt.set()
+    return evt
+
+
 def _near_silence(pcm: bytes) -> bool:
     """Cheap phantom check: peak amplitude over the WHOLE capture, early-exit
     on the first loud sample. The whole capture matters: a real command often
@@ -87,7 +94,13 @@ class EngineLike(Protocol):
 
     async def cancel(self) -> None: ...
 
-    async def submit_tool_result(self, call_id: str, output: str) -> None: ...
+    async def respond(self) -> None: ...
+
+    async def add_context(self, text: str) -> None: ...
+
+    async def submit_tool_result(
+        self, call_id: str, output: str, *, respond: bool = True
+    ) -> None: ...
 
     async def aclose(self) -> None: ...
 
@@ -104,8 +117,11 @@ class BridgeDeps:
     node_capable: Callable[[str], bool]
     #: Connect and return a ready engine session for the url.
     engine_factory: Callable[[str], Awaitable[EngineLike]]
-    #: (tier) -> (tool schemas for session.update, {name: min_tier} policy).
-    fetch_tools: Callable[[str], Awaitable[tuple[list[dict[str, Any]], dict[str, str]]]]
+    #: (tier) -> (tool schemas for session.update, {name: min_tier} policy,
+    #: {name: pace} — instant/working/deferred, the async tool contract).
+    fetch_tools: Callable[
+        [str], Awaitable[tuple[list[dict[str, Any]], dict[str, str], dict[str, str]]]
+    ]
     #: Speaker-ID one capture: (pcm, room) -> (Speaker, confidence). The glue
     #: also feeds occupancy — voice evidence is the server's concern, not ours.
     identify: Callable[[bytes, str], Awaitable[tuple[Speaker, float]]]
@@ -138,6 +154,30 @@ class BridgeDeps:
     #: Canonical voice — advisory on the kenzy-s2s profile (kenzy-tts's config
     #: is the voice identity, decision 5); "" is fine.
     voice: Callable[[], str] = lambda: ""
+    #: Detach a tool call into the task executor: (call, node, room, speaker,
+    #: in-flight work or None) -> the in-progress hand-off string the model
+    #: hears. ``work`` given = the working->deferred promotion (the execution
+    #: is ALREADY running and gets adopted); None = a deferred-class call the
+    #: executor starts itself. Unset = no executor: deferred verdicts and
+    #: promotions block inline, honestly.
+    detach: (
+        Callable[[ToolCall, str, str, Speaker, asyncio.Task[str] | None], Awaitable[str]]
+        | None
+    ) = None
+    #: Undelivered task results for an owner, as speakable lines (marking them
+    #: delivered): injected as context when the owner's next conversation
+    #: resolves their identity — the pickup path for deliveries the proactive
+    #: gate declined. Returns (task_id, speakable line) pairs; the bridge marks
+    #: each delivered via ``pickup_delivered`` ONLY after its line successfully
+    #: injects, so an engine hiccup mid-pickup leaves the rest deliverable
+    #: instead of silently lost. Unset = no pickup.
+    pickup: Callable[[str], list[tuple[str, str]]] | None = None
+    #: Confirm one picked-up task was handed to the model (mark it delivered).
+    pickup_delivered: Callable[[str], None] | None = None
+    #: Does this node report playback completion (tts_done, >=5.1.3)? Gates
+    #: the delivery turn's audible-idle wait — a node that never reports
+    #: would otherwise deadlock the wait after the first cleared event.
+    playback_signal: Callable[[str], bool] = lambda _n: False
     policy: WindowPolicy = field(default_factory=WindowPolicy)
 
 
@@ -149,6 +189,19 @@ class _Conversation:
     room: str
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     barged: bool = False
+    #: Last speaker name fed to the model as context — inject on CHANGE only,
+    #: or every turn appends a duplicate item to the one history.
+    injected_identity: str = ""
+    #: Set when a barge lands — a working tool awaiting inline reads it as a
+    #: downgrade request (promote to deferred, free the floor). Fresh per turn.
+    barge_evt: asyncio.Event = field(default_factory=asyncio.Event)
+    #: Set while the node is AUDIBLY idle; cleared when a reply's frames
+    #: dispatch, set again by the node's tts_done (or a barge, which stops
+    #: playback locally). The delivery turn anchors on this — audio sent
+    #: while the previous reply still plays is DISCARDED by the node's
+    #: player (trap #1), which read live as "she never came back with the
+    #: results" (2026-08-29).
+    playback_done: asyncio.Event = field(default_factory=_idle_event)
 
 
 class S2SBridge:
@@ -203,14 +256,41 @@ class S2SBridge:
                 if conv is None:
                     await self._deps.classic(node_id, room, session_id, pcm)
                     return
-            conv.barged = False
             async with conv.lock:
+                # Reset the barge state INSIDE the lock: a previous turn that
+                # was barged may still be draining its cancelled response
+                # while holding the lock (its post-cancel audio tail, or its
+                # up-to-10 s late-transcript wait). Clearing conv.barged
+                # before acquiring the lock would wipe that turn's barge flag
+                # mid-drain — un-suppressing its stale audio tail into the
+                # room and letting it re-arm the follow-up window over THIS
+                # capture (lived 2026-08-29; deliver_completion already does
+                # its reset in-lock for exactly this reason).
+                conv.barged = False
+                conv.barge_evt = asyncio.Event()
                 if conv.session.ended:
                     # Ended while we queued (a dying turn closed it) — loop
                     # once and open a FRESH conversation: with the toggle on,
                     # the wake NEVER falls back classic for a live engine.
                     continue
-                await self._run_turn(node_id, conv, session_id, pcm)
+                try:
+                    await self._run_turn(node_id, conv, session_id, pcm)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:  # noqa: BLE001
+                    # A cached engine whose socket died between turns raises at
+                    # the append/commit handoff — BEFORE a TurnRunner exists, so
+                    # _run_turn's own error→classic path can't catch it, and
+                    # this task is fire-and-forget (its exception would vanish
+                    # unretrieved, leaving dead air and a stuck conversation).
+                    # Close the dead conversation and give the utterance to the
+                    # classic pipeline so it still gets answered.
+                    log.warning(
+                        "[%s] s2s: turn failed at engine handoff (%s) — closing + classic",
+                        node_id, exc,
+                    )
+                    await self._close(node_id, "engine handoff failed")
+                    await self._deps.classic(node_id, room, session_id, pcm)
                 return
         await self._deps.classic(node_id, room, session_id, pcm)  # two dead convs: give up
 
@@ -227,16 +307,24 @@ class S2SBridge:
         started = False
 
         async def deliver(out: bytes) -> None:
+            # Barge guard: after an interrupt cancels the response, the
+            # engine's already-buffered audio tail still arrives (measured
+            # live against the cloud engine: 17 deltas — SECONDS of speech —
+            # land instantly post-cancel; the local engine's ≤1 tiny delta
+            # just made the same bug invisible). The runner deliberately
+            # consumes its response to the end so the socket stays clean for
+            # the next turn — but nothing cancelled may reach the room.
+            if conv.barged:
+                return
             nonlocal started
             if not started:
+                if self._deps.playback_signal(node_id):
+                    conv.playback_done.clear()  # audibly busy until tts_done
                 await self._deps.deliver_start(node_id)
                 started = True
             await self._deps.deliver_frame(node_id, out)
 
-        async def execute(call: ToolCall) -> str:
-            return await self._deps.execute_tool(
-                call, node_id, conv.room, conv.session.identity.current
-            )
+        execute, detach = self._tool_closures(conv, node_id)
 
         # Speaker-ID runs beside the turn (decision 6: the gate reads identity
         # at action time — a verdict can't precede the engine's transcript, and
@@ -259,6 +347,7 @@ class S2SBridge:
                 conv.session,
                 execute=execute,
                 deliver=deliver,
+                detach=detach if self._deps.detach is not None else None,
                 transcript_timeout_s=10.0,
             )
             result = await runner.run()
@@ -313,6 +402,15 @@ class S2SBridge:
             # An engine fault mid-conversation: end it honestly; the NEXT wake
             # starts fresh (and falls back classic if the engine stays down).
             await self._close(node_id, f"engine {result.status}")
+            # And the utterance itself must still get an answer — dead air was
+            # the lived symptom of a cloud session rejection (2026-08-29).
+            # Replay through the classic pipeline ONLY when the errored turn
+            # provably did nothing: no action RESOLVED (execution happens at
+            # resolve time, before any submit), no reply audio delivered — so
+            # a replay can never double-actuate or double-speak.
+            if result.status == "error" and result.actions_resolved == 0 and not started:
+                log.warning("[%s] s2s: errored turn replayed on the classic pipeline", node_id)
+                await self._deps.classic(node_id, conv.room, session_id, pcm)
             return
         if conv.barged:
             return  # a new capture already owns the floor — never re-arm over it
@@ -320,6 +418,181 @@ class S2SBridge:
             # The dialog machinery declined (turn cap) — the conversation ends.
             conv.session.end("hard_cap")
             await self._close(node_id, "turn cap")
+
+    def _tool_closures(self, conv: _Conversation, node_id: str) -> tuple[Any, Any]:
+        """The runner's execute/detach pair — shared by capture turns and
+        delivery turns so the promotion ladder behaves identically in both."""
+
+        async def execute(call: ToolCall) -> str:
+            # The working-class discipline: run inline — the result IS the
+            # reply — but never hold the floor hostage. Past the promotion
+            # threshold, or the moment the user barges over the wait (a
+            # downgrade request by ruling), the in-flight work is promoted
+            # ONE rung: adopted into the task executor, and the model gets
+            # the hand-off string instead.
+            work: asyncio.Task[str] = asyncio.ensure_future(
+                self._deps.execute_tool(
+                    call, node_id, conv.room, conv.session.identity.current
+                )
+            )
+            if self._deps.detach is None:
+                return await work  # no executor wired: block honestly
+            barge = asyncio.get_running_loop().create_task(conv.barge_evt.wait())
+            try:
+                done, _ = await asyncio.wait(
+                    {work, barge},
+                    timeout=self._deps.policy.working_promote_s,
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+            finally:
+                barge.cancel()
+            if work in done:
+                return work.result()  # a raised error stays the runner's to report
+            return await self._deps.detach(
+                call, node_id, conv.room, conv.session.identity.current, work
+            )
+
+        async def detach(call: ToolCall) -> str:
+            # A deferred-class verdict: never inline — the executor starts it.
+            assert self._deps.detach is not None  # runner only calls when wired
+            return await self._deps.detach(
+                call, node_id, conv.room, conv.session.identity.current, None
+            )
+
+        return execute, (detach if self._deps.detach is not None else None)
+
+    def on_tts_done(self, node_id: str) -> None:
+        """The node reports the reply finished PLAYING — the delivery turn's
+        audible-idle anchor."""
+        conv = self._convs.get(node_id)
+        if conv is not None:
+            conv.playback_done.set()
+
+    async def stage_completion(self, node_id: str, text: str) -> bool:
+        """A LATE completion in a live conversation: no unprompted turn — the
+        result is staged as context so the model mentions it alongside its
+        NEXT reply ("I've also got those results…"). The gentle in-
+        conversation channel, per the announce-window ruling."""
+        conv = self._convs.get(node_id)
+        if conv is None or conv.session.ended:
+            return False
+        try:
+            await conv.engine.add_context(
+                "A background task finished. Do NOT interrupt or start a reply "
+                f"for this now — mention it briefly alongside your next reply: {text}"
+            )
+            return True
+        except Exception as exc:  # noqa: BLE001 — staging failed: leave deliverable
+            log.debug("s2s: completion staging failed (%s)", exc)
+            return False
+
+    async def deliver_completion(self, node_id: str, text: str) -> bool:
+        """A finished background task speaks into the LIVE conversation — the
+        DELIVERY TURN: no capture, no user utterance. The completion is the
+        turn's provenance (audited as its transcript), the model phrases it
+        in context, and the reply delivers and re-arms the follow-up window
+        like any other. Returns False when there is no live conversation to
+        speak into — the caller falls back to the proactive/pickup paths.
+        """
+        conv = self._convs.get(node_id)
+        if conv is None or conv.session.ended:
+            return False
+        async with conv.lock:
+            if conv.session.ended or conv.session.poll() is not None:
+                return False
+            # The audible-idle anchor: never start speaking a completion while
+            # the previous reply is still PLAYING at the node — its player
+            # discards audio queued mid-playback (trap #1; lived 2026-08-29
+            # as a delivery that logged ok and was never heard). Bounded so a
+            # lost tts_done can only delay, never wedge, the delivery.
+            if not conv.playback_done.is_set():
+                with contextlib.suppress(TimeoutError):
+                    await asyncio.wait_for(conv.playback_done.wait(), 45.0)
+            if conv.session.ended:
+                return False
+            if conv.barged:
+                return False  # the user is speaking — the result waits its turn
+            conv.barged = False
+            conv.barge_evt = asyncio.Event()
+            turn_id = conv.session.begin_turn()
+            gate = TurnGate(
+                turn_id,
+                identity=lambda: conv.session.identity.current,
+                tool_rules=conv.rules,
+                audit=self._deps.audit,
+            )
+            # Pre-clear the gate: a delivery turn HAS no user utterance — the
+            # completion itself is the provenance, on the audit record as such.
+            gate.on_transcript(f"[task completion] {text}")
+            started = False
+
+            async def deliver(out: bytes) -> None:
+                nonlocal started
+                if conv.barged:
+                    return
+                if not started:
+                    if self._deps.playback_signal(node_id):
+                        conv.playback_done.clear()
+                    await self._deps.deliver_start(node_id)
+                    started = True
+                await self._deps.deliver_frame(node_id, out)
+
+            execute, detach = self._tool_closures(conv, node_id)
+            armed = False
+            try:
+                # The wording must OVERRIDE the hand-off still sitting in
+                # history ("not done yet") — live 2026-08-30, the model
+                # repeated the hand-off instead of the result until asked.
+                await conv.engine.add_context(
+                    "A background task update — this SUPERSEDES the earlier "
+                    f"'started' status. Relay it to the user now: {text}"
+                )
+                await conv.engine.respond()
+                runner = TurnRunner(
+                    conv.engine,
+                    gate,
+                    conv.session,
+                    execute=execute,
+                    deliver=deliver,
+                    detach=detach,
+                    transcript_timeout_s=10.0,
+                )
+                result = await runner.run()
+                if result.status == "ok" and not conv.session.ended and not conv.barged:
+                    armed = await self._deps.hold_floor(node_id)
+            finally:
+                if started:
+                    await self._deps.deliver_end(node_id)
+            log.info(
+                "[%s] s2s delivery turn %s: %s", node_id, turn_id, result.status
+            )
+            self._deps.activity(
+                {
+                    "ts": time.time(),
+                    "node_id": node_id,
+                    "room": conv.room,
+                    "speaker": "kenzy (task)",
+                    "transcript": f"[task completion] {text}",
+                    "response": result.reply_text,
+                    "mode": "follow-up",
+                }
+            )
+            if conv.session.ended:
+                await self._close(node_id, conv.session.end_reason or "verbal")
+                return result.status == "ok" and started and not conv.barged
+            if result.status != "ok":
+                await self._close(node_id, f"engine {result.status}")
+                return False
+            if not armed and not conv.barged:
+                conv.session.end("hard_cap")
+                await self._close(node_id, "turn cap")
+            # Delivered means HEARD, not merely attempted: a barge (real — or
+            # a phantom onset, lived 2026-08-29: rms=3 cancelled the reply
+            # 0.8 s in) suppressed the audio, and a turn that never started
+            # speaking said nothing. Report False so the result STAYS
+            # deliverable (pickup / next attempt) instead of being marked
+            # delivered and lost.
+            return started and not conv.barged
 
     async def _identify(self, conv: _Conversation, pcm: bytes) -> None:
         try:
@@ -329,6 +602,40 @@ class S2SBridge:
             return
         if speaker.name and speaker.tier != "unknown":
             conv.session.identity.hear(speaker.name, speaker.tier, confidence)
+            # OQ3 slice 1 (ruled 2026-08-29): feed the ANSWER to the model as
+            # session context — so she can address people and shape actions per
+            # speaker. Context only, never authorization (the gate re-reads
+            # identity at action time regardless). Injected on change, not per
+            # turn; the first turn's generation may already be in flight when
+            # this lands, in which case the model reads it from the next
+            # response on — "usually before an action", per the ruling.
+            if speaker.name != conv.injected_identity:
+                conv.injected_identity = speaker.name
+                try:
+                    await conv.engine.add_context(
+                        f"The current speaker is {speaker.name} "
+                        f"(voice-recognized, tier: {speaker.tier})."
+                    )
+                except Exception as exc:  # noqa: BLE001 — context is best-effort
+                    log.debug("s2s: identity context not injected (%s)", exc)
+                # The pickup path: results the proactive gate declined to
+                # announce wait for exactly this moment — the owner is here and
+                # talking. Mark each delivered ONLY after its line injects, so
+                # an engine hiccup mid-pickup leaves the remaining results
+                # deliverable rather than silently marked-and-lost. Separate
+                # try from identity so one failure doesn't skip the other.
+                if self._deps.pickup is not None:
+                    for task_id, line in self._deps.pickup(speaker.name):
+                        try:
+                            await conv.engine.add_context(
+                                f"While away, a background task finished — tell "
+                                f"the user when natural: {line}"
+                            )
+                        except Exception as exc:  # noqa: BLE001
+                            log.debug("s2s: pickup line not injected (%s) — stays pending", exc)
+                            break
+                        if self._deps.pickup_delivered is not None:
+                            self._deps.pickup_delivered(task_id)
         else:
             conv.session.identity.hear_stranger()
 
@@ -344,8 +651,11 @@ class S2SBridge:
             log.warning("s2s: engine unreachable at %s (%s) — classic fallback", url, exc)
             return None
         try:
-            tools, policy = await self._deps.fetch_tools("recognized")
-            rules = {name: ToolRule(min_tier=tier) for name, tier in policy.items()}
+            tools, policy, pace = await self._deps.fetch_tools("recognized")
+            rules = {
+                name: ToolRule(min_tier=tier, detach=pace.get(name) == "deferred")
+                for name, tier in policy.items()
+            }
             rules[str(END_CONVERSATION_TOOL["name"])] = end_conversation_rule()
             await engine.configure(
                 instructions=self._deps.instructions(room),
@@ -364,7 +674,12 @@ class S2SBridge:
             room=room,
         )
         self._convs[node_id] = conv
-        log.info("[%s] s2s conversation opened (%s)", node_id, conv.session.session_id)
+        # Name the ENGINE, not just the session: which endpoint answered is
+        # exactly the question when a profile and a co-running local engine
+        # disagree (lived 2026-08-29 — the registry hijack read as "cloud not
+        # working" instead of "wrong engine answered").
+        log.info("[%s] s2s conversation opened (%s) — engine %s",
+                 node_id, conv.session.session_id, url)
         return conv
 
     async def on_capture_start(self, node_id: str) -> None:
@@ -374,6 +689,8 @@ class S2SBridge:
         conv = self._convs.get(node_id)
         if conv is not None and conv.lock.locked():
             conv.barged = True
+            conv.barge_evt.set()
+            conv.playback_done.set()  # the node stopped its player locally
             with contextlib.suppress(Exception):
                 await conv.engine.cancel()
 

@@ -155,6 +155,28 @@ class EngineClient:
             await self._ws.close()
             self._ws = None
 
+    @staticmethod
+    def _realtime_tool(tool: dict[str, Any]) -> dict[str, Any]:
+        """Normalize a tool schema to the flat Realtime shape.
+
+        The skill registry emits chat-completions NESTED schemas
+        (``{"type": "function", "function": {...}}``); Realtime sessions take
+        them FLAT. Normalized here, at the seam boundary, so the wire shape
+        never depends on where a schema came from — found live 2026-08-29:
+        the mixed shape sailed through the local engine (whose provider wants
+        nested anyway) and errored OpenAI's GA API, silently dropping every
+        cloud conversation to the classic fallback.
+        """
+        fn = tool.get("function")
+        if not isinstance(fn, dict):
+            return tool
+        return {
+            "type": "function",
+            "name": str(fn.get("name", "")),
+            "description": str(fn.get("description", "")),
+            "parameters": fn.get("parameters") or {"type": "object", "properties": {}},
+        }
+
     async def configure(self, *, instructions: str, voice: str,
                         tools: list[dict[str, Any]] | None = None,
                         rate: int = 24000) -> None:
@@ -184,7 +206,7 @@ class EngineClient:
             },
         }
         if tools:
-            session["tools"] = tools
+            session["tools"] = [self._realtime_tool(t) for t in tools]
             session["tool_choice"] = "auto"
         await self._send({"type": "session.update", "session": session})
 
@@ -209,15 +231,47 @@ class EngineClient:
         """Stop the in-flight response (measured: ~65 ms cloud, ~2 ms local)."""
         await self._send({"type": "response.cancel"})
 
-    async def submit_tool_result(self, call_id: str, output: str) -> None:
-        """Return a gated tool's result and ask the engine to speak it."""
+    async def respond(self) -> None:
+        """Ask for a response with no new audio — the DELIVERY TURN's door:
+        a background task's completion lands as a context item and this makes
+        the model speak it."""
+        await self._send({"type": "response.create"})
+
+    async def add_context(self, text: str) -> None:
+        """Append a system-context item to the conversation — no response asked.
+
+        The identity-injection door (OQ3 slice 1, ruled 2026-08-29): facts
+        Kenzy resolves out-of-band (who is speaking, later people/rooms/
+        occupancy) land as conversation context the model reads on its next
+        response. CONTEXT ONLY — authorization stays with the gate.
+        """
+        await self._send(
+            {
+                "type": "conversation.item.create",
+                "item": {
+                    "type": "message",
+                    "role": "system",
+                    "content": [{"type": "input_text", "text": text}],
+                },
+            }
+        )
+
+    async def submit_tool_result(
+        self, call_id: str, output: str, *, respond: bool = True
+    ) -> None:
+        """Return a gated tool's result — and, normally, ask the engine to
+        speak about it. ``respond=False`` records the output WITHOUT a
+        follow-on response: the detach hand-off's door (the calling response
+        already spoke "I'll look that up" — a follow-on only repeats it,
+        lived 2026-08-29 as the double acknowledgment)."""
         await self._send(
             {
                 "type": "conversation.item.create",
                 "item": {"type": "function_call_output", "call_id": call_id, "output": output},
             }
         )
-        await self._send({"type": "response.create"})
+        if respond:
+            await self._send({"type": "response.create"})
 
     async def events(self) -> AsyncIterator[EngineEvent]:
         """Yield typed events until the connection closes or the caller stops.

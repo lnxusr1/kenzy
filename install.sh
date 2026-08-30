@@ -271,8 +271,8 @@ fi
 # order (backends → server → node).
 case "$PROFILE" in
   node)   EXTRAS="node"                        ; SVC_LIST="node" ;;
-  server) EXTRAS="server,stt,tts,llm,speaker"  ; SVC_LIST="stt tts llm speaker server" ;;
-  all)    EXTRAS="node,server,stt,tts,llm,speaker" ; SVC_LIST="stt tts llm speaker server node" ;;
+  server) EXTRAS="server,stt,tts,llm,speaker"  ; SVC_LIST="stt tts llm speaker s2s server" ;;
+  all)    EXTRAS="node,server,stt,tts,llm,speaker" ; SVC_LIST="stt tts llm speaker s2s server node" ;;
   *) die "Unknown profile '$PROFILE' (use: node | server | all)" ;;
 esac
 
@@ -527,6 +527,19 @@ fi
 step "Installing Kenzy [$EXTRAS] from $SRC_DESC (this can take a few minutes)"
 pip install "${CONSTRAINT_ARGS[@]}" "$SPEC"
 
+if [ -n "$PACKAGE" ]; then
+  # A local --package install is authoritative by definition: the operator
+  # handed us the artifact. pip's version-equality check defeats that — a
+  # rebuilt wheel carrying the SAME version as the installed one reports
+  # "already satisfied" and keeps the OLD code (lived 2026-08-29: a lab
+  # upgrade silently no-opped and the new kenzy-s2s entry point never
+  # installed, 203/EXEC crash loop). Force the kenzy dist itself; deps stay
+  # untouched — the resolve above already satisfied any new ones. Normal
+  # (PyPI / version-pinned) installs never take this path.
+  step "Forcing the local package over any same-version install"
+  pip install "${CONSTRAINT_ARGS[@]}" --no-deps --force-reinstall "$PKG_ABS"
+fi
+
 if [ "$WAKEWORD_NODEPS" = "1" ]; then
   step "Installing the wake-word engine (without its tflite dependency)"
   if pip install "${CONSTRAINT_ARGS[@]}" --no-deps openwakeword \
@@ -674,7 +687,7 @@ esac
 # --- run hints (used if we don't set up systemd) -----------------------------
 case "$PROFILE" in
   node)   RUN_HINT="kenzy-node" ;;
-  server) RUN_HINT="kenzy-server   # then: kenzy-stt / kenzy-tts / kenzy-llm / kenzy-speaker" ;;
+  server) RUN_HINT="kenzy-server   # then: kenzy-stt / kenzy-tts / kenzy-llm / kenzy-speaker / kenzy-s2s" ;;
   all)    RUN_HINT="kenzy-server   # plus stt/tts/llm/speaker, and kenzy-node on each room device" ;;
 esac
 DASH_URL="$DASH_SCHEME://127.0.0.1:8770"   # dashboard default bind/port (localhost)

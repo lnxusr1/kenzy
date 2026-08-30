@@ -5,6 +5,17 @@ the design decisions. **You don't need any of it to set up or use Kenzy** (that'
 [Getting Started](getting-started.md)); it's here for the curious, for contributors,
 and for anyone debugging something unusual.
 
+The pipeline below is the **classic path** — one wake, one command, one reply —
+and it remains first-class: it serves every room without echo cancellation and
+is the automatic fallback for everything. With **follow-up mode** enabled, a
+seventh service (`kenzy-s2s`, the [conversation engine](configuration/s2s.md))
+takes eligible captures instead: a Realtime-shaped session server composing the
+same STT and TTS services with a model provider called directly, so
+conversations hold state across turns while no model loads twice. Tool calls
+from the engine execute through the LLM service's skill-host doors and are
+authorized by the server's gate — transcript-on-record and speaker tier are
+checked before anything runs, whichever engine is talking.
+
 ## End-to-end pipeline
 
 ```

@@ -10,6 +10,10 @@ here and spelled out in **[Upgrading](https://docs.kenzy.ai/upgrading/)**.
 
 ## [Unreleased]
 
+Existing **server** installs need one manual step for the new `kenzy-s2s`
+service unit — see **[Upgrading](https://docs.kenzy.ai/upgrading/#600)**.
+Everything else is opt-in; nodes need nothing.
+
 ### Added
 
 - **Follow-up mode (experimental, off by default) — the v6.0 conversation
@@ -44,6 +48,66 @@ here and spelled out in **[Upgrading](https://docs.kenzy.ai/upgrading/)**.
   ignore it and arm post-reply only). Dashboard: the toggle lives under
   Settings → Backend services; a new Conversation Engine reference page in
   the docs.
+
+- **Follow-up mode round two: the cloud engine option, and the voice
+  switches.** Four additions to the unreleased conversation engine:
+  - **A cloud engine, selectable.** `s2s.profile: openai-realtime` points
+    the whole conversation path at OpenAI's Realtime API instead of the
+    local `kenzy-s2s` (which stays the default — the service never defaults
+    to the cloud). Authenticates with `OPENAI_API_KEY` (a custom endpoint
+    gets `CUSTOM_LLM_API_KEY` instead — the OpenAI key never goes to a
+    non-OpenAI host); `s2s.model` overrides the profile's model. **Read the
+    docs caveat before opting in: the cloud engine receives all room audio
+    during a conversation, including anything sensitive said aloud.**
+    Secrets Kenzy stores (the lockbox) still never leave the house, and
+    tool authorization stays local either way. Live-verified against the
+    real API: session shape, transcription (late — the gate's fail-closed
+    wait covers it), tool round trip, and cancel (zero late audio) all
+    green with the shipped client.
+  - **"Turn off follow-up mode"** — a voice switch for the feature, working
+    from the classic pipeline and from inside a live conversation alike.
+    Recognized voices only, confirms first, persists across restarts, and
+    the dashboard shows the state.
+  - **Volume and mute work mid-conversation.** "Turn it down" / "mute
+    yourself" now exist as a conversation tool driving the same server
+    action as the classic instant path — the second entry (after the live
+    clock) from the fast-intent coverage audit.
+  - **She knows who's talking.** The locally-resolved speaker identity is
+    fed to the conversation model as context the moment voice recognition
+    lands — so she can address you by name and shape actions per speaker.
+    Context only: what a speaker is *allowed* to do is still decided
+    locally at action time, never by the model.
+  - **Replies start sooner.** The local engine synthesizes sentence by
+    sentence as the model streams, instead of waiting for the complete
+    reply before making any audio — the same overlap the classic pipeline
+    has had since 4.4, applied inside the engine. Time-to-first-audio drops
+    from the whole reply to roughly the first sentence.
+
+- **Background tasks: "go do it and let me know" actually works.** The
+  async tool contract, end to end. Every skill now declares its pace —
+  `instant` (the result is the reply), `working` (a few seconds; she
+  acknowledges while it runs — the default), or `deferred` (unbounded:
+  "I'll get started and let you know"). A deferred skill never blocks a
+  conversation: it detaches into a persisted, owner-scoped task ledger,
+  Kenzy hands off audibly, and the result is spoken when it lands — into
+  the live conversation as a natural turn if one is still open, announced
+  in the origin room when the new `proactive.tasks.enabled` allows it
+  (the first announcement type that RESPECTS quiet hours, DND rooms, and
+  the rate limit — those knobs now do real work), or mentioned at the
+  start of that person's next conversation otherwise. Denied is never
+  dropped; failure is delivered as honestly as success; a restart fails
+  orphaned tasks loudly instead of losing them. A `working` skill that
+  stalls is promoted to the background treatment automatically instead of
+  holding the floor — and interrupting Kenzy while she waits on one does
+  the same immediately. Two manners rules, both from live testing: a
+  result may only speak UNPROMPTED while you're visibly still waiting
+  (~30 s from the ask) — slower results ride the next exchange ("I've
+  also got those results…") or wait to be asked, never interrupting; and
+  a delivery waits for her previous sentence to finish PLAYING in the
+  room before speaking (audio sent mid-playback was silently discarded —
+  "she never came back with the results"). Works identically from a
+  follow-up conversation and the classic pipeline; skill writers just
+  write an ordinary async function and declare the pace.
 
 - **Add-ons gained a universal per-node off switch.** `addons.<id>.enabled:
   false` (or the toggle on the add-on's panel) stops that node's half of an
@@ -80,6 +144,61 @@ here and spelled out in **[Upgrading](https://docs.kenzy.ai/upgrading/)**.
   an offline node, or one whose probe reported nothing usable for that key.
 
 ### Fixed
+
+- **The cloud engine profile actually connects now.** Its first real use
+  (founder, 2026-08-29) produced no conversations at all — every wake fell
+  silently back to the classic pipeline, because the tool schemas sent at
+  session setup were in the chat-completions NESTED shape the skill
+  registry emits, which the local engine happily accepts (its provider
+  wants that shape) but OpenAI's Realtime API rejects
+  (`Missing required parameter: 'session.tools[0].name'` — reproduced,
+  then verified fixed live with the full bridge-shaped session: tools
+  called, reply spoken in the OpenAI voice, 3.7 s end to end). Tool
+  schemas are now normalized to the flat Realtime shape at the seam
+  boundary, the engine's error message is logged instead of discarded
+  (the silent fallback was half the pain), and an errored turn that
+  provably did nothing now replays through the classic pipeline so the
+  utterance still gets an answer instead of dead air.
+
+- **A local `--package` install is authoritative now.** Installing a
+  local wheel or source dir over an existing install used to silently
+  no-op when the version number matched (pip's "already satisfied") —
+  every unit then restarted on the old code, and the only symptom was
+  whatever the new code should have added being absent. install.sh now
+  force-reinstalls the kenzy dist itself on the `--package` path (deps
+  untouched; normal PyPI installs unchanged), and the lab installer
+  asserts the new code actually landed by content hash rather than
+  trusting pip's exit code.
+
+- **Background-task delivery and the tier gate hardened (code review).**
+  A recall-biased review of the unreleased async tool contract surfaced ten
+  real defects, all fixed before tag: a deferred tool could carry a
+  *fabricated* "recognized" tier (a speaker's name is not their voiceprint) —
+  the gate is now enforced before a detach and the real tier rides through;
+  task results could be marked delivered before being heard (a TTS-down
+  announce, a mid-pickup engine hiccup, a staged-but-unspoken completion) —
+  each now confirms delivery or stays pending, never silently lost; a
+  deferred task on the classic pipeline (follow-up mode off) had no delivery
+  path at all — finished results now ride the recognized speaker's next
+  request and "how's that going?" is answerable; a barge could reopen the
+  stale-audio window through an out-of-lock state reset; a dead conversation
+  engine dropped the utterance into dead air instead of the classic
+  fallback; a cue's playback-complete could cut a real reply's delivery
+  short; spoken sentences weren't recorded in history on a barge (the model
+  forgot it spoke); and the OpenAI key was selected by a substring host match
+  (now an exact hostname check). The hand-off wording now lives in one shared
+  module so both pipelines can't drift. Also, the conversation engine's
+  generation stream now terminates on the model's `finish_reason`, not
+  only the `[DONE]` sentinel — some providers omit `[DONE]` and hold the
+  connection open, which would otherwise block until the read timeout.
+
+- **An interrupted reply can no longer finish itself into the room.** When
+  a barge-in cancelled a response, the engine's already-buffered audio tail
+  was still delivered to the node — invisible on the local engine (at most
+  one tiny late chunk) but measured live on the cloud engine at seconds of
+  speech arriving instantly after the cancel, meaning she would have kept
+  talking over the person who interrupted her. Cancelled audio is now
+  dropped at delivery while the turn still drains cleanly.
 
 - **Barge-in no longer confirms on speech-*shaped* silence.** The
   interrupt-over-a-reply detector required only a VAD (Silero) match, and the

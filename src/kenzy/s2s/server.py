@@ -44,6 +44,8 @@ from websockets.asyncio.server import serve as _ws_serve
 from websockets.datastructures import Headers
 from websockets.http11 import Request, Response
 
+from kenzy.sentences import split_sentences
+
 log = logging.getLogger(__name__)
 
 
@@ -204,6 +206,12 @@ class RealtimeSession:
             )
             self._history.append({"role": "user", "content": text})
 
+        # Defined before the try so the cancel/failure handlers can record
+        # whatever was already SPOKEN into the room (sentence-streamed audio
+        # is emitted mid-generation): on a barge or a mid-stream provider
+        # failure, history must not lag the room, or the next turn's model has
+        # no record it spoke and re-answers or contradicts itself.
+        text_parts: list[str] = []
         try:
             await self._emit({"type": "response.created"})
             pcm, self._pending = self._pending, b""
@@ -214,7 +222,7 @@ class RealtimeSession:
                 transcript_task = asyncio.ensure_future(self._transcribe(pcm))
                 await asyncio.shield(transcript_task)
                 await _record_transcript()
-            text_parts: list[str] = []
+            unspoken = ""  # generated text not yet synthesized
             request = GenRequest(self._instructions, list(self._tools), list(self._history))
             async for gen in self._generate(request):
                 if isinstance(gen, GenText):
@@ -222,6 +230,17 @@ class RealtimeSession:
                     await self._emit(
                         {"type": "response.output_audio_transcript.delta", "delta": gen.text}
                     )
+                    # Sentence-streamed synthesis (engine-internal plumbing —
+                    # decision 8 guard (b): the seam sees the same delta
+                    # events, just sooner): each completed sentence is
+                    # synthesized and its audio emitted while the provider is
+                    # still generating the tail, so time-to-first-audio is
+                    # one sentence, not the whole reply — the 4.4 overlap,
+                    # applied between the engine's own stages.
+                    unspoken += gen.text
+                    ready, unspoken = split_sentences(unspoken)
+                    for segment in ready:
+                        await self._speak(segment)
                 else:
                     self._history.append(
                         {
@@ -246,13 +265,8 @@ class RealtimeSession:
             out_tokens = _rough_tokens(text)
             if text:
                 self._history.append({"role": "assistant", "content": text})
-                async for chunk in self._synthesize(text, self._voice):
-                    await self._emit(
-                        {
-                            "type": "response.audio.delta",
-                            "delta": base64.b64encode(chunk).decode(),
-                        }
-                    )
+            # The tail: whatever never reached a sentence boundary.
+            await self._speak(unspoken)
             await self._done("completed", in_tokens, out_tokens)
         except asyncio.CancelledError:
             # The contract: cancel stops the stream HERE — no late deltas. But
@@ -262,11 +276,42 @@ class RealtimeSession:
                     await _record_transcript()  # the shielded task finishes
                 except Exception:  # noqa: BLE001 — the stage itself failed; nothing to record
                     log.debug("kenzy-s2s: transcript unrecoverable on cancel", exc_info=True)
+            self._record_spoken(text_parts)  # what the room already heard
             await self._done("cancelled", in_tokens, out_tokens)
         except Exception as exc:  # noqa: BLE001 — a stage failed; the client is told
             log.exception("kenzy-s2s: response failed")
+            self._record_spoken(text_parts)  # what the room already heard
             await self._error(f"response failed: {exc}")
             await self._done("failed", in_tokens, out_tokens)
+
+    def _record_spoken(self, text_parts: list[str]) -> None:
+        """Append partial spoken text to history on a cancel/failure — but
+        only if the completed path hasn't already recorded it, so a normal
+        completion isn't double-appended. Idempotent by the last-item check."""
+        text = "".join(text_parts).strip()
+        if not text:
+            return
+        last = self._history[-1] if self._history else None
+        already = (
+            isinstance(last, dict)
+            and last.get("role") == "assistant"
+            and last.get("content") == text
+        )
+        if already:
+            return  # the completed path already recorded it
+        self._history.append({"role": "assistant", "content": text})
+
+    async def _speak(self, text: str) -> None:
+        """Synthesize one text segment and emit its audio deltas."""
+        if not text.strip():
+            return
+        async for chunk in self._synthesize(text, self._voice):
+            await self._emit(
+                {
+                    "type": "response.audio.delta",
+                    "delta": base64.b64encode(chunk).decode(),
+                }
+            )
 
     async def _done(self, status: str, in_tokens: int, out_tokens: int) -> None:
         await self._emit(

@@ -258,3 +258,27 @@ async def test_cancel_sends_response_cancel() -> None:
     assert "response.cancel" in fake.sent_types()
     done = events[-1]
     assert isinstance(done, ResponseDone) and done.status == "cancelled"
+
+
+def test_nested_chat_tools_normalize_to_flat_realtime_shape() -> None:
+    """The skill registry emits chat-completions NESTED schemas; Realtime
+    sessions take them FLAT. The client normalizes at the seam boundary —
+    found live: the mixed shape passed the local engine and errored OpenAI's
+    GA API, silently dropping every cloud conversation to classic."""
+    nested = {
+        "type": "function",
+        "function": {
+            "name": "set_light",
+            "description": "Turn a light on or off.",
+            "parameters": {"type": "object", "properties": {"on": {"type": "boolean"}}},
+        },
+    }
+    flat = EngineClient._realtime_tool(nested)
+    assert flat == {
+        "type": "function",
+        "name": "set_light",
+        "description": "Turn a light on or off.",
+        "parameters": {"type": "object", "properties": {"on": {"type": "boolean"}}},
+    }
+    # An already-flat tool (END_CONVERSATION_TOOL's shape) passes through intact.
+    assert EngineClient._realtime_tool(flat) == flat

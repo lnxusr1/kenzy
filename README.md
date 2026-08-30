@@ -2,7 +2,7 @@
 
 **[kenzy.ai](https://kenzy.ai)** &middot; [Documentation](https://docs.kenzy.ai/) &middot; [Install](https://docs.kenzy.ai/getting-started/)
 
-A distributed home voice assistant built as six independently deployable microservices. Kenzy runs wake-word detection locally on room nodes (Orange Pi Zero 3 / 3W or Raspberry Pi 3 / 4 / 5), streams audio to a central server for transcription, runs it through an LLM with tool-calling skills, and streams synthesized speech back to the room. It also keeps a live, per-room sense of where people are, built from your Home Assistant sensors and from who it last heard in each room.
+A distributed home voice assistant built as seven independently deployable microservices. Kenzy runs wake-word detection locally on room nodes (Orange Pi Zero 3 / 3W or Raspberry Pi 3 / 4 / 5), streams audio to a central server for transcription, runs it through an LLM with tool-calling skills, and streams synthesized speech back to the room. It also keeps a live, per-room sense of where people are, built from your Home Assistant sensors and from who it last heard in each room.
 
 ## Architecture
 
@@ -26,6 +26,20 @@ Node (mic) ──PCM over WebSocket──► Server
 Alongside the voice pipeline, the server holds a persistent subscription to Home
 Assistant's WebSocket API, feeding the room-presence model described under
 [Room presence](#room-presence). It's the one inbound stream that isn't audio.
+
+**Follow-up mode** (experimental, off by default): with `s2s.enabled` switched
+on, a wake word on a room with an echo-cancelling speakerphone opens a
+*conversation* instead of a single command — Kenzy keeps listening for ~8
+seconds after each answer (no wake word to reply), listens while she thinks,
+can be interrupted over her own voice, and ends only when you say so. Slow
+tools detach into a background task ledger ("I'll let you know when it's
+done") and deliver their results when they land. Powered by the `kenzy-s2s`
+conversation engine below — or, opt-in, by OpenAI's Realtime API
+(`s2s.profile: openai-realtime`; read the
+[docs caveat](https://docs.kenzy.ai/configuration/s2s/) first — the cloud
+engine hears all room audio during a conversation). Rooms without echo
+cancellation, and every engine failure, stay on the classic pipeline
+automatically.
 
 | Service | Command | Default port | Role |
 |---|---|---|---|
@@ -126,6 +140,7 @@ kenzy-stt     [configs/stt.yaml]
 kenzy-tts     [configs/tts.yaml]
 kenzy-llm     [configs/llm.yaml]
 kenzy-speaker [configs/speaker.yaml]
+kenzy-s2s     [configs/s2s.yaml]      # optional: the conversation engine (follow-up mode)
 
 kenzy-node    [configs/node.yaml]     # then each room device (discovers + pulls from the server)
 ```
@@ -221,6 +236,7 @@ Included skills:
 | `lists.py` | Shopping / to-do lists, backed by Home Assistant's `todo` entities — add, read, check off, create (no Kenzy-side storage, so your phone already has them) |
 | `schedule.py` | Timers, alarms, and reminders — including "turn on the lights in 30 seconds", replayed through the pipeline at fire time |
 | `proactive_control.py` | Voice control over unprompted announcements — "stop" silences a sounding alert until its sensor cycles; "disable the alerts" turns the feature off entirely, and confirms first |
+| `followup_control.py` | Voice control over follow-up mode — "turn off follow-up mode" disables conversations house-wide (recognized voices, confirms first); works from inside a conversation too |
 | `memory_skill.py` | Remember / recall / forget, per person, with private / personal / shared tiers (recognized voices only) |
 | `presence.py` | "Is Mom home?", "where's Alice?", "is anyone in the loft?" — HA `person` entities composed with the room-presence model (where a voice was last heard, with its age). Spoken names match forgivingly ("Sara" finds Sarah; nicknames via per-person aliases on the People page), and a genuine near-tie asks instead of guessing |
 | `datetime_skill.py` | Current date and time (with a deterministic fast path) |
@@ -233,6 +249,7 @@ Included skills:
 | `random_tools.py` | Coin flip, dice, random number, pick from list |
 | `knock_knock.py` | Knock-knock jokes, both directions — she tells them and plays along with yours |
 | `about.py` | Reports the installed Kenzy version |
+| `debug_delay.py` | Test-only: "run a test for N seconds" blocks the pipeline to exercise slow-response handling — inert unless explicitly enabled |
 
 ### Adding a skill
 

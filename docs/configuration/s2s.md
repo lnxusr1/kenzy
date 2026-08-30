@@ -68,3 +68,36 @@ automatic one (the multi-host escape hatch).
 | `stt.timeout` | `30.0` | Transcription timeout, seconds. |
 | `tts.url` | *(auto-wired)* | The TTS service's `/speak` endpoint. |
 | `tts.timeout` | `30.0` | Synthesis timeout, seconds. |
+
+## Using a cloud realtime engine instead
+
+`kenzy-s2s` is the **default** engine, and the default stays local. The
+server can instead point the whole conversation path at OpenAI's Realtime
+API — set on the server (not in this file):
+
+```yaml
+# server.yaml (or Settings → Backend services)
+s2s:
+  enabled: true
+  profile: openai-realtime   # default: kenzy (this local service)
+  # model: gpt-realtime      # optional; this is the profile's default
+```
+
+The connection authenticates with `OPENAI_API_KEY` from the server's
+environment (a custom endpoint set via `s2s.url` uses `CUSTOM_LLM_API_KEY`
+instead — the OpenAI key is never sent to a non-OpenAI host). With the cloud
+profile active, this local service isn't used and doesn't need to run.
+
+!!! danger "What the cloud engine hears"
+    With `profile: openai-realtime`, **all room audio captured during a
+    conversation streams to OpenAI** — the model hears everything said,
+    including anything sensitive spoken aloud. There is no pre-screening:
+    audio leaves before any transcript exists to check. If someone says a
+    password mid-conversation, it reaches the provider as audio. That is
+    the trade of a cloud realtime engine; make it knowingly.
+
+    Two things do **not** change: secrets Kenzy *stores* for you (the
+    [lockbox](../memory.md)) never enter any model or any cloud
+    reply — spoken readback still routes through the local lockbox flow —
+    and who-may-do-what stays decided locally: every tool call is checked
+    against the speaker's locally-resolved voice identity before it runs.

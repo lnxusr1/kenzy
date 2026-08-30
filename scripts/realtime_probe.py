@@ -212,7 +212,7 @@ async def probe(mode: str, clip: Path, model: str, voice: str, key: str,
         while time.monotonic() < deadline:
             try:
                 raw = await asyncio.wait_for(ws.recv(), timeout=8)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 row("(recv timeout — ending)")
                 break
             evt = json.loads(raw)
@@ -277,7 +277,7 @@ async def probe(mode: str, clip: Path, model: str, voice: str, key: str,
                                     first_transcript_evt = ms()
                                 row(lt + "  (LATE — after response.done)",
                                     json.dumps(late.get("transcript", late.get("delta", "")))[:80])
-                    except asyncio.TimeoutError:
+                    except TimeoutError:
                         pass
                     break
 

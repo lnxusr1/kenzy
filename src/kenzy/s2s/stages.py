@@ -153,20 +153,38 @@ def _chat_tool(tool: dict[str, Any]) -> dict[str, Any]:
 
 
 def _chat_messages(req: GenRequest) -> list[dict[str, Any]]:
-    """The session's one history, translated to chat-completions shape."""
+    """The session's one history, translated to chat-completions shape.
+
+    Call/output ADJACENCY is normalized here: chat completions requires a
+    ``tool`` message to immediately follow the assistant message carrying its
+    ``tool_calls``, but the session history interleaves (the reply TEXT is
+    recorded after the loop, so speak-while-calling — the working-pace
+    acknowledgment — lands assistant text between a call and its output).
+    Found live 2026-08-30, the first time a model both spoke and called in
+    one response. Outputs are paired to their calls here; an unmatched call
+    or orphaned output is dropped rather than shipped as a guaranteed 400.
+    """
     messages: list[dict[str, Any]] = []
     if req.instructions:
         messages.append({"role": "system", "content": req.instructions})
+    outputs = {
+        str(item.get("call_id", "")): str(item.get("output", ""))
+        for item in req.history
+        if item.get("type") == "function_call_output"
+    }
     for item in req.history:
         kind = item.get("type")
         if kind == "function_call":
+            call_id = str(item.get("call_id", ""))
+            if call_id not in outputs:
+                continue  # in-flight or abandoned call: never ship half a pair
             messages.append(
                 {
                     "role": "assistant",
                     "content": None,
                     "tool_calls": [
                         {
-                            "id": str(item.get("call_id", "")),
+                            "id": call_id,
                             "type": "function",
                             "function": {
                                 "name": str(item.get("name", "")),
@@ -176,14 +194,23 @@ def _chat_messages(req: GenRequest) -> list[dict[str, Any]]:
                     ],
                 }
             )
-        elif kind == "function_call_output":
             messages.append(
-                {
-                    "role": "tool",
-                    "tool_call_id": str(item.get("call_id", "")),
-                    "content": str(item.get("output", "")),
-                }
+                {"role": "tool", "tool_call_id": call_id, "content": outputs[call_id]}
             )
+        elif kind == "function_call_output":
+            continue  # emitted beside its call above
+        elif kind == "message" and isinstance(item.get("content"), list):
+            # A Realtime-shaped message item (conversation.item.create) — the
+            # form the seam's add_context sends, valid against OpenAI's API
+            # too, so ONE client shape serves both engines. Flatten the
+            # content parts to their text.
+            text = " ".join(
+                str(part.get("text", ""))
+                for part in item["content"]
+                if isinstance(part, dict) and part.get("text")
+            ).strip()
+            if text:
+                messages.append({"role": str(item.get("role", "system")), "content": text})
         elif "role" in item:
             messages.append({"role": str(item["role"]), "content": str(item.get("content", ""))})
     return messages
@@ -222,7 +249,15 @@ def provider_generate(
                 timeout=cfg.timeout,
             ) as resp,
         ):
-            resp.raise_for_status()
+            if resp.status_code >= 400:
+                # The provider's own explanation is the diagnosis (lived
+                # 2026-08-30: a bare '400 Bad Request' hid a tool-ordering
+                # rejection behind two more debugging steps).
+                detail = (await resp.aread()).decode(errors="replace")[:500]
+                raise RuntimeError(
+                    f"provider {resp.status_code} from {base}/chat/completions: {detail}"
+                )
+            done = False
             async for raw in resp.aiter_lines():
                 if not raw.startswith("data:"):
                     continue
@@ -246,6 +281,17 @@ def provider_generate(
                             slot["name"] += str(fn["name"])
                         if fn.get("arguments"):
                             slot["args"] += str(fn["arguments"])
+                    # Terminate on the model's OWN completion signal, not only
+                    # on the "[DONE]" sentinel: some providers/models (measured
+                    # live 2026-08-29: gpt-5.1) send finish_reason and then keep
+                    # the connection open WITHOUT "[DONE]", so waiting only for
+                    # the sentinel blocks aiter_lines until the read timeout —
+                    # a deterministic ~30 s stall that errored every delivery
+                    # turn. finish_reason is the standard end-of-message signal.
+                    if choice.get("finish_reason"):
+                        done = True
+                if done:
+                    break
         for index in sorted(calls):
             slot = calls[index]
             yield GenToolCall(

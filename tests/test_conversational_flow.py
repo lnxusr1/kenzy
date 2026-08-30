@@ -121,7 +121,9 @@ async def test_sustained_speech_opens_session_with_onset_flush(monkeypatch):
     await c._begin_streaming("sid1", followup=True)
     monkeypatch.setattr(c, "_dialog_vad_score", lambda flat: 0.9)  # speech
     for _ in range(c._dialog_onset_frames):
-        await c._handle_onset_frame(FRAME)
+        # LOUD, not zeros: the onset confirms on shape AND level (a silent
+        # frame with a high VAD score is the phantom class, rejected).
+        await c._handle_onset_frame(LOUD)
     starts = [m for m in _texts(ws) if m.get("type") == protocol.MSG_AUDIO_START]
     assert len(starts) == 1
     assert c._onset_pending is False
@@ -139,8 +141,9 @@ async def test_boo_a_short_complete_word_opens_the_session(monkeypatch):
     # ~2 frames (160ms) of speech, then silence: a short COMPLETE utterance.
     scores = iter([0.9, 0.9] + [0.0] * 20)
     monkeypatch.setattr(c, "_dialog_vad_score", lambda flat: next(scores))
-    for _ in range(6):
-        await c._handle_onset_frame(FRAME)
+    for i in range(6):
+        # The word itself is LOUD (shape AND level); the tail is silence.
+        await c._handle_onset_frame(LOUD if i < 2 else FRAME)
     starts = [m for m in _texts(ws) if m.get("type") == protocol.MSG_AUDIO_START]
     assert len(starts) == 1  # "Boo" was heard, not discarded
     assert c._onset_pending is False
