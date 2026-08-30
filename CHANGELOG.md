@@ -10,7 +10,7 @@ here and spelled out in **[Upgrading](https://docs.kenzy.ai/upgrading/)**.
 
 ## [Unreleased]
 
-## [6.0.0] - 2026-08-29
+## [6.0.0]
 
 **The conversation era.** Kenzy talks *with* you now, not just *at* you — the
 S2S interaction re-founding, releasing single-node. Existing **server**
