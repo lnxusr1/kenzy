@@ -10,9 +10,14 @@ here and spelled out in **[Upgrading](https://docs.kenzy.ai/upgrading/)**.
 
 ## [Unreleased]
 
-Existing **server** installs need one manual step for the new `kenzy-s2s`
-service unit — see **[Upgrading](https://docs.kenzy.ai/upgrading/#600)**.
-Everything else is opt-in; nodes need nothing.
+## [6.0.0] - 2026-08-29
+
+**The conversation era.** Kenzy talks *with* you now, not just *at* you — the
+S2S interaction re-founding, releasing single-node. Existing **server**
+installs need one manual step for the new `kenzy-s2s` service unit — see
+**[Upgrading](https://docs.kenzy.ai/upgrading/#600)**. Everything else is
+opt-in; nodes need nothing, and follow-up mode stays off until you switch it
+on.
 
 ### Added
 
