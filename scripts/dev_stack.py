@@ -39,7 +39,7 @@ import sys
 import threading
 import time
 
-SERVICES = ["server", "stt", "tts", "llm", "speaker"]  # start order; node is opt-in
+SERVICES = ["server", "stt", "tts", "llm", "speaker", "s2s"]  # start order; node is opt-in
 
 
 def _home() -> str:
@@ -136,7 +136,7 @@ def main() -> int:
         # present, else the pinned packaged default) instead of the real
         # config-pull boot path. Off by default — pulling is what makes the
         # dashboard's Services editor actually apply to a dev stack.
-        if name in ("stt", "tts", "llm", "speaker") and args.local:
+        if name in ("stt", "tts", "llm", "speaker", "s2s") and args.local:
             local = os.path.join(_home(), "configs", f"{name}.yaml")
             if not os.path.exists(local):
                 # Pin the packaged default explicitly — otherwise the resolver

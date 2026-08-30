@@ -95,18 +95,23 @@ class _StubWS:
 
 
 async def test_dashboard_http_surfaces():
+    import socket
+
+    with socket.socket() as _s:
+        _s.bind(("127.0.0.1", 0))
+        _port = _s.getsockname()[1]  # 8771 is kenzy-s2s's port now
     server = AudioServer({"node_defaults": {"wakeword_threshold": 0.5}})
     server._nodes["den"] = NodeSession(
         ws=_StubWS(), node_id="den", room_id="den", streaming=True, session_id="abcd1234ef"
     )
     dash = Dashboard(
-        server, {}, DashboardConfig(enabled=True, bind="127.0.0.1", port=8771, auth_token="t0ken")
+        server, {}, DashboardConfig(enabled=True, bind="127.0.0.1", port=_port, auth_token="t0ken")
     )
     auth = {"Authorization": "Bearer t0ken"}
     task = asyncio.create_task(dash.serve())
     await asyncio.sleep(0.25)
     try:
-        async with httpx.AsyncClient(base_url="http://127.0.0.1:8771") as c:
+        async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{_port}") as c:
             # static index is public
             r = await c.get("/")
             assert r.status_code == 200

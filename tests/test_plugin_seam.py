@@ -173,6 +173,23 @@ async def test_sync_plugins_restarts_only_on_a_config_change() -> None:
     client._plugin_tasks["sample"].cancel()
 
 
+async def test_disabled_addon_never_starts_and_the_toggle_live_applies() -> None:
+    """addons.<id>.enabled: false — the off switch (2026-08-26): no task, no
+    device open, no retry loop, without uninstalling the distribution. Flipping
+    it back on applies live (this runs after every config apply)."""
+    client = NodeClient({"node_id": "n1"})
+    client._plugin_scan = _scan()
+    client._addons_cfg = {"sample": {"enabled": False}}
+    client._sync_plugins()
+    assert "sample" not in client._plugin_tasks  # off: nothing starts
+    client._addons_cfg = {"sample": {"enabled": True}}
+    client._sync_plugins()
+    assert "sample" in client._plugin_tasks  # on again — live, no restart
+    client._addons_cfg = {"sample": {"enabled": False}}
+    client._sync_plugins()
+    assert "sample" not in client._plugin_tasks  # and off cancels the running task
+
+
 async def test_a_crashing_node_half_never_takes_the_node_down(caplog: Any) -> None:
     import types
 

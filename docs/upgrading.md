@@ -32,6 +32,35 @@ Upgrade the **server first**, then services, then nodes.
 
 Newest first. Anything not listed needs no manual steps.
 
+### 6.0.0
+
+One new service, one manual step for existing **server** installs.
+
+**The `kenzy-s2s` conversation engine** (follow-up mode's local engine) ships
+as a seventh service. A fresh install creates its unit automatically; a
+package upgrade over an existing install cannot add a systemd unit, so an
+upgraded server host needs it once:
+
+```bash
+curl -sSL https://kenzy.ai/install.sh | bash -s -- --profile server --yes
+```
+
+Re-running the installer is safe and idempotent — it preserves your config
+home and token, upgrades the venv in place, and creates only what's missing
+(this is the same one-liner you installed with). If you prefer not to re-run
+it, copy an existing `kenzy-*.service` unit in
+`~/.config/systemd/user/`, point `ExecStart` at
+`.local/share/kenzy/venv/bin/kenzy-s2s`, then
+`systemctl --user daemon-reload && systemctl --user enable --now kenzy-s2s`.
+
+Everything else is opt-in and needs no steps: follow-up mode stays **off**
+until you switch `s2s.enabled` on (Settings → Backend services), and it only
+changes behavior in rooms whose speakerphone has hardware echo cancellation.
+Nodes need no changes — older nodes simply keep the classic one-shot behavior
+everywhere. The cloud engine option (`s2s.profile: openai-realtime`) is a
+separate opt-in; read [its caveat](configuration/s2s.md#using-a-cloud-realtime-engine-instead)
+before enabling it.
+
 ### 5.1.3
 
 Nothing required. Stateful audio groups change behavior **only for nodes that

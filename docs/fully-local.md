@@ -45,9 +45,10 @@ and speaker identification — runs entirely on your machines. Two honest caveat
 | Speech-to-text | faster-whisper on `kenzy-stt` | **Local by default** (`provider: whisper`) |
 | Reasoning (LLM) | Ollama / LM Studio via LiteLLM | One config change (below) |
 | Text-to-speech | Kokoro on `kenzy-tts` | One extra + one config change (below) |
+| Conversations (follow-up mode) | `kenzy-s2s` composing the stages above | **Local engine by default** — its model provider follows the same split (below) |
 | Dashboard, node links, HA control, lists | — | Already LAN-only by design |
 
-So on a default install, three of five stages are already local — only the LLM
+So on a default install, most stages are already local — only the LLM
 and the voice need switching.
 
 ### Configuring the brain (the LLM)
@@ -144,3 +145,17 @@ only a double failure reaches the error cue:
   cloud fails — if you've installed the `kokoro` extra.
 - **STT:** `openai.fallback: true` (the default) retries with local whisper —
   relevant only if you switched STT to the cloud provider.
+
+## The conversation engine
+
+[Follow-up mode](talking-to-kenzy.md#follow-up-mode-experimental)'s engine,
+`kenzy-s2s`, is **local by default** and composes the stages above — so going
+local for STT, TTS, and the model makes conversations fully local too. Its
+model provider is its own setting (it may legitimately differ from the classic
+pipeline's — pick for realtime latency): point
+[`provider.base_url`](configuration/s2s.md) at a local vLLM or llama.cpp
+server and conversations never leave the house. A validated local recipe —
+model, serving command, measured latencies — is planned for this page once
+benchmarking on reference hardware completes. The OpenAI Realtime cloud
+engine (`s2s.profile: openai-realtime`) is the deliberate opposite of this
+page — see [its caveat](configuration/s2s.md#using-a-cloud-realtime-engine-instead).

@@ -49,6 +49,7 @@ export const SERVICE_ENUMS = {
     log_capture_level: CAPTURE_LEVELS,
   },
   speaker: { log_level: LOG_LEVELS, log_capture_level: CAPTURE_LEVELS },
+  s2s: { log_level: LOG_LEVELS },
 };
 
 // One-line help shown under each field. Keyed by dotted path (services) or key
@@ -158,6 +159,23 @@ export const SERVICE_HELP = {
     enroll_prompts: "Sentences read aloud during voice enrollment (one per sample).",
     log_level: LOG_HELP,
     log_capture_level: CAPTURE_HELP,
+    "tls.cert": TLS_CERT_HELP,
+    "tls.key": TLS_KEY_HELP,
+  },
+  s2s: {
+    host: "Bind address for the conversation engine (follow-up mode).",
+    port: "WebSocket port — the server's s2s.url points here.",
+    "provider.base_url": "OpenAI-compatible endpoint for the conversation model. Blank = api.openai.com; a local vLLM / llama.cpp / LiteLLM proxy goes here.",
+    "provider.model": "Chat-completions model for follow-up conversations. May differ from the classic pipeline's — pick for realtime latency.",
+    "provider.auth_env": "Name of the environment variable holding the provider's API key — never the key itself. CUSTOM_LLM_API_KEY for a custom base_url; OPENAI_API_KEY is never sent to a non-OpenAI endpoint.",
+    "provider.temperature": "Sampling temperature. Blank = the provider's default (OpenAI's newest models reject an explicit one); set 0.0 for deterministic local serving.",
+    "provider.max_output": "Reply-length ceiling per turn, in tokens.",
+    "provider.timeout": "Model request timeout (seconds).",
+    "stt.url": "Transcription service the engine composes (auto-wired from the server; set for multi-host).",
+    "stt.timeout": "Transcription request timeout (seconds).",
+    "tts.url": "Speech service the engine composes (auto-wired from the server; set for multi-host).",
+    "tts.timeout": "Synthesis request timeout (seconds).",
+    log_level: LOG_HELP,
     "tls.cert": TLS_CERT_HELP,
     "tls.key": TLS_KEY_HELP,
   },
@@ -298,6 +316,12 @@ export const SERVER_HELP = {
   "alarm.ring_repeats": "How many times a firing alarm re-rings before giving up. A wake word stops it sooner.",
   "alarm.ring_interval": "Seconds between alarm re-rings.",
   "streaming.enabled": "Start speaking the first sentence while the rest is still being written — noticeably faster replies. Off = wait for the whole answer first.",
+  "proactive.tasks.enabled": "Announce finished background tasks in the room they started from. Quiet hours, DND rooms, and the rate limit all apply. Off = results wait for your next conversation.",
+  "s2s.enabled": "Follow-up mode (experimental): she keeps listening ~8s after answering, so you can reply without the wake word. Needs kenzy-s2s + echo-cancelling speakers; other rooms stay classic. Restart to apply.",
+  "s2s.url": "The conversation engine's address (ws://host:8771/v1/realtime). Leave empty to find a co-registered kenzy-s2s automatically.",
+  "s2s.hard_cap_s": "The longest a single follow-up conversation may run, in seconds, before it ends on its own — stuck-open protection.",
+  "s2s.profile": "Which conversation engine to use: kenzy (local, the default) or openai-realtime (cloud — ALL room audio streams to OpenAI while a conversation runs; see the docs). Restart to apply.",
+  "s2s.model": "Model name sent to the engine's ?model= query. Blank = the profile's default (openai-realtime: gpt-realtime; the local engine configures its model in s2s.yaml).",
   "discovery.enabled": "Announce this server on the network so nodes find it without being told an address.",
   "discovery.instance": "The name this server announces itself under. Only matters if you run more than one.",
   "integrations.mqtt.enabled": "Publish room state to an MQTT broker so Home Assistant sees your nodes as devices.",
@@ -323,6 +347,16 @@ export function serverHelp(key) {
   return SERVER_HELP[key] || null;
 }
 
+// Server settings whose value is a fixed vocabulary — rendered as a select in
+// the Settings grid (same idea as NODE_ENUMS/SERVICE_ENUMS).
+export const SERVER_ENUMS = {
+  "s2s.profile": ["kenzy", "openai-realtime"],
+};
+
+export function serverEnum(key) {
+  return SERVER_ENUMS[key] || null;
+}
+
 // Semantic sections for editors whose keys don't group cleanly by dotted parent
 // (flat keys, or backends we want combined). Each entry is [label, predicate].
 export const SERVICE_SECTIONS = {
@@ -343,7 +377,7 @@ export const SERVICE_SECTIONS = {
 export const SERVER_SECTIONS = [
   ["Server", (k) => !k.includes(".")], // top-level keys (experimental, …)
   ["Dashboard", (k) => k.startsWith("dashboard.")],
-  ["Backend services", (k) => ["stt.", "tts.", "llm.", "speaker."].some((p) => k.startsWith(p))],
+  ["Backend services", (k) => ["stt.", "tts.", "llm.", "speaker.", "s2s."].some((p) => k.startsWith(p))],
   ["Dialog & alarms", (k) => k.startsWith("dialog.") || k.startsWith("alarm.")],
   ["Discovery", (k) => k.startsWith("discovery.")],
   ["Integrations", (k) => k.startsWith("integrations.")],

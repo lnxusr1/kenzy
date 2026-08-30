@@ -73,6 +73,43 @@ On rooms with an echo-cancelling speaker you don't even have to wait for her
 to finish: **start talking over her** during a conversation and she'll drop
 her volume, then yield the floor to you mid-sentence.
 
+## Follow-up mode (experimental)
+
+With **follow-up mode** switched on (Settings → Backend services →
+`s2s.enabled` — off by default), every wake word in a room with an
+echo-cancelling speaker opens a real back-and-forth conversation, not a
+single command:
+
+- **Just keep talking.** After each answer she listens for about eight
+  seconds — reply, correct yourself ("wait, I meant the fan"), or ask the
+  next thing, no wake word needed.
+- **She listens while she thinks.** Change your mind mid-processing —
+  "actually, turn it off" — and that becomes the next turn.
+- **Interrupt her freely.** Talking over her reply makes her stop and
+  listen, same as any conversation.
+- **You end it, or silence does.** Say "that's all", "end the
+  conversation", or "goodbye" and she wraps up with a short farewell;
+  going quiet past the window ends it too. Completing a command does NOT
+  end it — she stays available for the follow-up.
+- **Slow work goes to the background.** Ask for something that takes a
+  while — "look that up and let me know" — and she starts it, tells you
+  so, and keeps the conversation free. If it finishes while you're still
+  talking, she comes back with the result as soon as she's done speaking;
+  if it finishes much later, she won't interrupt — she'll mention it the
+  next time you talk ("while you were away…"), announce it in the room
+  only if you've enabled `proactive.tasks`, or simply answer when you ask
+  "how's that going?".
+- **"Turn off follow-up mode"** disables the whole feature by voice
+  (recognized voices, confirms first) — and works from inside a
+  conversation.
+
+Rooms without echo cancellation, and anything that goes wrong with the
+engine, quietly keep the classic one-command-per-wake behavior. The
+conversation engine is local by default; an OpenAI Realtime cloud option
+exists behind an explicit opt-in — read
+[its caveat](configuration/s2s.md#using-a-cloud-realtime-engine-instead)
+first.
+
 ## What the sounds mean
 
 | Sound | Meaning |

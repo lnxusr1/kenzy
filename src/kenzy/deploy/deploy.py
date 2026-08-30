@@ -148,6 +148,11 @@ SERVICE_INFO: dict[str, dict[str, str]] = {
         "config": "configs/speaker.yaml",
         "desc": "Kenzy Speaker (voice identification)",
     },
+    "s2s": {
+        "script": "kenzy-s2s",
+        "config": "configs/s2s.yaml",
+        "desc": "Kenzy S2S (conversation engine)",
+    },
 }
 
 # OS packages required per service (beyond the base set).
@@ -160,6 +165,7 @@ APT_EXTRA: dict[str, list[str]] = {
     "tts": ["espeak-ng"],
     "llm": [],
     "speaker": ["libportaudio2", "portaudio19-dev", "python3-dev", "libgomp1"],
+    "s2s": [],
 }
 
 #: OS packages required by PIP EXTRAS (deploy.yaml `extras:`), not services.

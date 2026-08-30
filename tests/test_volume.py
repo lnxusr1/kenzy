@@ -5,6 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+import kenzy.llm.skills as sk
 from kenzy.llm.builtin_skills.volume import classify
 from kenzy.node.client import (
     _MUTED_ALERT_FLOOR,
@@ -296,3 +297,69 @@ def test_bare_volume_words_still_mean_the_node():
     assert classify("mute") == ("mute", None)
     assert classify("turn it up") == ("up", None)
     assert classify("set the volume to 60") == ("set", 60)
+
+
+# ---------------------------------------------------------------------------
+# The tool twin (v6 conversation path — no fast intents there)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _fresh_request_context():
+    """Token-reset the request/action contextvars — a bare .set() here leaks
+    into later test FILES (the tests/conftest.py trap)."""
+    t_req = sk._request_ctx.set({})
+    t_act = sk._actions.set([])
+    yield
+    sk._actions.reset(t_act)
+    sk._request_ctx.reset(t_req)
+
+
+def _twin_ctx(channel: str = "voice") -> None:
+    sk.begin_actions()
+    sk.begin_request({"channel": channel, "rooms": ["office"], "room_id": "office"})
+
+
+async def test_speaker_volume_twin_queues_the_same_actions():
+    """The skill twin drives the SAME server action as the fast intent, so the
+    v6 path and the classic path can never actuate differently."""
+    from kenzy.llm.builtin_skills.volume import set_speaker_volume
+
+    for action, expected in [
+        ("up", {"type": "set_volume", "delta": 15}),
+        ("down", {"type": "set_volume", "delta": -15}),
+        ("mute", {"type": "set_volume", "muted": True}),
+        ("unmute", {"type": "set_volume", "muted": False}),
+    ]:
+        _twin_ctx()
+        reply = await set_speaker_volume(action)
+        assert reply and "Unknown" not in reply
+        assert sk.take_actions() == [expected]
+
+
+async def test_speaker_volume_twin_set_clamps_and_requires_level():
+    from kenzy.llm.builtin_skills.volume import set_speaker_volume
+
+    _twin_ctx()
+    reply = await set_speaker_volume("set", 250)
+    assert "100" in reply
+    assert sk.take_actions() == [{"type": "set_volume", "level": 100}]
+
+    _twin_ctx()
+    reply = await set_speaker_volume("set")
+    assert "required" in reply
+    assert sk.take_actions() == []
+
+
+async def test_speaker_volume_twin_refuses_off_node_and_bad_action():
+    from kenzy.llm.builtin_skills.volume import set_speaker_volume
+
+    _twin_ctx("assist")  # no asking node on the assist channel
+    reply = await set_speaker_volume("up")
+    assert "room" in reply
+    assert sk.take_actions() == []
+
+    _twin_ctx()
+    reply = await set_speaker_volume("blast")
+    assert "Unknown" in reply
+    assert sk.take_actions() == []

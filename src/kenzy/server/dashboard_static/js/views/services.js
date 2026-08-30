@@ -66,6 +66,12 @@ const fmt = (v) => {
   return String(v);
 };
 
+// Text-input placeholders only: a blank/null/absent default shows a BLANK
+// placeholder — "blank"/"null"/"unset" written into the field reads like a
+// value someone set (founder call 2026-08-28); the help line under the field
+// says what blank means. Select options keep fmt(): an option needs text.
+const ph = (v) => (v === "" || v == null ? "" : fmt(v));
+
 // Sentinel for the "inherit" select option ("" can be a real enum value, e.g.
 // reasoning_effort's "don't send").
 const INHERIT = "__inherit__";
@@ -224,7 +230,7 @@ function ServiceEditor({ name, onBack }) {
       // decimal like 0.25 isn't collapsed to an integer mid-keystroke.
       const step = Number.isInteger(baseVal(k)) ? "1" : "any";
       input = html`<input type="number" step=${step} inputmode="decimal" disabled=${!info.controls}
-        value=${set ? v : ""} placeholder=${fmt(defs[k])}
+        value=${set ? v : ""} placeholder=${ph(defs[k])}
         onInput=${(e) => setKey(k, e.target.value === "" ? undefined : e.target.value)} />`;
     } else if (t === "list") {
       const items = Array.isArray(v) ? v : [];
@@ -248,7 +254,7 @@ function ServiceEditor({ name, onBack }) {
       </div>`;
     } else {
       input = html`<input disabled=${!info.controls} value=${set ? v : ""}
-        placeholder=${fmt(defs[k])}
+        placeholder=${ph(defs[k])}
         onInput=${(e) => setKey(k, e.target.value === "" ? undefined : e.target.value)} />`;
     }
     return html`

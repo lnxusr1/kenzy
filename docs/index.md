@@ -29,6 +29,12 @@ Assistant, and it can recognize **who** is talking.
 - **Take her with you on your phone** — through the Home Assistant companion app,
   the same Kenzy (your memory, your identity) answers from anywhere — and can
   speak in her own voice.
+- **Have an actual conversation** *(experimental)* — switch on
+  [follow-up mode](talking-to-kenzy.md#follow-up-mode-experimental) and one
+  wake word opens a back-and-forth: reply without the wake word, correct
+  yourself mid-thought, interrupt her freely, hand off slow requests ("look
+  that up and let me know") to finish in the background, and end it when
+  *you* say so.
 - **Manage it all from a web page** — the built-in dashboard shows every room and
   service, and is where you name rooms, tune microphones, and update everything with
   a click.

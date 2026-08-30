@@ -26,6 +26,7 @@ import asyncio
 import contextvars
 import importlib.util
 import inspect
+import json
 import logging
 import sys
 import types
@@ -34,6 +35,11 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+# Re-exported (skill_registry.handoff_text) so the deferred-detach path in
+# kenzy.llm.llm gives the model the SAME wording the server's task executor
+# uses, without kenzy.llm importing kenzy.server.
+from kenzy.taskhandoff import handoff_text as handoff_text
 
 log = logging.getLogger(__name__)
 
@@ -164,6 +170,24 @@ def tier_allows(name: str) -> bool:
     return _TIER_ORDER[current_tier()] >= _TIER_ORDER[need]
 
 
+def tier_refusal(name: str) -> str:
+    """The spoken refusal for a below-tier skill call — shared by execute()
+    and the deferred-detach path so both refuse a stranger identically."""
+    log.info(
+        "Skill %r refused: requires tier %r, speaker is %r",
+        name,
+        _MIN_TIER.get(name),
+        current_tier(),
+    )
+    return (
+        f"Refused: {name!r} requires a {_MIN_TIER.get(name)} voice and the current "
+        "speaker isn't recognized. Tell the user you can't do that for them until "
+        "their voice is enrolled (a household member can enroll them from the "
+        "dashboard's People tab)."
+    )
+
+
+
 # ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
@@ -174,6 +198,32 @@ _CONFIG: dict[str, Any] = {}
 # name (skill or fast intent) → minimum tier required to use it (F1.3).
 # Absent = available to everyone, including unrecognized voices.
 _MIN_TIER: dict[str, str] = {}
+
+#: Per-skill pace class (the async tool contract, ruled 2026-08-29): how long
+#: a call takes and therefore how it runs. "instant" = sub-second, the result
+#: is the reply; "working" = a few seconds, the turn holds but the wait is
+#: covered (model acknowledgment / busy cue); "deferred" = unbounded or
+#: assignment-shaped, NEVER inline — ledger, in-progress hand-off, delivered
+#: when done. Undeclared skills read as "working": never falsely instant,
+#: never floor-blocking.
+_PACES = ("instant", "working", "deferred")
+_PACE: dict[str, str] = {}
+
+#: What the MODEL is told per pace class, appended to the tool description —
+#: it must speak correctly BEFORE calling, not after discovering the wait.
+_PACE_HINTS = {
+    "instant": "",
+    "working": (
+        " (May take a few seconds; briefly acknowledge the user before or"
+        " while calling if a reply is warranted.)"
+    ),
+    "deferred": (
+        " (Runs in the background: calling it starts the job and returns"
+        " immediately — tell the user you've started it, in ONE short"
+        " sentence. The result is announced when ready. Never claim the work"
+        " is done, and NEVER invent, predict, or imagine its results.)"
+    ),
+}
 
 # Deterministic fast-path matchers: (priority, name, async_fn). Higher priority
 # runs first.  Kept sorted descending so dispatch is a simple in-order scan.
@@ -380,17 +430,26 @@ def _generate_schema(func: Callable[..., Any]) -> dict[str, Any]:
 
 
 def skill(
-    _func: Callable[..., Any] | None = None, *, min_tier: str | None = None
+    _func: Callable[..., Any] | None = None,
+    *,
+    min_tier: str | None = None,
+    pace: str | None = None,
 ) -> Callable[..., Any]:
     """Register an async function as a callable skill.
 
     ``min_tier`` (F1.3) declares the identity tier required to use it:
     ``"recognized"`` hides the tool from unrecognized voices entirely (it's
-    not offered to the model, and a direct call is refused). Usable bare
-    (``@skill``) or with the gate (``@skill(min_tier="recognized")``).
+    not offered to the model, and a direct call is refused). ``pace``
+    declares how long a call takes and therefore how it runs — "instant",
+    "working" (the default), or "deferred" (background task; the host
+    detaches it, the writer just writes an ordinary async function). Usable
+    bare (``@skill``) or with options (``@skill(min_tier="recognized",
+    pace="instant")``).
     """
     if min_tier is not None and min_tier not in _TIER_ORDER:
         raise ValueError(f"min_tier must be one of {sorted(_TIER_ORDER)}: {min_tier!r}")
+    if pace is not None and pace not in _PACES:
+        raise ValueError(f"pace must be one of {_PACES}: {pace!r}")
 
     def wrap(func: Callable[..., Any]) -> Callable[..., Any]:
         if not asyncio.iscoroutinefunction(func):
@@ -399,6 +458,8 @@ def skill(
         _MODULES[func.__name__] = _module_of(func)
         if min_tier is not None:
             _MIN_TIER[func.__name__] = min_tier
+        if pace is not None:
+            _PACE[func.__name__] = pace
         return func
 
     return wrap(_func) if _func is not None else wrap
@@ -697,15 +758,52 @@ def registry_info() -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
+def _with_pace_hint(name: str, schema: dict[str, Any]) -> dict[str, Any]:
+    """Append the pace hint to a tool's description — the model must speak
+    correctly BEFORE calling. Non-mutating: the registry keeps the clean
+    schema."""
+    hint = _PACE_HINTS.get(tool_pace().get(name, "working"), "")
+    if not hint:
+        return schema
+    out: dict[str, Any] = json.loads(json.dumps(schema))
+    fn = out.get("function", out)
+    fn["description"] = str(fn.get("description", "")) + hint
+    return out
+
+
 def get_tools() -> list[dict[str, Any]]:
     """Return the tool definitions to pass to LiteLLM — disabled skills excluded,
     and (F1.3) tools above the requesting speaker's tier withheld entirely, so
-    the model can't be talked into calling what the speaker isn't entitled to."""
+    the model can't be talked into calling what the speaker isn't entitled to.
+    Descriptions carry each tool's pace hint (acknowledge-first for working,
+    started-not-done for deferred) — both pipelines read this one source."""
     return [
-        schema
+        _with_pace_hint(name, schema)
         for name, (_, schema) in _REGISTRY.items()
         if not _inactive(name) and tier_allows(name)
     ]
+
+
+def tool_policy() -> dict[str, str]:
+    """The household's per-tool tier policy for active tools — the v6 gate's
+    ``ToolRule`` source (the ``/tools`` door serves it alongside the schemas,
+    so the server-side gate enforces the same tiers this registry does)."""
+    return {
+        name: _MIN_TIER.get(name, "unknown")
+        for name in _REGISTRY
+        if not _inactive(name)
+    }
+
+
+def tool_pace() -> dict[str, str]:
+    """The per-tool pace class for active tools (default "working") — served
+    beside :func:`tool_policy` on the ``/tools`` door so the server-side gate
+    and this registry can never disagree about how a tool runs."""
+    return {
+        name: _PACE.get(name, "working")
+        for name in _REGISTRY
+        if not _inactive(name)
+    }
 
 
 def _coerce_arguments(schema: dict[str, Any], arguments: dict[str, Any]) -> dict[str, Any]:
@@ -728,18 +826,7 @@ async def execute(name: str, arguments: dict[str, Any]) -> str:
     if _inactive(name):  # not advertised in get_tools(), but guard anyway
         return f"Skill {name!r} is disabled."
     if not tier_allows(name):  # withheld from get_tools(), but guard anyway (F1.3)
-        log.info(
-            "Skill %r refused: requires tier %r, speaker is %r",
-            name,
-            _MIN_TIER[name],
-            current_tier(),
-        )
-        return (
-            f"Refused: {name!r} requires a {_MIN_TIER[name]} voice and the current "
-            "speaker isn't recognized. Tell the user you can't do that for them until "
-            "their voice is enrolled (a household member can enroll them from the "
-            "dashboard's People tab)."
-        )
+        return tier_refusal(name)
     func, schema = _REGISTRY[name]
     try:
         result = await func(**_coerce_arguments(schema, arguments))

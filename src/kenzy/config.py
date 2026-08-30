@@ -17,7 +17,7 @@ log = logging.getLogger("kenzy.config")
 _PACKAGED_CONFIGS = Path(__file__).parent / "data" / "configs"
 
 #: Service config files shipped as defaults (also what ``kenzy-init`` scaffolds).
-SERVICES = ("node", "server", "stt", "tts", "llm", "speaker")
+SERVICES = ("node", "server", "stt", "tts", "llm", "speaker", "s2s")
 
 
 def kenzy_home() -> Path:

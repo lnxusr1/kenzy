@@ -105,6 +105,7 @@ nav:
       - Node: configuration/node.md
       - Server: configuration/server.md
       - Speaker ID: configuration/speaker.md
+      - Conversation Engine (S2S): configuration/s2s.md
       - Add-ons: configuration/addons.md
     - Skills:
       - Overview: skills/index.md

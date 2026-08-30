@@ -150,6 +150,23 @@ Web fleet manager served by `kenzy-server`. **On by default in the shipped confi
 | `llm.url` | — | URL of the kenzy-llm `/process` endpoint. Omit to disable LLM processing. |
 | `llm.timeout` | `30.0` | HTTP timeout in seconds |
 
+### Follow-up mode (experimental)
+
+Routes captures on echo-cancelling (`hardware_aec`) nodes through the
+[kenzy-s2s conversation engine](s2s.md): after Kenzy answers, she keeps
+listening ~8 seconds so you can reply without the wake word, until you say
+you're done ("end conversation", "that's all") or the window lapses. Rooms
+without echo cancellation — and every engine failure — stay on the classic
+pipeline automatically.
+
+| Key | Default | Description |
+|---|---|---|
+| `s2s.enabled` | `false` | The follow-up toggle. Off = the classic pipeline everywhere. Restart to apply. |
+| `s2s.url` | *(empty)* | The engine's WebSocket address (`ws://host:8771/v1/realtime`). Empty = find a co-registered kenzy-s2s automatically. |
+| `s2s.hard_cap_s` | `900` | The longest one conversation may run, in seconds — stuck-open protection. |
+| `s2s.profile` | `kenzy` | Which engine sits behind the seam: `kenzy` (the local engine) or `openai-realtime` (cloud opt-in). **The cloud engine receives all room audio while a conversation runs — including anything sensitive said aloud.** Secrets Kenzy *stores* (the lockbox) still never leave the house. See [the conversation engine page](s2s.md). |
+| `s2s.model` | *(empty)* | Model name for the engine connection's `?model=` query. Empty = the profile's default (`openai-realtime`: `gpt-realtime`; the local engine's model is set in `s2s.yaml`). |
+
 ### TTS service
 
 | Key | Default | Description |
@@ -253,6 +270,7 @@ deliberately sent. What's below governs the case where a sensor changed and
 | `proactive.rate_limit` | `6` | Most unprompted announcements allowed per `rate_window`. `0` disables the cap. |
 | `proactive.rate_window` | `3600` | The rate limit's window, in seconds. |
 | `proactive.safety.enabled` | `false` | **Tier A.** Smoke, carbon monoxide, gas, water leak, and an alarm panel that has actually *triggered*. Speaks in every room, immediately, **including muted ones**. Off by default because it will interrupt anything. |
+| `proactive.tasks.enabled` | `false` | Announce a finished **background task** in the room it was started from ("go write that report and let me know") — but only when it finishes within ~30 s of being asked, while you're visibly still waiting. Slower results never interrupt: they ride the next exchange ("I've also got those results…") or wait to be asked. Unlike safety, this respects every policy knob above — quiet hours, DND rooms, the rate limit. |
 | `proactive.safety.repeat_after` | `300` | Seconds before re-announcing a hazard that is *still* asserting. |
 
 Every entry Tier A acts on is a hazard a **device asserted** — a smoke sensor

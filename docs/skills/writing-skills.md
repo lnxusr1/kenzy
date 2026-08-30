@@ -265,6 +265,25 @@ your coroutine resumes with the spoken reply. Rules worth knowing:
   (silence, their wake word, or the room going away). Intercom consent is
   built exactly this way.
 
+## How fast a skill answers (`pace`)
+
+Declare how long a call takes, so Kenzy speaks correctly *before* running it:
+
+```python
+@skill(pace="instant")     # sub-second: the result IS the reply
+@skill                     # default "working": a few seconds; she acknowledges while it runs
+@skill(pace="deferred")    # unbounded: "I'll get started and let you know"
+```
+
+A `deferred` skill never blocks a conversation — it detaches into the
+background task ledger, Kenzy tells the user she's started it, and the result
+is spoken when it lands: into the live conversation if one is still open,
+announced in the origin room if `proactive.tasks.enabled` allows it, or
+mentioned at the start of that person's next conversation otherwise. A
+`working` skill that stalls is promoted to the same background treatment
+automatically rather than holding the floor. You just write an ordinary async
+function either way — the host handles the detaching.
+
 ## Gating a skill by identity (`min_tier`)
 
 Some skills shouldn't work for a voice Kenzy doesn't recognize — anything

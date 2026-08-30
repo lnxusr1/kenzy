@@ -7,6 +7,11 @@ volume itself, so the matcher queues a server-side **action** targeting the aski
 node; the server applies it (volume persists via config-pull, mute is a transient
 runtime toggle). While muted the wake-word ready chime stays audible so the user
 can tell the device is listening and knowingly unmute.
+
+Ships both forms (the datetime pattern): the fast_intent for the classic
+pipeline, and the ``set_speaker_volume`` skill — the tool twin the v6
+conversation path uses (that path has no fast intents; the model adjusts the
+volume as a tool call, through the same server action).
 """
 
 from __future__ import annotations
@@ -18,6 +23,7 @@ from kenzy.llm.skills import (  # type: ignore[import]
     add_action,
     fast_intent,
     is_node_bound_refused,
+    skill,
 )
 
 _VOICE_PROMPT = "Speak naturally at a conversational pace."
@@ -69,6 +75,45 @@ def classify(utterance: str) -> tuple[str, int | None] | None:
     if _DOWN_RE.search(text):
         return ("down", None)
     return None
+
+
+@skill
+async def set_speaker_volume(action: str, level: int | None = None) -> str:
+    """Adjust Kenzy's own speaker volume on the device being spoken to, or
+    mute/unmute it.
+
+    Use when the user asks Kenzy herself to be louder, quieter, muted, or set
+    to a level — "turn it up", "quieter", "mute yourself", "set the volume to
+    40". NOT for TVs, music, or media players — use the home control tools
+    for those.
+
+    action: one of "up", "down", "set", "mute", "unmute".
+    level: target volume percent (0-100); required when action is "set",
+           ignored otherwise.
+    """
+    refused = is_node_bound_refused()  # no asking node on the assist channel
+    if refused:
+        return refused
+    kind = (action or "").strip().lower()
+    if kind == "mute":
+        add_action({"type": "set_volume", "muted": True})
+        return "Muted. The wake word still works and unmutes."
+    if kind == "unmute":
+        add_action({"type": "set_volume", "muted": False})
+        return "Unmuted."
+    if kind == "set":
+        if level is None:
+            return "A target level (0-100) is required to set the volume."
+        clamped = max(0, min(100, int(level)))
+        add_action({"type": "set_volume", "level": clamped})
+        return f"Volume set to {clamped} percent."
+    if kind == "up":
+        add_action({"type": "set_volume", "delta": _STEP})
+        return "Volume raised."
+    if kind == "down":
+        add_action({"type": "set_volume", "delta": -_STEP})
+        return "Volume lowered."
+    return 'Unknown action — use "up", "down", "set", "mute", or "unmute".'
 
 
 @fast_intent(priority=90)

@@ -107,10 +107,17 @@ def test_every_service_setting_has_help():
     That distinction matters: the server merges in its TLS pair and the peer
     service URLs (_SERVICE_PEERS) before serving a service's config, so those
     fields appear in the editor without existing in any YAML on disk.
+
+    The service list is derived from kenzy.config.SERVICES, not hand-listed —
+    a hand-list here was a third allowlist to forget when adding a service,
+    and kenzy-s2s did exactly that: its card shipped with zero help strings
+    while this test stayed green (found by the founder, 2026-08-28).
     """
+    from kenzy.config import SERVICES
+
     documented = _service_help()
     missing: dict[str, list[str]] = {}
-    for service in ("stt", "tts", "llm", "speaker"):
+    for service in sorted(set(SERVICES) - {"node", "server"}):
         cfg = yaml.safe_load((_CONFIGS / f"{service}.yaml").read_text())
         rendered = set(_leaf_keys(cfg)) | set(_INJECTED_TLS)
         rendered |= {f"{peer}.url" for peer in _SERVICE_PEERS.get(service, ())}
@@ -128,10 +135,18 @@ def test_help_strings_are_short_enough_to_sit_under_a_field():
     """
     too_long: list[str] = []
     for block, indent in (("SERVER_HELP", 2), ("NODE_HELP", 2), ("SERVICE_HELP", 4)):
+        src = _js_object(block)
         pat = rf'^ {{{indent}}}"?([\w.]+)"?:\s*"((?:[^"\\]|\\.)*)"'
-        for key, text in re.findall(pat, _js_object(block), re.MULTILINE):
+        for key, text in re.findall(pat, src, re.MULTILINE):
             if len(text) > 200:
                 too_long.append(f"{block}.{key} ({len(text)} chars)")
+        # An entry wrapped onto its own line (prettier-style) is invisible to
+        # the pattern above — the exact silent gap this test exists to stop.
+        wrapped = re.findall(rf'^ {{{indent}}}"?([\w.]+)"?:\s*$', src, re.MULTILINE)
+        assert not wrapped, (
+            f"{block} entries must keep key and string on one line so this "
+            f"gate can measure them: {wrapped}"
+        )
     assert not too_long, f"Help strings should stay under ~200 chars: {too_long}"
 
 
@@ -191,16 +206,90 @@ def test_every_editable_node_key_shows_a_real_default():
     known = set(re.findall(r'^\s*"?([A-Za-z_][\w.]*)"?\s*:', defaults_blk.group(1), re.MULTILINE))
     known |= set(re.findall(r"(\w+):\s*\{", ranges_blk.group(1)))
 
-    # Exempt because their default is genuinely DYNAMIC, not a value anyone
-    # could type: the audio device falls back to whatever the OS calls default,
-    # and an empty wakeword list falls back to the bundled model paths. Naming
-    # them here is deliberate — a silent gap is what this test exists to stop.
-    # (mic_volume is NOT here: its DEFAULTS entry is the display phrase
-    # "device default", which is the honest rendering of "untouched".)
-    dynamic = {"audio_device", "wakeword_models"}
+    # Exempt because its default is genuinely DYNAMIC, not a value anyone
+    # could type: an empty wakeword list falls back to the bundled model
+    # paths. Naming it here is deliberate — a silent gap is what this test
+    # exists to stop. (audio_device is NOT here: its DEFAULTS entry is the
+    # display phrase "OS default device", the honest rendering of "whatever
+    # the OS picks".)
+    dynamic = {"wakeword_models"}
 
-    missing = sorted(set(_ALLOWED_OVERRIDE_KEYS) - inherited - known - dynamic)
+    # Exempt because their unset state genuinely IS blank — no group, gain
+    # untouched — and a placeholder phrase there read like a value someone
+    # set (founder call 2026-08-28). Must match config.js's BLANK_UNSET; the
+    # help strings carry the meaning ("Unset = ...") instead.
+    blank_re = re.search(r"const BLANK_UNSET = new Set\(\[(.*?)\]\)", js, re.S)
+    assert blank_re, "BLANK_UNSET set not found in config.js"
+    blank = set(re.findall(r'"(\w+)"', blank_re.group(1)))
+    assert blank == {"audio_group", "mic_volume"}, (
+        "BLANK_UNSET changed — a key added there stops showing any default "
+        "hint, which is only honest when unset truly means blank AND the "
+        "help string says so. Update this test deliberately: " + ", ".join(sorted(blank))
+    )
+    schema = _SCHEMA.read_text()
+    for k in blank:
+        m = re.search(rf'\b{k}: "([^"]+)"', schema)
+        assert m and "Unset" in m.group(1), (
+            f"{k} has a blank placeholder, so its help string must say what "
+            'unset means ("Unset = ...") — that sentence is the only default '
+            "hint the field has left"
+        )
+
+    missing = sorted(set(_ALLOWED_OVERRIDE_KEYS) - inherited - known - dynamic - blank)
     assert not missing, (
         'Editable node keys that render as a bare "default" — add the real value '
         "to config.js DEFAULTS (or node_defaults in server.yaml): " + ", ".join(missing)
+    )
+
+
+def test_device_keys_render_as_pickers():
+    """The device keys on the node card offer the node's own probe results as
+    dropdowns (founder catch 2026-08-27: the wizard picked devices from a
+    list while the grid asked for hand-typed names with no hint of what a
+    valid value even looks like).
+
+    The options must come from exactly what the wizard writes, so the grid
+    and the wizard can never save different classes of value:
+    ``volume_button_device`` from the probe's ``volume_key_device``
+    annotations (a stable endpoint NAME — an eventN path would change across
+    boots), and ``audio_device`` from ``suggested.audio_device`` (the stable
+    short name — an "(hw:N,0)" fragment would too).
+    """
+    import re
+
+    js = (_STATIC / "js/views/config.js").read_text()
+    branch = re.search(r'const probeOpts =(.*?)</select>', js, re.S)
+    assert branch, "the device-key picker branch is missing from config.js"
+    for key, source in [
+        ("volume_button_device", "volume_key_device"),
+        ("audio_device", "suggested.audio_device"),
+    ]:
+        assert f'k === "{key}"' in branch.group(1), f"{key} lost its picker branch"
+        assert source in branch.group(1), (
+            f"{key}'s picker options must come from the probe's {source} — "
+            "the same value the audio wizard writes"
+        )
+
+
+def test_server_enum_s2s_profile_matches_the_python_vocabulary():
+    """SERVER_ENUMS is a hand-maintained JS copy of the Python PROFILES map
+    (kenzy.s2s.profiles) — the 5.0.6 keep-in-sync trap. Pin it so a profile
+    added in Python can't silently never appear in the Settings dropdown.
+    'hf' is deliberately operator-hidden (a dev-only probe target).
+    """
+    import re
+
+    from kenzy.s2s.profiles import PROFILES
+
+    src = _SCHEMA.read_text()
+    block = re.search(r'"s2s\.profile":\s*\[([^\]]*)\]', src)
+    assert block, "SERVER_ENUMS is missing an s2s.profile entry"
+    js_profiles = set(re.findall(r'"([^"]+)"', block.group(1)))
+
+    _HIDDEN = {"hf"}  # dev probe target — never offered in the dashboard
+    expected = set(PROFILES) - _HIDDEN
+    assert js_profiles == expected, (
+        "SERVER_ENUMS['s2s.profile'] drifted from kenzy.s2s.profiles.PROFILES: "
+        f"JS has {sorted(js_profiles)}, expected {sorted(expected)} "
+        f"(hidden: {sorted(_HIDDEN)}). Update schema.js or _HIDDEN deliberately."
     )

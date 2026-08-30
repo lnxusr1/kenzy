@@ -76,7 +76,17 @@ SAFETY = Category(
     ignores_mute=True,
 )
 
-CATEGORIES: dict[str, Category] = {SAFETY.name: SAFETY}
+#: Task results — SOLICITED unprompted speech ("go do X and let me know when
+#: you're done"): the user asked for exactly this delivery, but it still
+#: respects every policy knob — no exemptions, making this the first
+#: non-exempt category, the one that turns quiet_hours / dnd_rooms /
+#: rate_limit from configurable-and-inert into real. Off by default like all
+#: proactive speech (`proactive.tasks.enabled`); an undeliverable result
+#: waits in the ledger and is picked up at the start of the owner's next
+#: conversation instead — denied is never dropped.
+TASKS = Category("tasks")
+
+CATEGORIES: dict[str, Category] = {SAFETY.name: SAFETY, TASKS.name: TASKS}
 
 
 @dataclass(frozen=True)

@@ -5,8 +5,11 @@ Answers "what time is it" / "what's the date" instantly with no LLM and no
 network.  Uses the home timezone from llm.yaml (location.timezone) when set,
 otherwise the system local time.
 
-This is a fast_intent only: if it misses, the LLM still answers because the
-current date/time is already injected into the LLM's context.
+Ships both forms: the fast_intent for the classic pipeline (fully supported,
+first-class — if it misses, the LLM still answers because the current
+date/time is injected into its context), and the ``get_datetime`` skill — the
+tool twin the v6 conversation path uses (that path has no fast intents; the
+model asks for the live clock as a tool call instead).
 """
 
 from __future__ import annotations
@@ -15,7 +18,7 @@ import datetime
 import random
 import re
 
-from kenzy.llm.skills import FastResult, fast_intent, get_config  # type: ignore[import]
+from kenzy.llm.skills import FastResult, fast_intent, get_config, skill  # type: ignore[import]
 
 _VOICE_PROMPT = "Speak naturally at a conversational pace."
 
@@ -97,6 +100,18 @@ def classify(utterance: str) -> str | None:
     if _DATE_RE.match(text):
         return "date"
     return None
+
+
+@skill
+async def get_datetime() -> str:
+    """Report the current date and time in the home's timezone.
+
+    Use whenever the user asks the time, the date, or the day of the week —
+    "what time is it", "what's the date today", "what day is it". Returns the
+    live clock; always call this rather than guessing from context.
+    """
+    now = _now()
+    return now.strftime("%A, %B %-d, %Y, %-I:%M %p").strip()
 
 
 @fast_intent(priority=100)

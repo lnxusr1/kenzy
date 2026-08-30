@@ -295,7 +295,7 @@ def tune_stop() -> str:
     return json.dumps({"type": MSG_TUNE_STOP})
 
 
-def expect_utterance(cue: bool = True) -> str:
+def expect_utterance(cue: bool = True, immediate: bool = False) -> str:
     """Arm one-shot capture after the next TTS prompt finishes playing.
 
     ``cue`` controls whether the node plays its ready chime when the capture
@@ -303,8 +303,16 @@ def expect_utterance(cue: bool = True) -> str:
     False for conversational follow-ups (her question IS the cue — a beep on
     top reads as "wait, was I supposed to wait?"). Absent = True, so an older
     server keeps today's chime behavior on a newer node.
+
+    ``immediate`` (v6 follow-up) opens the window NOW as well — she listens
+    while she thinks, so "wait, I mean…" lands mid-processing. An older node
+    ignores the field and simply arms after the next prompt: graceful
+    degradation, no protocol break.
     """
-    return json.dumps({"type": MSG_EXPECT_UTTERANCE, "cue": bool(cue)})
+    msg: dict[str, object] = {"type": MSG_EXPECT_UTTERANCE, "cue": bool(cue)}
+    if immediate:
+        msg["immediate"] = True
+    return json.dumps(msg)
 
 
 def followup_timeout() -> str:

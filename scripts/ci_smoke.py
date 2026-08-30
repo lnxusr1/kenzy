@@ -26,7 +26,7 @@ import shutil
 import subprocess
 import sys
 
-# The six long-running services take an optional config path POSITIONALLY and
+# The seven long-running services take an optional config path POSITIONALLY and
 # have no argument parser, so `kenzy-server --help` doesn't print help — it
 # treats "--help" as a config path, warns that it doesn't exist, falls through
 # to resolution, and boots the server. They're therefore verified by presence
@@ -39,6 +39,7 @@ DAEMONS = {
     "kenzy-tts": "kenzy.tts.tts",
     "kenzy-llm": "kenzy.llm.llm",
     "kenzy-speaker": "kenzy.speaker.speaker",
+    "kenzy-s2s": "kenzy.s2s.service",
 }
 
 # Console scripts are installed regardless of extras, so each profile names
@@ -49,7 +50,7 @@ PROFILES: dict[str, dict[str, list[str]]] = {
         "tools": ["kenzy-devices", "kenzy-init", "kenzy-setup"],
     },
     "server": {
-        "daemons": ["kenzy-server"],
+        "daemons": ["kenzy-server", "kenzy-s2s"],
         "tools": ["kenzy-passwd", "kenzy-deploy", "kenzy-init", "kenzy-setup"],
     },
     "all": {

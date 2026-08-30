@@ -26,12 +26,14 @@ holding. Roll back from the Proxmox side, then re-run `all`.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import shlex
 import subprocess
 import sys
 import threading
+import zipfile
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
@@ -80,10 +82,13 @@ HOSTS: dict[str, Host] = {
     "vm2": Host("vm2.lan", "node", 1, expect_model="tflite"),
     "vm3": Host("vm3.lan", "node", 1, expect_model="tflite"),
     "pi-a": Host("pi-a.lan", "node", 1, expect_model="onnx", audio=True),
-    # The talker lives on pi-b, not pi-a, and not by preference: two USB audio
-    # devices on one Pi exhaust the full-speed isochronous bandwidth on Bus 001
-    # ("Not enough bandwidth for altsetting 1"), so the board with the
-    # speakerphone cannot also hold the rig speaker. One audio device per board.
+    # 2026-08-29: the Y02 rig speaker moved to the workstation and pi-b now
+    # holds the second A05U (the co-audible matched pair). The voice stage
+    # detects the rig device locally and plays from THIS machine when it's
+    # here — this talker flag is the fallback for the rig-on-a-board layout.
+    # The original constraint still binds either way: two USB audio devices
+    # on one Pi exhaust full-speed isochronous bandwidth ("Not enough
+    # bandwidth for altsetting 1") — one audio device per board.
     "pi-b": Host("pi-b.lan", "node", 1, expect_model="onnx", talker=True),
     # Self-contained all-in-one hosts. Pinned to their own server so a
     # neighbour's broadcast can't claim them — the designed option, used as
@@ -193,19 +198,29 @@ def stage_voice(hosts: list[str], cases: list[str] | None) -> bool:
     """
     listeners = [h for h in hosts if HOSTS[h].audio]
     talkers = [h for h in hosts if HOSTS[h].talker]
-    if not listeners or not talkers:
+    # The rig speaker follows the operator: when the probe's device
+    # (PROBE_RIG, default "BY Y02") is plugged into THIS machine, the battery
+    # plays from here and needs no remote talker — voice_probe is
+    # local-native (the 2026-08-29 conversation passes ran exactly this way).
+    # The remote-talker path remains for the rig-on-a-board layout.
+    rig_sub = os.environ.get("PROBE_RIG", "BY Y02")
+    la = subprocess.run(["aplay", "-l"], capture_output=True, text=True)
+    local_talker = la.returncode == 0 and rig_sub.lower() in la.stdout.lower()
+    if not listeners or (not talkers and not local_talker):
         record("local", "voice: need a talker and a listener", False,
-               f"audio={listeners or 'none'} talker={talkers or 'none'}")
+               f"audio={listeners or 'none'} talker={talkers or 'none'} "
+               f"(and no local {rig_sub!r})")
         flush()
         return False
-    listener, h = listeners[0], talkers[0]
+    listener = listeners[0]
+    h = "local" if local_talker else talkers[0]
     if not PROBE.is_file():
         record("local", "voice_probe.py present", False, f"not found at {PROBE}")
         flush()
         return False
 
-    print(f"\n[voice] spoken battery — synthesised here, spoken on {h}, "
-          f"expecting {listener} to answer")
+    print(f"\n[voice] spoken battery — synthesised here, spoken on "
+          f"{'THIS machine' if h == 'local' else h}, expecting {listener} to answer")
 
     # PREFLIGHT. A tier configured for a cloud provider with a placeholder key
     # answers every single case with the error cue — and nothing downstream can
@@ -246,26 +261,27 @@ def stage_voice(hosts: list[str], cases: list[str] | None) -> bool:
         flush()
         return False
 
-    # The probe's own runtime deps. Both ship in the server / stt / tts / llm
-    # extras and NOT in `node`, so a board never has them: httpx to poll the
-    # dashboard, python-dotenv because the probe loads the same .env the
-    # services do. (numpy comes with the node extra; audio goes out through
-    # `aplay`, which is why no Python sound library is needed here.)
-    r = ssh(h, f"~/{VENV}/bin/python -c 'import httpx, dotenv' 2>/dev/null "
-               f"|| ~/{VENV}/bin/pip install -q httpx python-dotenv", timeout=900)
-    if not record(h, "probe dependencies", r.returncode == 0, r.stderr.strip()[:200]):
-        flush()
-        return False
+    if h != "local":
+        # The probe's own runtime deps. Both ship in the server / stt / tts /
+        # llm extras and NOT in `node`, so a board never has them: httpx to
+        # poll the dashboard, python-dotenv because the probe loads the same
+        # .env the services do. (numpy comes with the node extra; audio goes
+        # out through `aplay`, which is why no Python sound library is needed.)
+        r = ssh(h, f"~/{VENV}/bin/python -c 'import httpx, dotenv' 2>/dev/null "
+                   f"|| ~/{VENV}/bin/pip install -q httpx python-dotenv", timeout=900)
+        if not record(h, "probe dependencies", r.returncode == 0, r.stderr.strip()[:200]):
+            flush()
+            return False
 
-    ok = scp(h, PROBE, "/tmp/voice_probe.py")
-    cache = Path.home() / ".cache" / "kenzy-voice-probe"
-    rs = subprocess.run(["rsync", "-az", *SSH_RSYNC, f"{cache}/",
-                         f"{HOSTS[h].fqdn}:.cache/kenzy-voice-probe/"],
-                        capture_output=True, text=True, timeout=1800)
-    if not record(h, "push probe + WAV cache", ok and rs.returncode == 0,
-                  rs.stderr.strip()[:200]):
-        flush()
-        return False
+        ok = scp(h, PROBE, "/tmp/voice_probe.py")
+        cache = Path.home() / ".cache" / "kenzy-voice-probe"
+        rs = subprocess.run(["rsync", "-az", *SSH_RSYNC, f"{cache}/",
+                             f"{HOSTS[h].fqdn}:.cache/kenzy-voice-probe/"],
+                            capture_output=True, text=True, timeout=1800)
+        if not record(h, "push probe + WAV cache", ok and rs.returncode == 0,
+                      rs.stderr.strip()[:200]):
+            flush()
+            return False
     flush()
 
     # RESULT_TIMEOUT is raised from the default: the lab server is one VM on a
@@ -304,9 +320,17 @@ def stage_voice(hosts: list[str], cases: list[str] | None) -> bool:
     sel = " --case " + " ".join(cases) if cases else ""
     # Streamed, not captured: a full battery runs for minutes and the per-case
     # lines are the point of watching it.
-    run = subprocess.run(["ssh", *SSH, HOSTS[h].fqdn,
-                          f"cd ~ && {env} ~/{VENV}/bin/python /tmp/voice_probe.py{sel}"],
-                         timeout=5400)
+    if h == "local":
+        local_env = dict(os.environ)
+        for kv in env.split():
+            k, _, v = kv.partition("=")
+            local_env[k] = v.strip("'\"")
+        run = subprocess.run([sys.executable, str(PROBE), *(
+            ["--case", *cases] if cases else [])], cwd=REPO, env=local_env, timeout=5400)
+    else:
+        run = subprocess.run(["ssh", *SSH, HOSTS[h].fqdn,
+                              f"cd ~ && {env} ~/{VENV}/bin/python /tmp/voice_probe.py{sel}"],
+                             timeout=5400)
     out = record(h, "voice battery", run.returncode == 0, f"probe exited {run.returncode}")
     flush()
     return out
@@ -398,6 +422,22 @@ def _install_one(h: str, wheel: Path, token: str) -> bool:
         tail = (r.stdout + r.stderr).strip().splitlines()[-6:]
         return record(h, "install.sh", False, "; ".join(tail)[:300])
     record(h, "install.sh", True)
+
+    # Assert the new code LANDED, not that pip exited 0: a rebuilt wheel
+    # carrying an unchanged version number used to "install" as
+    # already-satisfied and leave stale code serving (2026-08-29: the new
+    # kenzy-s2s entry point never appeared — 203/EXEC crash loop). Content is
+    # the marker, never the version string — same-version is the exact
+    # failing case this exists to catch.
+    want = hashlib.sha256(
+        zipfile.ZipFile(wheel).read("kenzy/server/server.py")
+    ).hexdigest()
+    got = ssh(h, f"sha256sum ~/{VENV}/lib/python3*/site-packages/kenzy/server/server.py"
+                 " 2>/dev/null | awk '{print $1}'", timeout=60).stdout.strip()
+    if got != want:
+        detail = f"sentinel hash mismatch (installed {got[:12] or '?'}… != wheel {want[:12]}…)"
+        return record(h, "new code landed", False, detail)
+    record(h, "new code landed", True)
 
     # install.sh uses `systemctl --user enable --now`, which starts a stopped
     # unit and leaves a RUNNING one alone. That is right for an installer — the
