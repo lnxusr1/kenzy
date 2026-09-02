@@ -392,6 +392,11 @@ def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any
     return out
 
 
+# The three conversation modes (s2s.mode). off = classic only; on_demand =
+# classic resting, a spoken "start a conversation" escalates one session;
+# always = a conversation on every wake (the original 6.0 follow-up).
+_S2S_MODES = ("off", "on_demand", "always")
+
 # Server settings the dashboard may edit (dotted path → type). Deliberately excludes
 # lockout/secret-risky keys — server/dashboard bind+port, dashboard.auth.*, and
 # discovery.token stay file/CLI-managed (see design/centralized-config.md M4).
@@ -415,12 +420,15 @@ _SERVER_EDITABLE: dict[str, str] = {
     # 4.4 streaming pipeline: sentence-overlapped replies (off ⇒ the buffered
     # serial pipeline, byte-for-byte pre-4.4 behavior).
     "streaming.enabled": "bool",
-    # v6 follow-up mode: captures on hardware_aec-capable nodes route through
-    # the conversation engine (kenzy-s2s); off ⇒ the classic pipeline
+    # v6 conversation mode (6.0.x): off / on_demand / always — captures on
+    # hardware_aec-capable nodes route through the conversation engine
+    # (kenzy-s2s) when a conversation is active; off ⇒ the classic pipeline
     # everywhere. Restart to apply, like its siblings here.
-    "s2s.enabled": "bool",
+    "s2s.mode": "str",
     "s2s.url": "str",
     "s2s.hard_cap_s": "num",
+    "s2s.conversation_window_s": "num",
+    "s2s.resume_window_s": "num",
     # Which engine sits behind the seam: "kenzy" (local, the default) or
     # "openai-realtime" (cloud opt-in — the docs carry its audio-egress
     # caveat). s2s.model rides the connection's ?model= query; empty = the
@@ -3513,9 +3521,27 @@ class TranscribingServer(AudioServer):
         # OFF by default; dashboard-editable, restart to apply (like its
         # sibling keys here).
         s2s_cfg: dict[str, Any] = cfg.get("s2s", {}) or {}
-        self._s2s_enabled: bool = bool(s2s_cfg.get("enabled", False))
+        # Conversation mode (6.0.x): three-way, replacing the old `enabled`
+        # boolean. off = classic only; on_demand = classic resting, a spoken
+        # "start a conversation" escalates one session; always = a conversation
+        # on every wake (the original follow-up). Back-compat: a config that
+        # still carries the boolean maps enabled:true -> always, else off.
+        raw_mode = str(s2s_cfg.get("mode", "") or "").strip().lower()
+        if raw_mode not in _S2S_MODES:
+            raw_mode = "always" if s2s_cfg.get("enabled", False) else "off"
+        self._s2s_mode: str = raw_mode
         self._s2s_url: str = str(s2s_cfg.get("url", "") or "")
         self._s2s_hard_cap_s: float = float(s2s_cfg.get("hard_cap_s", 900.0))
+        # On-demand conversations get a longer, sticky follow-up window than the
+        # always-mode ~8 s — the user asked for this exchange, so she leans on
+        # keeping it open (they close it explicitly). Default 30 s.
+        self._s2s_conv_window_s: float = float(s2s_cfg.get("conversation_window_s", 30.0))
+        # "Continue" a just-ended on-demand conversation within this window
+        # (seconds) — an identity-gated, ephemeral warm-session cache. Default
+        # 180 s; the future memory framework subsumes it as its freshest tier.
+        self._s2s_resume_window_s: float = float(s2s_cfg.get("resume_window_s", 180.0))
+        #: node_id -> {"name", "history", "expires"} — the warm resume slot.
+        self._s2s_warm: dict[str, dict[str, Any]] = {}
         # Which engine sits behind the seam ("kenzy" default, "openai-realtime"
         # the cloud opt-in) and an optional ?model= override for it.
         self._s2s_profile_name: str = str(s2s_cfg.get("profile", "") or "kenzy")
@@ -3523,9 +3549,10 @@ class TranscribingServer(AudioServer):
         self._s2s_bridge: Any | None = None  # built lazily on first eligible capture
         self._s2s_sid: dict[str, str] = {}  # node -> current capture session id
         self._s2s_person: dict[str, str] = {}  # display name -> person id (tool context)
-        if self._s2s_enabled:
+        if self._s2s_mode != "off":
             log.info(
-                "Follow-up mode ENABLED (s2s.enabled) — profile: %s, engine: %s",
+                "Conversation mode: %s (s2s.mode) — profile: %s, engine: %s",
+                self._s2s_mode,
                 self._s2s_profile_name,
                 self._s2s_url or ("auto (service registry)"
                                   if self._s2s_profile_name == "kenzy"
@@ -3812,19 +3839,30 @@ class TranscribingServer(AudioServer):
             return False
 
     def set_s2s_enabled(self, enabled: bool) -> bool:
-        """The spoken follow-up-mode switch (v6.0). Applies live AND persists —
-        the set_proactive_enabled pattern: a feature switched off by voice
-        must not come back after an upgrade or power cut, and the dashboard
-        shows the state so off-and-visible never becomes off-and-silent.
+        """The spoken follow-up-mode switch (v6.0): on ⇒ ``always``, off ⇒
+        ``off``. On-demand is a config/dashboard choice, not this binary
+        toggle, so the voice switch maps to the two ends the user knows."""
+        return self.set_s2s_mode("always" if enabled else "off")
 
-        Live means the NEXT wake: the bridge reads the flag per capture, so
-        an in-flight conversation finishes normally rather than being cut
+    def set_s2s_mode(self, mode: str) -> bool:
+        """Set the conversation mode (off / on_demand / always). Applies live
+        AND persists — the set_proactive_enabled pattern: a mode chosen by
+        voice or dashboard must not come back after an upgrade or power cut,
+        and the dashboard shows the state so off-and-visible never becomes
+        off-and-silent.
+
+        Live means the NEXT wake: the bridge reads the mode per capture, so an
+        in-flight conversation finishes normally rather than being cut
         mid-reply. Returns False when the change could not be persisted.
         """
-        self._s2s_enabled = bool(enabled)
-        log.info("Follow-up mode %s by voice", "enabled" if enabled else "DISABLED")
+        mode = str(mode or "").strip().lower()
+        if mode not in _S2S_MODES:
+            log.warning("Ignoring unknown s2s.mode %r (want one of %s)", mode, _S2S_MODES)
+            return False
+        self._s2s_mode = mode
+        log.info("Conversation mode set to %s by voice/dashboard", mode)
         if self._config_path is None:
-            log.warning("Follow-up change not persisted — server config path unknown")
+            log.warning("Conversation-mode change not persisted — server config path unknown")
             return False
         try:
             import yaml
@@ -3838,13 +3876,14 @@ class TranscribingServer(AudioServer):
             block = data.get("s2s")
             if not isinstance(block, dict):
                 block = {}
-            block["enabled"] = bool(enabled)
+            block["mode"] = mode
+            block.pop("enabled", None)  # legacy boolean — mode supersedes it
             data["s2s"] = block
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(yaml.safe_dump(data, sort_keys=False))
             return True
         except Exception as exc:
-            log.error("Could not persist follow-up setting: %s", exc)
+            log.error("Could not persist conversation-mode setting: %s", exc)
             return False
 
     async def test_proactive_alert(self) -> dict[str, Any]:
@@ -4011,10 +4050,10 @@ class TranscribingServer(AudioServer):
         disabled install never even constructs the bridge. When the feature is
         ON but a capture is skipped, SAY WHY — a silent classic fallback with
         the toggle enabled is undiagnosable (the 5.0.4 lesson)."""
-        if self._s2s_bridge is None and not self._s2s_enabled:
+        if self._s2s_bridge is None and self._s2s_mode == "off":
             return False
         takes = bool(self._s2s().should_take(node_id))
-        if not takes and self._s2s_enabled:
+        if not takes and self._s2s_mode == "always":
             if not self._node_aec(node_id):
                 why = "node lacks hardware_aec (half-duplex) — classic pipeline"
             elif not self._s2s_engine_url():
@@ -4031,7 +4070,7 @@ class TranscribingServer(AudioServer):
 
             self._s2s_bridge = S2SBridge(
                 BridgeDeps(
-                    enabled=lambda: self._s2s_enabled,
+                    enabled=lambda: self._s2s_mode == "always",
                     engine_url=self._s2s_engine_url,
                     node_capable=self._node_aec,
                     engine_factory=self._s2s_engine_factory,
@@ -4041,7 +4080,9 @@ class TranscribingServer(AudioServer):
                     deliver_start=self._s2s_deliver_start,
                     deliver_frame=self.send_tts_frame,
                     deliver_end=self._s2s_deliver_end,
-                    hold_floor=lambda nid: self._maybe_hold_floor(nid, True, cue=False),
+                    hold_floor=lambda nid, w: self._maybe_hold_floor(
+                        nid, True, cue=False, window_s=w
+                    ),
                     listen_now=self._s2s_listen_now,
                     activity=self._s2s_activity,
                     end_floor=self._s2s_end_floor,
@@ -4051,11 +4092,54 @@ class TranscribingServer(AudioServer):
                     detach=self._s2s_detach_tool,
                     pickup=self._task_pickup,
                     pickup_delivered=self._task_delivered,
+                    stash=self._s2s_stash,
+                    resume=self._s2s_resume,
                     playback_signal=self._s2s_playback_signal,
                     policy=WindowPolicy(hard_cap_s=self._s2s_hard_cap_s),
+                    policy_on_demand=WindowPolicy(
+                        hard_cap_s=self._s2s_hard_cap_s,
+                        followup_s=self._s2s_conv_window_s,
+                        question_followup_s=self._s2s_conv_window_s,
+                    ),
                 )
             )
         return self._s2s_bridge
+
+    def _s2s_stash(self, node_id: str, name: str, history: list[tuple[str, str]]) -> None:
+        """Keep a just-closed on-demand conversation warm for resume_window_s,
+        keyed by node and gated (at resume time) to the speaker. Ephemeral and
+        in-memory by design — the future memory framework subsumes it."""
+        if not history or self._s2s_resume_window_s <= 0:
+            return
+        self._s2s_warm[node_id] = {
+            "name": name,
+            "history": history[-12:],  # the tail is what "continue" needs
+            "expires": time.monotonic() + self._s2s_resume_window_s,
+        }
+
+    def _s2s_resume(self, node_id: str, name: str) -> str | None:
+        """The warm conversation to resume for (node, speaker), as a context
+        string — or None. Consumes the slot. Identity mismatch or expiry
+        discards it, so a different or unknown speaker never resumes someone
+        else's conversation (the memory system's room-TTL rule, applied here)."""
+        warm = self._s2s_warm.pop(node_id, None)
+        if warm is None or time.monotonic() >= warm["expires"]:
+            return None
+        if not name or name != warm["name"]:
+            return None  # identity gate: only the same person resumes
+        lines: list[str] = []
+        for user, assistant in warm["history"]:
+            if user:
+                lines.append(f"{name}: {user}")
+            if assistant:
+                lines.append(f"You: {assistant}")
+        if not lines:
+            return None
+        return (
+            "Resuming your recent conversation — continue naturally from where it "
+            "left off; do not greet again or re-introduce yourself. Earlier:\n"
+            + "\n".join(lines)
+        )
 
     def _s2s_engine_url(self) -> str:
         """The engine's ws endpoint: explicit config, else the registry.
@@ -4888,7 +4972,13 @@ class TranscribingServer(AudioServer):
             await ladder.finish()
 
     async def _maybe_hold_floor(
-        self, node_id: str, hold: bool, *, cue: bool = False, for_ask: bool = False
+        self,
+        node_id: str,
+        hold: bool,
+        *,
+        cue: bool = False,
+        for_ask: bool = False,
+        window_s: float | None = None,
     ) -> bool:
         """Arm/continue a multi-turn dialog, or end it. Returns whether we re-armed.
 
@@ -4907,7 +4997,7 @@ class TranscribingServer(AudioServer):
                     # Dialog turns open silently (her question is the cue);
                     # record-after-the-tone flows (audio asks: enrollment) get
                     # the chime — the tone does real work there.
-                    await node.ws.send(protocol.expect_utterance(cue=cue))
+                    await node.ws.send(protocol.expect_utterance(cue=cue, window_s=window_s))
                     self._followup_turns[node_id] = turns + 1
                     self._engagement_update(node_id, None, "reply-window")
                     log.info("[%s] holding floor for follow-up (turn %d)", node_id, turns + 1)
@@ -5424,6 +5514,10 @@ class TranscribingServer(AudioServer):
             # Rooms whose speakers lack AEC (hardware_aec: false) — alarm and
             # intercom skills refuse these targets in the reply itself.
             "no_aec_rooms": self._no_aec_rooms(),
+            # Conversation mode (off/on_demand/always) so the on-demand
+            # "start a conversation" fast intent knows whether to escalate,
+            # decline, or defer to the model.
+            "s2s_mode": self._s2s_mode,
             # v5 spine: the occupancy snapshot — server-held room state, injected
             # exactly like rooms/schedules/no_aec_rooms above. 5.0.0 WIRES it;
             # nothing reads it until 5.0.1, and when a skill does it must
@@ -5750,10 +5844,46 @@ class TranscribingServer(AudioServer):
                         work=self._s2s_execute_tool(call, source_node_id, source_room, spk),
                     )
             elif atype == "set_s2s":
-                # Follow-up mode by voice (v6.0). House-wide like set_proactive;
-                # applies from the next wake so an in-flight conversation
-                # finishes normally.
-                self.set_s2s_enabled(bool(action.get("enabled", True)))
+                # Conversation mode by voice (v6.0). House-wide like
+                # set_proactive; applies from the next wake so an in-flight
+                # conversation finishes normally. `mode` is the three-way form;
+                # `enabled` is the legacy on/off (always/off) the follow-up
+                # toggle still sends.
+                if "mode" in action:
+                    self.set_s2s_mode(str(action.get("mode", "off")))
+                else:
+                    self.set_s2s_enabled(bool(action.get("enabled", True)))
+            elif atype == "start_conversation":
+                # On-demand escalation (6.0.x): the fast intent answered with
+                # SILENCE; this opens the conversation NOW and speaks the entry
+                # cue through the bridge's own delivery path — entry rides the
+                # same machinery as every later turn (no deferred-arm state).
+                # The fast intent already gated mode/AEC; re-check defensively.
+                if self._s2s_mode == "off":
+                    log.info("[%s] start_conversation ignored — mode is off", source_node_id)
+                elif not self._node_aec(source_node_id):
+                    log.info("[%s] start_conversation ignored — half-duplex node", source_node_id)
+                else:
+                    greeting = "Okay, let's talk."
+                    pcm = await self._synthesize(greeting, "") or b""
+                    ok = await self._s2s().open_on_demand(
+                        source_node_id, source_room, pcm, greeting
+                    )
+                    if not ok:
+                        # SAY WHY (5.0.4): a silent no-op after "start a
+                        # conversation" reads as broken. The engine being down
+                        # is the one reason left after the skill's own gates.
+                        log.warning(
+                            "[%s] on-demand conversation could not open — engine unavailable",
+                            source_node_id,
+                        )
+                        await self._run_tts(
+                            source_node_id,
+                            source_room,
+                            None,
+                            "I couldn't start a conversation — the engine isn't available.",
+                            "",
+                        )
             elif atype == "set_volume":
                 # Volume/mute change targeting the asking node (room context the
                 # server already holds — no room resolution needed).
@@ -6675,6 +6805,8 @@ class TranscribingServer(AudioServer):
         config returns True — silence by choice isn't a failure."""
         if not self._tts_url:
             return True
+        if not text.strip():
+            return True  # empty reply = silence by choice (mirrors the streamed close)
 
         import httpx  # type: ignore[import-untyped]
 

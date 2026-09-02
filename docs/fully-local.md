@@ -148,7 +148,7 @@ only a double failure reaches the error cue:
 
 ## The conversation engine
 
-[Follow-up mode](talking-to-kenzy.md#follow-up-mode-experimental)'s engine,
+[Conversation mode](talking-to-kenzy.md#conversation-mode-experimental)'s engine,
 `kenzy-s2s`, is **local by default** and composes the stages above — so going
 local for STT, TTS, and the model makes conversations fully local too. Its
 model provider is its own setting (it may legitimately differ from the classic

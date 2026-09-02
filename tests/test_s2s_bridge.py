@@ -80,7 +80,8 @@ class _Rig:
     def __init__(self, *, enabled: bool = True, capable: bool = True,
                  url: str = "ws://engine/v1/realtime", open_fails: bool = False,
                  speaker: Speaker | None = None,
-                 policy: WindowPolicy | None = None) -> None:
+                 policy: WindowPolicy | None = None,
+                 policy_on_demand: WindowPolicy | None = None) -> None:
         self.enabled = enabled
         self.capable = capable
         self.url = url
@@ -90,6 +91,8 @@ class _Rig:
         self.detached: list[tuple[str, bool]] = []  # (tool name, had running work)
         self.pickup_lines: list[str] = []
         self.pickup_delivered_ids: list[str] = []
+        self.stashed: list[tuple[str, str, list[tuple[str, str]]]] = []
+        self.resume_line: str | None = None
         self.exec_gate: asyncio.Event | None = None  # set = execute_tool blocks on it
         self.playback_signal = False  # node reports tts_done (>=5.1.3)
         self.engines: list[_FakeEngine] = []
@@ -99,6 +102,7 @@ class _Rig:
         self.ends = 0
         self.holds = 0
         self.hold_result = True
+        self.hold_windows: list[float | None] = []
         self.floor_ends = 0
         self.executed: list[str] = []
         self.order: list[str] = []  # cross-dep ordering (the buffered-order rule)
@@ -144,6 +148,12 @@ class _Rig:
         def pickup_delivered(task_id: str) -> None:
             self.pickup_delivered_ids.append(task_id)
 
+        def stash(node: str, name: str, history: list[tuple[str, str]]) -> None:
+            self.stashed.append((node, name, history))
+
+        def resume(node: str, name: str) -> str | None:
+            return self.resume_line
+
         async def deliver_start(_n: str) -> None:
             self.starts += 1
             self.order.append("tts_start")
@@ -159,8 +169,9 @@ class _Rig:
         async def listen_now(_n: str) -> None:
             self.order.append("listen_now")
 
-        async def hold_floor(_n: str) -> bool:
+        async def hold_floor(_n: str, window_s: float | None) -> bool:
             self.holds += 1
+            self.hold_windows.append(window_s)
             self.order.append("hold_floor")
             return self.hold_result
 
@@ -190,6 +201,9 @@ class _Rig:
             pickup_delivered=pickup_delivered,
             playback_signal=lambda _n: self.playback_signal,
             policy=policy or WindowPolicy(),
+            policy_on_demand=policy_on_demand,
+            stash=stash,
+            resume=resume,
         ))
 
     @property
@@ -216,6 +230,108 @@ def test_half_duplex_and_disabled_stay_classic() -> None:
     rig = _Rig()
     assert rig.bridge.should_take(NODE)
     assert rig.bridge.node_mode(NODE) == "follow-up"
+
+
+async def test_open_on_demand_opens_speaks_and_arms_the_sticky_window() -> None:
+    # on_demand (auto-open off): "start a conversation" opens the conversation
+    # NOW and speaks the greeting through the bridge's own delivery path.
+    rig = _Rig(
+        enabled=False,
+        policy=WindowPolicy(followup_s=8.0),
+        policy_on_demand=WindowPolicy(followup_s=30.0),
+    )
+    assert not rig.bridge.should_take(NODE)  # fresh capture would stay classic
+    ok = await rig.bridge.open_on_demand(NODE, ROOM, b"\x01" * 32, "Okay, let's talk.")
+    assert ok and rig.bridge.active(NODE)
+    assert rig.bridge.should_take(NODE)  # the open conversation now routes turns
+    # the greeting went out via the deliver path, floor-holding order intact
+    assert rig.starts == 1 and rig.ends == 1 and rig.frames
+    assert rig.order.index("hold_floor") < rig.order.index("tts_end")
+    assert rig.hold_windows == [30.0]  # the sticky window rode expect_utterance
+    # the engine was told it greeted (no double greeting on turn 1)
+    assert any("context:You just opened this conversation" in c for c in rig.engine.log)
+    await rig.bridge.close(NODE, "ended")
+    assert not rig.bridge.should_take(NODE)  # closed = classic again
+
+
+async def test_open_on_demand_refuses_half_duplex_and_engine_down() -> None:
+    rig = _Rig(enabled=False, capable=False)
+    assert not await rig.bridge.open_on_demand(NODE, ROOM, b"", "hi")
+    rig2 = _Rig(enabled=False, url="")
+    assert not await rig2.bridge.open_on_demand(NODE, ROOM, b"", "hi")
+    rig3 = _Rig(enabled=False, open_fails=True)
+    assert not await rig3.bridge.open_on_demand(NODE, ROOM, b"", "hi")
+    assert not rig3.bridge.active(NODE)
+
+
+async def test_open_on_demand_unarmed_floor_closes_honestly() -> None:
+    rig = _Rig(enabled=False)
+    rig.hold_result = False  # the node never armed its window
+    ok = await rig.bridge.open_on_demand(NODE, ROOM, b"\x01" * 8, "hi")
+    assert not ok and not rig.bridge.active(NODE)  # no zombie conversation
+
+
+async def test_always_mode_open_keeps_the_default_window() -> None:
+    rig = _Rig(  # always: auto-open, not on-demand
+        enabled=True,
+        policy=WindowPolicy(followup_s=8.0),
+        policy_on_demand=WindowPolicy(followup_s=30.0),
+    )
+    task = asyncio.get_running_loop().create_task(rig.bridge.take_turn(NODE, ROOM, "sid1", _PCM))
+    await _settle()
+    rig.engine.script.extend(_turn_ok())
+    await task
+    assert rig.bridge._convs[NODE].session._policy.followup_s == 8.0  # default, not sticky
+    assert rig.hold_windows == [None]  # always-mode turns use the node's default window
+
+
+async def test_on_demand_turn_arms_the_sticky_window() -> None:
+    rig = _Rig(
+        enabled=False,
+        policy=WindowPolicy(followup_s=8.0),
+        policy_on_demand=WindowPolicy(followup_s=30.0),
+    )
+    assert await rig.bridge.open_on_demand(NODE, ROOM, b"", "hi")
+    task = asyncio.get_running_loop().create_task(rig.bridge.take_turn(NODE, ROOM, "sid1", _PCM))
+    await _settle()
+    rig.engine.script.extend(_turn_ok())
+    await task
+    assert rig.bridge._convs[NODE].session._policy.followup_s == 30.0
+    assert rig.hold_windows[-1] == 30.0  # every on-demand turn re-arms sticky
+
+
+async def test_on_demand_close_stashes_the_transcript() -> None:
+    rig = _Rig(enabled=False, policy_on_demand=WindowPolicy())
+    assert await rig.bridge.open_on_demand(NODE, ROOM, b"", "Okay, let's talk.")
+    task = asyncio.get_running_loop().create_task(rig.bridge.take_turn(NODE, ROOM, "sid1", _PCM))
+    await _settle()
+    rig.engine.script.extend(_turn_ok())
+    await task
+    await rig.bridge.close(NODE, "ended")
+    assert rig.stashed and rig.stashed[0][0] == NODE and rig.stashed[0][1] == "Alex"
+    # the greeting + the turn's (transcript, reply)
+    assert rig.stashed[0][2] == [("", "Okay, let's talk."), ("hello", "")]
+
+
+async def test_always_close_does_not_stash() -> None:
+    rig = _Rig(enabled=True)  # always mode: not on-demand, never rests between wakes
+    task = asyncio.get_running_loop().create_task(rig.bridge.take_turn(NODE, ROOM, "sid1", _PCM))
+    await _settle()
+    rig.engine.script.extend(_turn_ok())
+    await task
+    await rig.bridge.close(NODE, "ended")
+    assert rig.stashed == []
+
+
+async def test_on_demand_resume_line_injected_as_context() -> None:
+    rig = _Rig(enabled=False, policy_on_demand=WindowPolicy())
+    rig.resume_line = "Resuming your recent conversation. Earlier: hi / hello"
+    assert await rig.bridge.open_on_demand(NODE, ROOM, b"", "hi")
+    task = asyncio.get_running_loop().create_task(rig.bridge.take_turn(NODE, ROOM, "sid1", _PCM))
+    await _settle()
+    rig.engine.script.extend(_turn_ok())
+    await task
+    assert any("context:Resuming your recent conversation" in c for c in rig.engine.log)
 
 
 async def test_engine_down_falls_back_to_classic_with_the_same_pcm() -> None:

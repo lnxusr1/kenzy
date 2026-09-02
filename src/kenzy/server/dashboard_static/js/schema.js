@@ -317,9 +317,11 @@ export const SERVER_HELP = {
   "alarm.ring_interval": "Seconds between alarm re-rings.",
   "streaming.enabled": "Start speaking the first sentence while the rest is still being written — noticeably faster replies. Off = wait for the whole answer first.",
   "proactive.tasks.enabled": "Announce finished background tasks in the room they started from. Quiet hours, DND rooms, and the rate limit all apply. Off = results wait for your next conversation.",
-  "s2s.enabled": "Follow-up mode (experimental): she keeps listening ~8s after answering, so you can reply without the wake word. Needs kenzy-s2s + echo-cancelling speakers; other rooms stay classic. Restart to apply.",
+  "s2s.mode": "Conversation mode. off: classic only. on_demand: 'start a conversation' turns a session conversational. always: keeps listening after each reply. Needs kenzy-s2s + AEC; restart to apply.",
   "s2s.url": "The conversation engine's address (ws://host:8771/v1/realtime). Leave empty to find a co-registered kenzy-s2s automatically.",
   "s2s.hard_cap_s": "The longest a single follow-up conversation may run, in seconds, before it ends on its own — stuck-open protection.",
+  "s2s.conversation_window_s": "On-demand ('start a conversation') listening window, in seconds, after each reply — longer and stickier than always-mode's ~8s, since you asked for the chat. Restart to apply.",
+  "s2s.resume_window_s": "How long, in seconds, a just-ended on-demand conversation stays warm so 'continue' resumes it — same person only. 0 disables resume. Restart to apply.",
   "s2s.profile": "Which conversation engine to use: kenzy (local, the default) or openai-realtime (cloud — ALL room audio streams to OpenAI while a conversation runs; see the docs). Restart to apply.",
   "s2s.model": "Model name sent to the engine's ?model= query. Blank = the profile's default (openai-realtime: gpt-realtime; the local engine configures its model in s2s.yaml).",
   "discovery.enabled": "Announce this server on the network so nodes find it without being told an address.",
@@ -350,6 +352,7 @@ export function serverHelp(key) {
 // Server settings whose value is a fixed vocabulary — rendered as a select in
 // the Settings grid (same idea as NODE_ENUMS/SERVICE_ENUMS).
 export const SERVER_ENUMS = {
+  "s2s.mode": ["off", "on_demand", "always"],
   "s2s.profile": ["kenzy", "openai-realtime"],
 };
 

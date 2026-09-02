@@ -295,7 +295,9 @@ def tune_stop() -> str:
     return json.dumps({"type": MSG_TUNE_STOP})
 
 
-def expect_utterance(cue: bool = True, immediate: bool = False) -> str:
+def expect_utterance(
+    cue: bool = True, immediate: bool = False, window_s: float | None = None
+) -> str:
     """Arm one-shot capture after the next TTS prompt finishes playing.
 
     ``cue`` controls whether the node plays its ready chime when the capture
@@ -308,10 +310,18 @@ def expect_utterance(cue: bool = True, immediate: bool = False) -> str:
     while she thinks, so "wait, I mean…" lands mid-processing. An older node
     ignores the field and simply arms after the next prompt: graceful
     degradation, no protocol break.
+
+    ``window_s`` (6.0.x on-demand conversations) overrides the node's
+    ``dialog_no_speech_timeout_ms`` for THIS window only — the sticky
+    conversation window ("start a conversation" earns ~30 s instead of ~8).
+    An older node ignores it and uses its configured window: degradation,
+    not a break.
     """
     msg: dict[str, object] = {"type": MSG_EXPECT_UTTERANCE, "cue": bool(cue)}
     if immediate:
         msg["immediate"] = True
+    if window_s is not None and window_s > 0:
+        msg["window_s"] = round(float(window_s), 1)
     return json.dumps(msg)
 
 

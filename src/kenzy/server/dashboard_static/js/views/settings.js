@@ -29,9 +29,11 @@ const CODE_DEFAULTS = {
   "integrations.mqtt.commands": true,
   "streaming.enabled": true,
   "proactive.tasks.enabled": false,
-  "s2s.enabled": false,
+  "s2s.mode": "off",
   "s2s.url": "ws://127.0.0.1:8771/v1/realtime",
   "s2s.hard_cap_s": 900,
+  "s2s.conversation_window_s": 30,
+  "s2s.resume_window_s": 180,
   "s2s.profile": "kenzy",
   // Display phrase: blank means each profile supplies its own model.
   "s2s.model": "profile default",

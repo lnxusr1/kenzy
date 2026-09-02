@@ -73,40 +73,54 @@ On rooms with an echo-cancelling speaker you don't even have to wait for her
 to finish: **start talking over her** during a conversation and she'll drop
 her volume, then yield the floor to you mid-sentence.
 
-## Follow-up mode (experimental)
+## Conversation mode (experimental)
 
-With **follow-up mode** switched on (Settings → Backend services →
-`s2s.enabled` — off by default), every wake word in a room with an
-echo-cancelling speaker opens a real back-and-forth conversation, not a
-single command:
+Kenzy can hold a real back-and-forth instead of taking one command per wake.
+It needs a room with an echo-cancelling speaker and the kenzy-s2s engine, and
+`s2s.mode` (Settings → Backend services) picks *when* it happens:
 
-- **Just keep talking.** After each answer she listens for about eight
-  seconds — reply, correct yourself ("wait, I meant the fan"), or ask the
-  next thing, no wake word needed.
-- **She listens while she thinks.** Change your mind mid-processing —
-  "actually, turn it off" — and that becomes the next turn.
-- **Interrupt her freely.** Talking over her reply makes her stop and
-  listen, same as any conversation.
-- **You end it, or silence does.** Say "that's all", "end the
-  conversation", or "goodbye" and she wraps up with a short farewell;
-  going quiet past the window ends it too. Completing a command does NOT
-  end it — she stays available for the follow-up.
-- **Slow work goes to the background.** Ask for something that takes a
-  while — "look that up and let me know" — and she starts it, tells you
-  so, and keeps the conversation free. If it finishes while you're still
-  talking, she comes back with the result as soon as she's done speaking;
-  if it finishes much later, she won't interrupt — she'll mention it the
-  next time you talk ("while you were away…"), announce it in the room
-  only if you've enabled `proactive.tasks`, or simply answer when you ask
-  "how's that going?".
-- **"Turn off follow-up mode"** disables the whole feature by voice
-  (recognized voices, confirms first) — and works from inside a
-  conversation.
+- **`off`** (default) — always the classic one-command-per-wake.
+- **`on_demand`** — classic normally, but you can start a conversation by voice.
+- **`always`** — every wake opens a conversation.
 
-Rooms without echo cancellation, and anything that goes wrong with the
-engine, quietly keep the classic one-command-per-wake behavior. The
-conversation engine is local by default; an OpenAI Realtime cloud option
-exists behind an explicit opt-in — read
+**On-demand — "start a conversation".** Say **"start a conversation"** (or
+"let's talk", "continue a conversation") and just this exchange turns
+conversational: she answers "Okay, let's talk" and keeps listening, with a
+longer window that *wants* to stay open. When you're done, **say so** — "end
+the conversation", "stop the conversation" — and she returns to normal. That
+explicit close always works, even if she's misbehaving. The rest of the house
+stays classic.
+
+**Continue where you left off.** End a conversation, and for a few minutes it
+stays warm: say "start a conversation" (or "continue") again and she picks up
+the thread — but **only for you**. If someone else starts one on that node,
+they get a fresh conversation, never your context.
+
+Once you're in a conversation (either mode):
+
+- **Just keep talking** — reply, correct yourself ("wait, I meant the fan"), or
+  ask the next thing, no wake word needed.
+- **She listens while she thinks** — change your mind mid-processing and that
+  becomes the next turn.
+- **Interrupt her freely** — talking over her reply makes her stop and listen.
+- **Completing a command does NOT end it** — she stays available for the
+  follow-up. Silence past the window ends it; so does the wake word.
+- **Slow work goes to the background.** Ask for something that takes a while —
+  "look that up and let me know" — and she starts it, tells you so, and keeps
+  the conversation free. If it finishes while you're still talking she comes
+  back with the result as soon as she's done speaking; if it finishes much
+  later she won't interrupt — she'll mention it next time you talk, announce it
+  only if you've enabled `proactive.tasks`, or answer when you ask "how's that
+  going?".
+
+**`always` mode** turns every wake into a conversation with a shorter (~8 s)
+window; **"turn off follow-up mode"** disables it by voice (recognized voices,
+confirms first), from inside a conversation.
+
+Rooms without echo cancellation, and anything that goes wrong with the engine,
+quietly keep the classic one-command-per-wake behavior. The conversation engine
+is local by default; an OpenAI Realtime cloud option exists behind an explicit
+opt-in — read
 [its caveat](configuration/s2s.md#using-a-cloud-realtime-engine-instead)
 first.
 

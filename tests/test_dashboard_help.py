@@ -293,3 +293,20 @@ def test_server_enum_s2s_profile_matches_the_python_vocabulary():
         f"JS has {sorted(js_profiles)}, expected {sorted(expected)} "
         f"(hidden: {sorted(_HIDDEN)}). Update schema.js or _HIDDEN deliberately."
     )
+
+
+def test_server_enum_s2s_mode_matches_the_python_vocabulary():
+    """The s2s.mode dropdown is a hand-maintained JS copy of _S2S_MODES — pin it
+    so a mode added in Python can't silently never appear in Settings."""
+    import re
+
+    from kenzy.server.server import _S2S_MODES
+
+    src = _SCHEMA.read_text()
+    block = re.search(r'"s2s\.mode":\s*\[([^\]]*)\]', src)
+    assert block, "SERVER_ENUMS is missing an s2s.mode entry"
+    js_modes = set(re.findall(r'"([^"]+)"', block.group(1)))
+    assert js_modes == set(_S2S_MODES), (
+        f"SERVER_ENUMS['s2s.mode'] drifted from _S2S_MODES: JS has {sorted(js_modes)}, "
+        f"expected {sorted(_S2S_MODES)}. Update schema.js."
+    )

@@ -109,7 +109,10 @@ class EngineLike(Protocol):
 class BridgeDeps:
     """The server's contribution, as narrow callables (glue, not surface)."""
 
-    #: The follow-up toggle (``s2s.enabled`` — dashboard-editable, default off).
+    #: Does a FRESH capture auto-open a conversation? True only in ``always``
+    #: mode (``s2s.mode``); ``on_demand`` opens a conversation explicitly (a
+    #: spoken "start a conversation"), so a fresh capture there stays classic.
+    #: An already-open conversation keeps its turns regardless (see should_take).
     enabled: Callable[[], bool]
     #: The engine's ws url — explicit config or the service registry; "" = unknown.
     engine_url: Callable[[], str]
@@ -131,8 +134,10 @@ class BridgeDeps:
     deliver_start: Callable[[str], Awaitable[None]]
     deliver_frame: Callable[[str, bytes], Awaitable[bool]]
     deliver_end: Callable[[str], Awaitable[None]]
-    #: Arm the node's follow-up capture window (expect_utterance, no cue).
-    hold_floor: Callable[[str], Awaitable[bool]]
+    #: Arm the node's post-reply capture window (expect_utterance). The second
+    #: arg is a per-window length override in seconds (the on-demand sticky
+    #: window) — None = the node's configured default.
+    hold_floor: Callable[[str, float | None], Awaitable[bool]]
     #: Open the node's capture window IMMEDIATELY — she listens while she
     #: thinks, so "wait, I mean…" lands mid-processing. Older nodes ignore the
     #: flag and arm post-TTS only: graceful degradation.
@@ -174,11 +179,21 @@ class BridgeDeps:
     pickup: Callable[[str], list[tuple[str, str]]] | None = None
     #: Confirm one picked-up task was handed to the model (mark it delivered).
     pickup_delivered: Callable[[str], None] | None = None
+    #: On-demand resume (6.0.x): stash a just-closed conversation's transcript,
+    #: keyed by node, for ``resume_window_s``. (node, speaker, history).
+    stash: Callable[[str, str, list[tuple[str, str]]], None] | None = None
+    #: Return the warm conversation to resume for (node, speaker) as a context
+    #: string, or None — identity-gated (only the same person resumes) and
+    #: TTL'd. Consumes the warm slot.
+    resume: Callable[[str, str], str | None] | None = None
     #: Does this node report playback completion (tts_done, >=5.1.3)? Gates
     #: the delivery turn's audible-idle wait — a node that never reports
     #: would otherwise deadlock the wait after the first cleared event.
     playback_signal: Callable[[str], bool] = lambda _n: False
     policy: WindowPolicy = field(default_factory=WindowPolicy)
+    #: The sticky policy for on-demand conversations (a longer follow-up window,
+    #: "start a conversation" earns it). Falls back to `policy` if unset.
+    policy_on_demand: WindowPolicy | None = None
 
 
 @dataclass
@@ -202,6 +217,15 @@ class _Conversation:
     #: player (trap #1), which read live as "she never came back with the
     #: results" (2026-08-29).
     playback_done: asyncio.Event = field(default_factory=_idle_event)
+    #: Opened on demand ("start a conversation")? Gates the sticky window and
+    #: the warm-session stash on close.
+    on_demand: bool = False
+    #: The node this conversation runs on (resume/stash key).
+    node_id: str = ""
+    #: Per-turn (user, assistant) transcript, for the 3-min resume stash.
+    history: list[tuple[str, str]] = field(default_factory=list)
+    #: One-shot: has a warm resume already been injected this conversation?
+    resumed: bool = False
 
 
 class S2SBridge:
@@ -218,8 +242,10 @@ class S2SBridge:
 
     def should_take(self, node_id: str) -> bool:
         """Route this capture through the engine? An open conversation always
-        keeps its turns; a fresh one needs toggle + capable node + a known
-        engine. Everything else is the classic pipeline's."""
+        keeps its turns (this is how on-demand conversations route — they were
+        OPENED by open_on_demand, no deferred-arm state exists); a fresh one
+        needs auto-open (``always``) + capable node + a known engine. Everything
+        else is the classic pipeline's."""
         if self.active(node_id):
             return True
         return (
@@ -231,6 +257,61 @@ class S2SBridge:
     def node_mode(self, node_id: str) -> str:
         """The node's effective mode, for the fleet view: follow-up or classic."""
         return "follow-up" if self.should_take(node_id) else "classic"
+
+    async def open_on_demand(
+        self,
+        node_id: str,
+        room: str,
+        greeting_pcm: bytes = b"",
+        greeting_text: str = "Okay, let's talk.",
+    ) -> bool:
+        """"Start a conversation": open the conversation NOW and speak the
+        entry cue through the bridge's own delivery path — so entry rides the
+        same hardened machinery as every later turn (no deferred-arm state;
+        the option-2 redesign, 2026-09-01, after the arm+held-floor entry
+        collided live with the classic cue ladder). Returns False when no
+        conversation can open (engine down / half-duplex) — the caller owns
+        saying why."""
+        if self.active(node_id):
+            return True  # already conversing — nothing to open
+        if not (self._deps.node_capable(node_id) and self._deps.engine_url()):
+            return False
+        conv = await self._open(node_id, room, on_demand=True)
+        if conv is None:
+            return False
+        async with conv.lock:
+            armed = False
+            started = False
+            try:
+                if greeting_pcm:
+                    conv.playback_done.clear()
+                    await self._deps.deliver_start(node_id)
+                    started = True
+                    for i in range(0, len(greeting_pcm), 9600):
+                        if not await self._deps.deliver_frame(
+                            node_id, greeting_pcm[i : i + 9600]
+                        ):
+                            break
+                # Buffered order: expect_utterance BEFORE tts_end, so the node
+                # treats the greeting as floor-holding and opens the sticky
+                # window at playback-complete.
+                armed = await self._deps.hold_floor(node_id, conv.session.followup_window_s)
+            finally:
+                if started:
+                    await self._deps.deliver_end(node_id)
+        if not armed:
+            conv.session.end("error")
+            await self._close(node_id, "entry window not armed")
+            return False
+        # The engine must know it greeted, or the model greets AGAIN on turn 1.
+        with contextlib.suppress(Exception):
+            await conv.engine.add_context(
+                f"You just opened this conversation by saying: {greeting_text} "
+                "Do not greet again — continue naturally from the user's next words."
+            )
+        conv.history.append(("", greeting_text))
+        log.info("[%s] on-demand conversation opened by voice", node_id)
+        return True
 
     # ----------------------------------------------------------------- turns
 
@@ -357,7 +438,9 @@ class S2SBridge:
             # what makes barge-in live DURING playback and the capture window
             # open at playback-complete. Armed after tts_end, it arms nothing.
             if result.status == "ok" and not conv.session.ended and not conv.barged:
-                armed = await self._deps.hold_floor(node_id)
+                armed = await self._deps.hold_floor(
+                    node_id, conv.session.followup_window_s if conv.on_demand else None
+                )
         finally:
             if not identify_task.done():
                 identify_task.cancel()
@@ -395,6 +478,10 @@ class S2SBridge:
                 "total_ms": round((time.monotonic() - t0) * 1000.0),
             }
         )
+        if result.transcript and conv.on_demand:
+            # Keep the running transcript for the 3-min resume stash (on-demand
+            # only — always-mode conversations never rest between wakes).
+            conv.history.append((result.transcript, result.reply_text or ""))
         if conv.session.ended:
             await self._close(node_id, conv.session.end_reason or "verbal")
             return
@@ -559,7 +646,10 @@ class S2SBridge:
                 )
                 result = await runner.run()
                 if result.status == "ok" and not conv.session.ended and not conv.barged:
-                    armed = await self._deps.hold_floor(node_id)
+                    armed = await self._deps.hold_floor(
+                        node_id,
+                        conv.session.followup_window_s if conv.on_demand else None,
+                    )
             finally:
                 if started:
                     await self._deps.deliver_end(node_id)
@@ -636,12 +726,30 @@ class S2SBridge:
                             break
                         if self._deps.pickup_delivered is not None:
                             self._deps.pickup_delivered(task_id)
+                # On-demand resume: if this same person stepped away and came
+                # back within the window, reattach the prior transcript as
+                # context. Identity-gated in the server (a different/unknown
+                # speaker gets nothing); one-shot per conversation.
+                if conv.on_demand and not conv.resumed and self._deps.resume is not None:
+                    conv.resumed = True
+                    resume_line = self._deps.resume(conv.node_id, speaker.name)
+                    if resume_line:
+                        log.info(
+                            "[%s] resuming %s's recent conversation (%d chars of context)",
+                            conv.node_id, speaker.name, len(resume_line),
+                        )
+                        try:
+                            await conv.engine.add_context(resume_line)
+                        except Exception as exc:  # noqa: BLE001 — resume is best-effort
+                            log.debug("s2s: resume context not injected (%s)", exc)
         else:
             conv.session.identity.hear_stranger()
 
     # ------------------------------------------------------------- lifecycle
 
-    async def _open(self, node_id: str, room: str) -> _Conversation | None:
+    async def _open(
+        self, node_id: str, room: str, *, on_demand: bool = False
+    ) -> _Conversation | None:
         url = self._deps.engine_url()
         if not url:
             return None
@@ -667,11 +775,20 @@ class S2SBridge:
             with contextlib.suppress(Exception):
                 await engine.aclose()
             return None
+        # On-demand opens get the sticky window; auto-open (`always`) keeps
+        # the default.
+        window_policy = (
+            self._deps.policy_on_demand
+            if on_demand and self._deps.policy_on_demand is not None
+            else self._deps.policy
+        )
         conv = _Conversation(
-            session=ConversationSession(policy=self._deps.policy),
+            session=ConversationSession(policy=window_policy),
             engine=engine,
             rules=rules,
             room=room,
+            on_demand=on_demand,
+            node_id=node_id,
         )
         self._convs[node_id] = conv
         # Name the ENGINE, not just the session: which endpoint answered is
@@ -733,6 +850,12 @@ class S2SBridge:
         conv = self._convs.pop(node_id, None)
         if conv is None:
             return
+        # Stash the transcript for a short identity-gated resume ("continue" /
+        # "start a conversation" again within the window). On-demand only, and
+        # only when we know WHO to gate the resume to.
+        speaker = conv.session.identity.current.name
+        if conv.on_demand and conv.history and speaker and self._deps.stash is not None:
+            self._deps.stash(node_id, speaker, list(conv.history))
         if not conv.session.ended:  # every path that names a real reason ended it already
             conv.session.end("error")
         self._deps.end_floor(node_id)

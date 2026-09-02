@@ -1,6 +1,6 @@
 """Spoken control of follow-up mode (v6.0).
 
-"Turn off follow-up mode" flips the server's ``s2s.enabled`` — live for the
+"Turn off follow-up mode" sets the server's ``s2s.mode`` to off (on ⇒ always) — live for the
 next wake word, persisted across restarts (the ``set_proactive`` pattern: a
 feature switched off because it was misbehaving must not come back after an
 upgrade or a power cut). The dashboard shows the state either way.

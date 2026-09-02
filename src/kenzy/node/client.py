@@ -1012,6 +1012,9 @@ class NodeClient:
         # Set when the server wants one utterance captured after the next TTS prompt
         # finishes (intercom consent answer, or a voice-enrollment sample).
         self._capture_after_prompt: bool = False
+        # 6.0.x on-demand: one-shot window-length override from expect_utterance's
+        # window_s (the sticky conversation window); None = configured default.
+        self._dialog_window_override_frames: int | None = None
         # Whether the armed capture should chime when it opens (expect_utterance's
         # cue flag): True = record-after-the-tone (enrollment); False = a
         # conversational follow-up — her question is the cue (stage 1).
@@ -1437,9 +1440,11 @@ class NodeClient:
 
         if self._followup_unbounded:
             return  # the thinking-gap window: no expiry — superseded or consumed
-        if self._onset_elapsed >= self._dialog_no_speech_frames:
+        window_frames = self._dialog_window_override_frames or self._dialog_no_speech_frames
+        if self._onset_elapsed >= window_frames:
             # Window expired in silence: the dialog is over. The server never saw
             # a session; it just needs its floor state cleared.
+            self._dialog_window_override_frames = None  # one-shot: consumed
             self._onset_pending = False
             self._state = _STATE_IDLE
             self._session_id = None
@@ -2468,6 +2473,7 @@ class NodeClient:
                 # capture window for the yes/no answer. No audio is bridged yet.
                 self._capture_after_prompt = True
                 self._capture_cue = False  # the consent prompt is the cue; no beep on top
+                self._dialog_window_override_frames = None  # consent uses the default window
                 log.info("Incoming call from '%s' — prompting for consent", msg.get("from_room"))
 
             elif mtype == protocol.MSG_CALL_CANCEL:
@@ -2575,6 +2581,16 @@ class NodeClient:
                 # where the prompt itself is the cue). Absent = legacy chime.
                 self._capture_after_prompt = True
                 self._capture_cue = bool(msg.get("cue", True))
+                # 6.0.x on-demand: a per-window length override (the sticky
+                # conversation window). One-shot — consumed when the window
+                # opens; absent = the configured dialog_no_speech_timeout_ms.
+                try:
+                    w = float(msg.get("window_s") or 0.0)
+                except (TypeError, ValueError):
+                    w = 0.0
+                self._dialog_window_override_frames = (
+                    max(int(w * 1000) // protocol.FRAME_MS, 1) if w > 0 else None
+                )
                 # v6 follow-up (immediate): open the window NOW — the user may
                 # interject while the server is still thinking. Onset-gated and
                 # silent, with no expiry (superseded by the reply's TTS or

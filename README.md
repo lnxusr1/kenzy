@@ -49,7 +49,7 @@ automatically.
 | **tts** | `kenzy-tts` | 8769 | Text-to-speech via OpenAI or local Kokoro |
 | **llm** | `kenzy-llm` | 8766 | LLM + skill tool-calling via LiteLLM |
 | **speaker** | `kenzy-speaker` | 8768 | Speaker identification via SpeechBrain |
-| **s2s** | `kenzy-s2s` | 8771 | Conversation engine (experimental follow-up mode — off by default) |
+| **s2s** | `kenzy-s2s` | 8771 | Conversation engine (experimental; `s2s.mode` off / on_demand / always — off by default) |
 
 ## Requirements
 
@@ -237,6 +237,7 @@ Included skills:
 | `schedule.py` | Timers, alarms, and reminders — including "turn on the lights in 30 seconds", replayed through the pipeline at fire time |
 | `proactive_control.py` | Voice control over unprompted announcements — "stop" silences a sounding alert until its sensor cycles; "disable the alerts" turns the feature off entirely, and confirms first |
 | `followup_control.py` | Voice control over follow-up mode — "turn off follow-up mode" disables conversations house-wide (recognized voices, confirms first); works from inside a conversation too |
+| `conversation_control.py` | "Start a conversation" — in `on_demand` mode, turns one session conversational (a sticky window, ended explicitly); declines with a reason on a half-duplex room |
 | `memory_skill.py` | Remember / recall / forget, per person, with private / personal / shared tiers (recognized voices only) |
 | `presence.py` | "Is Mom home?", "where's Alice?", "is anyone in the loft?" — HA `person` entities composed with the room-presence model (where a voice was last heard, with its age). Spoken names match forgivingly ("Sara" finds Sarah; nicknames via per-person aliases on the People page), and a genuine near-tie asks instead of guessing |
 | `datetime_skill.py` | Current date and time (with a deterministic fast path) |

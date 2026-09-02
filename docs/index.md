@@ -30,7 +30,7 @@ Assistant, and it can recognize **who** is talking.
   the same Kenzy (your memory, your identity) answers from anywhere — and can
   speak in her own voice.
 - **Have an actual conversation** *(experimental)* — switch on
-  [follow-up mode](talking-to-kenzy.md#follow-up-mode-experimental) and one
+  [conversation mode](talking-to-kenzy.md#conversation-mode-experimental) and one
   wake word opens a back-and-forth: reply without the wake word, correct
   yourself mid-thought, interrupt her freely, hand off slow requests ("look
   that up and let me know") to finish in the background, and end it when

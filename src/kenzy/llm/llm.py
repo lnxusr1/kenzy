@@ -86,6 +86,9 @@ class ProcessRequest(BaseModel):
     # results + in-flight titles for a recognized speaker, so the classic
     # pipeline mentions completions and can answer "how's that going?".
     task_updates: dict[str, Any] = {}
+    # Conversation mode (6.0.x): off / on_demand / always — so the on-demand
+    # "start a conversation" fast intent knows whether to escalate or decline.
+    s2s_mode: str = "off"
     # Identity core (F1): the resolved person id (None = no record / unknown), the
     # confidence tier ("unknown"/"recognized"), and the raw voiceprint confidence.
     # Skills read these via get_request to gate on who's asking.
@@ -1141,6 +1144,7 @@ async def _process_impl(
             "speaker_tier": req.speaker_tier or "unknown",
             "confidence": req.confidence,
             "task_updates": req.task_updates or {},
+            "s2s_mode": req.s2s_mode or "off",
             "channel": req.channel or "voice",
             "memory_opt_out": bool(req.memory_opt_out),
             "memory_capture": req.memory_capture or "explicit",

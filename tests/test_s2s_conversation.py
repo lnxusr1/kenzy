@@ -227,6 +227,62 @@ async def test_end_conversation_ends_verbally_and_model_may_say_farewell() -> No
     assert rig.delivered == [b"\x0f"]  # the farewell still played after the end
 
 
+async def test_explicit_close_phrase_ends_deterministically_without_the_model() -> None:
+    # "stop the conversation" closes from the STT transcript alone — the in-flight
+    # response is cancelled and no model turn runs (the 5.0.6 escape).
+    engine = _FakeEngine(
+        [
+            InputTranscript("stop the conversation", late=False),
+            AudioDelta(b"\xaa"),  # never reached
+            ResponseDone("done", 0, 0),
+        ]
+    )
+    rig = _Rig(engine)
+    result = await rig.runner.run()
+    assert result.status == "closed"
+    assert rig.session.ended and rig.session.end_reason == "verbal"
+    assert "cancel" in engine.log  # the in-flight response was cancelled
+    assert rig.delivered == []  # nothing spoken — the model turn never ran
+
+
+async def test_a_question_about_ending_is_not_a_deterministic_close() -> None:
+    # Only the whole-utterance command closes; a sentence about it routes normally.
+    engine = _FakeEngine(
+        [
+            InputTranscript("how do I end the conversation", late=False),
+            AudioDelta(b"\x01"),
+            ResponseDone("done", 0, 0),
+        ]
+    )
+    rig = _Rig(engine)
+    result = await rig.runner.run()
+    assert result.status == "ok"
+    assert not rig.session.ended
+    assert rig.delivered == [b"\x01"]
+
+
+def test_is_explicit_close_matches_only_the_commands() -> None:
+    from kenzy.s2s.conversation import is_explicit_close
+
+    for yes in (
+        "stop the conversation",
+        "End Conversation.",
+        "exit the conversation",
+        "end the chat",
+        "quit the conversation",
+    ):
+        assert is_explicit_close(yes), yes
+    for no in (
+        "how do I end the conversation",
+        "stop",
+        "that's all",
+        "let's talk",
+        "end the timer",
+        "conversation",
+    ):
+        assert not is_explicit_close(no), no
+
+
 async def test_denied_verdict_is_reported_honestly() -> None:
     engine = _FakeEngine(
         [InputTranscript("turn on the light", late=False), _call(), ResponseDone("done", 0, 0)],

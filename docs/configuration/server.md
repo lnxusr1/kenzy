@@ -150,20 +150,30 @@ Web fleet manager served by `kenzy-server`. **On by default in the shipped confi
 | `llm.url` | — | URL of the kenzy-llm `/process` endpoint. Omit to disable LLM processing. |
 | `llm.timeout` | `30.0` | HTTP timeout in seconds |
 
-### Follow-up mode (experimental)
+### Conversation mode (experimental)
 
 Routes captures on echo-cancelling (`hardware_aec`) nodes through the
-[kenzy-s2s conversation engine](s2s.md): after Kenzy answers, she keeps
-listening ~8 seconds so you can reply without the wake word, until you say
-you're done ("end conversation", "that's all") or the window lapses. Rooms
-without echo cancellation — and every engine failure — stay on the classic
-pipeline automatically.
+[kenzy-s2s conversation engine](s2s.md) so Kenzy keeps listening after she
+answers — you reply without the wake word, until you say you're done ("end
+conversation", "that's all") or the window lapses. Rooms without echo
+cancellation — and every engine failure — stay on the classic pipeline
+automatically.
+
+`s2s.mode` picks *when* a conversation opens:
+
+- **`off`** — classic pipeline everywhere; no conversations.
+- **`on_demand`** — classic normally; saying **"start a conversation"** turns
+  that one session conversational (it stays open, wanting to keep going) until
+  you end it. The rest of the house stays classic.
+- **`always`** — every wake opens a conversation (the original follow-up).
 
 | Key | Default | Description |
 |---|---|---|
-| `s2s.enabled` | `false` | The follow-up toggle. Off = the classic pipeline everywhere. Restart to apply. |
+| `s2s.mode` | `off` | Conversation mode: `off` / `on_demand` / `always` (see above). `on_demand` and `always` need a `hardware_aec` node and the kenzy-s2s service. Restart to apply. (Replaces the pre-6.0.x `s2s.enabled` boolean; a config still carrying `enabled: true` is read as `always`.) |
 | `s2s.url` | *(empty)* | The engine's WebSocket address (`ws://host:8771/v1/realtime`). Empty = find a co-registered kenzy-s2s automatically. |
 | `s2s.hard_cap_s` | `900` | The longest one conversation may run, in seconds — stuck-open protection. |
+| `s2s.conversation_window_s` | `30` | On-demand (`on_demand` mode) listening window after each reply, in seconds — longer and stickier than always-mode's ~8 s, since you asked for the chat. Restart to apply. |
+| `s2s.resume_window_s` | `180` | How long a just-ended on-demand conversation stays warm so "continue" resumes it — **same person only** (identity-gated), ephemeral. `0` disables resume. Restart to apply. |
 | `s2s.profile` | `kenzy` | Which engine sits behind the seam: `kenzy` (the local engine) or `openai-realtime` (cloud opt-in). **The cloud engine receives all room audio while a conversation runs — including anything sensitive said aloud.** Secrets Kenzy *stores* (the lockbox) still never leave the house. See [the conversation engine page](s2s.md). |
 | `s2s.model` | *(empty)* | Model name for the engine connection's `?model=` query. Empty = the profile's default (`openai-realtime`: `gpt-realtime`; the local engine's model is set in `s2s.yaml`). |
 

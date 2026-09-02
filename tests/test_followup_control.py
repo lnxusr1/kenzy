@@ -63,15 +63,16 @@ def test_disabling_applies_live_and_persists(tmp_path, monkeypatch):
     cfg_path = tmp_path / "server.yaml"
     cfg_path.write_text("host: 127.0.0.1\n")
 
-    s = TranscribingServer({"s2s": {"enabled": True}})
+    s = TranscribingServer({"s2s": {"enabled": True}})  # legacy boolean → always
     s._config_path = str(cfg_path)
-    assert s._s2s_enabled is True
+    assert s._s2s_mode == "always"
 
     assert s.set_s2s_enabled(False) is True
-    assert s._s2s_enabled is False  # live: the bridge reads this per capture
+    assert s._s2s_mode == "off"  # live: the bridge reads this per capture
 
     override = yaml.safe_load((tmp_path / "server.local.yaml").read_text())
-    assert override["s2s"]["enabled"] is False  # survives a restart
+    assert override["s2s"]["mode"] == "off"  # survives a restart
+    assert "enabled" not in override["s2s"]  # legacy key retired
 
 
 def test_persisting_keeps_other_override_keys(tmp_path, monkeypatch):
@@ -90,7 +91,7 @@ def test_persisting_keeps_other_override_keys(tmp_path, monkeypatch):
     override = yaml.safe_load((tmp_path / "server.local.yaml").read_text())
     assert override["dashboard"]["controls"] is True
     assert override["s2s"]["hard_cap_s"] == 120  # sibling key intact
-    assert override["s2s"]["enabled"] is True
+    assert override["s2s"]["mode"] == "always"
 
 
 async def test_dispatch_reaches_the_switch(tmp_path, monkeypatch):
@@ -102,6 +103,6 @@ async def test_dispatch_reaches_the_switch(tmp_path, monkeypatch):
     srv._config_path = str(cfg_path)
 
     await srv._dispatch_actions([{"type": "set_s2s", "enabled": False}], "k", "kitchen")
-    assert srv._s2s_enabled is False
+    assert srv._s2s_mode == "off"
     override = yaml.safe_load((tmp_path / "server.local.yaml").read_text())
-    assert override["s2s"]["enabled"] is False
+    assert override["s2s"]["mode"] == "off"

@@ -9,7 +9,7 @@
     she answers — and while she thinks — so you can talk back and forth
     without repeating the wake word. The server routes conversations through
     it **only when `s2s.enabled` is switched on** (see the
-    [server's follow-up section](server.md#follow-up-mode-experimental)) and
+    [server's conversation-mode section](server.md#conversation-mode-experimental)) and
     only on nodes with echo-cancelling speakers; everywhere else, and with
     the toggle off, the classic pipeline runs exactly as before.
 

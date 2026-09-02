@@ -202,12 +202,24 @@ stt:
 # word. OFF by default: the classic pipeline is the normal path, and remains
 # the automatic fallback for half-duplex rooms and any engine failure.
 s2s:
-  enabled: false
+  # Conversation mode: off / on_demand / always.
+  #   off        classic pipeline everywhere (no conversations)
+  #   on_demand  classic resting; a spoken "start a conversation" turns one
+  #              session conversational until you end it
+  #   always     a conversation on every wake (the original follow-up)
+  # on_demand and always need a hardware_aec node + the kenzy-s2s service.
+  mode: off
   # The engine's WebSocket address. Empty = find a co-registered kenzy-s2s
   # service automatically (e.g. "ws://127.0.0.1:8771/v1/realtime").
   url: ""
   # The longest one conversation may run, seconds — stuck-open protection.
   hard_cap_s: 900
+  # On-demand ("start a conversation") follow-up window, seconds — longer and
+  # stickier than the always-mode ~8 s, because the user asked for this chat.
+  conversation_window_s: 30
+  # "Continue" a just-ended on-demand conversation within this window (seconds)
+  # — an identity-gated, ephemeral resume. 0 disables it.
+  resume_window_s: 180
 
 # Integrations — surface Kenzy into external systems. Opt-in; nothing is wired
 # Sound library roots (4.2): HA automations / the HTTP and MQTT chime surfaces

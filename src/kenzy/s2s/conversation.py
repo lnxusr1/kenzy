@@ -34,7 +34,9 @@ that fails the turn closed (the gate held every action; nothing ran).
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
+import re
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
@@ -90,6 +92,45 @@ END_CONVERSATION_TOOL: dict[str, Any] = {
 def end_conversation_rule() -> ToolRule:
     """The household policy for the end tool: any tier may end a conversation."""
     return ToolRule(min_tier="unknown")
+
+
+#: Explicit conversation-close commands the runner honors DETERMINISTICALLY,
+#: from the STT input transcript — never routed through the model (5.0.6: an
+#: off-switch must not depend on the model, and the on-demand sticky window
+#: has no short auto-timeout to fall back on). Soft closes ("that's all",
+#: "thanks", "goodbye") stay the model's judgment via END_CONVERSATION; this
+#: set is only the unambiguous "…the conversation/chat" off-switch.
+_EXPLICIT_CLOSE: frozenset[str] = frozenset(
+    {
+        "end conversation",
+        "end the conversation",
+        "end this conversation",
+        "stop conversation",
+        "stop the conversation",
+        "stop this conversation",
+        "exit conversation",
+        "exit the conversation",
+        "close conversation",
+        "close the conversation",
+        "leave the conversation",
+        "quit the conversation",
+        "end chat",
+        "end the chat",
+        "stop chat",
+        "stop the chat",
+        "end the conversation kenzy",
+        "stop the conversation kenzy",
+    }
+)
+
+
+def is_explicit_close(text: str) -> bool:
+    """True for an unambiguous "end/stop the conversation" command — the
+    deterministic escape (matches the whole utterance, so "how do I end a
+    conversation?" is NOT a close)."""
+    norm = re.sub(r"[^\w\s]", "", text or "").strip().lower()
+    norm = re.sub(r"\s+", " ", norm)
+    return norm in _EXPLICIT_CLOSE
 
 
 @dataclass(frozen=True)
@@ -151,6 +192,12 @@ class ConversationSession:
     @property
     def cap_deadline(self) -> float:
         return self._started + self._policy.hard_cap_s
+
+    @property
+    def followup_window_s(self) -> float:
+        """The policy's post-reply window length — what the node's mic window
+        should be armed to (the on-demand sticky window rides this)."""
+        return self._policy.followup_s
 
     @property
     def followup_deadline(self) -> float | None:
@@ -302,6 +349,16 @@ class TurnRunner:
 
             if isinstance(evt, InputTranscript):
                 self._transcript = evt.text
+                if is_explicit_close(evt.text):
+                    # Deterministic escape: an explicit "end/stop the
+                    # conversation" closes from the STT transcript, WITHOUT the
+                    # model — cancel any in-flight response and end. Mirrors the
+                    # END_CONVERSATION tool's session.end, but a misbehaving
+                    # model can never trap the on-demand sticky window's hot mic.
+                    self._session.end("verbal")
+                    with contextlib.suppress(Exception):
+                        await self._engine.cancel()
+                    return self._result("closed", reply, submitted)
                 verdicts = self._gate.on_transcript(evt.text)
                 held = self._gate.drain_audio()
                 if held:

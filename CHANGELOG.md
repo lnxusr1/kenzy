@@ -10,7 +10,28 @@ here and spelled out in **[Upgrading](https://docs.kenzy.ai/upgrading/)**.
 
 ## [Unreleased]
 
-## [6.0.1]
+## [6.1.0]
+
+**Conversations on request.** You no longer choose between one-command-per-wake
+and always-on follow-up: say "start a conversation" and just that exchange
+turns conversational, until you say you're done.
+
+### Added
+
+- **On-demand conversation mode.** A new `s2s.mode` (`off` / `on_demand` /
+  `always`) replaces the `s2s.enabled` boolean (a config still carrying
+  `enabled: true` is read as `always`). In `on_demand`, the house rests on the
+  classic pipeline and saying **"start a conversation"** (or "let's talk",
+  "continue our conversation") opens one immediately — she answers "Okay,
+  let's talk" and keeps a longer, sticky window (`s2s.conversation_window_s`,
+  default 30 s) open after each reply until you end it. Ending is
+  deterministic: "end/stop the conversation" closes from the transcript, never
+  depending on the model. "Continue" resumes a just-ended conversation for a
+  few minutes (`s2s.resume_window_s`, default 180) — identity-gated, so only
+  the same person picks the thread back up. Half-duplex rooms decline with a
+  spoken reason and stay classic. Nodes gain an optional per-window length in
+  the `expect_utterance` frame; an older node ignores it and uses its
+  configured ~8 s window.
 
 ### Fixed
 

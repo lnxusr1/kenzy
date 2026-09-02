@@ -32,12 +32,20 @@ Upgrade the **server first**, then services, then nodes.
 
 Newest first. Anything not listed needs no manual steps.
 
-### 6.0.1
+### 6.1.0
 
-Nothing required. This fixes voice-activity (`wakeword_vad_threshold`)
-calibration, which previously never suggested a value. If you'd like a VAD gate
-on a node, re-run calibration (dashboard → the node's *Calibrate* wizard, or
-`kenzy-node --calibrate`) — it now produces one.
+Nothing required. Two notes:
+
+- **On-demand conversations** are opt-in: set `s2s.mode` to `on_demand` in
+  Settings. If you had follow-up mode on (`s2s.enabled: true`), it keeps
+  working as `always` — the old key is read for you, and the next settings
+  change writes the new one. A **node older than 6.1.0** in a conversation
+  uses its configured ~8 s reply window instead of the sticky ~30 s one until
+  it's upgraded — degraded, not broken.
+- **Voice-activity calibration** (`wakeword_vad_threshold`) previously never
+  suggested a value; it's fixed. If you'd like a VAD gate on a node, re-run
+  calibration (dashboard → the node's *Calibrate* wizard, or
+  `kenzy-node --calibrate`) — it now produces one.
 
 ### 6.0.0
 
