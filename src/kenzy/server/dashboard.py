@@ -1361,7 +1361,23 @@ class Dashboard:
                     if r.json().get("ok"):
                         return True, None
             except Exception:
-                pass
+                # GET fallback for the websockets-based service (kenzy-s2s can
+                # only parse GET — see _restart_service); FastAPI 405s this.
+                try:
+                    async with httpx.AsyncClient(
+                        timeout=6.0, verify=tlsutil.httpx_verify()
+                    ) as client:
+                        url = f"{base}/unit"
+                        r = await client.get(
+                            url,
+                            params={"action": "disable"},
+                            headers=self._server._service_headers("GET", url),
+                        )
+                        r.raise_for_status()
+                        if r.json().get("ok"):
+                            return True, None
+                except Exception:
+                    pass
         state = await asyncio.to_thread(unit_state, unit)
         if state.get("systemd") and state.get("exists"):
             ok, out = await asyncio.to_thread(disable_unit, unit)
@@ -1389,21 +1405,33 @@ class Dashboard:
             return False, f"install failed: {exc}"
 
     async def _restart_service(self, name: str) -> bool:
-        """POST /restart to a backend service so it re-execs and re-pulls config."""
+        """POST /restart to a backend service so it re-execs and re-pulls config.
+
+        Falls back to a signed GET /restart: the websockets-based service
+        (kenzy-s2s) can only parse GET — its HTTP layer refuses other methods
+        before any handler runs — which is how the restart button read
+        "service not reachable" while the health chip stayed green, and how
+        the upgrade sweep left the OLD s2s process serving an upgraded venv
+        (prod, 2026-09-02). A FastAPI service answers the GET with 405, so the
+        fallback can't false-succeed there."""
         base = self._service_base(name)
         if not base:
             return False
         import httpx
 
-        try:
-            async with httpx.AsyncClient(timeout=5.0, verify=tlsutil.httpx_verify()) as client:
-                r = await client.post(
-                    f"{base}/restart",
-                    headers=self._server._service_headers("POST", f"{base}/restart"),
-                )
-            return r.status_code == 200
-        except Exception:
-            return False
+        url = f"{base}/restart"
+        async with httpx.AsyncClient(timeout=5.0, verify=tlsutil.httpx_verify()) as client:
+            try:
+                r = await client.post(url, headers=self._server._service_headers("POST", url))
+                if r.status_code == 200:
+                    return True
+            except Exception:
+                pass
+            try:
+                r = await client.get(url, headers=self._server._service_headers("GET", url))
+                return r.status_code == 200
+            except Exception:
+                return False
 
     async def _service_health(self, base: str) -> dict[str, Any]:
         import httpx
@@ -1441,18 +1469,32 @@ class Dashboard:
                 return False, f"v{target} already installed but the restart failed"
         import httpx
 
-        try:
-            async with httpx.AsyncClient(timeout=900.0, verify=tlsutil.httpx_verify()) as client:
+        url = f"{base}/upgrade"
+        async with httpx.AsyncClient(timeout=900.0, verify=tlsutil.httpx_verify()) as client:
+            try:
                 r = await client.post(
-                    f"{base}/upgrade",
+                    url,
                     json={"version": version},
-                    headers=self._server._service_headers("POST", f"{base}/upgrade"),
+                    headers=self._server._service_headers("POST", url),
                 )
                 r.raise_for_status()
-            data = r.json()
-            return bool(data.get("ok")), str(data.get("output", ""))[-800:]
-        except Exception as exc:
-            return False, str(exc)
+                data = r.json()
+                return bool(data.get("ok")), str(data.get("output", ""))[-800:]
+            except Exception as exc:
+                post_err = exc
+            # GET fallback for the websockets-based service (see _restart_service);
+            # a FastAPI service 405s this, so the POST error is what's reported.
+            try:
+                r = await client.get(
+                    url,
+                    params={"version": version} if version else None,
+                    headers=self._server._service_headers("GET", url),
+                )
+                r.raise_for_status()
+                data = r.json()
+                return bool(data.get("ok")), str(data.get("output", ""))[-800:]
+            except Exception:
+                return False, str(post_err)
 
     async def _do_service_upgrade(
         self, connection: ServerConnection, name: str, version: str | None

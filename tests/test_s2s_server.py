@@ -342,3 +342,100 @@ async def test_spoken_text_is_recorded_in_history_on_cancel() -> None:
 
     assistant = [h for h in session._history if h.get("role") == "assistant"]
     assert assistant and "garage is open" in assistant[-1]["content"]
+
+
+# ---------------------------------------------------------------- HTTP doors
+
+
+async def _serve_doors(monkeypatch=None):
+    port = _free_port()
+
+    async def synthesize(_t: str, _v: str) -> AsyncIterator[bytes]:
+        yield b"\x00"
+
+    async def generate(_r: GenRequest) -> AsyncIterator[GenText]:
+        yield GenText("hi")
+
+    server = await serve(
+        "127.0.0.1", port, transcribe=_transcribe, generate=generate, synthesize=synthesize
+    )
+    return server, f"http://127.0.0.1:{port}"
+
+
+async def test_http_doors_restart_upgrade_unit(monkeypatch):
+    """The service-parity doors (prod 2026-09-02: the dashboard's restart/
+    upgrade/disable buttons all POST, which websockets refuses before any
+    handler runs — so the doors are signed GETs and the dashboard falls back).
+    """
+    import os as _os
+
+    import httpx
+
+    import kenzy.upgrade as upgrade_mod
+
+    monkeypatch.delenv("KENZY_SERVER_TOKEN", raising=False)
+    monkeypatch.delenv("KENZY_SERVICE_TOKEN", raising=False)
+
+    execs: list[list[str]] = []
+    monkeypatch.setattr(_os, "execv", lambda *a: execs.append(list(a)))
+
+    async def fake_pip(extra: str, version):
+        return True, f"upgraded {extra} to {version or 'latest'}"
+
+    monkeypatch.setattr(upgrade_mod, "run_pip_upgrade", fake_pip)
+
+    server, base = await _serve_doors()
+    try:
+        async with httpx.AsyncClient() as client:
+            r = await client.get(f"{base}/health")
+            assert r.status_code == 200 and r.json()["service"] == "s2s"
+
+            # restart: 200 + a scheduled re-exec
+            r = await client.get(f"{base}/restart")
+            assert r.status_code == 200 and r.json()["status"] == "restarting"
+            await asyncio.sleep(0.5)
+            assert execs, "restart never re-exec'd"
+
+            # upgrade: pip runs, then re-exec
+            execs.clear()
+            r = await client.get(f"{base}/upgrade", params={"version": "9.9.9"})
+            assert r.status_code == 200 and r.json()["ok"] is True
+            assert "9.9.9" in r.json()["output"]
+            await asyncio.sleep(0.5)
+            assert execs, "upgrade never re-exec'd"
+
+            # unit: state read answers; unsupported actions are named
+            r = await client.get(f"{base}/unit")
+            assert r.status_code == 200 and r.json()["unit"] == "kenzy-s2s.service"
+            r = await client.get(f"{base}/unit", params={"action": "enable"})
+            assert r.json()["ok"] is False
+    finally:
+        server.close()
+        await server.wait_closed()
+
+
+async def test_http_doors_require_signature_when_token_set(monkeypatch):
+    import httpx
+
+    from kenzy import serviceauth
+
+    monkeypatch.setenv("KENZY_SERVER_TOKEN", "sekret")
+    server, base = await _serve_doors()
+    try:
+        async with httpx.AsyncClient() as client:
+            # unsigned → refused; /health stays open (the dashboard polls it)
+            r = await client.get(f"{base}/restart")
+            assert r.status_code == 401
+            r = await client.get(f"{base}/health")
+            assert r.status_code == 200
+
+            # a valid signature opens the door
+            import os as _os
+
+            monkeypatch.setattr(_os, "execv", lambda *a: None)
+            sig = serviceauth.sign_service_request("sekret", "GET", "/restart")
+            r = await client.get(f"{base}/restart", headers={serviceauth.SIG_HEADER: sig})
+            assert r.status_code == 200
+    finally:
+        server.close()
+        await server.wait_closed()

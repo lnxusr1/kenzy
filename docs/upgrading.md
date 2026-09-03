@@ -32,6 +32,22 @@ Upgrade the **server first**, then services, then nodes.
 
 Newest first. Anything not listed needs no manual steps.
 
+### 6.1.1
+
+**One restart by hand, once, on the host running kenzy-s2s.** This release
+fixes the dashboard's Restart/Upgrade/Disable buttons for the conversation
+engine — but the fix lives *in* the kenzy-s2s process, so the upgrade that
+delivers it can't use it: a kenzy-s2s started on an older version can't be
+restarted from the dashboard even after the venv holds 6.1.1. After
+upgrading, run once on that host:
+
+```bash
+systemctl --user restart kenzy-s2s
+```
+
+From then on the buttons (and future upgrade sweeps) manage kenzy-s2s like
+every other service. Installs that never enabled conversations need nothing.
+
 ### 6.1.0
 
 Nothing required. Two notes:

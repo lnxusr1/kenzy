@@ -33,10 +33,13 @@ import asyncio
 import base64
 import json
 import logging
+import os
+import sys
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
 from ssl import SSLContext
 from typing import Any, Protocol
+from urllib.parse import parse_qsl
 
 import websockets
 from websockets.asyncio.server import Server, ServerConnection
@@ -380,22 +383,87 @@ async def serve(
         )
         await session.run()
 
+    def _json(status: int, reason: str, payload: dict[str, Any]) -> Response:
+        headers = Headers()
+        headers["Content-Type"] = "application/json"
+        return Response(status, reason, headers, json.dumps(payload).encode())
+
+    def _schedule_exec(why: str) -> None:
+        async def _exec() -> None:
+            await asyncio.sleep(0.3)  # let the HTTP response flush first
+            log.warning("%s — re-executing service", why)
+            os.execv(sys.executable, [sys.executable, *sys.argv])
+
+        asyncio.get_running_loop().create_task(_exec())
+
     async def process_request(
         _connection: ServerConnection, request: Request
     ) -> Response | None:
-        """Plain-HTTP door on the WS port (the main server's own pattern):
-        ``GET /health`` answers the dashboard's probe; everything else falls
-        through to the WebSocket handshake."""
-        if request.path.split("?", 1)[0] != "/health":
-            return None
-        from kenzy import version_info
+        """Plain-HTTP doors on the WS port (the main server's own pattern).
 
-        body = json.dumps(
-            {"status": "ok", "service": "s2s", "sessions": stages.sessions, **version_info()}
-        ).encode()
-        headers = Headers()
-        headers["Content-Type"] = "application/json"
-        return Response(200, "OK", headers, body)
+        Every FastAPI backend gets ``/restart``, ``/upgrade`` and ``/unit``
+        from ``kenzy.fastapi_auth``; this websockets service must answer the
+        SAME doors or the dashboard's buttons and the upgrade sweep report it
+        failed while the OLD process keeps serving the upgraded venv (lived on
+        prod 2026-09-02 — the fifth s2s service-parity strike). All doors are
+        **GET**: websockets' HTTP parser refuses any other method before this
+        hook even runs, which is exactly why the FastAPI-shaped POSTs could
+        never work here — the dashboard falls back to these signed GETs.
+        State-changing doors require the token-proof signature
+        (``X-Kenzy-Auth``) whenever a fleet token is set, mirroring the
+        FastAPI middleware; ``/health`` stays open like everywhere else."""
+        path, _, query = request.path.partition("?")
+        if path == "/health":
+            from kenzy import version_info
+
+            return _json(
+                200,
+                "OK",
+                {"status": "ok", "service": "s2s", "sessions": stages.sessions, **version_info()},
+            )
+        if path not in ("/restart", "/upgrade", "/unit"):
+            return None
+        from kenzy import serviceauth
+
+        token = serviceauth.service_token_from_env()
+        if token and (
+            serviceauth.verify_service_request(
+                request.headers.get(serviceauth.SIG_HEADER), token, "GET", path
+            )
+            is None
+        ):
+            return _json(401, "Unauthorized", {"detail": "invalid service token"})
+        params = dict(parse_qsl(query))
+        if path == "/restart":
+            _schedule_exec("Restart requested")
+            return _json(200, "OK", {"status": "restarting"})
+        if path == "/unit":
+            from kenzy.unitctl import disable_unit, unit_state
+
+            unit = "kenzy-s2s.service"
+            action = params.get("action")
+            if action == "disable":
+
+                async def _later() -> None:
+                    await asyncio.sleep(0.5)  # let the response flush first
+                    ok, out = await asyncio.to_thread(disable_unit, unit)
+                    if not ok:
+                        log.error("Self-disable failed: %s", out)
+
+                asyncio.get_running_loop().create_task(_later())
+                return _json(200, "OK", {"ok": True})
+            if action:
+                return _json(200, "OK", {"ok": False, "error": "only 'disable' is supported here"})
+            state = await asyncio.to_thread(unit_state, unit)
+            return _json(200, "OK", {"unit": unit, **state})
+        # /upgrade — awaited like the FastAPI door (pip can take minutes; the
+        # dashboard's fan-out call uses a long timeout), re-exec on success.
+        from kenzy.upgrade import run_pip_upgrade
+
+        ok, output = await run_pip_upgrade("s2s", params.get("version") or None)
+        if ok:
+            _schedule_exec("Upgrade applied")
+        return _json(200, "OK", {"ok": ok, "output": output})
 
     return await _ws_serve(
         handler, host, port, max_size=1 << 24, ssl=ssl, process_request=process_request

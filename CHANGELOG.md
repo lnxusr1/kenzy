@@ -10,6 +10,23 @@ here and spelled out in **[Upgrading](https://docs.kenzy.ai/upgrading/)**.
 
 ## [Unreleased]
 
+## [6.1.1]
+
+One manual step for existing installs running kenzy-s2s — see
+**[Upgrading](https://docs.kenzy.ai/upgrading/#611)**.
+
+### Fixed
+
+- **The dashboard's Restart, Upgrade, and Disable buttons didn't work for the
+  kenzy-s2s service** — and "upgrade services + nodes" reported s2s failed to
+  restart while the OLD process quietly kept serving the upgraded code. Every
+  other backend answers those buttons on HTTP POST doors; the conversation
+  engine is a WebSocket server whose HTTP layer refuses anything but GET, so
+  the POSTs never reached it (the health check is a GET, which is why the
+  chip stayed green while the buttons failed). kenzy-s2s now answers signed
+  GET forms of `/restart`, `/upgrade`, and `/unit`, and the dashboard falls
+  back to them automatically.
+
 ## [6.1.0]
 
 **Conversations on request.** You no longer choose between one-command-per-wake
