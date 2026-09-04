@@ -129,7 +129,13 @@ async def test_dashboard_http_surfaces():
             assert state["nodes"][0]["node_id"] == "den"
             assert state["nodes"][0]["room"] == "den"
             assert state["nodes"][0]["streaming"] is True
-            assert state["services"] == []  # none configured
+            # None configured ⇒ every backend still gets a DOWN card (derived
+            # from kenzy.config.SERVICES) — absent-not-down was how the s2s
+            # card stayed invisible until its first heartbeat.
+            assert {s["name"] for s in state["services"]} == {
+                "stt", "tts", "llm", "speaker", "s2s",
+            }
+            assert all(s["up"] is False for s in state["services"])
             # logs/controls default ON when the keys are absent (matching the shipped config).
             assert state["flags"]["logs"] is True and state["flags"]["controls"] is True
             assert "ha_active" in state["flags"]  # HA-surface gate (F3)
@@ -914,3 +920,20 @@ async def test_presence_candidate_reachability_is_reported_separately():
     assert state["ha_reachable"] is True
     assert state["occupancy_reachable"] is False
     assert state["curation"]["occupancy"] == {"exclude": ["binary_sensor.hall"]}
+
+
+async def test_every_backend_service_gets_a_card_even_unconfigured():
+    """The fleet's service chips derive from kenzy.config.SERVICES — a backend
+    with no static URL and no heartbeat yet (s2s by default: its url is empty
+    so the registry can find it) must still show, as down, instead of not
+    existing (founder-found on prod, 2026-09-02: the s2s card only appeared
+    after the service's first successful connect)."""
+    from kenzy.config import SERVICES
+
+    d = Dashboard(AudioServer({}), {}, DashboardConfig())
+    services = await d._services_state()
+    names = {s["name"] for s in services}
+    expected = {s for s in SERVICES if s not in ("node", "server")}
+    assert expected <= names, f"missing cards: {sorted(expected - names)}"
+    s2s = next(s for s in services if s["name"] == "s2s")
+    assert s2s["up"] is False and s2s["url"] is None  # down, not absent

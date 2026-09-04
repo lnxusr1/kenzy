@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import json
 import logging
 import os
@@ -47,7 +48,7 @@ from websockets.asyncio.server import serve as _ws_serve
 from websockets.datastructures import Headers
 from websockets.http11 import Request, Response
 
-from kenzy.sentences import split_sentences
+from kenzy.sentences import split_sentences, strip_spoken_markup
 
 log = logging.getLogger(__name__)
 
@@ -123,9 +124,14 @@ class RealtimeSession:
         self._voice = ""
         self._tools: list[dict[str, Any]] = []
         self._buffer = bytearray()
-        self._pending = b""
         self._history: list[dict[str, Any]] = []
         self._response_task: asyncio.Task[None] | None = None
+        #: The committed utterance's transcription, started AT COMMIT (GA
+        #: semantics — input transcription belongs to the item, not to a
+        #: response). A response awaits it; a commit with no response (the
+        #: ask() answer turn) still transcribes, emits, and records.
+        self._transcript_job: asyncio.Task[None] | None = None
+        self._last_in_tokens = 0
 
     async def run(self) -> None:
         """The per-connection loop. Ends when the transport closes; an
@@ -156,9 +162,18 @@ class RealtimeSession:
         elif et == "input_audio_buffer.append":
             self._buffer.extend(base64.b64decode(str(evt.get("audio", ""))))
         elif et == "input_audio_buffer.commit":
-            self._pending = bytes(self._buffer)
+            pcm = bytes(self._buffer)
             self._buffer.clear()
             await self._emit({"type": "input_audio_buffer.committed"})
+            if pcm:
+                # Transcription starts NOW, independent of any response — so a
+                # commit-without-response (the ask() answer turn) still yields
+                # its transcript event, and a response cancel can never kill
+                # the record (seam decision 4, now by construction).
+                self._transcript_job = asyncio.get_running_loop().create_task(
+                    self._record_transcript(pcm)
+                )
+                self._transcript_job.add_done_callback(_log_transcript_failure)
         elif et == "response.create":
             if self._response_task is not None and not self._response_task.done():
                 await self._error("conversation already has an active response")
@@ -186,29 +201,29 @@ class RealtimeSession:
 
     # -------------------------------------------------------------- responses
 
+    async def _record_transcript(self, pcm: bytes) -> None:
+        """Transcribe one committed utterance, emit its event, record history.
+
+        Its own task, started at COMMIT — so it exists independent of any
+        response: a response cancel can never kill the record (seam decision 4,
+        found live: a barge mid-transcription dropped the transcript and failed
+        the whole turn closed), and a commit with no response at all (the ask()
+        answer turn) still transcribes and emits.
+        """
+        text = await self._transcribe(pcm)
+        self._last_in_tokens = _rough_tokens(text)
+        await self._emit(
+            {
+                "type": "conversation.item.input_audio_transcription.completed",
+                "transcript": text,
+            }
+        )
+        self._history.append({"role": "user", "content": text})
+
     async def _respond(self) -> None:
         in_tokens = 0
         out_tokens = 0
-        transcript_task: asyncio.Future[str] | None = None
-        transcript_recorded = False
-
-        async def _record_transcript() -> None:
-            # Emit + append exactly once — shared by the normal path and the
-            # cancelled path below.
-            nonlocal in_tokens, transcript_recorded
-            if transcript_task is None or transcript_recorded:
-                return
-            text = await transcript_task
-            transcript_recorded = True
-            in_tokens = _rough_tokens(text)
-            await self._emit(
-                {
-                    "type": "conversation.item.input_audio_transcription.completed",
-                    "transcript": text,
-                }
-            )
-            self._history.append({"role": "user", "content": text})
-
+        job: asyncio.Task[None] | None = None
         # Defined before the try so the cancel/failure handlers can record
         # whatever was already SPOKEN into the room (sentence-streamed audio
         # is emitted mid-generation): on a barge or a mid-stream provider
@@ -217,14 +232,13 @@ class RealtimeSession:
         text_parts: list[str] = []
         try:
             await self._emit({"type": "response.created"})
-            pcm, self._pending = self._pending, b""
-            if pcm:
-                # SHIELDED: a cancel kills the RESPONSE, never the RECORD
-                # (seam decision 4 — found live: a barge mid-transcription
-                # dropped the transcript and failed the whole turn closed).
-                transcript_task = asyncio.ensure_future(self._transcribe(pcm))
-                await asyncio.shield(transcript_task)
-                await _record_transcript()
+            job, self._transcript_job = self._transcript_job, None
+            if job is not None:
+                # SHIELDED: cancelling this response must not cancel the
+                # record's own task — it finishes (and emits) regardless; a
+                # transcription FAILURE still fails the response, as before.
+                await asyncio.shield(job)
+            in_tokens = self._last_in_tokens
             unspoken = ""  # generated text not yet synthesized
             request = GenRequest(self._instructions, list(self._tools), list(self._history))
             async for gen in self._generate(request):
@@ -272,13 +286,13 @@ class RealtimeSession:
             await self._speak(unspoken)
             await self._done("completed", in_tokens, out_tokens)
         except asyncio.CancelledError:
-            # The contract: cancel stops the stream HERE — no late deltas. But
-            # the input transcript still lands first: the record survives.
-            if transcript_task is not None and not transcript_recorded:
-                try:
-                    await _record_transcript()  # the shielded task finishes
-                except Exception:  # noqa: BLE001 — the stage itself failed; nothing to record
-                    log.debug("kenzy-s2s: transcript unrecoverable on cancel", exc_info=True)
+            # The contract: cancel stops the stream HERE — no late deltas. The
+            # input transcript's own task survives the cancel and still emits —
+            # and the cancelled done WAITS for it, so the record lands BEFORE
+            # response.done (the runner's ordering contract, seam decision 4).
+            if job is not None and not job.done():
+                with contextlib.suppress(Exception):
+                    await asyncio.shield(job)
             self._record_spoken(text_parts)  # what the room already heard
             await self._done("cancelled", in_tokens, out_tokens)
         except Exception as exc:  # noqa: BLE001 — a stage failed; the client is told
@@ -305,7 +319,13 @@ class RealtimeSession:
         self._history.append({"role": "assistant", "content": text})
 
     async def _speak(self, text: str) -> None:
-        """Synthesize one text segment and emit its audio deltas."""
+        """Synthesize one text segment and emit its audio deltas.
+
+        The text→audio boundary strips markdown artifacts (a model that
+        ignores the plain-prose instruction emits ``**bold**`` and the voice
+        says "asterisk asterisk" — lived, 2026-09-02); the transcript deltas
+        and history keep the model's own text."""
+        text = strip_spoken_markup(text)
         if not text.strip():
             return
         async for chunk in self._synthesize(text, self._voice):
@@ -343,6 +363,18 @@ class RealtimeSession:
 def _rough_tokens(text: str) -> int:
     """Crude usage accounting (chars/4) — honest about being an estimate."""
     return len(text) // 4
+
+
+def _log_transcript_failure(task: asyncio.Task[None]) -> None:
+    """Retrieve a commit-time transcription task's outcome. A response that
+    awaited it already reported the failure; a commit with NO response (the
+    ask() answer turn) has only this — the client's bounded transcript wait
+    fails that turn closed, and this line says why."""
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        log.warning("kenzy-s2s: input transcription failed: %s", exc)
 
 
 # ----------------------------------------------------------------- the server

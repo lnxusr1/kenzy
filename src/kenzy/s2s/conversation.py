@@ -134,6 +134,25 @@ def is_explicit_close(text: str) -> bool:
 
 
 @dataclass(frozen=True)
+class ToolAsk:
+    """A skill parked on ``ask()`` mid-tool — the continuation bridge's carrier.
+
+    The llm's ``/tool`` door returns this instead of a result when the skill
+    needs the user's answer: the bridge speaks ``prompt`` VERBATIM (consent and
+    enrollment wording is the skill's contract with the user, never the
+    model's paraphrase), arms the floor, and routes the next utterance to
+    ``/tool/continue``. The model's function call stays OPEN meanwhile — from
+    its seat, an ask is just a slow tool.
+    """
+
+    continuation: str
+    prompt: str
+    capture: str = "text"  # "text" | "audio" (audio = stage 2; refused today)
+    cue: bool = False
+    timeout_s: float | None = None
+
+
+@dataclass(frozen=True)
 class WindowPolicy:
     """The conversation's timing knobs (config-backed at wiring time)."""
 
@@ -198,6 +217,12 @@ class ConversationSession:
         """The policy's post-reply window length — what the node's mic window
         should be armed to (the on-demand sticky window rides this)."""
         return self._policy.followup_s
+
+    @property
+    def question_window_s(self) -> float:
+        """The longer question window — what an ask()'s answer window arms to
+        when the skill set no timeout of its own."""
+        return self._policy.question_followup_s
 
     @property
     def followup_deadline(self) -> float | None:
@@ -292,6 +317,15 @@ class TurnResult:
     #: without submitting. The bridge's replay-classic guard reads THIS: a
     #: replay is only safe when the turn provably did nothing.
     actions_resolved: int = 0
+    #: status == "ask": a tool parked on ask(). The bridge speaks the prompt,
+    #: arms the floor, and holds ``ask_call_id`` open until the resumed skill's
+    #: final result is submitted as its function_call_output.
+    ask: ToolAsk | None = None
+    ask_call_id: str = ""
+    #: Superseded sibling asks (two askable tools in one response — rare):
+    #: their calls were already answered into the engine as canceled; the
+    #: bridge must cancel these llm-side continuations so nothing stays parked.
+    stale_asks: tuple[str, ...] = ()
 
 
 class TurnRunner:
@@ -310,7 +344,7 @@ class TurnRunner:
         gate: TurnGate,
         session: ConversationSession,
         *,
-        execute: Callable[[ToolCall], Awaitable[str]],
+        execute: Callable[[ToolCall], Awaitable[str | ToolAsk]],
         deliver: Callable[[bytes], Awaitable[None]],
         detach: Callable[[ToolCall], Awaitable[str]] | None = None,
         transcript_timeout_s: float = 5.0,
@@ -324,13 +358,18 @@ class TurnRunner:
         self._transcript_timeout_s = transcript_timeout_s
         self._transcript = ""
         self._resolved = 0
+        #: The flush found a parked ask: (call_id, ToolAsk, superseded ids).
+        self._ask: tuple[str, ToolAsk, tuple[str, ...]] | None = None
 
     async def run(self) -> TurnResult:
         events = aiter(self._engine.events())
-        pending: list[tuple[str, str, bool]] = []  # (call_id, output, is_detach_handoff)
+        # (call_id, output, is_detach_handoff) — output is a ToolAsk when the
+        # skill parked on ask() (the /tool door returned a question, not a result).
+        pending: list[tuple[str, str | ToolAsk, bool]] = []
         reply: list[str] = []
         submitted = 0
         self._resolved = 0
+        self._ask = None
         awaiting_late_transcript = False
         self._transcript = ""
 
@@ -368,6 +407,8 @@ class TurnRunner:
                 if awaiting_late_transcript:
                     submitted += await self._flush(pending)
                     awaiting_late_transcript = False
+                    if self._ask is not None:
+                        return self._result("ask", reply, submitted)
             elif isinstance(evt, ToolCall):
                 rendered = self._gate.on_tool_call(evt)  # None = held pre-transcript
                 if rendered is not None:
@@ -389,6 +430,11 @@ class TurnRunner:
                     # by the hand-off wording ("if you already said it's
                     # started, add nothing"), not by suppressing the response.
                     submitted += await self._flush(pending)
+                    if self._ask is not None:
+                        # A tool parked on ask(): the turn ends here — the
+                        # bridge speaks the skill's question next, not the
+                        # model, and the parked call stays open for the answer.
+                        return self._result("ask", reply, submitted)
                 elif self._gate.cleared:
                     return self._result("ok", reply, submitted)
                 else:
@@ -405,7 +451,7 @@ class TurnRunner:
 
     # -------------------------------------------------------------- internals
 
-    async def _resolve(self, verdict: ToolVerdict) -> tuple[str, str, bool]:
+    async def _resolve(self, verdict: ToolVerdict) -> tuple[str, str | ToolAsk, bool]:
         """Turn a gate verdict into the result string the model will hear.
 
         Denials are reported honestly (the model must not claim success);
@@ -427,20 +473,48 @@ class TurnRunner:
         except Exception as exc:  # noqa: BLE001 — the model is told, never lied to
             return (call.call_id, f"error: {exc}", False)
 
-    async def _flush(self, pending: list[tuple[str, str, bool]]) -> int:
+    async def _flush(self, pending: list[tuple[str, str | ToolAsk, bool]]) -> int:
         """Submit held results and request one follow-on response to speak
         about them. The follow-on is always requested (a detached tool must
         not start silently); the response.create rides only the LAST result
-        so N results open exactly one response, not N."""
+        so N results open exactly one response, not N.
+
+        A ToolAsk in the batch changes the shape: its call is NOT submitted
+        (it stays open until the resumed skill's real result arrives), the
+        finished siblings submit with NO follow-on (the bridge speaks the
+        skill's question next, not the model), and the ask is staged in
+        ``self._ask`` for the caller to end the turn on. A rare second ask in
+        the same batch is superseded: its call answered as canceled here, its
+        continuation surfaced for the bridge to cancel llm-side.
+        """
+        asks = [(cid, out) for cid, out, _d in pending if isinstance(out, ToolAsk)]
+        if asks:
+            finished: list[tuple[str, str]] = [
+                (cid, out) for cid, out, _d in pending if isinstance(out, str)
+            ]
+            finished.extend(
+                (cid, "canceled: another question to the user was already pending")
+                for cid, _a in asks[1:]
+            )
+            for cid, text in finished:
+                await self._engine.submit_tool_result(cid, text, respond=False)
+            pending.clear()
+            self._ask = (asks[0][0], asks[0][1], tuple(a.continuation for _c, a in asks[1:]))
+            return len(finished)
         count = len(pending)
         if not count:
             return 0
         for i, (call_id, output, _is_detach) in enumerate(pending):
+            assert isinstance(output, str)
             await self._engine.submit_tool_result(call_id, output, respond=i == count - 1)
         pending.clear()
         return count
 
     def _result(self, status: str, reply: list[str], submitted: int) -> TurnResult:
+        staged = self._ask
+        ask_call_id = staged[0] if staged is not None else ""
+        ask = staged[1] if staged is not None else None
+        stale = staged[2] if staged is not None else ()
         return TurnResult(
             status=status,
             reply_text="".join(reply),
@@ -448,6 +522,9 @@ class TurnRunner:
             session_ended=self._session.ended,
             transcript=self._transcript,
             actions_resolved=self._resolved,
+            ask=ask,
+            ask_call_id=ask_call_id,
+            stale_asks=stale,
         )
 
 
@@ -456,6 +533,7 @@ __all__ = [
     "END_CONVERSATION_TOOL",
     "ConversationSession",
     "EndReason",
+    "ToolAsk",
     "TurnResult",
     "TurnRunner",
     "WindowPolicy",

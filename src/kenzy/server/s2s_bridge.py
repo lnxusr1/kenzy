@@ -38,11 +38,14 @@ from typing import Any, Protocol
 from kenzy.s2s.conversation import (
     END_CONVERSATION_TOOL,
     ConversationSession,
+    ToolAsk,
+    TurnResult,
     TurnRunner,
     WindowPolicy,
     end_conversation_rule,
+    is_explicit_close,
 )
-from kenzy.s2s.engine import EngineEvent, ToolCall
+from kenzy.s2s.engine import EngineError, EngineEvent, InputTranscript, ToolCall
 from kenzy.s2s.gate import AuditRecord, Speaker, ToolRule, TurnGate
 
 log = logging.getLogger(__name__)
@@ -90,7 +93,7 @@ class EngineLike(Protocol):
 
     async def append(self, pcm: bytes) -> None: ...
 
-    async def commit(self) -> None: ...
+    async def commit(self, *, respond: bool = True) -> None: ...
 
     async def cancel(self) -> None: ...
 
@@ -194,6 +197,31 @@ class BridgeDeps:
     #: The sticky policy for on-demand conversations (a longer follow-up window,
     #: "start a conversation" earns it). Falls back to `policy` if unset.
     policy_on_demand: WindowPolicy | None = None
+    #: The ask() continuation bridge (2026-09-03). ``synthesize`` speaks a
+    #: parked skill's question VERBATIM (consent/enrollment wording is the
+    #: skill's contract, never the model's paraphrase). ``continue_ask``
+    #: delivers the user's answer llm-side: (continuation, answer text,
+    #: node_id, room, answerer) -> the final result string, or a ToolAsk when
+    #: the skill chains another question. ``cancel_ask`` (continuation,
+    #: reason) cancels a parked skill — every conversation exit calls it, so
+    #: nothing stays parked llm-side. Any of the three unset ⇒ asks are
+    #: refused honestly (the model is told, and relays).
+    synthesize: Callable[[str], Awaitable[bytes]] | None = None
+    continue_ask: (
+        Callable[[str, str, str, str, Speaker], Awaitable[str | ToolAsk]] | None
+    ) = None
+    cancel_ask: Callable[[str, str], Awaitable[None]] | None = None
+
+
+@dataclass(frozen=True)
+class _PendingAsk:
+    """A skill's question is out in the room: the llm-side continuation that
+    holds the parked coroutine, and the engine-side call_id held OPEN until
+    the resumed skill's real result is submitted."""
+
+    continuation: str
+    call_id: str
+    prompt: str
 
 
 @dataclass
@@ -226,6 +254,9 @@ class _Conversation:
     history: list[tuple[str, str]] = field(default_factory=list)
     #: One-shot: has a warm resume already been injected this conversation?
     resumed: bool = False
+    #: A skill parked on ask(): its question was spoken and the floor armed —
+    #: the NEXT capture is the answer (routed to /tool/continue), not a turn.
+    pending_ask: _PendingAsk | None = None
 
 
 class S2SBridge:
@@ -354,6 +385,20 @@ class S2SBridge:
                     # once and open a FRESH conversation: with the toggle on,
                     # the wake NEVER falls back classic for a live engine.
                     continue
+                if conv.pending_ask is not None:
+                    # A skill's question is out — this capture is its ANSWER.
+                    # Never replayed classic on failure: "yes please" as a
+                    # fresh command would misfire; the question dies honestly.
+                    try:
+                        await self._run_answer_turn(node_id, conv, pcm)
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as exc:  # noqa: BLE001 — fire-and-forget task
+                        log.warning(
+                            "[%s] s2s: answer turn failed (%s) — closing", node_id, exc
+                        )
+                        await self._close(node_id, "answer turn failed")
+                    return
                 try:
                     await self._run_turn(node_id, conv, session_id, pcm)
                 except asyncio.CancelledError:
@@ -441,6 +486,14 @@ class S2SBridge:
                 armed = await self._deps.hold_floor(
                     node_id, conv.session.followup_window_s if conv.on_demand else None
                 )
+            elif result.status == "ask" and result.ask is not None:
+                # A tool parked on ask(): speak the skill's question and arm
+                # the answer window (or refuse honestly). Same buffered-order
+                # constraint — the prompt's frames and the arm ride before
+                # this turn's tts_end.
+                await self._carry_ask(
+                    conv, node_id, result.ask, result.ask_call_id, result.stale_asks, deliver
+                )
         finally:
             if not identify_task.done():
                 identify_task.cancel()
@@ -458,6 +511,10 @@ class S2SBridge:
             result.results_submitted,
             " — conversation ended" if conv.session.ended else "",
         )
+        # An ask turn's audible reply includes the skill's spoken question.
+        response_text = result.reply_text
+        if result.status == "ask" and conv.pending_ask is not None:
+            response_text = f"{result.reply_text} {conv.pending_ask.prompt}".strip()
         # The household-visible trail (Activity tab) — same shape as the
         # classic pipeline's record; the sink applies the dashboard.logs gate.
         self._deps.activity(
@@ -467,7 +524,7 @@ class S2SBridge:
                 "room": conv.room,
                 "speaker": conv.session.identity.current.name or "unknown",
                 "transcript": result.transcript,
-                "response": result.reply_text,
+                "response": response_text,
                 "fast": False,
                 "s2s": True,
                 "spans": [],
@@ -481,9 +538,14 @@ class S2SBridge:
         if result.transcript and conv.on_demand:
             # Keep the running transcript for the 3-min resume stash (on-demand
             # only — always-mode conversations never rest between wakes).
-            conv.history.append((result.transcript, result.reply_text or ""))
+            conv.history.append((result.transcript, response_text or ""))
         if conv.session.ended:
             await self._close(node_id, conv.session.end_reason or "verbal")
+            return
+        if result.status == "ask":
+            # Carried (a question is pending), superseded by a barge, or
+            # refused-and-spoken — _carry_ask settled every case; the
+            # conversation stays open either way.
             return
         if result.status != "ok":
             # An engine fault mid-conversation: end it honestly; the NEXT wake
@@ -547,6 +609,315 @@ class S2SBridge:
             )
 
         return execute, (detach if self._deps.detach is not None else None)
+
+    # ------------------------------------------------- the ask() continuation
+
+    async def _cancel_ask(self, continuation: str, reason: str) -> None:
+        """Cancel a parked skill llm-side — best-effort (cancel is idempotent
+        there, and a dead llm's backstop sweep collects strays anyway)."""
+        if self._deps.cancel_ask is None:
+            return
+        with contextlib.suppress(Exception):
+            await self._deps.cancel_ask(continuation, reason)
+
+    async def _carry_ask(
+        self,
+        conv: _Conversation,
+        node_id: str,
+        ask: ToolAsk,
+        call_id: str,
+        stale: tuple[str, ...],
+        deliver: Callable[[bytes], Awaitable[None]],
+    ) -> bool:
+        """Speak a parked skill's question VERBATIM and arm the answer window.
+
+        True = the question is live (``conv.pending_ask`` set; the next
+        capture is its answer). Every refusal path cancels the llm-side
+        continuation AND answers the model's open call, so nothing dangles: a
+        barge/close is answered quietly (the user moved on); a capability
+        refusal is answered with respond=True and the follow-on spoken, so
+        the model tells the user instead of dead air (the 5.0.4 say-why rule).
+        """
+        for extra in stale:
+            await self._cancel_ask(extra, "superseded")
+        quiet = ""
+        if conv.barged:
+            quiet = "canceled: the user interrupted before the question was asked"
+        elif conv.session.ended:
+            quiet = "canceled: the conversation ended before the question was asked"
+        if quiet:
+            await self._cancel_ask(ask.continuation, quiet)
+            with contextlib.suppress(Exception):
+                await conv.engine.submit_tool_result(call_id, quiet, respond=False)
+            return False
+        refusal = ""
+        synthesize = self._deps.synthesize
+        if ask.capture != "text":
+            # ask_audio (enrollment) — stage 2; refused honestly until bridged.
+            refusal = (
+                "error: this skill needs a voice-recording exchange that "
+                "conversations don't support yet — suggest trying it outside "
+                "a conversation, or from the dashboard"
+            )
+        elif synthesize is None or self._deps.continue_ask is None:
+            refusal = "error: this deployment cannot relay a skill's question mid-conversation"
+        pcm = b""
+        if not refusal and synthesize is not None:
+            try:
+                pcm = await synthesize(ask.prompt)
+            except Exception as exc:  # noqa: BLE001 — the refusal below says why
+                log.warning("[%s] s2s: ask prompt synthesis failed (%s)", node_id, exc)
+            if not pcm:
+                refusal = "error: the question could not be spoken (synthesis failed)"
+        if not refusal:
+            for i in range(0, len(pcm), 9600):
+                await deliver(pcm[i : i + 9600])
+            window = ask.timeout_s or conv.session.question_window_s
+            if await self._deps.hold_floor(node_id, window):
+                conv.pending_ask = _PendingAsk(ask.continuation, call_id, ask.prompt)
+                log.info(
+                    "[%s] s2s: skill question pending (%s, window %.0fs)",
+                    node_id, ask.continuation, window,
+                )
+                return True
+            refusal = "canceled: the user's answer window could not be opened"
+        await self._cancel_ask(ask.continuation, refusal)
+        with contextlib.suppress(Exception):
+            await conv.engine.submit_tool_result(call_id, refusal, respond=True)
+        try:
+            followon = await self._run_followon(
+                conv, node_id, deliver, f"[ask refused] {refusal}"
+            )
+            if followon.status == "ask" and followon.ask is not None:
+                # One level only: a follow-on asking AGAIN right after a
+                # refusal is refused quietly — never an unbounded ladder.
+                await self._cancel_ask(followon.ask.continuation, "ask after refusal")
+                with contextlib.suppress(Exception):
+                    await conv.engine.submit_tool_result(
+                        followon.ask_call_id,
+                        "canceled: questions to the user are unavailable right now",
+                        respond=False,
+                    )
+            elif followon.status == "ok" and not conv.session.ended and not conv.barged:
+                await self._deps.hold_floor(
+                    node_id, conv.session.followup_window_s if conv.on_demand else None
+                )
+        except Exception as exc:  # noqa: BLE001 — the refusal was already recorded
+            log.warning("[%s] s2s: ask refusal follow-on failed (%s)", node_id, exc)
+        return False
+
+    async def _run_followon(
+        self,
+        conv: _Conversation,
+        node_id: str,
+        deliver: Callable[[bytes], Awaitable[None]],
+        provenance: str,
+    ) -> TurnResult:
+        """Consume one response the ask path just requested (a resumed skill's
+        result, or a refusal) — a full TurnRunner, so gated tools in the
+        follow-on behave exactly like any turn's. The gate is pre-cleared:
+        the user's answer (or the refusal) is the provenance, the delivery-
+        turn pattern."""
+        gate = TurnGate(
+            f"{conv.session.session_id}-ask",
+            identity=lambda: conv.session.identity.current,
+            tool_rules=conv.rules,
+            audit=self._deps.audit,
+        )
+        gate.on_transcript(provenance)
+        execute, detach = self._tool_closures(conv, node_id)
+        runner = TurnRunner(
+            conv.engine,
+            gate,
+            conv.session,
+            execute=execute,
+            deliver=deliver,
+            detach=detach,
+            transcript_timeout_s=10.0,
+        )
+        return await runner.run()
+
+    #: The answer wait's bound. STT starts at the commit; a short answer on a
+    #: slow host measured ~10-13 s (vm1) — 20 gives headroom without wedging.
+    _ANSWER_TRANSCRIPT_S = 20.0
+
+    async def _answer_transcript(self, conv: _Conversation) -> str | None:
+        """The engine's transcript of the just-committed answer (no response
+        was requested, so the stream carries only the transcript plus any
+        cancelled stragglers). None = engine error or timeout — the caller
+        fails the question closed."""
+        events = aiter(conv.engine.events())
+        deadline = time.monotonic() + self._ANSWER_TRANSCRIPT_S
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return None
+            try:
+                evt = await asyncio.wait_for(anext(events), remaining)
+            except (StopAsyncIteration, TimeoutError):
+                return None
+            if isinstance(evt, InputTranscript):
+                return evt.text
+            if isinstance(evt, EngineError):
+                log.warning("s2s: engine error awaiting an answer — %s", evt.message)
+                return None
+            # Anything else (a cancelled response's stragglers): drain.
+
+    async def _run_answer_turn(self, node_id: str, conv: _Conversation, pcm: bytes) -> None:
+        """The capture that answers a pending skill question.
+
+        The engine transcribes it (one transcript method — the 6.0 gate rule)
+        but NO response is requested: the answer belongs to the parked skill.
+        It resumes via /tool/continue with the ANSWERER's identity, its real
+        result closes the model's still-open call, and the follow-on response
+        speaks with both the answer (now in session history) and the result
+        in view. The deterministic close outranks any pending question.
+        """
+        pa = conv.pending_ask
+        assert pa is not None
+        conv.pending_ask = None
+        turn_id = conv.session.begin_turn()
+        started = False
+
+        async def deliver(out: bytes) -> None:
+            nonlocal started
+            if conv.barged:
+                return
+            if not started:
+                if self._deps.playback_signal(node_id):
+                    conv.playback_done.clear()
+                await self._deps.deliver_start(node_id)
+                started = True
+            await self._deps.deliver_frame(node_id, out)
+
+        identify_task = asyncio.get_running_loop().create_task(
+            self._identify(conv, pcm), name=f"s2s-id-{node_id}"
+        )
+        armed = False
+        t0 = time.monotonic()
+        result: TurnResult | None = None
+        transcript: str | None = None
+        try:
+            await conv.engine.append(pcm)
+            await conv.engine.commit(respond=False)
+            await self._deps.listen_now(node_id)
+            transcript = await self._answer_transcript(conv)
+            # The answerer's identity rides the resume — wait briefly for it
+            # (speaker-id usually beats STT, so this rarely actually waits).
+            with contextlib.suppress(Exception):
+                await asyncio.wait_for(asyncio.shield(identify_task), 5.0)
+            if transcript is not None and is_explicit_close(transcript):
+                conv.session.end("verbal")
+                await self._cancel_ask(pa.continuation, "conversation closed")
+            elif conv.barged:
+                # A fresh capture arrived while we waited — it owns the floor.
+                await self._cancel_ask(pa.continuation, "the user interrupted")
+                with contextlib.suppress(Exception):
+                    await conv.engine.submit_tool_result(
+                        pa.call_id, "canceled: the user moved on", respond=False
+                    )
+            else:
+                outcome: str | ToolAsk
+                if transcript is None:
+                    await self._cancel_ask(pa.continuation, "answer not transcribed")
+                    outcome = (
+                        "error: the user's answer could not be transcribed — "
+                        "the question was abandoned; apologize briefly"
+                    )
+                elif self._deps.continue_ask is None:  # defensive: carry gates on it
+                    await self._cancel_ask(pa.continuation, "no continue door")
+                    outcome = "error: the answer could not reach the skill"
+                else:
+                    outcome = await self._deps.continue_ask(
+                        pa.continuation,
+                        transcript,
+                        node_id,
+                        conv.room,
+                        conv.session.identity.current,
+                    )
+                if isinstance(outcome, ToolAsk):
+                    # The skill chained another question — same call stays open.
+                    await self._carry_ask(conv, node_id, outcome, pa.call_id, (), deliver)
+                else:
+                    await conv.engine.submit_tool_result(pa.call_id, outcome, respond=True)
+                    result = await self._run_followon(
+                        conv, node_id, deliver, transcript or "[unheard answer]"
+                    )
+                    if result.status == "ok" and not conv.session.ended and not conv.barged:
+                        armed = await self._deps.hold_floor(
+                            node_id,
+                            conv.session.followup_window_s if conv.on_demand else None,
+                        )
+                    elif result.status == "ask" and result.ask is not None:
+                        await self._carry_ask(
+                            conv,
+                            node_id,
+                            result.ask,
+                            result.ask_call_id,
+                            result.stale_asks,
+                            deliver,
+                        )
+        except Exception:
+            # take_turn's wrapper closes the conversation on this raise — make
+            # sure the parked skill dies with it, not at the backstop sweep.
+            await self._cancel_ask(pa.continuation, "answer turn failed")
+            raise
+        finally:
+            if not identify_task.done():
+                identify_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await identify_task
+            if started:
+                await self._deps.deliver_end(node_id)
+
+        reply_text = result.reply_text if result is not None else ""
+        if conv.pending_ask is not None:
+            reply_text = f"{reply_text} {conv.pending_ask.prompt}".strip()
+        log.info(
+            "[%s] s2s answer turn %s: %s",
+            node_id,
+            turn_id,
+            "closed"
+            if conv.session.ended
+            else (
+                "question pending"
+                if conv.pending_ask is not None
+                else (result.status if result is not None else "canceled")
+            ),
+        )
+        self._deps.activity(
+            {
+                "ts": time.time(),
+                "node_id": node_id,
+                "room": conv.room,
+                "speaker": conv.session.identity.current.name or "unknown",
+                "transcript": transcript or "",
+                "response": reply_text,
+                "fast": False,
+                "s2s": True,
+                "spans": [],
+                "stt_ms": 0,
+                "speaker_ms": 0,
+                "llm_ms": 0,
+                "tts_ms": 0,
+                "total_ms": round((time.monotonic() - t0) * 1000.0),
+            }
+        )
+        if transcript and conv.on_demand:
+            conv.history.append((transcript, reply_text or ""))
+        if conv.session.ended:
+            await self._close(node_id, conv.session.end_reason or "verbal")
+            return
+        if conv.pending_ask is not None or conv.barged or result is None:
+            return  # chained question live / a new capture owns the floor / canceled
+        if result.status == "ask":
+            return  # settled by _carry_ask (carried, or refused-and-spoken)
+        if result.status != "ok":
+            await self._close(node_id, f"engine {result.status}")
+            return
+        if not armed:
+            conv.session.end("hard_cap")
+            await self._close(node_id, "turn cap")
 
     def on_tts_done(self, node_id: str) -> None:
         """The node reports the reply finished PLAYING — the delivery turn's
@@ -850,6 +1221,12 @@ class S2SBridge:
         conv = self._convs.pop(node_id, None)
         if conv is None:
             return
+        if conv.pending_ask is not None:
+            # Every conversation exit kills the parked skill with it — the
+            # classic law (the wake word always cancels), and no leaked
+            # coroutine idling llm-side until the backstop sweep.
+            pa, conv.pending_ask = conv.pending_ask, None
+            await self._cancel_ask(pa.continuation, f"conversation closed ({reason})")
         # Stash the transcript for a short identity-gated resume ("continue" /
         # "start a conversation" again within the window). On-demand only, and
         # only when we know WHO to gate the resume to.

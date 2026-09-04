@@ -524,12 +524,49 @@ class ToolExecBody(BaseModel):
     people: list[dict[str, Any]] = []
     schedules: list[dict[str, Any]] = []
     occupancy: dict[str, Any] = {}
+    # The ask() continuation bridge (2026-09-03): True = the caller can carry a
+    # parked question to the user and bring the answer to /tool/continue — the
+    # conversation bridge's in-turn executor. False (the default, and every
+    # older server) keeps today's behavior: ask() fails inside the skill and
+    # the error string is the result — so a new llm never parks a continuation
+    # a caller has no door to resume.
+    allow_ask: bool = False
+
+
+def _tool_ask_payload(parked: Any) -> dict[str, Any]:
+    """The /tool doors' parked-question shape (the wire mirror of
+    ``_ask_prompt_response``, minus the speak-it-yourself finishers — the
+    bridge speaks the prompt through its own delivery path)."""
+    ch = parked.channel
+    acts = list(ch.actions or [])
+    if ch.actions:
+        ch.actions.clear()  # drained per turn, same lifecycle as _ask_prompt_response
+    return {
+        "ask": {
+            "continuation": parked.id,
+            "prompt": ch.prompt,
+            "capture": ch.capture,
+            "cue": ch.cue,
+            "timeout_s": ch.timeout,
+            "room": ch.room,
+        },
+        "actions": acts,
+    }
 
 
 @app.post("/tool")
 async def execute_tool(body: ToolExecBody) -> dict[str, Any]:
-    """Execute one skill and return its result plus any queued server actions."""
+    """Execute one skill and return its result plus any queued server actions.
+
+    With ``allow_ask``, a skill that parks on ask() returns an ``ask`` payload
+    instead of a result: the caller speaks the prompt, routes the user's
+    answer to ``/tool/continue``, and the skill resumes where it suspended —
+    the same continuation registry the classic pipeline parks in.
+    """
+    from kenzy.llm import asking, memory
+
     skill_registry.begin_actions()
+    memory.begin_touch()
     skill_registry.begin_request(
         {
             "rooms": body.rooms,
@@ -544,8 +581,74 @@ async def execute_tool(body: ToolExecBody) -> dict[str, Any]:
             "occupancy": body.occupancy,
         }
     )
-    result = await skill_registry.execute(body.name, body.arguments)
-    return {"result": result, "actions": skill_registry.take_actions()}
+    if not body.allow_ask:
+        result = await skill_registry.execute(body.name, body.arguments)
+        return {"result": result, "actions": skill_registry.take_actions()}
+    outcome = await asking.run_askable(
+        skill_registry.execute(body.name, body.arguments),
+        kind="tool",
+        meta={"room_id": body.room_id or "", "tool": body.name},
+    )
+    if not outcome.finished:
+        return _tool_ask_payload(outcome.parked)
+    return {"result": outcome.value, "actions": skill_registry.take_actions()}
+
+
+class ToolContinueBody(BaseModel):
+    """The user's answer to a tool-parked ask() — identity is the ANSWERER's."""
+
+    continuation: str
+    text: str = ""
+    speaker: str | None = None
+    person_id: str | None = None
+    speaker_tier: str | None = None
+    confidence: float | None = None
+
+
+@app.post("/tool/continue")
+async def continue_tool(body: ToolContinueBody) -> dict[str, Any]:
+    """Resume a tool-parked continuation with the user's answer: returns the
+    final ``result`` (plus actions the resumed skill queued), or another
+    ``ask`` when the skill chains questions."""
+    from kenzy import redact
+    from kenzy.llm import asking
+
+    parked = asking.pending(body.continuation)
+    if parked is None:
+        raise HTTPException(status_code=404, detail="no such continuation")
+    if parked.kind != "tool":
+        raise HTTPException(status_code=409, detail="not a tool continuation")
+    log.info("[tool-continue/%s] %s", body.speaker or "?", redact.loggable(body.text))
+    ch = parked.channel
+    answerer = {
+        "person_id": body.person_id,
+        "speaker_tier": body.speaker_tier or "unknown",
+        "confidence": body.confidence,
+        "speaker": body.speaker,
+    }
+    outcome = await asking.resume(body.continuation, body.text, answerer)
+    if not outcome.finished:
+        return _tool_ask_payload(outcome.parked)
+    acts = list(ch.actions or [])
+    if ch.actions:
+        ch.actions.clear()
+    return {"result": outcome.value, "actions": acts}
+
+
+class ToolCancelBody(BaseModel):
+    continuation: str
+    reason: str = "canceled"
+
+
+@app.post("/tool/cancel")
+async def cancel_tool(body: ToolCancelBody) -> dict[str, Any]:
+    """Cancel a tool-parked continuation (conversation closed, window expired,
+    the user moved on). Unknown ids are a no-op — the normal race with an
+    answer that just arrived."""
+    from kenzy.llm import asking
+
+    await asking.cancel(body.continuation, body.reason or "canceled")
+    return {"ok": True}
 
 
 # ---------------------------------------------------------------------------
@@ -985,6 +1088,10 @@ async def process_continue(req: ContinueRequest) -> ProcessResponse:
     parked = asking.pending(req.continuation)
     if parked is None:
         raise HTTPException(status_code=404, detail="no such continuation")
+    if parked.kind == "tool":
+        # A conversation-bridge park: its finisher is the raw tool result, not
+        # this door's spoken-reply shape (unpacking it here would corrupt).
+        raise HTTPException(status_code=409, detail="a tool continuation — use /tool/continue")
     ch, meta, kind = parked.channel, parked.meta, parked.kind
     log.info("[continue/%s] %s", req.speaker or "?", redact.loggable(req.text))
     answerer = {

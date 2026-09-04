@@ -32,6 +32,15 @@ Upgrade the **server first**, then services, then nodes.
 
 Newest first. Anything not listed needs no manual steps.
 
+### 6.2.0
+
+No manual steps. One thing worth knowing during a rolling upgrade: skills
+that ask a question mid-conversation (the headline feature) need
+kenzy-server and kenzy-llm on 6.2.0 **together** — a mixed fleet keeps the
+previous behavior (the skill reports it can't ask, and the model relays
+that) rather than breaking, and catches up the moment both sides are
+upgraded.
+
 ### 6.1.1
 
 **One restart by hand, once, on the host running kenzy-s2s.** This release

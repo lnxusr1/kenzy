@@ -439,3 +439,35 @@ async def test_http_doors_require_signature_when_token_set(monkeypatch):
     finally:
         server.close()
         await server.wait_closed()
+
+
+async def test_synthesis_strips_markdown_but_transcript_keeps_it() -> None:
+    """The text→audio boundary strips markdown (the voice must never say
+    "asterisk asterisk" — lived 2026-09-02); the reply transcript stays the
+    model's own text."""
+    spoken: list[str] = []
+
+    async def generate(_r: GenRequest) -> AsyncIterator[GenText]:
+        yield GenText("That **object** has *three* parts. ")
+
+    async def synthesize(text: str, _v: str) -> AsyncIterator[bytes]:
+        spoken.append(text)
+        yield b"\x00"
+
+    pipe = _Pipe()
+    session = RealtimeSession(
+        pipe, transcribe=_transcribe, generate=generate, synthesize=synthesize
+    )
+    audio = base64.b64encode(b"\x00\x00").decode()
+    pipe.push({"type": "input_audio_buffer.append", "audio": audio})
+    pipe.push({"type": "input_audio_buffer.commit"})
+    pipe.push({"type": "response.create"})
+    task = asyncio.get_running_loop().create_task(session.run())
+    await pipe.wait_for("response.done")
+    pipe.close()
+    await task
+    assert spoken == ["That object has three parts. "]
+    deltas = [
+        e["delta"] for e in pipe.sent if e.get("type") == "response.output_audio_transcript.delta"
+    ]
+    assert "".join(deltas) == "That **object** has *three* parts. "

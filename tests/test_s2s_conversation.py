@@ -13,6 +13,7 @@ from kenzy.s2s.conversation import (
     END_CONVERSATION,
     END_CONVERSATION_TOOL,
     ConversationSession,
+    ToolAsk,
     TurnRunner,
     WindowPolicy,
     end_conversation_rule,
@@ -163,9 +164,15 @@ class _Rig:
         self.executed: list[str] = []
         self.detached: list[str] = []
         self.delivered: list[bytes] = []
+        #: name -> ToolAsk: the executor returns a parked question instead of
+        #: a result for these (the ask() continuation tests).
+        self.ask_map: dict[str, ToolAsk] = {}
 
-        async def execute(call: ToolCall) -> str:
+        async def execute(call: ToolCall) -> str | ToolAsk:
             self.executed.append(call.name)
+            staged = self.ask_map.get(call.name)
+            if staged is not None:
+                return staged
             return "light on"
 
         async def detach_fn(call: ToolCall) -> str:
@@ -326,3 +333,64 @@ async def test_transcript_never_arrives_fails_the_turn_closed() -> None:
     result = await rig.runner.run()
     assert result.status == "no_transcript"
     assert rig.executed == [] and engine.submitted == []  # the gate held everything
+
+
+# ------------------------------------------------------- ask() continuation
+
+
+async def test_an_asking_tool_ends_the_turn_with_its_call_held_open() -> None:
+    engine = _FakeEngine([
+        InputTranscript("tell me a knock knock joke", late=False),
+        ToolCall(call_id="c1", name="knock", arguments_json="{}"),
+        AudioDelta(b"\x01"),
+        ResponseDone("done", 0, 0),
+    ])
+    rig = _Rig(engine, rules={"knock": ToolRule(min_tier="recognized")})
+    rig.ask_map["knock"] = ToolAsk("cont1", "Say who's there?")
+    result = await rig.runner.run()
+    assert result.status == "ask"
+    assert result.ask is not None and result.ask.continuation == "cont1"
+    assert result.ask_call_id == "c1"
+    assert engine.submitted == []  # the model's call stays OPEN for the real result
+    assert rig.delivered == [b"\x01"]  # pre-ask reply audio still played
+
+
+async def test_a_finished_sibling_still_submits_when_another_tool_asks() -> None:
+    engine = _FakeEngine([
+        InputTranscript("light on and a joke", late=False),
+        ToolCall(call_id="c1", name="set_light", arguments_json="{}"),
+        ToolCall(call_id="c2", name="knock", arguments_json="{}"),
+        ResponseDone("done", 0, 0),
+    ])
+    rig = _Rig(engine, rules={
+        "set_light": ToolRule(min_tier="recognized"),
+        "knock": ToolRule(min_tier="recognized"),
+    })
+    rig.ask_map["knock"] = ToolAsk("cont1", "Say who's there?")
+    result = await rig.runner.run()
+    assert result.status == "ask" and result.ask_call_id == "c2"
+    # the sibling's result submitted with NO follow-on (the bridge speaks next)
+    assert engine.submitted == [("c1", "light on")]
+    assert "submit:c1:norespond" in engine.log
+
+
+async def test_a_second_ask_in_one_batch_is_superseded() -> None:
+    engine = _FakeEngine([
+        InputTranscript("two questions", late=False),
+        ToolCall(call_id="c1", name="knock", arguments_json="{}"),
+        ToolCall(call_id="c2", name="quiz", arguments_json="{}"),
+        ResponseDone("done", 0, 0),
+    ])
+    rig = _Rig(engine, rules={
+        "knock": ToolRule(min_tier="recognized"),
+        "quiz": ToolRule(min_tier="recognized"),
+    })
+    rig.ask_map["knock"] = ToolAsk("cont1", "q1?")
+    rig.ask_map["quiz"] = ToolAsk("cont2", "q2?")
+    result = await rig.runner.run()
+    assert result.status == "ask" and result.ask is not None
+    assert result.ask.continuation == "cont1"  # the first ask wins the turn
+    assert result.stale_asks == ("cont2",)  # the bridge cancels this park llm-side
+    assert engine.submitted == [
+        ("c2", "canceled: another question to the user was already pending")
+    ]

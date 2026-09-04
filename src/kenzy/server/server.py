@@ -4076,7 +4076,11 @@ class TranscribingServer(AudioServer):
                     engine_factory=self._s2s_engine_factory,
                     fetch_tools=self._s2s_fetch_tools,
                     identify=self._s2s_identify,
-                    execute_tool=self._s2s_execute_tool,
+                    # In-turn executes may park on ask() (a user is holding the
+                    # floor); the task ledger's calls stay allow_ask=False.
+                    execute_tool=lambda call, nid, room, spk: self._s2s_execute_tool(
+                        call, nid, room, spk, allow_ask=True
+                    ),
                     deliver_start=self._s2s_deliver_start,
                     deliver_frame=self.send_tts_frame,
                     deliver_end=self._s2s_deliver_end,
@@ -4101,6 +4105,12 @@ class TranscribingServer(AudioServer):
                         followup_s=self._s2s_conv_window_s,
                         question_followup_s=self._s2s_conv_window_s,
                     ),
+                    # The ask() continuation bridge: the skill's question is
+                    # spoken VERBATIM in Kenzy's own voice, the answer routes
+                    # to /tool/continue, and every exit cancels the park.
+                    synthesize=lambda text: self._s2s_ask_pcm(text),
+                    continue_ask=self._s2s_continue_tool,
+                    cancel_ask=self._s2s_cancel_tool,
                 )
             )
         return self._s2s_bridge
@@ -4289,11 +4299,31 @@ class TranscribingServer(AudioServer):
         owner = str(getattr(speaker, "name", "") or "")
         if work is None:
             work = self._s2s_execute_tool(call, node_id, room, speaker)
+        else:
+            # The promotion adopts an in-flight execute that was opened
+            # allow_ask=True; backgrounded, no user holds the floor — a park
+            # arriving after adoption is canceled and reported honestly.
+            work = self._collapse_ask(work)
         task = self._tasks().start(
             owner=owner, title=title, origin_room=room, origin_node=node_id, work=work
         )
         log.info("[%s] tool %s detached as task %s", node_id, call.name, task.id)
         return handoff_text(title)
+
+    async def _collapse_ask(self, work: Any) -> str:
+        """Await an adopted execute and collapse a ToolAsk outcome to an
+        honest error string (canceling the llm-side park) — the task ledger
+        only ever holds finished strings."""
+        result = await work
+        from kenzy.s2s.conversation import ToolAsk
+
+        if isinstance(result, ToolAsk):
+            await self._s2s_cancel_tool(result.continuation, "backgrounded")
+            return (
+                "error: the skill needed the user's answer after being "
+                "backgrounded — canceled"
+            )
+        return str(result)
 
     async def _deliver_task_result(self, task: Any) -> bool:
         """Speak a finished task's result: into the live conversation (a
@@ -4416,11 +4446,17 @@ class TranscribingServer(AudioServer):
                 self._tasks().mark_delivered(tid)
 
     async def _s2s_execute_tool(
-        self, call: Any, node_id: str, room: str, speaker: Any
-    ) -> str:
+        self, call: Any, node_id: str, room: str, speaker: Any, *, allow_ask: bool = False
+    ) -> Any:
         """POST one gate-approved call to the llm's /tool door and dispatch any
         server actions it queued (announce, volume, …) — same actuator as the
-        classic pipeline, same audit surface."""
+        classic pipeline, same audit surface.
+
+        ``allow_ask`` (the bridge's in-turn executor ONLY — never the task
+        ledger, which has no user holding the floor): a skill that parks on
+        ask() comes back as a ToolAsk for the bridge to carry, instead of the
+        RuntimeError string that lived as "the knock knock skill glitched".
+        """
         base = self._s2s_llm_base()
         if not base:
             return "error: no llm service configured"
@@ -4439,6 +4475,7 @@ class TranscribingServer(AudioServer):
             "rooms": sorted({s.room_id for s in self._nodes.values()}),
             "schedules": self._schedule_payload(node_id),
             "occupancy": self._occupancy_payload(),
+            "allow_ask": allow_ask,
         }
         import httpx
 
@@ -4451,11 +4488,91 @@ class TranscribingServer(AudioServer):
                 headers=self._service_headers("POST", url),
             )
             resp.raise_for_status()
-        data = resp.json()
+        return await self._s2s_tool_outcome(resp.json(), node_id, room, speaker)
+
+    async def _s2s_tool_outcome(
+        self, data: dict[str, Any], node_id: str, room: str, speaker: Any
+    ) -> Any:
+        """Shared /tool + /tool/continue response handling: dispatch queued
+        actions, then either the result string or the parked question."""
         actions = list(data.get("actions") or [])
         if actions:
             await self._dispatch_actions(actions, node_id, room, speaker.name or None)
+        ask = data.get("ask")
+        if isinstance(ask, dict) and ask.get("continuation"):
+            from kenzy.s2s.conversation import ToolAsk
+
+            return ToolAsk(
+                continuation=str(ask.get("continuation", "")),
+                prompt=str(ask.get("prompt", "")),
+                capture=str(ask.get("capture", "text") or "text"),
+                cue=bool(ask.get("cue", False)),
+                timeout_s=(
+                    float(ask["timeout_s"]) if ask.get("timeout_s") is not None else None
+                ),
+            )
         return str(data.get("result", ""))
+
+    async def _s2s_continue_tool(
+        self, continuation: str, text: str, node_id: str, room: str, speaker: Any
+    ) -> Any:
+        """Deliver the user's answer to a tool-parked skill (the bridge's
+        continue_ask dep). The answerer's identity rides the resume — gated
+        skills re-check against who actually answered, the classic guarantee.
+        A 404 (llm restarted; continuations are mortal) is reported honestly
+        as the tool result, never as dead air."""
+        base = self._s2s_llm_base()
+        if not base:
+            return "error: no llm service configured"
+        body = {
+            "continuation": continuation,
+            "text": text,
+            "speaker": speaker.name or None,
+            "person_id": self._s2s_person.get(speaker.name) or None,
+            "speaker_tier": speaker.tier,
+        }
+        import httpx
+
+        url = f"{base}/tool/continue"
+        try:
+            async with httpx.AsyncClient(verify=tlsutil.httpx_verify()) as client:
+                resp = await client.post(
+                    url,
+                    json=body,
+                    timeout=self._llm_timeout,
+                    headers=self._service_headers("POST", url),
+                )
+        except Exception as exc:  # noqa: BLE001 — the model is told, never dead air
+            return f"error: the skill's question flow failed ({exc})"
+        if resp.status_code == 404:
+            return (
+                "error: the skill lost its place (the service restarted) — "
+                "the question was abandoned; apologize briefly"
+            )
+        if resp.status_code >= 400:
+            return f"error: the skill's question flow failed (HTTP {resp.status_code})"
+        return await self._s2s_tool_outcome(resp.json(), node_id, room, speaker)
+
+    async def _s2s_cancel_tool(self, continuation: str, reason: str) -> None:
+        """Cancel a tool-parked skill (the bridge's cancel_ask dep)."""
+        base = self._s2s_llm_base()
+        if not base:
+            return
+        import httpx
+
+        url = f"{base}/tool/cancel"
+        async with httpx.AsyncClient(verify=tlsutil.httpx_verify()) as client:
+            await client.post(
+                url,
+                json={"continuation": continuation, "reason": reason},
+                timeout=self._llm_timeout,
+                headers=self._service_headers("POST", url),
+            )
+
+    async def _s2s_ask_pcm(self, text: str) -> bytes:
+        """A skill's ask() prompt in Kenzy's own voice (the bridge's
+        synthesize dep) — b"" tells the bridge to refuse the ask honestly."""
+        return await self._synthesize(text, "") or b""
 
     async def _s2s_deliver_start(self, node_id: str) -> None:
         self._tts_active.add(node_id)
@@ -4528,6 +4645,10 @@ class TranscribingServer(AudioServer):
             "You are Kenzy, a helpful whole-home voice assistant, speaking with someone "
             f"in the {where}. Keep spoken replies short and natural — one or two "
             "sentences unless asked for more.\n"
+            "- Everything you say is READ ALOUD by a voice synthesizer: plain "
+            "conversational prose only — never markdown, asterisks, bullet points, "
+            "headings, code blocks, or emojis; say symbols and numbers as words "
+            "(\"two times three\", not \"2*3\").\n"
             f"- Date and time as this conversation started: {clock}. For a precise "
             "current time, call the get_datetime tool.\n"
             f"- Device requests that don't name a room mean THIS room: always pass "

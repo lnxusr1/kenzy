@@ -8,7 +8,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Most releases need nothing beyond the upgrade itself. When one does, it's noted
 here and spelled out in **[Upgrading](https://docs.kenzy.ai/upgrading/)**.
 
-## [Unreleased]
+## [6.2.0] - 2026-09-03
+
+### Added
+
+- **Skills that ask a question mid-flow now work in conversations.** A skill
+  awaiting `ask()` — the knock-knock joke, a list's delete confirmation, the
+  offer to remember something, a near-tie name check — errored on the
+  conversation path ("the knock knock skill glitched", and the model
+  improvised), because the conversation engine's tool door had no way to
+  carry a question to the user. Now it does: the skill's question is spoken
+  verbatim in Kenzy's own voice, the answer window opens, and the next thing
+  you say goes back to the waiting skill — which can ask again, chaining
+  turns, exactly as it does outside a conversation. The model's tool call
+  simply waits for the real result, and ending the conversation (or saying
+  nothing) cancels the question cleanly. Voice-recording exchanges
+  (enrollment's `ask_audio`) are not carried yet and say so honestly.
+  Requires kenzy-server and kenzy-llm on the same version — a mixed fleet
+  degrades to the previous behavior rather than breaking.
+
+### Fixed
+
+- **Conversations sometimes spoke markdown aloud** ("that asterisk asterisk
+  object has…") — the model emits `**bold**` and the voice reads the
+  characters. Two layers: the conversation instructions now say replies are
+  read aloud (plain prose, no markdown or symbols), and the engine strips
+  markdown artifacts at the text-to-speech boundary regardless, so a model
+  that ignores the instruction still sounds right. Transcripts and the
+  Activity log keep the model's own text.
+- **The kenzy-s2s card didn't exist on the dashboard until the service's
+  first successful connect** — the other four backends always show (their
+  packaged configs carry static addresses), but s2s finds its address via the
+  service registry, so a disabled or not-yet-started s2s simply wasn't there.
+  The Fleet's service cards now derive from the one authoritative service
+  list: every backend gets a card, shown as down until it's reachable.
 
 ## [6.1.1]
 

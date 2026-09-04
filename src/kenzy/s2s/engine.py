@@ -216,15 +216,21 @@ class EngineClient:
             {"type": "input_audio_buffer.append", "audio": base64.b64encode(pcm).decode()}
         )
 
-    async def commit(self) -> None:
+    async def commit(self, *, respond: bool = True) -> None:
         """The endpoint decision: the utterance is over.
 
         Per-profile normalization (the first measured conformance divergence):
         OpenAI-shaped engines need an explicit ``response.create``; STT-driven
         engines auto-respond and would auto-cancel one sent at commit time.
+
+        ``respond=False`` commits WITHOUT requesting a response — the ask()
+        answer turn's door: the engine transcribes the utterance (input
+        transcription runs at commit, GA semantics) but the model stays out of
+        it, because the answer belongs to the parked skill, not to a fresh
+        generation over a still-open function call.
         """
         await self._send({"type": "input_audio_buffer.commit"})
-        if self._profile.requires_response_create:
+        if respond and self._profile.requires_response_create:
             await self._send({"type": "response.create"})
 
     async def cancel(self) -> None:

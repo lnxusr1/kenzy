@@ -201,3 +201,17 @@ def test_stream_buffer_pending_tracks_drain():
     buf.feed(np.ones(3, dtype=np.int16))
     buf.clear()
     assert not buf.pending
+
+
+def test_strip_spoken_markup_removes_what_a_voice_would_read_aloud():
+    """Markdown artifacts must never reach TTS (lived 2026-09-02: the voice
+    said "asterisk asterisk object") — while identifiers, hyphens, and prose
+    survive untouched."""
+    from kenzy.sentences import strip_spoken_markup as strip
+
+    assert strip("that **object** has *three* parts") == "that object has three parts"
+    assert strip("## Heading\n- a bullet\n> a quote") == "Heading\na bullet\na quote"
+    assert strip("use `set_followup_mode` or __bold__") == "use set_followup_mode or bold"
+    # conservative: single underscores and hyphens are left alone
+    assert strip("snake_case and a well-known word") == "snake_case and a well-known word"
+    assert strip("plain prose passes through.") == "plain prose passes through."

@@ -29,3 +29,21 @@ def split_sentences(buf: str) -> tuple[list[str], str]:
         out.append(buf[start : m.end()])
         start = m.end()
     return out, buf[start:]
+
+
+_MD_LINE_MARKUP = re.compile(r"(?m)^[ \t]*(?:#{1,6}[ \t]+|[-*•][ \t]+|>[ \t]+)")
+_MD_CHARS = re.compile(r"\*{1,3}|__|`+")
+
+
+def strip_spoken_markup(text: str) -> str:
+    """Remove markdown artifacts a TTS voice would read aloud.
+
+    A model that ignores the plain-prose instruction emits ``**bold**`` and the
+    synthesizer dutifully says "asterisk asterisk" (lived in v6 conversations,
+    2026-09-02). Deliberately conservative: line-leading heading/bullet/quote
+    markers, asterisks, double underscores, and backticks go; single
+    underscores (identifiers), hyphens, and everything else stay. Applied at
+    the text→audio boundary only — transcripts and Activity keep the model's
+    own text, and lockbox-sensitive speech never rides a path that strips.
+    """
+    return _MD_CHARS.sub("", _MD_LINE_MARKUP.sub("", text))

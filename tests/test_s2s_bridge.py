@@ -8,7 +8,7 @@ import asyncio
 from collections.abc import AsyncIterator
 from typing import Any
 
-from kenzy.s2s.conversation import END_CONVERSATION, WindowPolicy
+from kenzy.s2s.conversation import END_CONVERSATION, ToolAsk, WindowPolicy
 from kenzy.s2s.engine import (
     AudioDelta,
     EngineEvent,
@@ -53,8 +53,8 @@ class _FakeEngine:
     async def append(self, pcm: bytes) -> None:
         self.log.append(f"append:{len(pcm)}")
 
-    async def commit(self) -> None:
-        self.log.append("commit")
+    async def commit(self, *, respond: bool = True) -> None:
+        self.log.append("commit" if respond else "commit:norespond")
 
     async def cancel(self) -> None:
         self.log.append("cancel")
@@ -107,6 +107,13 @@ class _Rig:
         self.executed: list[str] = []
         self.order: list[str] = []  # cross-dep ordering (the buffered-order rule)
         self.activities: list[dict[str, Any]] = []
+        # the ask() continuation deps' recorders
+        self.ask_results: list[Any] = []  # execute_tool returns these first
+        self.continue_results: list[Any] = []  # continue_ask returns these first
+        self.continued: list[tuple[str, str]] = []
+        self.canceled: list[tuple[str, str]] = []
+        self.synth_texts: list[str] = []
+        self.synth_pcm: bytes = b"\x02" * 19200
 
         async def factory(_url: str) -> _FakeEngine:
             if self.open_fails:
@@ -127,11 +134,28 @@ class _Rig:
         async def identify(_pcm: bytes, _room: str) -> tuple[Speaker, float]:
             return self.speaker, 0.9
 
-        async def execute_tool(call: ToolCall, _n: str, _r: str, _s: Speaker) -> str:
+        async def execute_tool(call: ToolCall, _n: str, _r: str, _s: Speaker) -> Any:
             if self.exec_gate is not None:
                 await self.exec_gate.wait()
             self.executed.append(call.name)
+            if self.ask_results:
+                return self.ask_results.pop(0)
             return "done"
+
+        async def synthesize(text: str) -> bytes:
+            self.synth_texts.append(text)
+            return self.synth_pcm
+
+        async def continue_ask(
+            cont: str, text: str, _n: str, _r: str, _s: Speaker
+        ) -> Any:
+            self.continued.append((cont, text))
+            if self.continue_results:
+                return self.continue_results.pop(0)
+            return "answered"
+
+        async def cancel_ask(cont: str, reason: str) -> None:
+            self.canceled.append((cont, reason))
 
         async def detach(
             call: ToolCall, _n: str, _r: str, _s: Speaker, work: asyncio.Task[str] | None
@@ -204,6 +228,9 @@ class _Rig:
             policy_on_demand=policy_on_demand,
             stash=stash,
             resume=resume,
+            synthesize=synthesize,
+            continue_ask=continue_ask,
+            cancel_ask=cancel_ask,
         ))
 
     @property
@@ -756,3 +783,116 @@ async def test_a_dead_cached_engine_falls_back_to_classic_and_closes() -> None:
     await rig.bridge.take_turn(NODE, ROOM, "sid2", _PCM)
     assert rig.classic == [(NODE, ROOM, "sid2", len(_PCM))]  # answered, not dead air
     assert not rig.bridge.active(NODE)  # the dead conversation was closed
+
+
+# ------------------------------------------------------- ask() continuation
+
+
+def _ask_turn_script() -> list[EngineEvent]:
+    return [
+        InputTranscript("tell me a knock knock joke", late=False),
+        ToolCall(call_id="c1", name="set_light", arguments_json="{}"),
+        AudioDelta(b"\x01"),
+        ResponseDone("done", 0, 0),
+    ]
+
+
+async def _open_pending_ask(rig: _Rig) -> None:
+    """Drive one turn whose tool parks on ask() — leaves the question pending."""
+    rig.ask_results.append(ToolAsk("cont1", "Who's there?"))
+    task = asyncio.get_running_loop().create_task(rig.bridge.take_turn(NODE, ROOM, "sid1", _PCM))
+    await _settle()
+    rig.engine.script.extend(_ask_turn_script())
+    await task
+
+
+async def test_ask_turn_speaks_prompt_arms_window_and_holds_call_open() -> None:
+    rig = _Rig()
+    await _open_pending_ask(rig)
+    conv = rig.bridge._convs[NODE]
+    assert conv.pending_ask is not None and conv.pending_ask.continuation == "cont1"
+    assert rig.synth_texts == ["Who's there?"]  # spoken VERBATIM, never paraphrased
+    assert any(f == rig.synth_pcm[:9600] for f in rig.frames)  # the prompt's audio went out
+    assert rig.hold_windows == [15.0]  # the question window armed the answer capture
+    assert rig.order.index("hold_floor") < rig.order.index("tts_end")  # buffered order
+    assert not any(e.startswith("submit:c1") for e in rig.engine.log)  # the call stays OPEN
+    assert "Who's there?" in rig.activities[-1]["response"]  # the household trail has it
+
+
+async def test_answer_turn_resumes_the_skill_and_submits_the_result() -> None:
+    rig = _Rig()
+    await _open_pending_ask(rig)
+    task = asyncio.get_running_loop().create_task(rig.bridge.take_turn(NODE, ROOM, "sid2", _PCM2))
+    await _settle()
+    rig.engine.script.append(InputTranscript("boo", late=False))
+    await task
+    assert rig.continued == [("cont1", "boo")]  # the answer reached /tool/continue
+    assert "commit:norespond" in rig.engine.log  # transcribed, but NO model response
+    assert "submit:c1" in rig.engine.log  # the held call closed with the real result
+    conv = rig.bridge._convs[NODE]
+    assert conv.pending_ask is None and rig.bridge.active(NODE)  # conversation continues
+    assert rig.hold_windows[-1] is None  # the follow-on re-armed the normal window
+    assert rig.activities[-1]["transcript"] == "boo"
+
+
+async def test_chained_ask_from_continue_re_asks_on_the_same_call() -> None:
+    rig = _Rig()
+    await _open_pending_ask(rig)
+    rig.continue_results.append(ToolAsk("cont2", "Say boo who?"))
+    task = asyncio.get_running_loop().create_task(rig.bridge.take_turn(NODE, ROOM, "sid2", _PCM2))
+    await _settle()
+    rig.engine.script.append(InputTranscript("boo", late=False))
+    await task
+    conv = rig.bridge._convs[NODE]
+    assert conv.pending_ask is not None and conv.pending_ask.continuation == "cont2"
+    assert conv.pending_ask.call_id == "c1"  # the SAME model call stays open
+    assert rig.synth_texts == ["Who's there?", "Say boo who?"]
+    assert not any(e.startswith("submit:c1") for e in rig.engine.log)
+
+
+async def test_explicit_close_during_an_answer_cancels_the_park() -> None:
+    rig = _Rig()
+    await _open_pending_ask(rig)
+    task = asyncio.get_running_loop().create_task(rig.bridge.take_turn(NODE, ROOM, "sid2", _PCM2))
+    await _settle()
+    rig.engine.script.append(InputTranscript("end the conversation", late=False))
+    await task
+    assert not rig.bridge.active(NODE)  # the deterministic escape outranks the question
+    assert ("cont1", "conversation closed") in rig.canceled
+    assert rig.continued == []  # the close never reached the skill as an answer
+    assert rig.engine.closed
+
+
+async def test_closing_a_conversation_cancels_its_pending_ask() -> None:
+    rig = _Rig()
+    await _open_pending_ask(rig)
+    await rig.bridge.close(NODE, "wake")
+    assert any(c[0] == "cont1" and "wake" in c[1] for c in rig.canceled)
+
+
+async def test_ask_audio_is_refused_honestly_and_spoken() -> None:
+    # ask_audio (enrollment) is stage 2 — the model is told and relays, the
+    # conversation survives (never dead air, never a dangling call).
+    rig = _Rig()
+    rig.ask_results.append(ToolAsk("cont1", "Record after the tone.", capture="audio"))
+    task = asyncio.get_running_loop().create_task(rig.bridge.take_turn(NODE, ROOM, "sid1", _PCM))
+    await _settle()
+    rig.engine.script.extend(_ask_turn_script())
+    await task
+    assert any(c[0] == "cont1" for c in rig.canceled)  # the park died llm-side
+    assert "submit:c1" in rig.engine.log  # the call was answered (respond=True)
+    conv = rig.bridge._convs[NODE]
+    assert conv.pending_ask is None and rig.bridge.active(NODE)
+    assert rig.synth_texts == []  # the audio prompt was never spoken
+
+
+async def test_answer_transcript_timeout_fails_the_question_closed() -> None:
+    rig = _Rig()
+    await _open_pending_ask(rig)
+    rig.bridge._ANSWER_TRANSCRIPT_S = 0.05  # type: ignore[misc]
+    task = asyncio.get_running_loop().create_task(rig.bridge.take_turn(NODE, ROOM, "sid2", _PCM2))
+    await task  # no transcript ever arrives
+    assert rig.canceled == [("cont1", "answer not transcribed")]
+    assert rig.continued == []
+    assert "submit:c1" in rig.engine.log  # the model was told, honestly
+    assert rig.bridge.active(NODE)  # the conversation itself survives

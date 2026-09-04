@@ -131,10 +131,20 @@ class DashboardConfig:
         )
 
 
+def _backend_services() -> list[str]:
+    """Every backend service name, derived from the one authoritative list
+    (kenzy.config.SERVICES) — never hand-enumerated (the s2s parity strikes:
+    a hand-list here is why the s2s card only appeared after its first
+    heartbeat while the four listed services always showed)."""
+    from kenzy.config import SERVICES
+
+    return [s for s in SERVICES if s not in ("node", "server")]
+
+
 def _service_targets(cfg: dict[str, Any]) -> dict[str, str]:
     """Map service name → base health URL, derived from configured endpoint URLs."""
     targets: dict[str, str] = {}
-    for name in ("stt", "tts", "llm", "speaker"):
+    for name in _backend_services():
         url = (cfg.get(name, {}) or {}).get("url")
         if not url:
             continue
@@ -469,8 +479,6 @@ class Dashboard:
         # Statically-configured backends plus any that auto-registered with the server
         # (GET /register); the latter win on name collision (live address).
         targets = {**self._service_urls, **self._server.announced_health_urls()}
-        if not targets:
-            return []
         import time
 
         if self._svc_cache and time.monotonic() - self._svc_cache[0] < 3.0:
@@ -500,7 +508,19 @@ class Dashboard:
             except Exception:
                 return {"name": name, "up": False, "detail": {}, "url": base_of(url)}
 
-        result = list(await asyncio.gather(*(check(n, u) for n, u in targets.items())))
+        # EVERY backend gets a card, address known or not (a service with no
+        # static URL and no heartbeat yet — s2s by default — shows as down
+        # instead of not existing). Unknown announced names still show too.
+        backends = _backend_services()
+        ordered = backends + [n for n in targets if n not in backends]
+
+        async def entry(name: str) -> dict[str, Any]:
+            url = targets.get(name)
+            if not url:
+                return {"name": name, "up": False, "detail": {}, "url": None}
+            return await check(name, url)
+
+        result = list(await asyncio.gather(*(entry(n) for n in ordered)))
         self._svc_cache = (time.monotonic(), result)
         return result
 

@@ -27,13 +27,17 @@ Alongside the voice pipeline, the server holds a persistent subscription to Home
 Assistant's WebSocket API, feeding the room-presence model described under
 [Room presence](#room-presence). It's the one inbound stream that isn't audio.
 
-**Follow-up mode** (experimental, off by default): with `s2s.enabled` switched
-on, a wake word on a room with an echo-cancelling speakerphone opens a
+**Follow-up mode** (experimental, off by default): with `s2s.mode` set to
+`always`, a wake word on a room with an echo-cancelling speakerphone opens a
 *conversation* instead of a single command — Kenzy keeps listening for ~8
 seconds after each answer (no wake word to reply), listens while she thinks,
-can be interrupted over her own voice, and ends only when you say so. Slow
-tools detach into a background task ledger ("I'll let you know when it's
-done") and deliver their results when they land. Powered by the `kenzy-s2s`
+can be interrupted over her own voice, and ends only when you say so
+(`on_demand` keeps the house classic and opens a conversation only when you
+say "start a conversation"). Slow tools detach into a background task ledger
+("I'll let you know when it's done") and deliver their results when they
+land, and skills that need your answer mid-flow — a delete confirmation, a
+knock-knock joke — ask their question and hear your reply right inside the
+conversation. Powered by the `kenzy-s2s`
 conversation engine below — or, opt-in, by OpenAI's Realtime API
 (`s2s.profile: openai-realtime`; read the
 [docs caveat](https://docs.kenzy.ai/configuration/s2s/) first — the cloud
